@@ -714,6 +714,7 @@ def settings_keyboard(chat_state: dict) -> InlineKeyboardMarkup:
 
     kb += [
         [_section_button("Действия")],
+        [InlineKeyboardButton("ℹ️ Что значат настройки", callback_data="st:help")],
         [
             InlineKeyboardButton("📊 Status", callback_data="st:status"),
             InlineKeyboardButton("🔄 Refresh", callback_data="st:refresh"),
@@ -803,10 +804,53 @@ def help_text() -> str:
         "/resetbase BTC — сбросить baseline по монете\n"
         "/resetbase all — сбросить все baseline для текущего источника\n"
         "/help — эта справка\n\n"
+        "Как работает бот:\n"
+        "- Алерт срабатывает по движению цены от baseline, а не по 24h change.\n"
+        "- TF metric (CHANGE_TF) — только дополнительная метрика, не триггер алерта.\n"
+        "- Top: следим за top-N монетами источника; List: только за вашим списком.\n"
+        "- /mute временно отключает алерты по монете, /resetbase пересохраняет baseline.\n\n"
         "Примечания:\n"
         "- В Bybit list-режиме можно писать BTC, ETH, SOL — бот сам превратит их в BTCUSDT/ETHUSDT/...\n"
         "- В top-режиме rank показывается в /status и алертах.\n"
         "- CHANGE_TF — только дополнительная метрика, не триггер алерта."
+    )
+
+
+def settings_help_text() -> str:
+    return (
+        "ℹ️ *Что значат настройки*\n\n"
+        "*Source*\n"
+        "Источник котировок:\n"
+        "• BYBIT — данные с Bybit\n"
+        "• CMC — данные с CoinMarketCap\n\n"
+        "*Mode*\n"
+        "Режим отслеживания:\n"
+        "• Top — следить за топ-N монетами источника\n"
+        "• List — следить только за заданным списком монет\n\n"
+        "*Threshold*\n"
+        "Порог алерта в процентах.\n"
+        "Алерт приходит, когда цена смещается на этот % от сохранённой базы (baseline), а не от 24h change.\n\n"
+        "*Poll interval*\n"
+        "Как часто бот проверяет цены для этого чата.\n"
+        "Чем меньше интервал, тем быстрее реакция, но тем выше нагрузка и шум.\n\n"
+        "*TF metric*\n"
+        "Дополнительная метрика изменения за выбранный таймфрейм.\n"
+        "Показывается в статусе и алертах только как справочная.\n"
+        "Не является триггером алерта.\n\n"
+        "*Top limit*\n"
+        "Сколько монет отслеживать в режиме Top.\n"
+        "Больше лимит — шире покрытие, но выше нагрузка.\n\n"
+        "*Tracking*\n"
+        "Что бот отслеживает прямо сейчас:\n"
+        "• Top N\n"
+        "или\n"
+        "• конкретный список монет\n\n"
+        "*Muted*\n"
+        "Количество монет, для которых алерты временно отключены.\n\n"
+        "*Важно*\n"
+        "• Baseline — сохранённая базовая цена, от которой считается движение\n"
+        "• Cooldown — пауза между повторными алертами по одной монете\n"
+        "• TF metric не влияет на факт срабатывания алерта"
     )
 
 
@@ -1002,6 +1046,9 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     action = parts[1]
     if action == "noop":
+        return
+    if action == "help":
+        await query.message.reply_text(settings_help_text(), parse_mode="Markdown")
         return
 
     async with _state_lock:
