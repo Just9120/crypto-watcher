@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Telegram Crypto Watcher — Sprint 1
+Telegram Crypto Watcher — Sprint 1.1
 - Bybit / CoinMarketCap
 - Top-N / custom list
 - Alerts on % move from rolling baseline
@@ -9,14 +9,15 @@ Telegram Crypto Watcher — Sprint 1
 - Improved inline settings UI
 - Mute / reset base actions in Telegram
 
-Sprint 1 changes vs baseline:
-  • async-safe fetch via ThreadPoolExecutor (event loop no longer blocked)
-  • asyncio.Lock for state mutations
-  • fetch_quotes_bybit: single bulk request instead of N
-  • _attach_bybit_tf_change: parallel requests via executor
-  • ALLOWED_CHAT_IDS whitelist (optional)
-  • save_state() called once per poll_engine cycle
-  • requests.Session with retry
+Sprint 1.1 changes vs Sprint 1:
+  • thread-safe HTTP sessions via threading.local (no more shared Session)
+  • two separate executor pools: _fetch_pool + _kline_pool (no deadlock)
+  • whitelist enforced in poll_engine_job (not only in handlers)
+  • status_text() no longer mutates state (baselines created only by poll)
+  • fetch duration logged for diagnostics
+  • as_completed import moved to top level
+  • asyncio.get_event_loop() → asyncio.get_running_loop()
+  • .env.example and README updated
 
 Tested target deps:
     python-telegram-bot[job-queue]==20.8
@@ -28,8 +29,9 @@ import asyncio
 import json
 import logging
 import os
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -48,22 +50,39 @@ from telegram.ext import (
 
 load_dotenv(dotenv_path=Path(__file__).with_name(".env"))
 
-# ----------------------------- logging
+# ---------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
-# suppress noisy http loggers that may leak tokens / urls
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
-# ----------------------------- HTTP session with retry
-_session = requests.Session()
-_retry = Retry(total=3, backoff_factor=0.5, status_forcelist=[502, 503, 504])
-_session.mount("https://", HTTPAdapter(max_retries=_retry))
-_session.mount("http://", HTTPAdapter(max_retries=_retry))
+# ---------------------------------------------------------------
+# Thread-safe HTTP sessions (one per thread)
+# ---------------------------------------------------------------
+_thread_local = threading.local()
 
-# ----------------------------- Thread pool for sync→async bridge
-_http_pool = ThreadPoolExecutor(max_workers=6)
 
-# ----------------------------- asyncio lock for state mutations
+def _get_session() -> requests.Session:
+    """Return a per-thread requests.Session with retry."""
+    if not hasattr(_thread_local, "session"):
+        s = requests.Session()
+        retry = Retry(total=3, backoff_factor=0.5, status_forcelist=[502, 503, 504])
+        s.mount("https://", HTTPAdapter(max_retries=retry))
+        s.mount("http://", HTTPAdapter(max_retries=retry))
+        _thread_local.session = s
+    return _thread_local.session
+
+
+# ---------------------------------------------------------------
+# Executor pools (separate to avoid deadlock)
+# ---------------------------------------------------------------
+_fetch_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="fetch")
+_kline_pool = ThreadPoolExecutor(max_workers=12, thread_name_prefix="kline")
+
+# ---------------------------------------------------------------
+# Asyncio lock for state mutations
+# ---------------------------------------------------------------
 _state_lock = asyncio.Lock()
 
 
@@ -365,7 +384,7 @@ def fetch_quotes_cmc(settings: dict, symbols: List[str]) -> Dict[str, dict]:
     url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
     headers = {"X-CMC_PRO_API_KEY": CMC_API_KEY}
     params = {"symbol": ",".join(symbols), "convert": settings["convert"]}
-    r = _session.get(url, headers=headers, params=params, timeout=20)
+    r = _get_session().get(url, headers=headers, params=params, timeout=20)
     r.raise_for_status()
     data = r.json()["data"]
     out: Dict[str, dict] = {}
@@ -393,7 +412,7 @@ def fetch_top_cmc(settings: dict) -> Dict[str, dict]:
         "convert": settings["convert"],
         "sort": "market_cap",
     }
-    r = _session.get(url, headers=headers, params=params, timeout=20)
+    r = _get_session().get(url, headers=headers, params=params, timeout=20)
     r.raise_for_status()
     data = r.json()["data"]
     out: Dict[str, dict] = {}
@@ -413,7 +432,7 @@ def fetch_top_cmc(settings: dict) -> Dict[str, dict]:
 def _fetch_single_kline(base_url: str, settings: dict, sym: str) -> Tuple[str, float | None]:
     """Fetch one kline TF-change for a symbol. Returns (sym, pct_change | None)."""
     try:
-        k = _session.get(
+        k = _get_session().get(
             f"{base_url}/v5/market/kline",
             params={
                 "category": settings["bybit_category"],
@@ -439,7 +458,7 @@ def _fetch_single_kline(base_url: str, settings: dict, sym: str) -> Tuple[str, f
 
 
 def _attach_bybit_tf_change(settings: dict, out: Dict[str, dict]) -> None:
-    """Attach TF-change metric. Uses thread pool for parallel requests."""
+    """Attach TF-change metric. Uses dedicated kline pool for parallel requests."""
     if not settings.get("show_tf_change"):
         return
     base_url = "https://api.bybit.com"
@@ -447,14 +466,11 @@ def _attach_bybit_tf_change(settings: dict, out: Dict[str, dict]) -> None:
     if not symbols:
         return
 
-    # parallel fetch in batches via thread pool
-    from concurrent.futures import as_completed
-
     BATCH = 25
     for i in range(0, len(symbols), BATCH):
         batch = symbols[i : i + BATCH]
         futures = {
-            _http_pool.submit(_fetch_single_kline, base_url, settings, sym): sym
+            _kline_pool.submit(_fetch_single_kline, base_url, settings, sym): sym
             for sym in batch
         }
         for fut in as_completed(futures, timeout=60):
@@ -469,7 +485,7 @@ def _attach_bybit_tf_change(settings: dict, out: Dict[str, dict]) -> None:
 def fetch_quotes_bybit(settings: dict, pairs: List[str]) -> Dict[str, dict]:
     """Fetch quotes for a list of Bybit pairs — single bulk request + filter."""
     base_url = "https://api.bybit.com"
-    r = _session.get(
+    r = _get_session().get(
         f"{base_url}/v5/market/tickers",
         params={"category": settings["bybit_category"]},
         timeout=15,
@@ -503,7 +519,7 @@ def fetch_quotes_bybit(settings: dict, pairs: List[str]) -> Dict[str, dict]:
 def fetch_bybit_top(settings: dict) -> Dict[str, dict]:
     base_url = "https://api.bybit.com"
     limit = int(settings["bybit_top_limit"])
-    r = _session.get(
+    r = _get_session().get(
         f"{base_url}/v5/market/tickers",
         params={"category": settings["bybit_category"]},
         timeout=15,
@@ -550,12 +566,16 @@ def fetch_quotes_any(settings: dict) -> Dict[str, dict]:
 
 async def _fetch_async(settings: dict) -> Dict[str, dict]:
     """Run sync fetch in thread pool so we don't block the event loop."""
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(_http_pool, fetch_quotes_any, settings)
+    loop = asyncio.get_running_loop()
+    t0 = time.monotonic()
+    result = await loop.run_in_executor(_fetch_pool, fetch_quotes_any, settings)
+    elapsed = time.monotonic() - t0
+    logging.info(f"Fetch completed: {settings['pricer']} {current_mode(settings)} — {len(result)} symbols in {elapsed:.1f}s")
+    return result
 
 
 # ---------------------------------------------------------------
-# Rendering
+# Rendering  (pure functions — no state mutation)
 # ---------------------------------------------------------------
 def _symbol_key(source: str, sym: str) -> str:
     return f"{source}:{sym}"
@@ -700,6 +720,7 @@ def _symbols_for_status(settings: dict, quotes: Dict[str, dict]) -> List[str]:
 
 
 def status_text(chat_state: dict, quotes: Dict[str, dict]) -> str:
+    """Render status message. Pure read — does NOT create baselines."""
     s = chat_state["settings"]
     unit = price_unit(s)
     now = time.time()
@@ -712,8 +733,7 @@ def status_text(chat_state: dict, quotes: Dict[str, dict]) -> str:
         key = _symbol_key(s["pricer"], sym)
         base = chat_state["baselines"].get(key)
         if not base:
-            chat_state["baselines"][key] = {"price": q["price"], "ts": now, "last_alert": 0}
-            delta_str = "Δ —"
+            delta_str = "Δ — (new)"
         else:
             base_price = float(base["price"] or 0.0)
             move_pct = ((q["price"] - base_price) / base_price * 100.0) if base_price else 0.0
@@ -935,9 +955,7 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка запроса цен: {e}")
         return
-    async with _state_lock:
-        text = status_text(chat_state, quotes)
-        save_state()
+    text = status_text(chat_state, quotes)
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
@@ -1030,9 +1048,7 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_state = get_chat_state(query.message.chat_id)
         try:
             quotes = await _fetch_async(chat_state["settings"])
-            async with _state_lock:
-                txt = status_text(chat_state, quotes)
-                save_state()
+            txt = status_text(chat_state, quotes)
             await query.message.reply_text(txt, parse_mode="Markdown")
         except Exception as e:
             await query.message.reply_text(f"❌ Ошибка статуса: {e}")
@@ -1060,9 +1076,7 @@ async def alert_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_state = get_chat_state(query.message.chat_id)
         try:
             quotes = await _fetch_async(chat_state["settings"])
-            async with _state_lock:
-                txt = status_text(chat_state, quotes)
-                save_state()
+            txt = status_text(chat_state, quotes)
             await query.message.reply_text(txt, parse_mode="Markdown")
         except Exception as e:
             await query.message.reply_text(f"❌ Ошибка статуса: {e}")
@@ -1107,6 +1121,9 @@ async def poll_engine_job(context: ContextTypes.DEFAULT_TYPE):
 
     for chat_id, chat_state in list(state["chats"].items()):
         try:
+            # --- whitelist check in poll loop ---
+            if not _is_authorized(int(chat_id)):
+                continue
             if not chat_state.get("enabled", True):
                 continue
             s = chat_state["settings"]
@@ -1186,7 +1203,7 @@ async def poll_engine_job(context: ContextTypes.DEFAULT_TYPE):
 def main():
     load_state()
     logging.info(
-        "Booting CryptoWatcher (Sprint 1): "
+        "Booting CryptoWatcher (Sprint 1.1): "
         f"default_source={DEFAULT_PRICER}; "
         f"default_threshold={DEFAULT_THRESHOLD_PERCENT}%; "
         f"default_interval={_fmt_interval(DEFAULT_POLL_INTERVAL_SEC)}; "
