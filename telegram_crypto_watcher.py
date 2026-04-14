@@ -31,7 +31,7 @@ import logging
 import os
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -459,11 +459,18 @@ def _fetch_single_kline(base_url: str, settings: dict, sym: str) -> Tuple[str, f
 def _attach_bybit_tf_change(settings: dict, out: Dict[str, dict]) -> None:
     """Attach TF-change metric. Uses dedicated kline pool for parallel requests."""
     if not settings.get("show_tf_change"):
+        logging.info("TF enrichment outcome=skipped reason=disabled")
         return
     base_url = "https://api.bybit.com"
     symbols = list(out.keys())
     if not symbols:
+        logging.info("TF enrichment outcome=skipped reason=no_symbols")
         return
+
+    total = len(symbols)
+    ok = 0
+    failed = 0
+    timeout = 0
 
     BATCH = 25
     for i in range(0, len(symbols), BATCH):
@@ -472,13 +479,35 @@ def _attach_bybit_tf_change(settings: dict, out: Dict[str, dict]) -> None:
             _kline_pool.submit(_fetch_single_kline, base_url, settings, sym): sym
             for sym in batch
         }
-        for fut in as_completed(futures, timeout=60):
-            try:
-                sym, pct = fut.result()
-                if pct is not None:
-                    out[sym]["percent_change_tf"] = pct
-            except Exception:
-                pass
+        done = set()
+        try:
+            for fut in as_completed(futures, timeout=60):
+                done.add(fut)
+                try:
+                    sym, pct = fut.result()
+                    if pct is not None:
+                        out[sym]["percent_change_tf"] = pct
+                        ok += 1
+                    else:
+                        failed += 1
+                except Exception:
+                    failed += 1
+        except FuturesTimeoutError:
+            pending = [fut for fut in futures if fut not in done]
+            timeout += len(pending)
+            for fut in pending:
+                fut.cancel()
+            logging.warning(f"TF enrichment batch timeout: pending={len(pending)}")
+
+    if timeout > 0:
+        outcome = "timeout"
+    elif failed > 0:
+        outcome = "failed"
+    else:
+        outcome = "ok"
+    logging.info(
+        f"TF enrichment outcome={outcome} ok={ok} failed={failed} timeout={timeout} total={total}"
+    )
 
 
 def fetch_quotes_bybit(settings: dict, pairs: List[str]) -> Dict[str, dict]:
