@@ -34,7 +34,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -84,6 +84,22 @@ _kline_pool = ThreadPoolExecutor(max_workers=12, thread_name_prefix="kline")
 # Asyncio lock for state mutations
 # ---------------------------------------------------------------
 _state_lock = asyncio.Lock()
+
+# ---------------------------------------------------------------
+# Core/reference caches
+# ---------------------------------------------------------------
+CORE_UNIVERSE_TTL_SEC = int(os.getenv("CORE_UNIVERSE_TTL_SEC", "10800") or "10800")
+REFERENCE_PRICE_TTL_SEC = int(os.getenv("REFERENCE_PRICE_TTL_SEC", "900") or "900")
+CORE_REFERENCE_TF_TO_SEC = {
+    "1d": 86400,
+    "3d": 86400 * 3,
+    "7d": 86400 * 7,
+    "30d": 86400 * 30,
+}
+
+_cache_lock = threading.Lock()
+_core_universe_cache: Dict[int, dict] = {}
+_reference_price_cache: Dict[Tuple[str, str, str], dict] = {}
 
 
 # ---------------------------------------------------------------
@@ -225,6 +241,9 @@ def _default_settings() -> dict:
         "bybit_top_limit": DEFAULT_BYBIT_TOP_LIMIT if DEFAULT_BYBIT_TOP_LIMIT > 0 else 100,
         "watchlist": list(DEFAULT_WATCHLIST),
         "cmc_top_limit": DEFAULT_CMC_TOP_LIMIT if DEFAULT_CMC_TOP_LIMIT > 0 else 100,
+        "core_baseline_enabled": False,
+        "core_top_n": 20,
+        "core_reference_tf": "7d",
     }
 
 
@@ -262,6 +281,11 @@ def _ensure_chat_shape(chat_state: dict) -> dict:
     base_settings["cmc_top_limit"] = int(base_settings.get("cmc_top_limit", _default_settings()["cmc_top_limit"]))
     base_settings["convert"] = str(base_settings.get("convert", DEFAULT_CONVERT)).upper()
     base_settings["show_tf_change"] = bool(base_settings.get("show_tf_change", DEFAULT_SHOW_TF_CHANGE))
+    base_settings["core_baseline_enabled"] = bool(base_settings.get("core_baseline_enabled", False))
+    core_top_n = int(base_settings.get("core_top_n", 20))
+    base_settings["core_top_n"] = core_top_n if core_top_n in (20, 30) else 20
+    core_reference_tf = str(base_settings.get("core_reference_tf", "7d")).lower()
+    base_settings["core_reference_tf"] = core_reference_tf if core_reference_tf in CORE_REFERENCE_TF_TO_SEC else "7d"
     tf_label, tf_bybit = _parse_change_tf(str(base_settings.get("change_tf_label", DEFAULT_CHANGE_TF_LABEL)))
     base_settings["change_tf_label"] = tf_label
     base_settings["change_tf_bybit"] = tf_bybit
@@ -602,6 +626,121 @@ async def _fetch_async(settings: dict) -> Dict[str, dict]:
     return result
 
 
+def _asset_from_symbol(symbol: str) -> str:
+    s = (symbol or "").strip().upper()
+    if s.endswith("USDT"):
+        return s[:-4]
+    return s
+
+
+def fetch_core_universe_cmc(core_top_n: int) -> Set[str]:
+    if not CMC_API_KEY:
+        raise RuntimeError("CMC_API_KEY is missing in environment")
+    url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest"
+    headers = {"X-CMC_PRO_API_KEY": CMC_API_KEY}
+    params = {"start": 1, "limit": int(core_top_n), "convert": "USD", "sort": "market_cap"}
+    r = _get_session().get(url, headers=headers, params=params, timeout=20)
+    r.raise_for_status()
+    data = r.json().get("data") or []
+    return {_normalize_cmc_symbol(item.get("symbol", "")) for item in data if item.get("symbol")}
+
+
+def get_cached_core_universe(core_top_n: int) -> Optional[Set[str]]:
+    now = time.time()
+    with _cache_lock:
+        row = _core_universe_cache.get(core_top_n)
+        if row and now < float(row.get("expires_at", 0)):
+            return set(row.get("symbols") or set())
+    try:
+        symbols = fetch_core_universe_cmc(core_top_n)
+        with _cache_lock:
+            _core_universe_cache[core_top_n] = {"symbols": set(symbols), "expires_at": now + CORE_UNIVERSE_TTL_SEC}
+        return symbols
+    except Exception as e:
+        logging.warning(f"Core universe refresh failed top={core_top_n}: {e}")
+        return None
+
+
+def is_core_symbol(symbol: str, core_top_n: int, core_symbols: Optional[Set[str]] = None) -> bool:
+    symbols = core_symbols if core_symbols is not None else get_cached_core_universe(core_top_n)
+    if not symbols:
+        return False
+    return _asset_from_symbol(symbol) in symbols
+
+
+def fetch_reference_price_cmc(symbol: str, convert: str, tf: str) -> Optional[float]:
+    if not CMC_API_KEY:
+        raise RuntimeError("CMC_API_KEY is missing in environment")
+    tf_sec = CORE_REFERENCE_TF_TO_SEC.get(tf)
+    if not tf_sec:
+        return None
+    end_ts = int(time.time() - tf_sec)
+    start_ts = max(0, end_ts - 12 * 3600)
+    url = "https://pro-api.coinmarketcap.com/v2/cryptocurrency/quotes/historical"
+    headers = {"X-CMC_PRO_API_KEY": CMC_API_KEY}
+    params = {
+        "symbol": _asset_from_symbol(symbol),
+        "convert": convert,
+        "time_start": datetime.fromtimestamp(start_ts, tz=timezone.utc).isoformat(),
+        "time_end": datetime.fromtimestamp(end_ts, tz=timezone.utc).isoformat(),
+        "interval": "5m",
+        "count": 1,
+    }
+    r = _get_session().get(url, headers=headers, params=params, timeout=20)
+    r.raise_for_status()
+    payload = r.json().get("data") or {}
+    symbol_data = payload.get(_asset_from_symbol(symbol)) or []
+    if not symbol_data:
+        return None
+    quotes = symbol_data[0].get("quotes") or []
+    if not quotes:
+        return None
+    price = ((quotes[-1].get("quote") or {}).get(convert) or {}).get("price")
+    return float(price) if price is not None else None
+
+
+def get_reference_price(symbol: str, convert: str, tf: str) -> Optional[float]:
+    key = (_asset_from_symbol(symbol), convert, tf)
+    now = time.time()
+    with _cache_lock:
+        row = _reference_price_cache.get(key)
+        if row and now < float(row.get("expires_at", 0)):
+            return float(row["price"])
+    try:
+        price = fetch_reference_price_cmc(symbol, convert, tf)
+        if price is None:
+            return None
+        with _cache_lock:
+            _reference_price_cache[key] = {"price": float(price), "expires_at": now + REFERENCE_PRICE_TTL_SEC}
+        return float(price)
+    except Exception as e:
+        logging.warning(f"Reference price failed symbol={symbol} tf={tf}: {e}")
+        return None
+
+
+async def _prepare_core_context(settings: dict, quotes: Dict[str, dict]) -> Tuple[Optional[Set[str]], Dict[str, float]]:
+    if not settings.get("core_baseline_enabled"):
+        return None, {}
+    loop = asyncio.get_running_loop()
+    core_top_n = int(settings.get("core_top_n", 20))
+    core_symbols = await loop.run_in_executor(_fetch_pool, get_cached_core_universe, core_top_n)
+    if not core_symbols:
+        return None, {}
+    tf = settings.get("core_reference_tf", "7d")
+    convert = "USDT" if settings["pricer"] == "BYBIT" else settings["convert"]
+    unique_assets = {_asset_from_symbol(sym) for sym in quotes.keys() if is_core_symbol(sym, core_top_n, core_symbols)}
+    refs: Dict[str, float] = {}
+    if not unique_assets:
+        return core_symbols, refs
+    for asset in unique_assets:
+        ref = await loop.run_in_executor(_fetch_pool, get_reference_price, asset, convert, tf)
+        if ref is not None:
+            refs[asset] = ref
+        else:
+            logging.info(f"Core reference skipped symbol={asset} tf={tf} reason=no_reference")
+    return core_symbols, refs
+
+
 # ---------------------------------------------------------------
 # Rendering  (pure functions — no state mutation)
 # ---------------------------------------------------------------
@@ -628,6 +767,9 @@ def _sub_metrics(q: dict, settings: dict) -> str:
 def settings_text(chat_state: dict) -> str:
     s = chat_state["settings"]
     active_mutes = sum(1 for _, ts in chat_state["mutes"].items() if ts > time.time())
+    core_suffix = ""
+    if s.get("core_baseline_enabled"):
+        core_suffix = f" (Top {s.get('core_top_n')}, {s.get('core_reference_tf')} ref)"
     return (
         "⚙️ *Settings*\n\n"
         f"*Source:* {s['pricer']}\n"
@@ -635,6 +777,7 @@ def settings_text(chat_state: dict) -> str:
         f"*Threshold:* {s['threshold_percent']}%\n"
         f"*Poll interval:* {_fmt_interval(s['poll_interval_sec'])}\n"
         f"*TF metric:* {('OFF' if not s['show_tf_change'] else s['change_tf_label'])}\n"
+        f"*Core baseline:* {'ON' if s.get('core_baseline_enabled') else 'OFF'}{core_suffix}\n"
         f"*Tracking:* {tracked_desc(s)}\n"
         f"*Muted:* {active_mutes}\n\n"
         "Ниже можно менять настройки кнопками."
@@ -653,6 +796,9 @@ def settings_keyboard(chat_state: dict) -> InlineKeyboardMarkup:
     interval = int(s["poll_interval_sec"])
     tf_label = s["change_tf_label"]
     tf_show = bool(s["show_tf_change"])
+    core_enabled = bool(s.get("core_baseline_enabled"))
+    core_top_n = int(s.get("core_top_n", 20))
+    core_reference_tf = s.get("core_reference_tf", "7d")
 
     kb = [
         [_section_button("Источник")],
@@ -688,6 +834,23 @@ def settings_keyboard(chat_state: dict) -> InlineKeyboardMarkup:
             InlineKeyboardButton(_selected("15m", tf_show and tf_label == "15m"), callback_data="st:tf:15m"),
             InlineKeyboardButton(_selected("30m", tf_show and tf_label == "30m"), callback_data="st:tf:30m"),
             InlineKeyboardButton(_selected("60m", tf_show and tf_label == "60m"), callback_data="st:tf:60m"),
+        ],
+        [_section_button("Core baseline")],
+        [
+            InlineKeyboardButton(_selected("OFF", not core_enabled), callback_data="st:core:off"),
+            InlineKeyboardButton(_selected("ON", core_enabled), callback_data="st:core:on"),
+        ],
+        [_section_button("Core universe")],
+        [
+            InlineKeyboardButton(_selected("Top 20", core_top_n == 20), callback_data="st:coretop:20"),
+            InlineKeyboardButton(_selected("Top 30", core_top_n == 30), callback_data="st:coretop:30"),
+        ],
+        [_section_button("Core reference")],
+        [
+            InlineKeyboardButton(_selected("1d", core_reference_tf == "1d"), callback_data="st:coretf:1d"),
+            InlineKeyboardButton(_selected("3d", core_reference_tf == "3d"), callback_data="st:coretf:3d"),
+            InlineKeyboardButton(_selected("7d", core_reference_tf == "7d"), callback_data="st:coretf:7d"),
+            InlineKeyboardButton(_selected("30d", core_reference_tf == "30d"), callback_data="st:coretf:30d"),
         ],
     ]
 
@@ -748,25 +911,43 @@ def _symbols_for_status(settings: dict, quotes: Dict[str, dict]) -> List[str]:
     return settings["watchlist"]
 
 
-def status_text(chat_state: dict, quotes: Dict[str, dict]) -> str:
+def status_text(
+    chat_state: dict,
+    quotes: Dict[str, dict],
+    core_symbols: Optional[Set[str]] = None,
+    reference_prices: Optional[Dict[str, float]] = None,
+) -> str:
     """Render status message. Pure read — does NOT create baselines."""
     s = chat_state["settings"]
     unit = price_unit(s)
     now = time.time()
+    core_suffix = ""
+    if s.get("core_baseline_enabled"):
+        core_suffix = f" (Top {s.get('core_top_n')}, {s.get('core_reference_tf')} ref)"
     lines = []
+    reference_prices = reference_prices or {}
     symbols = _symbols_for_status(s, quotes)
     for sym in symbols:
         q = quotes.get(sym)
         if not q:
             continue
         key = _symbol_key(s["pricer"], sym)
-        base = chat_state["baselines"].get(key)
-        if not base:
-            delta_str = "Δ — (new)"
+        core_ref_mode = bool(s.get("core_baseline_enabled")) and is_core_symbol(sym, int(s.get("core_top_n", 20)), core_symbols)
+        if core_ref_mode:
+            ref_price = reference_prices.get(_asset_from_symbol(sym))
+            if ref_price:
+                move_pct = ((q["price"] - ref_price) / ref_price * 100.0) if ref_price else 0.0
+                delta_str = f"Δ {move_pct:+.2f}% от {s['core_reference_tf']} ref {ref_price:.6g}"
+            else:
+                delta_str = f"Δ — ({s['core_reference_tf']} ref n/a)"
         else:
-            base_price = float(base["price"] or 0.0)
-            move_pct = ((q["price"] - base_price) / base_price * 100.0) if base_price else 0.0
-            delta_str = f"Δ {move_pct:+.2f}% от {base_price:.6g}"
+            base = chat_state["baselines"].get(key)
+            if not base:
+                delta_str = "Δ — (new)"
+            else:
+                base_price = float(base["price"] or 0.0)
+                move_pct = ((q["price"] - base_price) / base_price * 100.0) if base_price else 0.0
+                delta_str = f"Δ {move_pct:+.2f}% от базы {base_price:.6g}"
         muted_until = float(chat_state["mutes"].get(key, 0) or 0)
         mute_flag = " 🔕" if muted_until > now else ""
         metrics = _sub_metrics(q, s)
@@ -781,6 +962,7 @@ def status_text(chat_state: dict, quotes: Dict[str, dict]) -> str:
         "📊 *Статус бота*\n\n"
         f"*Source:* {s['pricer']} | *Mode:* {_mode_label(s)} | *Threshold:* {s['threshold_percent']}%\n"
         f"*Poll:* {_fmt_interval(s['poll_interval_sec'])} | *Cooldown:* {s['cooldown_min']} min\n"
+        f"*Core baseline:* {'ON' if s.get('core_baseline_enabled') else 'OFF'}{core_suffix}\n"
         f"*Tracking:* {tracked_desc(s)}\n"
     )
     if current_mode(s) == "top":
@@ -805,10 +987,13 @@ def help_text() -> str:
         "/resetbase all — сбросить все baseline для текущего источника\n"
         "/help — эта справка\n\n"
         "Как работает бот:\n"
-        "- Алерт срабатывает по движению цены от baseline, а не по 24h change.\n"
+        "- Non-core монеты работают по rolling baseline (сохранённая база в state).\n"
+        "- Core монеты (Top 20/30 CMC при включённом Core baseline) работают от reference окна 1d/3d/7d/30d.\n"
+        "- Алерт срабатывает по движению цены от baseline/reference, а не по 24h change.\n"
         "- TF metric (CHANGE_TF) — только дополнительная метрика, не триггер алерта.\n"
         "- Top: следим за top-N монетами источника; List: только за вашим списком.\n"
-        "- /mute временно отключает алерты по монете, /resetbase пересохраняет baseline.\n\n"
+        "- /mute временно отключает алерты по монете.\n"
+        "- /resetbase нужен для rolling baseline; для core reference reset не требуется.\n\n"
         "Примечания:\n"
         "- В Bybit list-режиме можно писать BTC, ETH, SOL — бот сам превратит их в BTCUSDT/ETHUSDT/...\n"
         "- В top-режиме rank показывается в /status и алертах.\n"
@@ -840,6 +1025,14 @@ def settings_help_text() -> str:
         "*Top limit*\n"
         "Сколько монет отслеживать в режиме Top.\n"
         "Больше лимит — шире покрытие, но выше нагрузка.\n\n"
+        "*Core baseline*\n"
+        "Когда OFF — все монеты работают по rolling baseline.\n"
+        "Когда ON — core монеты (из Core universe) работают по reference baseline.\n\n"
+        "*Core universe*\n"
+        "Какой размер core-рынка считать core-монетами: Top 20 или Top 30 (CMC market cap).\n\n"
+        "*Core reference*\n"
+        "Окно reference-базы для core-монет: 1d / 3d / 7d / 30d.\n"
+        "Для core reference бот считает базу автоматически, без ручного reset.\n\n"
         "*Tracking*\n"
         "Что бот отслеживает прямо сейчас:\n"
         "• Top N\n"
@@ -848,7 +1041,8 @@ def settings_help_text() -> str:
         "*Muted*\n"
         "Количество монет, для которых алерты временно отключены.\n\n"
         "*Важно*\n"
-        "• Baseline — сохранённая базовая цена, от которой считается движение\n"
+        "• Rolling baseline — сохранённая базовая цена для non-core\n"
+        "• Core reference — автоматическая база от выбранного окна для core\n"
         "• Cooldown — пауза между повторными алертами по одной монете\n"
         "• TF metric не влияет на факт срабатывания алерта"
     )
@@ -990,25 +1184,41 @@ async def unmute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def resetbase_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _is_authorized(update.effective_chat.id):
         return
+    if not context.args:
+        await update.message.reply_text("Использование: /resetbase BTC  или  /resetbase all")
+        return
+    raw = context.args[0].strip().lower()
     async with _state_lock:
         chat_state = get_chat_state(update.effective_chat.id)
-        s = chat_state["settings"]
-        if not context.args:
-            await update.message.reply_text("Использование: /resetbase BTC  или  /resetbase all")
-            return
-        raw = context.args[0].strip().lower()
-        if raw == "all":
-            prefix = f"{s['pricer']}:"
+        s_snapshot = dict(chat_state["settings"])
+
+    if raw == "all":
+        async with _state_lock:
+            chat_state = get_chat_state(update.effective_chat.id)
+            prefix = f"{chat_state['settings']['pricer']}:"
             removed = []
             for key in list(chat_state["baselines"].keys()):
                 if key.startswith(prefix):
                     removed.append(key)
                     del chat_state["baselines"][key]
             save_state()
-            await update.message.reply_text(f"♻️ Сбросил baseline: {len(removed)} шт.")
+        await update.message.reply_text(f"♻️ Сбросил baseline: {len(removed)} шт.")
+        return
+
+    sym = _normalize_bybit_pair(raw) if s_snapshot["pricer"] == "BYBIT" else _normalize_cmc_symbol(raw)
+    if s_snapshot.get("core_baseline_enabled"):
+        loop = asyncio.get_running_loop()
+        core_symbols = await loop.run_in_executor(_fetch_pool, get_cached_core_universe, int(s_snapshot.get("core_top_n", 20)))
+        if is_core_symbol(sym, int(s_snapshot.get("core_top_n", 20)), core_symbols):
+            await update.message.reply_text(
+                f"ℹ️ Для {sym} включён core reference mode: baseline считается автоматически ({s_snapshot.get('core_reference_tf')}). "
+                "Команда reset не нужна."
+            )
             return
-        sym = _normalize_bybit_pair(raw) if s["pricer"] == "BYBIT" else _normalize_cmc_symbol(raw)
-        key = _symbol_key(s["pricer"], sym)
+
+    async with _state_lock:
+        chat_state = get_chat_state(update.effective_chat.id)
+        key = _symbol_key(chat_state["settings"]["pricer"], sym)
         if key in chat_state["baselines"]:
             del chat_state["baselines"][key]
             save_state()
@@ -1024,10 +1234,11 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     s = chat_state["settings"]
     try:
         quotes = await _fetch_async(s)
+        core_symbols, reference_prices = await _prepare_core_context(s, quotes)
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка запроса цен: {e}")
         return
-    text = status_text(chat_state, quotes)
+    text = status_text(chat_state, quotes, core_symbols=core_symbols, reference_prices=reference_prices)
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
@@ -1099,6 +1310,28 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text(settings_text(chat_state), reply_markup=settings_keyboard(chat_state), parse_mode="Markdown")
             return
 
+        if action == "core" and len(parts) >= 3:
+            s["core_baseline_enabled"] = parts[2].lower() == "on"
+            save_state()
+            await query.edit_message_text(settings_text(chat_state), reply_markup=settings_keyboard(chat_state), parse_mode="Markdown")
+            return
+
+        if action == "coretop" and len(parts) >= 3:
+            top_n = int(parts[2])
+            if top_n in (20, 30):
+                s["core_top_n"] = top_n
+            save_state()
+            await query.edit_message_text(settings_text(chat_state), reply_markup=settings_keyboard(chat_state), parse_mode="Markdown")
+            return
+
+        if action == "coretf" and len(parts) >= 3:
+            tf = parts[2].lower()
+            if tf in CORE_REFERENCE_TF_TO_SEC:
+                s["core_reference_tf"] = tf
+            save_state()
+            await query.edit_message_text(settings_text(chat_state), reply_markup=settings_keyboard(chat_state), parse_mode="Markdown")
+            return
+
         if action == "top" and len(parts) >= 3:
             s["bybit_top_limit"] = int(parts[2])
             s["pricer"] = "BYBIT"
@@ -1123,7 +1356,8 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_state = get_chat_state(query.message.chat_id)
         try:
             quotes = await _fetch_async(chat_state["settings"])
-            txt = status_text(chat_state, quotes)
+            core_symbols, reference_prices = await _prepare_core_context(chat_state["settings"], quotes)
+            txt = status_text(chat_state, quotes, core_symbols=core_symbols, reference_prices=reference_prices)
             await query.message.reply_text(txt, parse_mode="Markdown")
         except Exception as e:
             await query.message.reply_text(f"❌ Ошибка статуса: {e}")
@@ -1151,7 +1385,8 @@ async def alert_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_state = get_chat_state(query.message.chat_id)
         try:
             quotes = await _fetch_async(chat_state["settings"])
-            txt = status_text(chat_state, quotes)
+            core_symbols, reference_prices = await _prepare_core_context(chat_state["settings"], quotes)
+            txt = status_text(chat_state, quotes, core_symbols=core_symbols, reference_prices=reference_prices)
             await query.message.reply_text(txt, parse_mode="Markdown")
         except Exception as e:
             await query.message.reply_text(f"❌ Ошибка статуса: {e}")
@@ -1174,10 +1409,21 @@ async def alert_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if action == "reset" and len(parts) >= 4:
+        source = parts[2].upper()
+        sym = parts[3].upper()
+        chat_state = get_chat_state(query.message.chat_id)
+        s = chat_state["settings"]
+        if source == s["pricer"] and s.get("core_baseline_enabled"):
+            loop = asyncio.get_running_loop()
+            core_symbols = await loop.run_in_executor(_fetch_pool, get_cached_core_universe, int(s.get("core_top_n", 20)))
+            if is_core_symbol(sym, int(s.get("core_top_n", 20)), core_symbols):
+                await query.answer("Core reference mode", show_alert=False)
+                await query.message.reply_text(
+                    f"ℹ️ Для {sym} baseline считается автоматически от {s.get('core_reference_tf')} reference. Reset не нужен."
+                )
+                return
         async with _state_lock:
             chat_state = get_chat_state(query.message.chat_id)
-            source = parts[2].upper()
-            sym = parts[3].upper()
             key = _symbol_key(source, sym)
             if key in chat_state["baselines"]:
                 del chat_state["baselines"][key]
@@ -1224,6 +1470,7 @@ async def poll_engine_job(context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logging.warning(f"[chat {chat_id}] Fetch error: {e}")
                 continue
+            core_symbols, reference_prices = await _prepare_core_context(s_snapshot, quotes)
 
             unit = price_unit(s_snapshot)
             cooldown = int(s_snapshot["cooldown_min"]) * 60
@@ -1240,30 +1487,46 @@ async def poll_engine_job(context: ContextTypes.DEFAULT_TYPE):
                     if not q:
                         continue
                     key = _symbol_key(s["pricer"], sym)
+                    core_ref_mode = bool(s.get("core_baseline_enabled")) and is_core_symbol(sym, int(s.get("core_top_n", 20)), core_symbols)
                     mute_until = float(chat_state["mutes"].get(key, 0) or 0)
                     if mute_until > now:
                         continue
-                    base = chat_state["baselines"].get(key)
-                    if not base:
-                        chat_state["baselines"][key] = {"price": q["price"], "ts": now, "last_alert": 0}
-                        state_dirty = True
-                        continue
-                    base_price = float(base.get("price") or 0.0)
-                    move_pct = ((q["price"] - base_price) / base_price * 100.0) if base_price else 0.0
-                    last_alert_ts = float(base.get("last_alert", 0) or 0)
+                    if core_ref_mode:
+                        ref_price = reference_prices.get(_asset_from_symbol(sym))
+                        if not ref_price:
+                            continue
+                        move_pct = ((q["price"] - ref_price) / ref_price * 100.0) if ref_price else 0.0
+                        base = chat_state["baselines"].get(key) or {}
+                        last_alert_ts = float(base.get("last_alert", 0) or 0)
+                        if abs(move_pct) >= float(s["threshold_percent"]) and (now - last_alert_ts) >= cooldown:
+                            alerts_to_send.append((sym, q, move_pct, ref_price, "reference"))
+                            chat_state["baselines"][key] = {"price": base.get("price", q["price"]), "ts": now, "last_alert": now}
+                            state_dirty = True
+                    else:
+                        base = chat_state["baselines"].get(key)
+                        if not base:
+                            chat_state["baselines"][key] = {"price": q["price"], "ts": now, "last_alert": 0}
+                            state_dirty = True
+                            continue
+                        base_price = float(base.get("price") or 0.0)
+                        move_pct = ((q["price"] - base_price) / base_price * 100.0) if base_price else 0.0
+                        last_alert_ts = float(base.get("last_alert", 0) or 0)
+                        if abs(move_pct) >= float(s["threshold_percent"]) and (now - last_alert_ts) >= cooldown:
+                            alerts_to_send.append((sym, q, move_pct, base_price, "rolling"))
+                            chat_state["baselines"][key] = {"price": q["price"], "ts": now, "last_alert": now}
+                            state_dirty = True
 
-                    if abs(move_pct) >= float(s["threshold_percent"]) and (now - last_alert_ts) >= cooldown:
-                        alerts_to_send.append((sym, q, move_pct, base_price))
-                        chat_state["baselines"][key] = {"price": q["price"], "ts": now, "last_alert": now}
-                        state_dirty = True
-
-            for sym, q, move_pct, base_price in alerts_to_send:
+            for sym, q, move_pct, base_price, baseline_mode in alerts_to_send:
                 rank_prefix = _rank_prefix(q)
                 metrics = _sub_metrics(q, s)
+                if baseline_mode == "reference":
+                    delta_line = f"Δ от {s['core_reference_tf']} ref: {move_pct:+.2f}% ({base_price:.6g} {unit})"
+                else:
+                    delta_line = f"Δ от базы: {move_pct:+.2f}% (база {base_price:.6g} {unit})"
                 text = (
                     f"🚨 {rank_prefix}{sym}\n"
                     f"Цена: {q['price']:.6g} {unit}\n"
-                    f"Δ от базы: {move_pct:+.2f}% (база {base_price:.6g} {unit})"
+                    f"{delta_line}"
                 )
                 if metrics:
                     text += f"\n{metrics}"
