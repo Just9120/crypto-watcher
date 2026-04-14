@@ -318,7 +318,6 @@ def get_chat_state(chat_id: int | str) -> dict:
     key = str(chat_id)
     if key not in state["chats"]:
         state["chats"][key] = _default_chat_state()
-        save_state()
     else:
         state["chats"][key] = _ensure_chat_shape(state["chats"][key])
     return state["chats"][key]
@@ -1119,33 +1118,47 @@ async def poll_engine_job(context: ContextTypes.DEFAULT_TYPE):
     now = time.time()
     state_dirty = False
 
-    for chat_id, chat_state in list(state["chats"].items()):
-        try:
-            # --- whitelist check in poll loop ---
-            if not _is_authorized(int(chat_id)):
-                continue
-            if not chat_state.get("enabled", True):
-                continue
-            s = chat_state["settings"]
-            last_poll_ts = float(chat_state.get("runtime", {}).get("last_poll_ts", 0) or 0)
-            if now - last_poll_ts < int(s["poll_interval_sec"]):
-                continue
+    async with _state_lock:
+        chat_ids = list(state["chats"].keys())
 
-            chat_state["runtime"]["last_poll_ts"] = now
-            state_dirty = True
+    for chat_id in chat_ids:
+        try:
+            async with _state_lock:
+                chat_state = state["chats"].get(chat_id)
+                if not chat_state:
+                    continue
+
+                # --- whitelist check in poll loop ---
+                if not _is_authorized(int(chat_id)):
+                    continue
+                if not chat_state.get("enabled", True):
+                    continue
+
+                s = chat_state["settings"]
+                last_poll_ts = float(chat_state.get("runtime", {}).get("last_poll_ts", 0) or 0)
+                if now - last_poll_ts < int(s["poll_interval_sec"]):
+                    continue
+
+                chat_state["runtime"]["last_poll_ts"] = now
+                state_dirty = True
+                s_snapshot = dict(s)
 
             try:
-                quotes = await _fetch_async(s)
+                quotes = await _fetch_async(s_snapshot)
             except Exception as e:
                 logging.warning(f"[chat {chat_id}] Fetch error: {e}")
                 continue
 
-            unit = price_unit(s)
-            cooldown = int(s["cooldown_min"]) * 60
+            unit = price_unit(s_snapshot)
+            cooldown = int(s_snapshot["cooldown_min"]) * 60
             symbols = list(quotes.keys())
             alerts_to_send = []
 
             async with _state_lock:
+                chat_state = state["chats"].get(chat_id)
+                if not chat_state:
+                    continue
+                s = chat_state["settings"]
                 for sym in symbols:
                     q = quotes.get(sym)
                     if not q:
