@@ -761,7 +761,15 @@ def _sub_metrics(q: dict, settings: dict) -> str:
         parts.append(f"1h {q['percent_change_1h']:+.2f}%")
     if settings.get("show_tf_change") and q.get("percent_change_tf") is not None:
         parts.append(f"{settings['change_tf_label']} {q['percent_change_tf']:+.2f}%")
-    return ", ".join(parts)
+    return " · ".join(parts)
+
+
+def _directional_marker(delta_pct: Optional[float]) -> str:
+    if delta_pct is None:
+        return "→"
+    if abs(delta_pct) < 0.005:
+        return "→"
+    return "↗" if delta_pct > 0 else "↘"
 
 
 def settings_text(chat_state: dict) -> str:
@@ -932,12 +940,13 @@ def status_text(
         if not q:
             continue
         key = _symbol_key(s["pricer"], sym)
+        delta_pct: Optional[float] = None
         core_ref_mode = bool(s.get("core_baseline_enabled")) and is_core_symbol(sym, int(s.get("core_top_n", 20)), core_symbols)
         if core_ref_mode:
             ref_price = reference_prices.get(_asset_from_symbol(sym))
             if ref_price:
-                move_pct = ((q["price"] - ref_price) / ref_price * 100.0) if ref_price else 0.0
-                delta_str = f"Δ {move_pct:+.2f}% от {s['core_reference_tf']} ref {ref_price:.6g}"
+                delta_pct = ((q["price"] - ref_price) / ref_price * 100.0) if ref_price else 0.0
+                delta_str = f"Δ {delta_pct:+.2f}% от {s['core_reference_tf']} ref {ref_price:.6g}"
             else:
                 delta_str = f"Δ — ({s['core_reference_tf']} ref n/a)"
         else:
@@ -946,17 +955,18 @@ def status_text(
                 delta_str = "Δ — (new)"
             else:
                 base_price = float(base["price"] or 0.0)
-                move_pct = ((q["price"] - base_price) / base_price * 100.0) if base_price else 0.0
-                delta_str = f"Δ {move_pct:+.2f}% от базы {base_price:.6g}"
+                delta_pct = ((q["price"] - base_price) / base_price * 100.0) if base_price else 0.0
+                delta_str = f"Δ {delta_pct:+.2f}% от базы {base_price:.6g}"
         muted_until = float(chat_state["mutes"].get(key, 0) or 0)
         mute_flag = " 🔕" if muted_until > now else ""
         metrics = _sub_metrics(q, s)
         rank_prefix = _rank_prefix(q)
-        line = f"{rank_prefix}{sym}: {q['price']:.6g} {unit}{mute_flag}"
+        marker = _directional_marker(delta_pct)
+        lines.append(f"{rank_prefix}{sym}: {q['price']:.6g} {unit}{mute_flag}")
         if metrics:
-            line += f" ({metrics})"
-        line += f" | {delta_str}"
-        lines.append(line)
+            lines.append(metrics)
+        lines.append(f"{marker} {delta_str}")
+        lines.append("")
 
     header = (
         "📊 *Статус бота*\n\n"
@@ -969,7 +979,7 @@ def status_text(
         header += f"_Показаны top 20 из {len(quotes)} отслеживаемых_\n"
     if not lines:
         return header + "\nНет данных по текущей конфигурации."
-    return header + "\n" + "\n".join(lines)
+    return header + "\n" + "\n".join(lines).rstrip()
 
 
 def help_text() -> str:
@@ -1519,17 +1529,18 @@ async def poll_engine_job(context: ContextTypes.DEFAULT_TYPE):
             for sym, q, move_pct, base_price, baseline_mode in alerts_to_send:
                 rank_prefix = _rank_prefix(q)
                 metrics = _sub_metrics(q, s)
+                marker = _directional_marker(move_pct)
                 if baseline_mode == "reference":
-                    delta_line = f"Δ от {s['core_reference_tf']} ref: {move_pct:+.2f}% ({base_price:.6g} {unit})"
+                    delta_line = f"{marker} Δ {move_pct:+.2f}% от {s['core_reference_tf']} ref {base_price:.6g}"
                 else:
-                    delta_line = f"Δ от базы: {move_pct:+.2f}% (база {base_price:.6g} {unit})"
+                    delta_line = f"{marker} Δ {move_pct:+.2f}% от базы {base_price:.6g}"
                 text = (
                     f"🚨 {rank_prefix}{sym}\n"
                     f"Цена: {q['price']:.6g} {unit}\n"
-                    f"{delta_line}"
                 )
                 if metrics:
-                    text += f"\n{metrics}"
+                    text += f"{metrics}\n"
+                text += delta_line
                 try:
                     await context.bot.send_message(
                         chat_id=int(chat_id),
