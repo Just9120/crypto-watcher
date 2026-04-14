@@ -1,0 +1,12 @@
+services:
+  crypto_watcher:
+    build: .
+    container_name: crypto-watcher
+    restart: unless-stopped
+    working_dir: /app
+    env_file:
+      - .env
+    environment:
+      TZ: Europe/Amsterdam
+    volumes:
+      - ./data:/data

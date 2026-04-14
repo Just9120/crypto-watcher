@@ -1,0 +1,21 @@
+# secrets
+.env
+
+# runtime data
+data/
+*.tmp
+*.log
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# local/editor
+.vscode/
+.idea/
+.DS_Store
+
+# backups
+backup/
