@@ -167,6 +167,17 @@ def _selected(label: str, active: bool) -> str:
     return f"✅ {label}" if active else label
 
 
+def _is_cmc_available() -> bool:
+    return bool(CMC_API_KEY)
+
+
+def _user_friendly_fetch_error(e: Exception) -> str:
+    msg = str(e)
+    if "CMC_API_KEY is missing in environment" in msg:
+        return "❌ CMC недоступен: API-ключ не настроен на сервере. Переключите Source на BYBIT в /settings."
+    return f"❌ Ошибка запроса цен: {msg}"
+
+
 def _truncate_list(items: List[str], max_items: int = 8) -> str:
     if not items:
         return "—"
@@ -181,6 +192,7 @@ def _truncate_list(items: List[str], max_items: int = 8) -> str:
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 CMC_API_KEY = os.getenv("CMC_API_KEY", "").strip()
 assert TELEGRAM_BOT_TOKEN, "Missing TELEGRAM_BOT_TOKEN in .env / environment"
+CMC_UNAVAILABLE_MESSAGE = "CMC недоступен на сервере (нет CMC_API_KEY). Используется BYBIT."
 
 DEFAULT_PRICER = os.getenv("PRICER", "CMC").strip().upper()
 DEFAULT_BYBIT_CATEGORY = os.getenv("BYBIT_CATEGORY", "spot").strip().lower()
@@ -227,8 +239,12 @@ state: Dict[str, dict] = {"version": 2, "chats": {}}
 
 
 def _default_settings() -> dict:
+    default_pricer = DEFAULT_PRICER
+    if default_pricer == "CMC" and not CMC_API_KEY:
+        logging.warning("Default PRICER=CMC ignored: CMC_API_KEY is missing, falling back to BYBIT")
+        default_pricer = "BYBIT"
     return {
-        "pricer": DEFAULT_PRICER,
+        "pricer": default_pricer,
         "threshold_percent": DEFAULT_THRESHOLD_PERCENT,
         "poll_interval_sec": DEFAULT_POLL_INTERVAL_SEC,
         "cooldown_min": DEFAULT_COOLDOWN_MIN,
@@ -273,6 +289,9 @@ def _ensure_chat_shape(chat_state: dict) -> dict:
     base_settings["bybit_pairs"] = [_normalize_bybit_pair(x) for x in base_settings.get("bybit_pairs", []) if x]
     base_settings["watchlist"] = [_normalize_cmc_symbol(x) for x in base_settings.get("watchlist", []) if x]
     base_settings["pricer"] = str(base_settings.get("pricer", DEFAULT_PRICER)).upper()
+    if base_settings["pricer"] == "CMC" and not CMC_API_KEY:
+        logging.warning("Chat settings fallback: pricer=CMC but CMC_API_KEY is missing; forcing BYBIT")
+        base_settings["pricer"] = "BYBIT"
     base_settings["bybit_category"] = str(base_settings.get("bybit_category", DEFAULT_BYBIT_CATEGORY)).lower()
     base_settings["threshold_percent"] = float(base_settings.get("threshold_percent", DEFAULT_THRESHOLD_PERCENT))
     base_settings["poll_interval_sec"] = int(base_settings.get("poll_interval_sec", DEFAULT_POLL_INTERVAL_SEC))
@@ -776,11 +795,14 @@ def settings_text(chat_state: dict) -> str:
     s = chat_state["settings"]
     active_mutes = sum(1 for _, ts in chat_state["mutes"].items() if ts > time.time())
     core_suffix = ""
+    source_label = s["pricer"]
+    if not _is_cmc_available():
+        source_label += " (CMC: нет API)"
     if s.get("core_baseline_enabled"):
         core_suffix = f" (Top {s.get('core_top_n')}, {s.get('core_reference_tf')} ref)"
     return (
         "⚙️ *Settings*\n\n"
-        f"*Source:* {s['pricer']}\n"
+        f"*Source:* {source_label}\n"
         f"*Mode:* {_mode_label(s)}\n"
         f"*Threshold:* {s['threshold_percent']}%\n"
         f"*Poll interval:* {_fmt_interval(s['poll_interval_sec'])}\n"
@@ -807,12 +829,15 @@ def settings_keyboard(chat_state: dict) -> InlineKeyboardMarkup:
     core_enabled = bool(s.get("core_baseline_enabled"))
     core_top_n = int(s.get("core_top_n", 20))
     core_reference_tf = s.get("core_reference_tf", "7d")
+    cmc_available = _is_cmc_available()
+    cmc_source_text = "CMC" if cmc_available else "CMC (нет API)"
+    cmc_source_cb = "st:src:CMC" if cmc_available else "st:noop"
 
     kb = [
         [_section_button("Источник")],
         [
             InlineKeyboardButton(_selected("Bybit", pricer == "BYBIT"), callback_data="st:src:BYBIT"),
-            InlineKeyboardButton(_selected("CMC", pricer == "CMC"), callback_data="st:src:CMC"),
+            InlineKeyboardButton(_selected(cmc_source_text, pricer == "CMC"), callback_data=cmc_source_cb),
         ],
         [_section_button("Режим")],
         [
@@ -872,7 +897,7 @@ def settings_keyboard(chat_state: dict) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(_selected("500", mode == "top" and top_limit == 500), callback_data="st:top:500"),
             ],
         ]
-    else:
+    elif cmc_available:
         cmc_top_limit = int(s["cmc_top_limit"])
         kb += [
             [_section_button("Top лимит CMC")],
@@ -903,7 +928,7 @@ def alert_keyboard(source: str, sym: str) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton("♻️ Reset base", callback_data=f"al:reset:{source}:{sym}"),
-                InlineKeyboardButton("📊 Status", callback_data="al:status"),
+                InlineKeyboardButton("📊 Status", callback_data=f"al:status:{source}:{sym}"),
             ],
         ]
     )
@@ -982,6 +1007,49 @@ def status_text(
     return header + "\n" + "\n".join(lines).rstrip()
 
 
+def single_symbol_summary_text(
+    chat_state: dict,
+    source: str,
+    sym: str,
+    quotes: Dict[str, dict],
+    core_symbols: Optional[Set[str]] = None,
+    reference_prices: Optional[Dict[str, float]] = None,
+) -> str:
+    s = chat_state["settings"]
+    q = quotes.get(sym)
+    if not q:
+        return f"{sym}\nНет данных по символу для текущей выборки."
+    reference_prices = reference_prices or {}
+    core_ref_mode = bool(s.get("core_baseline_enabled")) and source == s["pricer"] and is_core_symbol(
+        sym, int(s.get("core_top_n", 20)), core_symbols
+    )
+    delta_pct: Optional[float] = None
+    if core_ref_mode:
+        ref_price = reference_prices.get(_asset_from_symbol(sym))
+        if ref_price:
+            delta_pct = ((q["price"] - ref_price) / ref_price * 100.0) if ref_price else 0.0
+            delta_line = f"Δ {delta_pct:+.2f}% от {s['core_reference_tf']} ref {ref_price:.6g}"
+        else:
+            delta_line = f"Δ — ({s['core_reference_tf']} ref n/a)"
+    else:
+        key = _symbol_key(source, sym)
+        base = chat_state["baselines"].get(key)
+        if not base:
+            delta_line = "Δ — (new)"
+        else:
+            base_price = float(base.get("price") or 0.0)
+            delta_pct = ((q["price"] - base_price) / base_price * 100.0) if base_price else 0.0
+            delta_line = f"Δ {delta_pct:+.2f}% от базы {base_price:.6g}"
+    marker = _directional_marker(delta_pct)
+    lines = [sym, f"Цена: {q['price']:.6g} {price_unit(s)}"]
+    if q.get("percent_change_24h") is not None:
+        lines.append(f"24h: {q['percent_change_24h']:+.2f}%")
+    if s.get("show_tf_change") and q.get("percent_change_tf") is not None:
+        lines.append(f"{s['change_tf_label']}: {q['percent_change_tf']:+.2f}%")
+    lines.append(f"{marker} {delta_line}")
+    return "\n".join(lines)
+
+
 def help_text() -> str:
     return (
         "Команды:\n"
@@ -994,7 +1062,7 @@ def help_text() -> str:
         "/unmute BTC — снять mute с монеты\n"
         "/unmute all — снять все mute\n"
         "/resetbase BTC — сбросить baseline по монете\n"
-        "/resetbase all — сбросить все baseline для текущего источника\n"
+        "/resetallbase — сбросить все baseline для текущего источника (с подтверждением)\n"
         "/help — эта справка\n\n"
         "Как работает бот:\n"
         "- Non-core монеты работают по rolling baseline (сохранённая база в state).\n"
@@ -1003,10 +1071,12 @@ def help_text() -> str:
         "- TF metric (CHANGE_TF) — только дополнительная метрика, не триггер алерта.\n"
         "- Top: следим за top-N монетами источника; List: только за вашим списком.\n"
         "- /mute временно отключает алерты по монете.\n"
-        "- /resetbase нужен для rolling baseline; для core reference reset не требуется.\n\n"
+        "- /resetbase нужен для rolling baseline; для core reference reset не требуется.\n"
+        "- Кнопка Status в алерте показывает краткую карточку только по этой монете.\n\n"
         "Примечания:\n"
         "- В Bybit list-режиме можно писать BTC, ETH, SOL — бот сам превратит их в BTCUSDT/ETHUSDT/...\n"
         "- В top-режиме rank показывается в /status и алертах.\n"
+        "- Если CMC API-ключ не настроен, источник CMC недоступен, используется BYBIT.\n"
         "- CHANGE_TF — только дополнительная метрика, не триггер алерта."
     )
 
@@ -1017,7 +1087,7 @@ def settings_help_text() -> str:
         "*Source*\n"
         "Источник котировок:\n"
         "• BYBIT — данные с Bybit\n"
-        "• CMC — данные с CoinMarketCap\n\n"
+        "• CMC — данные с CoinMarketCap (доступно только при настроенном CMC_API_KEY)\n\n"
         "*Mode*\n"
         "Режим отслеживания:\n"
         "• Top — следить за топ-N монетами источника\n"
@@ -1054,6 +1124,8 @@ def settings_help_text() -> str:
         "• Rolling baseline — сохранённая базовая цена для non-core\n"
         "• Core reference — автоматическая база от выбранного окна для core\n"
         "• Cooldown — пауза между повторными алертами по одной монете\n"
+        "• /resetbase — сброс одной монеты, /resetallbase — массовый сброс с подтверждением\n"
+        "• В алерте кнопка Status показывает карточку конкретной монеты\n"
         "• TF metric не влияет на факт срабатывания алерта"
     )
 
@@ -1098,6 +1170,9 @@ async def watchlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     chat_state = get_chat_state(update.effective_chat.id)
     s = chat_state["settings"]
+    if s["pricer"] == "CMC" and not _is_cmc_available():
+        await update.message.reply_text(CMC_UNAVAILABLE_MESSAGE)
+        return
     mode = current_mode(s)
     if mode == "top":
         if s["pricer"] == "BYBIT":
@@ -1195,7 +1270,7 @@ async def resetbase_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _is_authorized(update.effective_chat.id):
         return
     if not context.args:
-        await update.message.reply_text("Использование: /resetbase BTC  или  /resetbase all")
+        await update.message.reply_text("Использование: /resetbase BTC")
         return
     raw = context.args[0].strip().lower()
     async with _state_lock:
@@ -1237,6 +1312,23 @@ async def resetbase_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"Для {sym} baseline не найден.")
 
 
+async def resetallbase_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_authorized(update.effective_chat.id):
+        return
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("✅ Да, сбросить все", callback_data="rb:confirm"),
+                InlineKeyboardButton("❌ Отмена", callback_data="rb:cancel"),
+            ]
+        ]
+    )
+    await update.message.reply_text(
+        "⚠️ Ты уверен, что хочешь сбросить все baseline для текущего источника?",
+        reply_markup=keyboard,
+    )
+
+
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _is_authorized(update.effective_chat.id):
         return
@@ -1246,7 +1338,7 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         quotes = await _fetch_async(s)
         core_symbols, reference_prices = await _prepare_core_context(s, quotes)
     except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка запроса цен: {e}")
+        await update.message.reply_text(_user_friendly_fetch_error(e))
         return
     text = status_text(chat_state, quotes, core_symbols=core_symbols, reference_prices=reference_prices)
     await update.message.reply_text(text, parse_mode="Markdown")
@@ -1279,7 +1371,7 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if action == "src" and len(parts) >= 3:
             target = parts[2].upper()
             if target == "CMC" and not CMC_API_KEY:
-                await query.answer("CMC_API_KEY отсутствует в окружении", show_alert=True)
+                await query.answer("CMC недоступен: на сервере нет CMC_API_KEY", show_alert=True)
                 return
             s["pricer"] = target
             chat_state["runtime"]["last_poll_ts"] = 0
@@ -1352,7 +1444,7 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if action == "cmctop" and len(parts) >= 3:
             if not CMC_API_KEY:
-                await query.answer("CMC_API_KEY отсутствует в окружении", show_alert=True)
+                await query.answer("CMC недоступен: на сервере нет CMC_API_KEY", show_alert=True)
                 return
             s["cmc_top_limit"] = int(parts[2])
             s["pricer"] = "CMC"
@@ -1370,7 +1462,7 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             txt = status_text(chat_state, quotes, core_symbols=core_symbols, reference_prices=reference_prices)
             await query.message.reply_text(txt, parse_mode="Markdown")
         except Exception as e:
-            await query.message.reply_text(f"❌ Ошибка статуса: {e}")
+            await query.message.reply_text(_user_friendly_fetch_error(e))
         return
 
     if action == "refresh":
@@ -1391,15 +1483,24 @@ async def alert_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     action = parts[1]
 
-    if action == "status":
+    if action == "status" and len(parts) >= 4:
         chat_state = get_chat_state(query.message.chat_id)
+        source = parts[2].upper()
+        sym = parts[3].upper()
         try:
             quotes = await _fetch_async(chat_state["settings"])
             core_symbols, reference_prices = await _prepare_core_context(chat_state["settings"], quotes)
-            txt = status_text(chat_state, quotes, core_symbols=core_symbols, reference_prices=reference_prices)
+            txt = single_symbol_summary_text(
+                chat_state,
+                source=source,
+                sym=sym,
+                quotes=quotes,
+                core_symbols=core_symbols,
+                reference_prices=reference_prices,
+            )
             await query.message.reply_text(txt, parse_mode="Markdown")
         except Exception as e:
-            await query.message.reply_text(f"❌ Ошибка статуса: {e}")
+            await query.message.reply_text(_user_friendly_fetch_error(e))
         return
 
     if action == "mute" and len(parts) >= 5:
@@ -1432,6 +1533,30 @@ async def alert_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"ℹ️ Для {sym} baseline считается автоматически от {s.get('core_reference_tf')} reference. Reset не нужен."
                 )
                 return
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(f"✅ Да, сбросить {sym}", callback_data=f"al:resetconfirm:{source}:{sym}"),
+                    InlineKeyboardButton("❌ Отмена", callback_data=f"al:resetcancel:{source}:{sym}"),
+                ]
+            ]
+        )
+        await query.message.reply_text(f"Подтвердить сброс baseline для {sym}?", reply_markup=keyboard)
+        return
+
+    if action == "resetconfirm" and len(parts) >= 4:
+        source = parts[2].upper()
+        sym = parts[3].upper()
+        chat_state = get_chat_state(query.message.chat_id)
+        s_snapshot = dict(chat_state["settings"])
+        if source == s_snapshot["pricer"] and s_snapshot.get("core_baseline_enabled"):
+            loop = asyncio.get_running_loop()
+            core_symbols = await loop.run_in_executor(_fetch_pool, get_cached_core_universe, int(s_snapshot.get("core_top_n", 20)))
+            if is_core_symbol(sym, int(s_snapshot.get("core_top_n", 20)), core_symbols):
+                await query.message.reply_text(
+                    f"ℹ️ Для {sym} baseline считается автоматически от {s_snapshot.get('core_reference_tf')} reference. Reset не нужен."
+                )
+                return
         async with _state_lock:
             chat_state = get_chat_state(query.message.chat_id)
             key = _symbol_key(source, sym)
@@ -1441,6 +1566,35 @@ async def alert_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("Baseline reset", show_alert=False)
         await query.message.reply_text(f"♻️ Baseline для {sym} сброшен. Новый будет создан на следующем poll/status.")
         return
+
+    if action == "resetcancel" and len(parts) >= 4:
+        sym = parts[3].upper()
+        await query.answer("Отменено", show_alert=False)
+        await query.message.reply_text(f"Отмена: baseline для {sym} не изменён.")
+        return
+
+
+async def resetallbase_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not _is_authorized(query.message.chat_id):
+        return
+    action = (query.data or "").split(":")[1] if ":" in (query.data or "") else ""
+    if action == "cancel":
+        await query.message.reply_text("Отмена: массовый reset baseline не выполнен.")
+        return
+    if action != "confirm":
+        return
+    async with _state_lock:
+        chat_state = get_chat_state(query.message.chat_id)
+        prefix = f"{chat_state['settings']['pricer']}:"
+        removed = []
+        for key in list(chat_state["baselines"].keys()):
+            if key.startswith(prefix):
+                removed.append(key)
+                del chat_state["baselines"][key]
+        save_state()
+    await query.message.reply_text(f"♻️ Сбросил baseline: {len(removed)} шт.")
 
 
 # ---------------------------------------------------------------
@@ -1585,9 +1739,11 @@ def main():
     app.add_handler(CommandHandler("mute", mute_cmd))
     app.add_handler(CommandHandler("unmute", unmute_cmd))
     app.add_handler(CommandHandler("resetbase", resetbase_cmd))
+    app.add_handler(CommandHandler("resetallbase", resetallbase_cmd))
 
     app.add_handler(CallbackQueryHandler(settings_callback, pattern=r"^st:"))
     app.add_handler(CallbackQueryHandler(alert_callback, pattern=r"^al:"))
+    app.add_handler(CallbackQueryHandler(resetallbase_callback, pattern=r"^rb:"))
 
     app.job_queue.run_repeating(poll_engine_job, interval=ENGINE_INTERVAL_SEC, first=5)
 
