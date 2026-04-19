@@ -40,7 +40,8 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from dotenv import load_dotenv
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -409,6 +410,38 @@ def tracked_desc(settings: dict) -> str:
         if mode == "top":
             return f"Top {settings['cmc_top_limit']} CMC"
         return _truncate_list(settings["watchlist"])
+
+
+def _radar_tracking_source(settings: dict) -> str:
+    watchlist = [_normalize_bybit_pair(x) for x in (settings.get("watchlist") or []) if x]
+    if watchlist:
+        return "watchlist"
+    pairs = [_normalize_bybit_pair(x) for x in (settings.get("bybit_pairs") or []) if x]
+    if pairs:
+        return "bybit_pairs"
+    return "none"
+
+
+def radar_mode_label(settings: dict) -> str:
+    source = _radar_tracking_source(settings)
+    configured_mode = current_mode(settings)
+    if source in ("watchlist", "bybit_pairs"):
+        if configured_mode == "top":
+            return "List/watchlist (effective; top configured)"
+        return "List/watchlist"
+    return "No symbols configured"
+
+
+def radar_tracking_desc(settings: dict) -> str:
+    source = _radar_tracking_source(settings)
+    symbols = _symbols_for_radar(settings)
+    if not symbols:
+        return "Список пуст"
+    if source == "watchlist":
+        return f"Watchlist: {_truncate_list(symbols)}"
+    if source == "bybit_pairs":
+        return f"Bybit pairs: {_truncate_list(symbols)}"
+    return _truncate_list(symbols)
 
 
 def price_unit(settings: dict) -> str:
@@ -943,31 +976,25 @@ def settings_text(chat_state: dict) -> str:
     return (
         "⚙️ *Bybit Spot Volume Radar*\n\n"
         f"*Source:* BYBIT spot\n"
-        f"*Mode:* List/watchlist\n"
+        f"*Mode:* {radar_mode_label(s)}\n"
         f"*Radar poll:* {_fmt_interval(int(s.get('radar_poll_sec', DEFAULT_RADAR_POLL_SEC)))}\n"
         f"*Signal:* |5m|≥{PRICE_MOVE_MIN:.1f}% + x≥{TURNOVER_SPIKE_MIN:.1f} + 24h≥${LIQUIDITY_FLOOR_24H:,.0f}\n"
         f"*SMA periods:* {SMA_PERIODS}\n"
-        f"*Tracking:* {tracked_desc(s)}\n"
+        f"*Tracking:* {radar_tracking_desc(s)}\n"
         f"*Muted:* {active_mutes}\n\n"
         "Пороги сигнала настраиваются через .env."
     )
 
 
-def _section_button(text: str) -> InlineKeyboardButton:
-    return InlineKeyboardButton(text, callback_data="st:noop")
-
-
 def settings_keyboard(chat_state: dict) -> InlineKeyboardMarkup:
     s = chat_state["settings"]
     kb = [
-        [_section_button("Radar cadence")],
         [
             InlineKeyboardButton(_selected("1m", int(s.get("radar_poll_sec", 0)) == 60), callback_data="st:rdr:60"),
             InlineKeyboardButton(_selected("90s", int(s.get("radar_poll_sec", 0)) == 90), callback_data="st:rdr:90"),
             InlineKeyboardButton(_selected("2m", int(s.get("radar_poll_sec", 0)) == 120), callback_data="st:rdr:120"),
             InlineKeyboardButton(_selected("3m", int(s.get("radar_poll_sec", 0)) == 180), callback_data="st:rdr:180"),
         ],
-        [_section_button("Действия")],
         [InlineKeyboardButton("ℹ️ Что значат настройки", callback_data="st:help")],
         [
             InlineKeyboardButton("📊 Status", callback_data="st:status"),
@@ -1030,10 +1057,10 @@ def status_text(
 
     header = (
         "📊 *Bybit Spot Volume Radar*\n\n"
-        f"*Mode:* watchlist/list\n"
+        f"*Mode:* {radar_mode_label(s)}\n"
         f"*Radar poll:* {_fmt_interval(int(s.get('radar_poll_sec', DEFAULT_RADAR_POLL_SEC)))} | *Cooldown:* {s['cooldown_min']} min\n"
         f"*Signal:* |5m|≥{PRICE_MOVE_MIN:.1f}% + x≥{TURNOVER_SPIKE_MIN:.1f} + 24h≥${LIQUIDITY_FLOOR_24H:,.0f}\n"
-        f"*Tracking:* {tracked_desc(s)}\n"
+        f"*Tracking:* {radar_tracking_desc(s)}\n"
     )
     if not lines:
         return header + "\nНет данных по текущей конфигурации."
@@ -1091,14 +1118,29 @@ def help_text() -> str:
 
 def settings_help_text() -> str:
     return (
-        "ℹ️ *Bybit Spot Volume Radar*\n\n"
-        "*Radar cadence* — частота проверки watchlist (обычно 60-120 секунд).\n\n"
-        "*Signal contract*\n"
+        "ℹ️ Что значат настройки\n\n"
+        "Bybit Spot Volume Radar\n"
+        "Radar cadence — частота проверки watchlist (обычно 60-120 секунд).\n\n"
+        "Signal contract\n"
         f"1) |5m change| >= {PRICE_MOVE_MIN:.1f}%\n"
         f"2) turnover spike >= x{TURNOVER_SPIKE_MIN:.1f}\n"
         f"3) turnover24h >= ${LIQUIDITY_FLOOR_24H:,.0f}\n\n"
         f"SMA_PERIODS={SMA_PERIODS} задаётся в .env.\n"
     )
+
+
+async def _safe_edit_settings_message(query, chat_state: dict) -> None:
+    try:
+        await query.edit_message_text(
+            settings_text(chat_state),
+            reply_markup=settings_keyboard(chat_state),
+            parse_mode="Markdown",
+        )
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            await query.answer("Без изменений", show_alert=False)
+            return
+        raise
 
 
 # ---------------------------------------------------------------
@@ -1315,10 +1357,8 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(parts) < 2:
         return
     action = parts[1]
-    if action == "noop":
-        return
     if action == "help":
-        await query.message.reply_text(settings_help_text(), parse_mode="Markdown")
+        await query.message.reply_text(settings_help_text())
         return
 
     async with _state_lock:
@@ -1328,7 +1368,7 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             s["radar_poll_sec"] = int(parts[2])
             chat_state["runtime"]["last_poll_ts"] = 0
             save_state()
-            await query.edit_message_text(settings_text(chat_state), reply_markup=settings_keyboard(chat_state), parse_mode="Markdown")
+            await _safe_edit_settings_message(query, chat_state)
             return
 
         if action == "src" and len(parts) >= 3:
@@ -1339,27 +1379,27 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             s["pricer"] = target
             chat_state["runtime"]["last_poll_ts"] = 0
             save_state()
-            await query.edit_message_text(settings_text(chat_state), reply_markup=settings_keyboard(chat_state), parse_mode="Markdown")
+            await _safe_edit_settings_message(query, chat_state)
             return
 
         if action == "mode" and len(parts) >= 3:
             set_mode(s, parts[2])
             chat_state["runtime"]["last_poll_ts"] = 0
             save_state()
-            await query.edit_message_text(settings_text(chat_state), reply_markup=settings_keyboard(chat_state), parse_mode="Markdown")
+            await _safe_edit_settings_message(query, chat_state)
             return
 
         if action == "thr" and len(parts) >= 3:
             s["threshold_percent"] = float(parts[2])
             save_state()
-            await query.edit_message_text(settings_text(chat_state), reply_markup=settings_keyboard(chat_state), parse_mode="Markdown")
+            await _safe_edit_settings_message(query, chat_state)
             return
 
         if action == "int" and len(parts) >= 3:
             s["poll_interval_sec"] = int(parts[2])
             chat_state["runtime"]["last_poll_ts"] = 0
             save_state()
-            await query.edit_message_text(settings_text(chat_state), reply_markup=settings_keyboard(chat_state), parse_mode="Markdown")
+            await _safe_edit_settings_message(query, chat_state)
             return
 
         if action == "tf" and len(parts) >= 3:
@@ -1372,13 +1412,13 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 s["change_tf_bybit"] = bybit_val
             chat_state["runtime"]["last_poll_ts"] = 0
             save_state()
-            await query.edit_message_text(settings_text(chat_state), reply_markup=settings_keyboard(chat_state), parse_mode="Markdown")
+            await _safe_edit_settings_message(query, chat_state)
             return
 
         if action == "core" and len(parts) >= 3:
             s["core_baseline_enabled"] = parts[2].lower() == "on"
             save_state()
-            await query.edit_message_text(settings_text(chat_state), reply_markup=settings_keyboard(chat_state), parse_mode="Markdown")
+            await _safe_edit_settings_message(query, chat_state)
             return
 
         if action == "coretop" and len(parts) >= 3:
@@ -1386,7 +1426,7 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if top_n in (20, 30):
                 s["core_top_n"] = top_n
             save_state()
-            await query.edit_message_text(settings_text(chat_state), reply_markup=settings_keyboard(chat_state), parse_mode="Markdown")
+            await _safe_edit_settings_message(query, chat_state)
             return
 
         if action == "coretf" and len(parts) >= 3:
@@ -1394,7 +1434,7 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if tf in CORE_REFERENCE_TF_TO_SEC:
                 s["core_reference_tf"] = tf
             save_state()
-            await query.edit_message_text(settings_text(chat_state), reply_markup=settings_keyboard(chat_state), parse_mode="Markdown")
+            await _safe_edit_settings_message(query, chat_state)
             return
 
         if action == "top" and len(parts) >= 3:
@@ -1402,7 +1442,7 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             s["pricer"] = "BYBIT"
             set_mode(s, "top")
             save_state()
-            await query.edit_message_text(settings_text(chat_state), reply_markup=settings_keyboard(chat_state), parse_mode="Markdown")
+            await _safe_edit_settings_message(query, chat_state)
             return
 
         if action == "cmctop" and len(parts) >= 3:
@@ -1413,7 +1453,7 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             s["pricer"] = "CMC"
             set_mode(s, "top")
             save_state()
-            await query.edit_message_text(settings_text(chat_state), reply_markup=settings_keyboard(chat_state), parse_mode="Markdown")
+            await _safe_edit_settings_message(query, chat_state)
             return
 
     # --- actions that need fetch (outside state lock) ---
@@ -1429,8 +1469,23 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if action == "refresh":
         chat_state = get_chat_state(query.message.chat_id)
-        await query.edit_message_text(settings_text(chat_state), reply_markup=settings_keyboard(chat_state), parse_mode="Markdown")
+        await _safe_edit_settings_message(query, chat_state)
         return
+
+
+async def _register_bot_commands(app: Application) -> None:
+    commands = [
+        BotCommand("start", "Активировать бот в чате"),
+        BotCommand("status", "Текущее состояние радара"),
+        BotCommand("settings", "Открыть настройки"),
+        BotCommand("watchlist", "Показать список отслеживания"),
+        BotCommand("setlist", "Обновить watchlist"),
+        BotCommand("mute", "Временно отключить алерты по монете"),
+        BotCommand("unmute", "Снять mute с монеты или всех"),
+        BotCommand("help", "Справка по командам"),
+    ]
+    await app.bot.set_my_commands(commands)
+    logging.info("Telegram commands registered via setMyCommands")
 
 
 async def alert_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1657,7 +1712,7 @@ def main():
         f"whitelist={'ON (' + str(len(ALLOWED_CHAT_IDS)) + ')' if ALLOWED_CHAT_IDS else 'OFF'}"
     )
 
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).post_init(_register_bot_commands).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
