@@ -1,7 +1,3 @@
-
-## `docs/product_scope.md`
-
-```md
 # CryptoWatcher — Текущий продуктовый scope
 
 ## 1. Назначение
