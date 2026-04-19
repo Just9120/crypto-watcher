@@ -194,6 +194,22 @@ def _truncate_list(items: List[str], max_items: int = 8) -> str:
     return ", ".join(items[:max_items]) + f" … (+{len(items) - max_items})"
 
 
+def _fmt_price_move_threshold(value: float) -> str:
+    return f"{float(value):.1f}%"
+
+
+def _fmt_spike_threshold(value: float) -> str:
+    return f"x{float(value):.1f}"
+
+
+def _fmt_liquidity_threshold(value: float) -> str:
+    amount = float(value)
+    if amount >= 1_000_000:
+        label = amount / 1_000_000
+        return f"${label:.0f}M" if abs(label - round(label)) < 1e-9 else f"${label:.1f}M"
+    return f"${amount:,.0f}"
+
+
 # ---------------------------------------------------------------
 # Env defaults
 # ---------------------------------------------------------------
@@ -294,6 +310,9 @@ def _default_settings() -> dict:
         "alert_universe_mode": "top",
         "custom_pairs": [],
         "signal_timeframe": DEFAULT_SIGNAL_TIMEFRAME,
+        "price_move_min": PRICE_MOVE_MIN,
+        "turnover_spike_min": TURNOVER_SPIKE_MIN,
+        "liquidity_floor_24h": LIQUIDITY_FLOOR_24H,
     }
 
 
@@ -337,6 +356,9 @@ def _ensure_chat_shape(chat_state: dict) -> dict:
     base_settings["signal_timeframe"] = _normalize_signal_timeframe(
         base_settings.get("signal_timeframe", DEFAULT_SIGNAL_TIMEFRAME)
     )
+    base_settings["price_move_min"] = float(base_settings.get("price_move_min", PRICE_MOVE_MIN))
+    base_settings["turnover_spike_min"] = float(base_settings.get("turnover_spike_min", TURNOVER_SPIKE_MIN))
+    base_settings["liquidity_floor_24h"] = float(base_settings.get("liquidity_floor_24h", LIQUIDITY_FLOOR_24H))
     core_top_n = int(base_settings.get("core_top_n", 20))
     base_settings["core_top_n"] = core_top_n if core_top_n in (20, 30) else 20
     core_reference_tf = str(base_settings.get("core_reference_tf", "7d")).lower()
@@ -881,7 +903,7 @@ def _timeframe_to_seconds(timeframe: str) -> int:
     return int(timeframe[:-1]) * 60
 
 
-def _eval_radar_signal(klines: List[list], ticker: dict, signal_timeframe: str) -> Optional[dict]:
+def _eval_radar_signal(klines: List[list], ticker: dict, signal_timeframe: str, settings: dict) -> Optional[dict]:
     now_ms = int(time.time() * 1000)
     timeframe_sec = _timeframe_to_seconds(signal_timeframe)
     timeframe_ms = timeframe_sec * 1000
@@ -907,6 +929,9 @@ def _eval_radar_signal(klines: List[list], ticker: dict, signal_timeframe: str) 
     price_change_tf = (latest_close / prev_close - 1.0) * 100.0
     spike_ratio = current_turnover / sma_turnover
     turnover24h = float(ticker.get("turnover24h") or 0.0)
+    price_move_min = float(settings.get("price_move_min", PRICE_MOVE_MIN))
+    turnover_spike_min = float(settings.get("turnover_spike_min", TURNOVER_SPIKE_MIN))
+    liquidity_floor_24h = float(settings.get("liquidity_floor_24h", LIQUIDITY_FLOOR_24H))
     return {
         "price": float(ticker.get("lastPrice") or latest_close),
         "signal_timeframe": signal_timeframe,
@@ -916,9 +941,9 @@ def _eval_radar_signal(klines: List[list], ticker: dict, signal_timeframe: str) 
         "turnover_spike_ratio": spike_ratio,
         "turnover24h": turnover24h,
         "meets_signal": (
-            abs(price_change_tf) >= PRICE_MOVE_MIN
-            and spike_ratio >= TURNOVER_SPIKE_MIN
-            and turnover24h >= LIQUIDITY_FLOOR_24H
+            abs(price_change_tf) >= price_move_min
+            and spike_ratio >= turnover_spike_min
+            and turnover24h >= liquidity_floor_24h
         ),
     }
 
@@ -942,7 +967,7 @@ def _fetch_symbol_radar(settings: dict, sym: str, ticker: dict) -> Tuple[str, Op
         if kd.get("retCode") != 0:
             return sym, None
         kl = kd.get("result", {}).get("list") or []
-        return sym, _eval_radar_signal(kl, ticker, signal_timeframe)
+        return sym, _eval_radar_signal(kl, ticker, signal_timeframe, settings)
     except Exception:
         return sym, None
 
@@ -1024,38 +1049,67 @@ def _directional_marker(delta_pct: Optional[float]) -> str:
 def settings_text(chat_state: dict) -> str:
     s = chat_state["settings"]
     signal_timeframe = _normalize_signal_timeframe(s.get("signal_timeframe", DEFAULT_SIGNAL_TIMEFRAME))
+    price_move_min = float(s.get("price_move_min", PRICE_MOVE_MIN))
+    turnover_spike_min = float(s.get("turnover_spike_min", TURNOVER_SPIKE_MIN))
+    liquidity_floor_24h = float(s.get("liquidity_floor_24h", LIQUIDITY_FLOOR_24H))
     active_mutes = sum(1 for _, ts in chat_state["mutes"].items() if ts > time.time())
     return (
         "⚙️ *Bybit Spot Volume Radar*\n\n"
         f"*Source:* BYBIT spot\n"
         f"*Mode:* {radar_mode_label(s)}\n"
-        f"*Radar poll:* {_fmt_interval(int(s.get('radar_poll_sec', DEFAULT_RADAR_POLL_SEC)))} (как часто проверяем рынок)\n"
-        f"*Signal timeframe:* {signal_timeframe} (размер свечи для сигнала)\n"
-        f"*Signal:* |{signal_timeframe}|≥{PRICE_MOVE_MIN:.1f}% + x≥{TURNOVER_SPIKE_MIN:.1f} + 24h≥${LIQUIDITY_FLOOR_24H:,.0f}\n"
+        f"*Проверка рынка:* {_fmt_interval(int(s.get('radar_poll_sec', DEFAULT_RADAR_POLL_SEC)))}\n"
+        f"*Таймфрейм сигнала:* {signal_timeframe}\n"
+        f"*Движение цены:* ≥ {_fmt_price_move_threshold(price_move_min)}\n"
+        f"*Спайк объёма:* ≥ {_fmt_spike_threshold(turnover_spike_min)}\n"
+        f"*Ликвидность 24ч:* ≥ {_fmt_liquidity_threshold(liquidity_floor_24h)}\n"
+        f"*Сигнал:* все 3 условия выше должны выполниться одновременно\n"
         f"*SMA periods:* {SMA_PERIODS}\n"
         f"*Tracking:* {radar_tracking_desc(s)}\n"
-        f"*Muted:* {active_mutes}\n\n"
-        "Пороги сигнала настраиваются через .env."
+        f"*Muted:* {active_mutes}"
     )
 
 
 def settings_keyboard(chat_state: dict) -> InlineKeyboardMarkup:
     s = chat_state["settings"]
     signal_timeframe = _normalize_signal_timeframe(s.get("signal_timeframe", DEFAULT_SIGNAL_TIMEFRAME))
+    price_move_min = float(s.get("price_move_min", PRICE_MOVE_MIN))
+    turnover_spike_min = float(s.get("turnover_spike_min", TURNOVER_SPIKE_MIN))
+    liquidity_floor_24h = float(s.get("liquidity_floor_24h", LIQUIDITY_FLOOR_24H))
     kb = [
-        [InlineKeyboardButton("Signal timeframe", callback_data="st:noop")],
+        [InlineKeyboardButton("Таймфрейм сигнала", callback_data="st:noop")],
         [
             InlineKeyboardButton(_selected("1m", signal_timeframe == "1m"), callback_data="st:sgtf:1m"),
             InlineKeyboardButton(_selected("3m", signal_timeframe == "3m"), callback_data="st:sgtf:3m"),
             InlineKeyboardButton(_selected("5m", signal_timeframe == "5m"), callback_data="st:sgtf:5m"),
             InlineKeyboardButton(_selected("15m", signal_timeframe == "15m"), callback_data="st:sgtf:15m"),
         ],
-        [InlineKeyboardButton("Radar poll cadence", callback_data="st:noop")],
+        [InlineKeyboardButton("Проверка рынка", callback_data="st:noop")],
         [
             InlineKeyboardButton(_selected("1m", int(s.get("radar_poll_sec", 0)) == 60), callback_data="st:rdr:60"),
             InlineKeyboardButton(_selected("90s", int(s.get("radar_poll_sec", 0)) == 90), callback_data="st:rdr:90"),
             InlineKeyboardButton(_selected("2m", int(s.get("radar_poll_sec", 0)) == 120), callback_data="st:rdr:120"),
             InlineKeyboardButton(_selected("3m", int(s.get("radar_poll_sec", 0)) == 180), callback_data="st:rdr:180"),
+        ],
+        [InlineKeyboardButton("Движение цены", callback_data="st:noop")],
+        [
+            InlineKeyboardButton(_selected("1.0%", abs(price_move_min - 1.0) < 1e-9), callback_data="st:pm:1.0"),
+            InlineKeyboardButton(_selected("1.5%", abs(price_move_min - 1.5) < 1e-9), callback_data="st:pm:1.5"),
+            InlineKeyboardButton(_selected("2.0%", abs(price_move_min - 2.0) < 1e-9), callback_data="st:pm:2.0"),
+            InlineKeyboardButton(_selected("3.0%", abs(price_move_min - 3.0) < 1e-9), callback_data="st:pm:3.0"),
+        ],
+        [InlineKeyboardButton("Спайк объёма", callback_data="st:noop")],
+        [
+            InlineKeyboardButton(_selected("x2.0", abs(turnover_spike_min - 2.0) < 1e-9), callback_data="st:sp:2.0"),
+            InlineKeyboardButton(_selected("x3.0", abs(turnover_spike_min - 3.0) < 1e-9), callback_data="st:sp:3.0"),
+            InlineKeyboardButton(_selected("x4.0", abs(turnover_spike_min - 4.0) < 1e-9), callback_data="st:sp:4.0"),
+            InlineKeyboardButton(_selected("x5.0", abs(turnover_spike_min - 5.0) < 1e-9), callback_data="st:sp:5.0"),
+        ],
+        [InlineKeyboardButton("Ликвидность 24ч", callback_data="st:noop")],
+        [
+            InlineKeyboardButton(_selected("$1M", abs(liquidity_floor_24h - 1_000_000.0) < 1e-6), callback_data="st:lq:1000000"),
+            InlineKeyboardButton(_selected("$5M", abs(liquidity_floor_24h - 5_000_000.0) < 1e-6), callback_data="st:lq:5000000"),
+            InlineKeyboardButton(_selected("$10M", abs(liquidity_floor_24h - 10_000_000.0) < 1e-6), callback_data="st:lq:10000000"),
+            InlineKeyboardButton(_selected("$25M", abs(liquidity_floor_24h - 25_000_000.0) < 1e-6), callback_data="st:lq:25000000"),
         ],
         [InlineKeyboardButton("ℹ️ Что значат настройки", callback_data="st:help")],
         [
@@ -1119,6 +1173,9 @@ def status_text(
     _ = reference_prices
     s = chat_state["settings"]
     signal_timeframe = _normalize_signal_timeframe(s.get("signal_timeframe", DEFAULT_SIGNAL_TIMEFRAME))
+    price_move_min = float(s.get("price_move_min", PRICE_MOVE_MIN))
+    turnover_spike_min = float(s.get("turnover_spike_min", TURNOVER_SPIKE_MIN))
+    liquidity_floor_24h = float(s.get("liquidity_floor_24h", LIQUIDITY_FLOOR_24H))
     now = time.time()
     lines = []
     symbols = _symbols_for_status(s, quotes)
@@ -1134,17 +1191,19 @@ def status_text(
         lines.append(f"{sym}: {q['price']:.6g} USDT{mute_flag}{signal_flag}")
         lines.append(
             f"{signal_timeframe} {q['price_change_tf']:+.2f}% · "
-            f"{signal_timeframe} vol ${q['current_tf_turnover']:,.0f} (x{q['turnover_spike_ratio']:.2f})"
+            f"Объём {signal_timeframe} ${q['current_tf_turnover']:,.0f} (x{q['turnover_spike_ratio']:.2f})"
         )
-        lines.append(f"24h turnover ${q['turnover24h']:,.0f}")
+        lines.append(f"Ликвидность 24ч ${q['turnover24h']:,.0f}")
         lines.append("")
 
     header = (
         "📊 *Bybit Spot Volume Radar*\n\n"
         f"*Mode:* {radar_mode_label(s)}\n"
-        f"*Radar poll:* {_fmt_interval(int(s.get('radar_poll_sec', DEFAULT_RADAR_POLL_SEC)))} | *Cooldown:* {s['cooldown_min']} min\n"
-        f"*Signal timeframe:* {signal_timeframe}\n"
-        f"*Signal:* |{signal_timeframe}|≥{PRICE_MOVE_MIN:.1f}% + x≥{TURNOVER_SPIKE_MIN:.1f} + 24h≥${LIQUIDITY_FLOOR_24H:,.0f}\n"
+        f"*Проверка рынка:* {_fmt_interval(int(s.get('radar_poll_sec', DEFAULT_RADAR_POLL_SEC)))} | *Cooldown:* {s['cooldown_min']} min\n"
+        f"*Таймфрейм сигнала:* {signal_timeframe}\n"
+        f"*Сигнал:* Движение цены ≥ {_fmt_price_move_threshold(price_move_min)}, "
+        f"Спайк объёма ≥ {_fmt_spike_threshold(turnover_spike_min)}, "
+        f"Ликвидность 24ч ≥ {_fmt_liquidity_threshold(liquidity_floor_24h)}\n"
         f"*Tracking:* {radar_tracking_desc(s)}\n"
     )
     if not lines:
@@ -1224,34 +1283,34 @@ def help_text() -> str:
         "/unmute all — снять все mute\n"
         "/help — эта справка\n\n"
         "Как работает бот:\n"
-        "- Bybit-only radar.\n"
+        "- Bybit Spot Volume Radar.\n"
         "- Режимы радара: Top 100 Bybit или Мой список.\n"
-        f"- Сигнал: |TF| >= {PRICE_MOVE_MIN:.1f}% + spike >= x{TURNOVER_SPIKE_MIN:.1f} + 24h turnover >= ${LIQUIDITY_FLOOR_24H:,.0f}.\n"
-        "- TF выбирается в /settings (1m / 3m / 5m / 15m).\n"
+        "- Таймфрейм сигнала выбирается в /settings (1m / 3m / 5m / 15m).\n"
+        "- Движение цены, Спайк объёма и Ликвидность 24ч настраиваются в /settings кнопками.\n"
+        "- Сигнал приходит только если одновременно выполнены все три порога.\n"
         "- Для сигнала используются только закрытые свечи выбранного TF.\n"
         "- /mute временно отключает алерты по монете.\n"
         "- Кнопка Монета показывает карточку конкретного символа."
     )
 
 
-def terms_text() -> str:
+def terms_text(chat_state: Optional[dict] = None) -> str:
+    s = (chat_state or {}).get("settings", {}) if isinstance(chat_state, dict) else {}
+    price_move_min = float(s.get("price_move_min", PRICE_MOVE_MIN))
+    turnover_spike_min = float(s.get("turnover_spike_min", TURNOVER_SPIKE_MIN))
+    liquidity_floor_24h = float(s.get("liquidity_floor_24h", LIQUIDITY_FLOOR_24H))
     return (
         "📚 Термины\n\n"
-        "*1) Практический смысл*\n"
-        "• Signal timeframe — размер свечи для расчёта сигнала (1m/3m/5m/15m).\n"
-        "• Если переключить timeframe, бот смотрит на другой шаг цены и другой свечной объём.\n"
-        "• turnover_spike_ratio показывает, во сколько раз объём последней закрытой свечи выше обычного.\n"
-        "  Пример: x2.5 = объём в 2.5 раза выше среднего за последние свечи.\n\n"
-        "*2) Формулы расчёта*\n"
-        "• price_change_tf = (close_last / close_prev - 1) × 100%.\n"
-        "• current_tf_turnover = turnover последней закрытой свечи выбранного timeframe.\n"
-        f"• sma_tf_turnover = средний turnover за {SMA_PERIODS} предыдущих закрытых свечей.\n"
-        "• turnover_spike_ratio = current_tf_turnover / sma_tf_turnover.\n"
-        "• turnover24h = оборот пары за 24ч по Bybit.\n"
-        "• Signal = TRUE только если одновременно:\n"
-        f"  1) |price_change_tf| ≥ {PRICE_MOVE_MIN:.1f}%\n"
-        f"  2) turnover_spike_ratio ≥ x{TURNOVER_SPIKE_MIN:.1f}\n"
-        f"  3) turnover24h ≥ ${LIQUIDITY_FLOOR_24H:,.0f}\n"
+        "• *Таймфрейм сигнала* — размер свечи для расчёта: 1m / 3m / 5m / 15m.\n"
+        "• *Движение цены* — насколько изменилась цена за последнюю закрытую свечу выбранного таймфрейма.\n"
+        "• *Спайк объёма* — во сколько раз объём последней закрытой свечи выше среднего за прошлые свечи.\n"
+        "• *Ликвидность 24ч* — оборот пары за 24 часа на Bybit.\n"
+        "• *Сигнал* — алерт приходит только когда одновременно выполнены все 3 порога.\n\n"
+        "*Как считается*\n"
+        f"1) Движение цены ≥ {_fmt_price_move_threshold(price_move_min)}\n"
+        f"2) Спайк объёма ≥ {_fmt_spike_threshold(turnover_spike_min)}\n"
+        f"3) Ликвидность 24ч ≥ {_fmt_liquidity_threshold(liquidity_floor_24h)}\n"
+        f"Средний объём берётся по {SMA_PERIODS} предыдущим закрытым свечам."
     )
 
 
@@ -1259,13 +1318,14 @@ def settings_help_text() -> str:
     return (
         "ℹ️ Что значат настройки\n\n"
         "Bybit Spot Volume Radar\n"
-        "Radar poll — как часто бот заново проверяет рынок (обычно 60-120 секунд).\n"
-        "Signal timeframe — размер свечи для расчёта сигнала (1m/3m/5m/15m).\n"
+        "Проверка рынка — как часто бот заново проверяет рынок (обычно 60-120 секунд).\n"
+        "Таймфрейм сигнала — размер свечи для расчёта сигнала (1m/3m/5m/15m).\n"
         "Это разные настройки: частота опроса не меняет размер свечи.\n\n"
-        "Signal contract\n"
-        f"1) |TF change| >= {PRICE_MOVE_MIN:.1f}%\n"
-        f"2) turnover spike >= x{TURNOVER_SPIKE_MIN:.1f}\n"
-        f"3) turnover24h >= ${LIQUIDITY_FLOOR_24H:,.0f}\n\n"
+        "Сигнал\n"
+        "1) Движение цены\n"
+        "2) Спайк объёма\n"
+        "3) Ликвидность 24ч\n"
+        "Алерт приходит только если выполнены все три условия одновременно.\n\n"
         "Для сигнала учитываются только закрытые свечи выбранного timeframe.\n"
         f"SMA_PERIODS={SMA_PERIODS} задаётся в .env.\n"
     )
@@ -1274,12 +1334,15 @@ def settings_help_text() -> str:
 def sample_alert_text(chat_state: dict) -> str:
     s = chat_state["settings"]
     tf = _normalize_signal_timeframe(s.get("signal_timeframe", DEFAULT_SIGNAL_TIMEFRAME))
+    price_move_min = float(s.get("price_move_min", PRICE_MOVE_MIN))
+    turnover_spike_min = float(s.get("turnover_spike_min", TURNOVER_SPIKE_MIN))
+    liquidity_floor_24h = float(s.get("liquidity_floor_24h", LIQUIDITY_FLOOR_24H))
     sample_symbol = "SOLUSDT"
     sample_price = 182.45
-    sample_change = max(PRICE_MOVE_MIN + 0.3, 2.3)
+    sample_change = max(price_move_min + 0.3, 2.3)
     sample_turnover = 1_850_000.0
-    sample_spike = max(TURNOVER_SPIKE_MIN + 0.2, 2.0)
-    sample_turnover24h = max(LIQUIDITY_FLOOR_24H * 1.4, 8_500_000.0)
+    sample_spike = max(turnover_spike_min + 0.2, 2.0)
+    sample_turnover24h = max(liquidity_floor_24h * 1.4, 8_500_000.0)
     return (
         f"🧪 Пример алерта ({radar_mode_label(s)}, TF {tf})\n"
         f"🚨 {sample_symbol}\n"
@@ -1329,7 +1392,8 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def terms_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(terms_text(), parse_mode="Markdown", reply_markup=main_menu_keyboard())
+    chat_state = get_chat_state(update.effective_chat.id)
+    await update.message.reply_text(terms_text(chat_state), parse_mode="Markdown", reply_markup=main_menu_keyboard())
 
 
 async def settings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1684,6 +1748,30 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             target = _normalize_signal_timeframe(parts[2], default="")
             if target and target in SUPPORTED_SIGNAL_TIMEFRAMES:
                 s["signal_timeframe"] = target
+                chat_state["runtime"]["last_poll_ts"] = 0
+                save_state()
+            await _safe_edit_settings_message(query, chat_state)
+            return
+        if action == "pm" and len(parts) >= 3:
+            val = float(parts[2])
+            if val in (1.0, 1.5, 2.0, 3.0):
+                s["price_move_min"] = val
+                chat_state["runtime"]["last_poll_ts"] = 0
+                save_state()
+            await _safe_edit_settings_message(query, chat_state)
+            return
+        if action == "sp" and len(parts) >= 3:
+            val = float(parts[2])
+            if val in (2.0, 3.0, 4.0, 5.0):
+                s["turnover_spike_min"] = val
+                chat_state["runtime"]["last_poll_ts"] = 0
+                save_state()
+            await _safe_edit_settings_message(query, chat_state)
+            return
+        if action == "lq" and len(parts) >= 3:
+            val = float(parts[2])
+            if val in (1_000_000.0, 5_000_000.0, 10_000_000.0, 25_000_000.0):
+                s["liquidity_floor_24h"] = val
                 chat_state["runtime"]["last_poll_ts"] = 0
                 save_state()
             await _safe_edit_settings_message(query, chat_state)

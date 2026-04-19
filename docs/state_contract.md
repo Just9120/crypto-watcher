@@ -33,8 +33,8 @@
 - секретов
 - дефолтных значений
 - инфраструктурной и runtime-конфигурации
-- дефолтного timeframe сигнала
-- дефолтных порогов сигнала
+- дефолтной частоты polling
+- default timeframe сигнала
 - deployment-specific параметров
 - legacy/default seed полей
 
@@ -72,6 +72,18 @@
 
 - `settings.liquidity_floor_24h`
   - порог фильтра **Ликвидность 24ч**
+
+- `settings.price_move_min`
+  - порог `Движение цены` для конкретного чата
+  - дефолт берётся из `.env` (`PRICE_MOVE_MIN`)
+
+- `settings.turnover_spike_min`
+  - порог `Спайк объёма` для конкретного чата
+  - дефолт берётся из `.env` (`TURNOVER_SPIKE_MIN`)
+
+- `settings.liquidity_floor_24h`
+  - порог `Ликвидность 24ч` для конкретного чата
+  - дефолт берётся из `.env` (`LIQUIDITY_FLOOR_24H`)
 
 ### Runtime
 - `runtime.last_poll_ts`
@@ -134,9 +146,9 @@
    - `watchlist`
    - иначе пустой список
 5. Если `signal_timeframe` отсутствует, должен использоваться безопасный дефолт `5m`.
-6. Если новые поля порогов сигнала отсутствуют, должны использоваться env-backed дефолты.
-7. Символы должны нормализоваться через `_normalize_bybit_pair`.
-8. Дедупликация должна сохранять порядок элементов.
+6. Символы должны нормализоваться через `_normalize_bybit_pair`.
+7. Дедупликация должна сохранять порядок элементов.
+8. Если нет threshold-полей (`price_move_min`, `turnover_spike_min`, `liquidity_floor_24h`), они должны безопасно заполняться дефолтами из `.env`.
 
 Критичное правило:
 решения по миграции должны приниматься на основе raw persisted settings, а не уже default-merged settings.
