@@ -21,6 +21,8 @@
 6. отсутствие регресса по polling и отправке алертов
 7. корректную работу выбранного `signal_timeframe`
 8. корректное использование только закрытых свечей выбранного timeframe
+9. корректную работу per-chat порогов сигнала
+10. согласованность между settings / status / terms / sample alert
 
 ## 3. Текущие follow-up темы
 
@@ -61,6 +63,7 @@ Top-mode radar делает много запросов к kline endpoint.
 - no-op callback behavior
 - `signal_timeframe`
 - closed-candle filtering
+- per-chat threshold overrides
 
 Риск:
 эти участки легко снова сломать в будущих PR.
@@ -115,3 +118,4 @@ Top-mode radar делает много запросов к kline endpoint.
 - возвращать старую baseline-driven модель как main product path
 - переносить управление пользовательским списком обратно в `.env`
 - смешивать безопасный deploy-fix с большим cleanup/refactor PR
+- превращать настройки порогов сигнала в сложный конструктор с произвольным вводом без необходимости
