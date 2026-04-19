@@ -196,6 +196,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 CMC_API_KEY = os.getenv("CMC_API_KEY", "").strip()
 assert TELEGRAM_BOT_TOKEN, "Missing TELEGRAM_BOT_TOKEN in .env / environment"
 CMC_UNAVAILABLE_MESSAGE = "CMC недоступен на сервере (нет CMC_API_KEY). Используется BYBIT."
+TELEGRAM_MAX_MESSAGE_LEN = 4096
 
 DEFAULT_PRICER = os.getenv("PRICER", "BYBIT").strip().upper()
 DEFAULT_BYBIT_CATEGORY = os.getenv("BYBIT_CATEGORY", "spot").strip().lower()
@@ -1116,7 +1117,26 @@ def status_text(
     hidden = len(symbols) - len(rendered_symbols)
     if hidden > 0:
         body += f"\n\n… и ещё {hidden} символов (показаны первые {len(rendered_symbols)})."
-    return header + "\n" + body
+    text = header + "\n" + body
+    if len(text) <= TELEGRAM_MAX_MESSAGE_LEN:
+        return text
+
+    max_body_len = max(0, TELEGRAM_MAX_MESSAGE_LEN - len(header) - 1)
+    truncated_body = body[:max_body_len].rstrip()
+    hidden_chars = max(0, len(body) - len(truncated_body))
+    note = f"\n\n… и ещё {hidden_chars} символов (показаны первые {len(truncated_body)})."
+
+    while truncated_body and len(truncated_body + note) > max_body_len:
+        truncated_body = truncated_body[:-1].rstrip()
+        hidden_chars = max(0, len(body) - len(truncated_body))
+        note = f"\n\n… и ещё {hidden_chars} символов (показаны первые {len(truncated_body)})."
+
+    if len(note) > max_body_len:
+        note = note[:max_body_len]
+        truncated_body = ""
+
+    safe_body = (truncated_body + note).rstrip()
+    return (header + "\n" + safe_body)[:TELEGRAM_MAX_MESSAGE_LEN]
 
 
 def single_symbol_summary_text(
