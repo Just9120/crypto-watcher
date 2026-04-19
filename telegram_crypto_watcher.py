@@ -143,6 +143,11 @@ def _parse_change_tf(raw: str) -> Tuple[str, str]:
     return v, minutes
 
 
+def _normalize_signal_timeframe(raw: str, default: str = "5m") -> str:
+    v = str(raw or "").strip().lower()
+    return v if v in {"1m", "3m", "5m", "15m"} else default
+
+
 def _parse_csv(raw: str) -> List[str]:
     return [x.strip().upper() for x in (raw or "").split(",") if x.strip()]
 
@@ -220,6 +225,9 @@ TURNOVER_SPIKE_MIN = float(os.getenv("TURNOVER_SPIKE_MIN", "4.0") or "4.0")
 PRICE_MOVE_MIN = float(os.getenv("PRICE_MOVE_MIN", "2.0") or "2.0")
 LIQUIDITY_FLOOR_24H = float(os.getenv("LIQUIDITY_FLOOR_24H", "5000000") or "5000000")
 SMA_PERIODS = int(os.getenv("SMA_PERIODS", "12") or "12")
+SUPPORTED_SIGNAL_TIMEFRAMES = ("1m", "3m", "5m", "15m")
+SIGNAL_TF_TO_BYBIT_INTERVAL = {"1m": "1", "3m": "3", "5m": "5", "15m": "15"}
+DEFAULT_SIGNAL_TIMEFRAME = _normalize_signal_timeframe(os.getenv("SIGNAL_TIMEFRAME", "5m"))
 
 # ---- Authorization whitelist (optional) ----
 _raw_allowed = os.getenv("ALLOWED_CHAT_IDS", "").strip()
@@ -285,6 +293,7 @@ def _default_settings() -> dict:
         "core_reference_tf": "7d",
         "alert_universe_mode": "top",
         "custom_pairs": [],
+        "signal_timeframe": DEFAULT_SIGNAL_TIMEFRAME,
     }
 
 
@@ -325,6 +334,9 @@ def _ensure_chat_shape(chat_state: dict) -> dict:
     base_settings["convert"] = str(base_settings.get("convert", DEFAULT_CONVERT)).upper()
     base_settings["show_tf_change"] = bool(base_settings.get("show_tf_change", DEFAULT_SHOW_TF_CHANGE))
     base_settings["core_baseline_enabled"] = bool(base_settings.get("core_baseline_enabled", False))
+    base_settings["signal_timeframe"] = _normalize_signal_timeframe(
+        base_settings.get("signal_timeframe", DEFAULT_SIGNAL_TIMEFRAME)
+    )
     core_top_n = int(base_settings.get("core_top_n", 20))
     base_settings["core_top_n"] = core_top_n if core_top_n in (20, 30) else 20
     core_reference_tf = str(base_settings.get("core_reference_tf", "7d")).lower()
@@ -865,13 +877,19 @@ def _fetch_tickers_map(settings: dict) -> Dict[str, dict]:
     return {str(it.get("symbol", "")).upper(): it for it in items if it.get("symbol")}
 
 
-def _eval_radar_signal(klines: List[list], ticker: dict) -> Optional[dict]:
+def _timeframe_to_seconds(timeframe: str) -> int:
+    return int(timeframe[:-1]) * 60
+
+
+def _eval_radar_signal(klines: List[list], ticker: dict, signal_timeframe: str) -> Optional[dict]:
     now_ms = int(time.time() * 1000)
+    timeframe_sec = _timeframe_to_seconds(signal_timeframe)
+    timeframe_ms = timeframe_sec * 1000
     closed = []
     for row in klines:
         try:
             start = int(row[0])
-            if start + 300000 <= now_ms:
+            if start + timeframe_ms <= now_ms:
                 closed.append(row)
         except Exception:
             continue
@@ -886,18 +904,19 @@ def _eval_radar_signal(klines: List[list], ticker: dict) -> Optional[dict]:
     sma_turnover = sum(float(x[6]) for x in hist) / float(SMA_PERIODS)
     if prev_close <= 0 or sma_turnover <= 0:
         return None
-    price_change_5m = (latest_close / prev_close - 1.0) * 100.0
+    price_change_tf = (latest_close / prev_close - 1.0) * 100.0
     spike_ratio = current_turnover / sma_turnover
     turnover24h = float(ticker.get("turnover24h") or 0.0)
     return {
         "price": float(ticker.get("lastPrice") or latest_close),
-        "price_change_5m": price_change_5m,
-        "current_5m_turnover": current_turnover,
-        "sma_5m_turnover": sma_turnover,
+        "signal_timeframe": signal_timeframe,
+        "price_change_tf": price_change_tf,
+        "current_tf_turnover": current_turnover,
+        "sma_tf_turnover": sma_turnover,
         "turnover_spike_ratio": spike_ratio,
         "turnover24h": turnover24h,
         "meets_signal": (
-            abs(price_change_5m) >= PRICE_MOVE_MIN
+            abs(price_change_tf) >= PRICE_MOVE_MIN
             and spike_ratio >= TURNOVER_SPIKE_MIN
             and turnover24h >= LIQUIDITY_FLOOR_24H
         ),
@@ -907,12 +926,13 @@ def _eval_radar_signal(klines: List[list], ticker: dict) -> Optional[dict]:
 def _fetch_symbol_radar(settings: dict, sym: str, ticker: dict) -> Tuple[str, Optional[dict]]:
     try:
         base_url = "https://api.bybit.com"
+        signal_timeframe = _normalize_signal_timeframe(settings.get("signal_timeframe", DEFAULT_SIGNAL_TIMEFRAME))
         k = _get_session().get(
             f"{base_url}/v5/market/kline",
             params={
                 "category": settings["bybit_category"],
                 "symbol": sym,
-                "interval": "5",
+                "interval": SIGNAL_TF_TO_BYBIT_INTERVAL[signal_timeframe],
                 "limit": SMA_PERIODS + 4,
             },
             timeout=12,
@@ -922,7 +942,7 @@ def _fetch_symbol_radar(settings: dict, sym: str, ticker: dict) -> Tuple[str, Op
         if kd.get("retCode") != 0:
             return sym, None
         kl = kd.get("result", {}).get("list") or []
-        return sym, _eval_radar_signal(kl, ticker)
+        return sym, _eval_radar_signal(kl, ticker, signal_timeframe)
     except Exception:
         return sym, None
 
@@ -1003,13 +1023,15 @@ def _directional_marker(delta_pct: Optional[float]) -> str:
 
 def settings_text(chat_state: dict) -> str:
     s = chat_state["settings"]
+    signal_timeframe = _normalize_signal_timeframe(s.get("signal_timeframe", DEFAULT_SIGNAL_TIMEFRAME))
     active_mutes = sum(1 for _, ts in chat_state["mutes"].items() if ts > time.time())
     return (
         "⚙️ *Bybit Spot Volume Radar*\n\n"
         f"*Source:* BYBIT spot\n"
         f"*Mode:* {radar_mode_label(s)}\n"
-        f"*Radar poll:* {_fmt_interval(int(s.get('radar_poll_sec', DEFAULT_RADAR_POLL_SEC)))}\n"
-        f"*Signal:* |5m|≥{PRICE_MOVE_MIN:.1f}% + x≥{TURNOVER_SPIKE_MIN:.1f} + 24h≥${LIQUIDITY_FLOOR_24H:,.0f}\n"
+        f"*Radar poll:* {_fmt_interval(int(s.get('radar_poll_sec', DEFAULT_RADAR_POLL_SEC)))} (как часто проверяем рынок)\n"
+        f"*Signal timeframe:* {signal_timeframe} (размер свечи для сигнала)\n"
+        f"*Signal:* |{signal_timeframe}|≥{PRICE_MOVE_MIN:.1f}% + x≥{TURNOVER_SPIKE_MIN:.1f} + 24h≥${LIQUIDITY_FLOOR_24H:,.0f}\n"
         f"*SMA periods:* {SMA_PERIODS}\n"
         f"*Tracking:* {radar_tracking_desc(s)}\n"
         f"*Muted:* {active_mutes}\n\n"
@@ -1019,7 +1041,16 @@ def settings_text(chat_state: dict) -> str:
 
 def settings_keyboard(chat_state: dict) -> InlineKeyboardMarkup:
     s = chat_state["settings"]
+    signal_timeframe = _normalize_signal_timeframe(s.get("signal_timeframe", DEFAULT_SIGNAL_TIMEFRAME))
     kb = [
+        [InlineKeyboardButton("Signal timeframe", callback_data="st:noop")],
+        [
+            InlineKeyboardButton(_selected("1m", signal_timeframe == "1m"), callback_data="st:sgtf:1m"),
+            InlineKeyboardButton(_selected("3m", signal_timeframe == "3m"), callback_data="st:sgtf:3m"),
+            InlineKeyboardButton(_selected("5m", signal_timeframe == "5m"), callback_data="st:sgtf:5m"),
+            InlineKeyboardButton(_selected("15m", signal_timeframe == "15m"), callback_data="st:sgtf:15m"),
+        ],
+        [InlineKeyboardButton("Radar poll cadence", callback_data="st:noop")],
         [
             InlineKeyboardButton(_selected("1m", int(s.get("radar_poll_sec", 0)) == 60), callback_data="st:rdr:60"),
             InlineKeyboardButton(_selected("90s", int(s.get("radar_poll_sec", 0)) == 90), callback_data="st:rdr:90"),
@@ -1087,6 +1118,7 @@ def status_text(
     _ = core_symbols
     _ = reference_prices
     s = chat_state["settings"]
+    signal_timeframe = _normalize_signal_timeframe(s.get("signal_timeframe", DEFAULT_SIGNAL_TIMEFRAME))
     now = time.time()
     lines = []
     symbols = _symbols_for_status(s, quotes)
@@ -1100,7 +1132,10 @@ def status_text(
         mute_flag = " 🔕" if muted_until > now else ""
         signal_flag = " 🚨" if q.get("meets_signal") else ""
         lines.append(f"{sym}: {q['price']:.6g} USDT{mute_flag}{signal_flag}")
-        lines.append(f"5m {q['price_change_5m']:+.2f}% · 5m vol ${q['current_5m_turnover']:,.0f} (x{q['turnover_spike_ratio']:.2f})")
+        lines.append(
+            f"{signal_timeframe} {q['price_change_tf']:+.2f}% · "
+            f"{signal_timeframe} vol ${q['current_tf_turnover']:,.0f} (x{q['turnover_spike_ratio']:.2f})"
+        )
         lines.append(f"24h turnover ${q['turnover24h']:,.0f}")
         lines.append("")
 
@@ -1108,7 +1143,8 @@ def status_text(
         "📊 *Bybit Spot Volume Radar*\n\n"
         f"*Mode:* {radar_mode_label(s)}\n"
         f"*Radar poll:* {_fmt_interval(int(s.get('radar_poll_sec', DEFAULT_RADAR_POLL_SEC)))} | *Cooldown:* {s['cooldown_min']} min\n"
-        f"*Signal:* |5m|≥{PRICE_MOVE_MIN:.1f}% + x≥{TURNOVER_SPIKE_MIN:.1f} + 24h≥${LIQUIDITY_FLOOR_24H:,.0f}\n"
+        f"*Signal timeframe:* {signal_timeframe}\n"
+        f"*Signal:* |{signal_timeframe}|≥{PRICE_MOVE_MIN:.1f}% + x≥{TURNOVER_SPIKE_MIN:.1f} + 24h≥${LIQUIDITY_FLOOR_24H:,.0f}\n"
         f"*Tracking:* {radar_tracking_desc(s)}\n"
     )
     if not lines:
@@ -1152,14 +1188,15 @@ def single_symbol_summary_text(
     _ = core_symbols
     _ = reference_prices
     q = quotes.get(sym)
+    signal_timeframe = _normalize_signal_timeframe(chat_state["settings"].get("signal_timeframe", DEFAULT_SIGNAL_TIMEFRAME))
     if not q:
         return f"{sym}\nНет данных по символу для текущей выборки."
     lines = [
         f"📌 {sym}",
         f"Цена: {q['price']:.6g} USDT",
-        f"5m: {q['price_change_5m']:+.2f}%",
-        f"Объём 5m: ${q['current_5m_turnover']:,.0f}",
-        f"SMA 5m ({SMA_PERIODS}): ${q['sma_5m_turnover']:,.0f}",
+        f"{signal_timeframe}: {q['price_change_tf']:+.2f}%",
+        f"Объём {signal_timeframe}: ${q['current_tf_turnover']:,.0f}",
+        f"SMA {signal_timeframe} ({SMA_PERIODS}): ${q['sma_tf_turnover']:,.0f}",
         f"Spike ratio: x{q['turnover_spike_ratio']:.2f}",
         f"Оборот 24h: ${q['turnover24h']:,.0f}",
         f"Signal: {'YES' if q.get('meets_signal') else 'NO'}",
@@ -1180,6 +1217,7 @@ def help_text() -> str:
         "/clearlist — очистить пользовательский список\n"
         "/radar_top — включить режим Top 100 Bybit\n"
         "/radar_custom — включить режим Мой список\n"
+        "/sample_alert — показать пример алерта с кнопками\n"
         "/terms — глоссарий сигналов и метрик\n"
         "/mute BTC 60 — отключить алерты по монете на 60 минут\n"
         "/unmute BTC — снять mute с монеты\n"
@@ -1188,8 +1226,9 @@ def help_text() -> str:
         "Как работает бот:\n"
         "- Bybit-only radar.\n"
         "- Режимы радара: Top 100 Bybit или Мой список.\n"
-        f"- Сигнал: |5m| >= {PRICE_MOVE_MIN:.1f}% + spike >= x{TURNOVER_SPIKE_MIN:.1f} + 24h turnover >= ${LIQUIDITY_FLOOR_24H:,.0f}.\n"
-        "- Сигнал строится по закрытой 5m kline.\n"
+        f"- Сигнал: |TF| >= {PRICE_MOVE_MIN:.1f}% + spike >= x{TURNOVER_SPIKE_MIN:.1f} + 24h turnover >= ${LIQUIDITY_FLOOR_24H:,.0f}.\n"
+        "- TF выбирается в /settings (1m / 3m / 5m / 15m).\n"
+        "- Для сигнала используются только закрытые свечи выбранного TF.\n"
         "- /mute временно отключает алерты по монете.\n"
         "- Кнопка Монета показывает карточку конкретного символа."
     )
@@ -1198,12 +1237,21 @@ def help_text() -> str:
 def terms_text() -> str:
     return (
         "📚 Термины\n\n"
-        "*price_change_5m* — изменение цены на закрытой 5m свече.\n"
-        "*current_5m_turnover* — оборот текущей закрытой 5m свечи.\n"
-        f"*sma_5m_turnover* — средний 5m оборот за {SMA_PERIODS} свечей.\n"
-        "*turnover_spike_ratio* — current_5m_turnover / sma_5m_turnover.\n"
-        "*turnover24h* — оборот пары за 24 часа по Bybit.\n"
-        "*Signal* — алерт только если все условия выполнены одновременно."
+        "*1) Практический смысл*\n"
+        "• Signal timeframe — размер свечи для расчёта сигнала (1m/3m/5m/15m).\n"
+        "• Если переключить timeframe, бот смотрит на другой шаг цены и другой свечной объём.\n"
+        "• turnover_spike_ratio показывает, во сколько раз объём последней закрытой свечи выше обычного.\n"
+        "  Пример: x2.5 = объём в 2.5 раза выше среднего за последние свечи.\n\n"
+        "*2) Формулы расчёта*\n"
+        "• price_change_tf = (close_last / close_prev - 1) × 100%.\n"
+        "• current_tf_turnover = turnover последней закрытой свечи выбранного timeframe.\n"
+        f"• sma_tf_turnover = средний turnover за {SMA_PERIODS} предыдущих закрытых свечей.\n"
+        "• turnover_spike_ratio = current_tf_turnover / sma_tf_turnover.\n"
+        "• turnover24h = оборот пары за 24ч по Bybit.\n"
+        "• Signal = TRUE только если одновременно:\n"
+        f"  1) |price_change_tf| ≥ {PRICE_MOVE_MIN:.1f}%\n"
+        f"  2) turnover_spike_ratio ≥ x{TURNOVER_SPIKE_MIN:.1f}\n"
+        f"  3) turnover24h ≥ ${LIQUIDITY_FLOOR_24H:,.0f}\n"
     )
 
 
@@ -1211,12 +1259,34 @@ def settings_help_text() -> str:
     return (
         "ℹ️ Что значат настройки\n\n"
         "Bybit Spot Volume Radar\n"
-        "Radar cadence — частота проверки watchlist (обычно 60-120 секунд).\n\n"
+        "Radar poll — как часто бот заново проверяет рынок (обычно 60-120 секунд).\n"
+        "Signal timeframe — размер свечи для расчёта сигнала (1m/3m/5m/15m).\n"
+        "Это разные настройки: частота опроса не меняет размер свечи.\n\n"
         "Signal contract\n"
-        f"1) |5m change| >= {PRICE_MOVE_MIN:.1f}%\n"
+        f"1) |TF change| >= {PRICE_MOVE_MIN:.1f}%\n"
         f"2) turnover spike >= x{TURNOVER_SPIKE_MIN:.1f}\n"
         f"3) turnover24h >= ${LIQUIDITY_FLOOR_24H:,.0f}\n\n"
+        "Для сигнала учитываются только закрытые свечи выбранного timeframe.\n"
         f"SMA_PERIODS={SMA_PERIODS} задаётся в .env.\n"
+    )
+
+
+def sample_alert_text(chat_state: dict) -> str:
+    s = chat_state["settings"]
+    tf = _normalize_signal_timeframe(s.get("signal_timeframe", DEFAULT_SIGNAL_TIMEFRAME))
+    sample_symbol = "SOLUSDT"
+    sample_price = 182.45
+    sample_change = max(PRICE_MOVE_MIN + 0.3, 2.3)
+    sample_turnover = 1_850_000.0
+    sample_spike = max(TURNOVER_SPIKE_MIN + 0.2, 2.0)
+    sample_turnover24h = max(LIQUIDITY_FLOOR_24H * 1.4, 8_500_000.0)
+    return (
+        f"🧪 Пример алерта ({radar_mode_label(s)}, TF {tf})\n"
+        f"🚨 {sample_symbol}\n"
+        f"Цена: {sample_price:,.2f} USDT\n"
+        f"{tf}: +{sample_change:.1f}%\n"
+        f"Объём {tf}: ${sample_turnover:,.1f} (x{sample_spike:.1f})\n"
+        f"Оборот 24h: ${sample_turnover24h:,.1f}"
     )
 
 
@@ -1505,6 +1575,16 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
+async def sample_alert_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_authorized(update.effective_chat.id):
+        return
+    chat_state = get_chat_state(update.effective_chat.id)
+    await update.message.reply_text(
+        sample_alert_text(chat_state),
+        reply_markup=alert_keyboard("BYBIT", "SOLUSDT"),
+    )
+
+
 async def text_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
@@ -1588,6 +1668,8 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == "help":
         await query.message.reply_text(settings_help_text())
         return
+    if action == "noop":
+        return
 
     async with _state_lock:
         chat_state = get_chat_state(query.message.chat_id)
@@ -1596,6 +1678,14 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             s["radar_poll_sec"] = int(parts[2])
             chat_state["runtime"]["last_poll_ts"] = 0
             save_state()
+            await _safe_edit_settings_message(query, chat_state)
+            return
+        if action == "sgtf" and len(parts) >= 3:
+            target = _normalize_signal_timeframe(parts[2], default="")
+            if target and target in SUPPORTED_SIGNAL_TIMEFRAMES:
+                s["signal_timeframe"] = target
+                chat_state["runtime"]["last_poll_ts"] = 0
+                save_state()
             await _safe_edit_settings_message(query, chat_state)
             return
 
@@ -1713,6 +1803,7 @@ async def _register_bot_commands(app: Application) -> None:
         BotCommand("clearlist", "Очистить пользовательский список"),
         BotCommand("radar_top", "Режим радара Top 100 Bybit"),
         BotCommand("radar_custom", "Режим радара Мой список"),
+        BotCommand("sample_alert", "Показать пример алерта"),
         BotCommand("terms", "Глоссарий терминов"),
         BotCommand("mute", "Временно отключить алерты по монете"),
         BotCommand("unmute", "Снять mute с монеты или всех"),
@@ -1909,8 +2000,8 @@ async def poll_engine_job(context: ContextTypes.DEFAULT_TYPE):
             for sym, q in alerts_to_send:
                 text = (
                     f"🚨 {sym}\n"
-                    f"5m: {q['price_change_5m']:+.1f}%\n"
-                    f"Объём 5m: ${q['current_5m_turnover']:,.1f} (x{q['turnover_spike_ratio']:.1f})\n"
+                    f"{s_snapshot['signal_timeframe']}: {q['price_change_tf']:+.1f}%\n"
+                    f"Объём {s_snapshot['signal_timeframe']}: ${q['current_tf_turnover']:,.1f} (x{q['turnover_spike_ratio']:.1f})\n"
                     f"Оборот 24h: ${q['turnover24h']:,.1f}"
                 )
                 try:
@@ -1960,6 +2051,7 @@ def main():
     app.add_handler(CommandHandler("clearlist", clearlist_cmd))
     app.add_handler(CommandHandler("radar_top", radar_top_cmd))
     app.add_handler(CommandHandler("radar_custom", radar_custom_cmd))
+    app.add_handler(CommandHandler("sample_alert", sample_alert_cmd))
     app.add_handler(CommandHandler("mute", mute_cmd))
     app.add_handler(CommandHandler("unmute", unmute_cmd))
     app.add_handler(CommandHandler("resetbase", resetbase_cmd))
