@@ -2,24 +2,24 @@
 
 Telegram-бот для ручной spot-торговли на Bybit: ищет краткосрочные объёмно-ценовые сигналы, отправляет алерты в Telegram и даёт быстрый переход в терминал Bybit.
 
-## Documentation
+## Документация
 
-Подробная рабочая документация лежит в папке `docs/`:
+Рабочая документация лежит в папке `docs/`:
 
-- `docs/product_scope.md` — текущий продуктовый scope и правила изменения scope
-- `docs/state_contract.md` — контракт state, правила владения `.env` vs chat state и миграции
-- `docs/open_issues.md` — текущие открытые вопросы и pre-deploy риски
+- `docs/product_scope.md` — текущий продуктовый scope и правила его изменения
+- `docs/state_contract.md` — контракт state, правила владения `.env` vs chat state и правила миграции
+- `docs/open_issues.md` — текущие follow-up задачи, операционные риски и темы на следующий спринт
 
-`README.md` intentionally остаётся коротким: это обзор проекта, quickstart и карта документации.
+### Иерархия источников истины
 
-### Source of truth order
-
-При конфликте трактовок используйте следующий приоритет:
+Для этого репозитория порядок такой:
 
 1. `docs/product_scope.md`
 2. `docs/state_contract.md`
 3. `README.md`
-4. code comments / implementation details
+4. комментарии в коде и детали реализации
+
+Если между README и `docs/` появляется расхождение, приоритет у файлов из `docs/`.
 
 ## Что это за продукт
 
@@ -36,19 +36,19 @@ CryptoWatcher в текущем виде — это **Bybit Spot Volume Radar**,
 - композитный radar-сигнал
 - режим алертов по умолчанию: **Top 100 Bybit**
 - альтернативный режим: **Мой список**
-- persistent bottom keyboard в Telegram как основной UX
+- постоянная нижняя клавиатура в Telegram как основной UX
 - управление пользовательским списком прямо из Telegram
 - per-chat persistent state
 - быстрые действия по монете из алерта
 - глоссарий терминов через `/terms`
 
-## Что сейчас не является основным продуктовым путём
+## Что не является основным продуктовым путём
 
 Следующее не считается main product path:
 
 - CoinMarketCap как основной источник
 - старый percent/baseline-driven monitor как основная модель алертов
-- управление рабочим пользовательским списком через `.env`
+- управление активным пользовательским списком через `.env`
 - futures mode
 - portfolio/account features
 - order execution из Telegram
@@ -88,13 +88,13 @@ CryptoWatcher в текущем виде — это **Bybit Spot Volume Radar**,
 Пользовательский список:
 - хранится в persistent chat state
 - управляется из Telegram
-- не должен считаться основным механизмом через `.env`
+- не считается основным пользовательским механизмом через `.env`
 
 ## Telegram UX
 
 Основной интерфейс — **постоянная нижняя клавиатура**.
 
-Ожидаемые основные кнопки:
+Основные кнопки:
 
 - `📊 Статус`
 - `⚙️ Настройки`
@@ -106,7 +106,7 @@ CryptoWatcher в текущем виде — это **Bybit Spot Volume Radar**,
 - `Очистить список`
 - `Термины`
 
-Slash-команды остаются как вторичный интерфейс.
+Slash-команды остаются поддерживаемым, но вторичным интерфейсом.
 
 ## Основные команды
 
@@ -145,7 +145,8 @@ Slash-команды остаются как вторичный интерфей
 - `LIQUIDITY_FLOOR_24H`
 - `STATE_FILE`
 
-Важно: `.env.example` поля `BYBIT_PAIRS` и `WATCHLIST` — это legacy/default seed-поля для bootstrap и обратной совместимости, а не основной путь управления рабочим списком пользователя. Основной путь управления списком — per-chat state (`alert_universe_mode` + `custom_pairs`) через Telegram UX.
+Важно:
+поля вроде `BYBIT_PAIRS` и `WATCHLIST` в `.env.example` сохраняются как legacy/default seed поля и для backward compatibility, но не являются основным пользовательским способом управления рабочим списком.
 
 ### Persistent chat state
 Используется для:
@@ -155,8 +156,6 @@ Slash-команды остаются как вторичный интерфей
 - runtime workflow конкретного чата
 - per-chat timestamps и operational state
 
-`baselines` в state — это operational/runtime storage и legacy-compatible данные. Наличие поля не означает возврат к старой baseline-driven продуктовой модели как main path.
-
 Подробные правила — в `docs/state_contract.md`.
 
 ## Структура проекта
@@ -165,10 +164,10 @@ Slash-команды остаются как вторичный интерфей
 
 - `telegram_crypto_watcher.py` — основная логика Telegram-бота, state и radar engine
 - `.env.example` — шаблон конфигурации
-- `docker-compose.yml` — локальный/серверный запуск через Docker Compose
+- `docker-compose.yml` — запуск через Docker Compose
 - `docs/product_scope.md` — продуктовый source of truth
 - `docs/state_contract.md` — контракт state и миграции
-- `docs/open_issues.md` — текущие риски и pending fixes
+- `docs/open_issues.md` — текущие follow-up риски и следующие темы
 
 ## Запуск
 
