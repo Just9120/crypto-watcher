@@ -219,6 +219,7 @@ TURNOVER_SPIKE_MIN = float(os.getenv("TURNOVER_SPIKE_MIN", "4.0") or "4.0")
 PRICE_MOVE_MIN = float(os.getenv("PRICE_MOVE_MIN", "2.0") or "2.0")
 LIQUIDITY_FLOOR_24H = float(os.getenv("LIQUIDITY_FLOOR_24H", "5000000") or "5000000")
 SMA_PERIODS = int(os.getenv("SMA_PERIODS", "12") or "12")
+TELEGRAM_MAX_MESSAGE_LEN = 4096
 
 # ---- Authorization whitelist (optional) ----
 _raw_allowed = os.getenv("ALLOWED_CHAT_IDS", "").strip()
@@ -1087,9 +1088,9 @@ def status_text(
     _ = reference_prices
     s = chat_state["settings"]
     now = time.time()
-    lines = []
+    lines: List[str] = []
     symbols = _symbols_for_status(s, quotes)
-    max_rows = 12 if s.get("alert_universe_mode") == "top" else max(12, len(symbols))
+    max_rows = 12 if s.get("alert_universe_mode") == "top" else len(symbols)
     rendered_symbols = symbols[:max_rows]
     for sym in rendered_symbols:
         q = quotes.get(sym)
@@ -1112,10 +1113,31 @@ def status_text(
     )
     if not lines:
         return header + "\nНет данных по текущей конфигурации."
-    body = "\n".join(lines).rstrip()
-    hidden = len(symbols) - len(rendered_symbols)
+    entries: List[str] = []
+    for idx in range(0, len(lines), 4):
+        entries.append("\n".join(lines[idx : idx + 4]).rstrip())
+
+    body = ""
+    rendered_count = 0
+    for entry in entries:
+        candidate = f"{body}\n\n{entry}".strip() if body else entry
+        hidden_if_truncated = len(symbols) - (rendered_count + 1)
+        suffix = (
+            f"\n\n… и ещё {hidden_if_truncated} символов (показаны первые {rendered_count + 1})."
+            if hidden_if_truncated > 0
+            else ""
+        )
+        if len(header) + 1 + len(candidate) + len(suffix) > TELEGRAM_MAX_MESSAGE_LEN:
+            break
+        body = candidate
+        rendered_count += 1
+
+    if not body:
+        return header[: TELEGRAM_MAX_MESSAGE_LEN - 1]
+
+    hidden = len(symbols) - rendered_count
     if hidden > 0:
-        body += f"\n\n… и ещё {hidden} символов (показаны первые {len(rendered_symbols)})."
+        body += f"\n\n… и ещё {hidden} символов (показаны первые {rendered_count})."
     return header + "\n" + body
 
 
