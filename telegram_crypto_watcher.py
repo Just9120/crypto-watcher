@@ -768,10 +768,31 @@ async def _prepare_core_context(settings: dict, quotes: Dict[str, dict]) -> Tupl
 
 
 def _symbols_for_radar(settings: dict) -> List[str]:
-    pairs = settings.get("bybit_pairs") or []
-    if pairs:
-        return [_normalize_bybit_pair(x) for x in pairs if x]
-    return [_normalize_bybit_pair(x) for x in settings.get("watchlist", []) if x]
+    # Migration-safe priority:
+    # legacy chats usually keep real user intent in watchlist, while bybit_pairs may be stale defaults.
+    watchlist = [_normalize_bybit_pair(x) for x in (settings.get("watchlist") or []) if x]
+    if watchlist:
+        return list(dict.fromkeys(watchlist))
+    pairs = [_normalize_bybit_pair(x) for x in (settings.get("bybit_pairs") or []) if x]
+    return list(dict.fromkeys(pairs))
+
+
+def _radar_mute_key(sym: str) -> str:
+    return _symbol_key("BYBIT", _normalize_bybit_pair(sym))
+
+
+def _legacy_mute_keys(sym: str) -> List[str]:
+    return [
+        _symbol_key("CMC", _normalize_cmc_symbol(sym)),
+        _symbol_key("CMC", _asset_from_symbol(_normalize_bybit_pair(sym))),
+    ]
+
+
+def _read_effective_mute_until(chat_state: dict, sym: str) -> float:
+    mutes = chat_state.get("mutes", {})
+    vals = [float(mutes.get(_radar_mute_key(sym), 0) or 0)]
+    vals.extend(float(mutes.get(k, 0) or 0) for k in _legacy_mute_keys(sym))
+    return max(vals) if vals else 0.0
 
 
 def _fetch_tickers_map(settings: dict) -> Dict[str, dict]:
@@ -999,8 +1020,7 @@ def status_text(
         q = quotes.get(sym)
         if not q:
             continue
-        key = _symbol_key("BYBIT", sym)
-        muted_until = float(chat_state["mutes"].get(key, 0) or 0)
+        muted_until = _read_effective_mute_until(chat_state, sym)
         mute_flag = " 🔕" if muted_until > now else ""
         signal_flag = " 🚨" if q.get("meets_signal") else ""
         lines.append(f"{sym}: {q['price']:.6g} USDT{mute_flag}{signal_flag}")
@@ -1120,11 +1140,7 @@ async def watchlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _is_authorized(update.effective_chat.id):
         return
     chat_state = get_chat_state(update.effective_chat.id)
-    s = chat_state["settings"]
-    if s["pricer"] == "CMC" and not _is_cmc_available():
-        await update.message.reply_text(CMC_UNAVAILABLE_MESSAGE)
-        return
-    lst = _symbols_for_radar(s)
+    lst = _symbols_for_radar(chat_state["settings"])
     txt = "Текущий watchlist/list:\n" + (", ".join(lst) if lst else "Список пуст")
     await update.message.reply_text(txt)
 
@@ -1158,7 +1174,6 @@ async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     async with _state_lock:
         chat_state = get_chat_state(update.effective_chat.id)
-        s = chat_state["settings"]
         if not context.args:
             await update.message.reply_text("Использование: /mute BTC 60")
             return
@@ -1169,8 +1184,8 @@ async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 minutes = int(context.args[1])
             except Exception:
                 minutes = 60
-        sym = _normalize_bybit_pair(raw_sym) if s["pricer"] == "BYBIT" else _normalize_cmc_symbol(raw_sym)
-        key = _symbol_key(s["pricer"], sym)
+        sym = _normalize_bybit_pair(raw_sym)
+        key = _radar_mute_key(sym)
         until = time.time() + max(1, minutes) * 60
         chat_state["mutes"][key] = until
         save_state()
@@ -1182,25 +1197,27 @@ async def unmute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     async with _state_lock:
         chat_state = get_chat_state(update.effective_chat.id)
-        s = chat_state["settings"]
         if not context.args:
             await update.message.reply_text("Использование: /unmute BTC  или  /unmute all")
             return
         raw = context.args[0].strip().lower()
         if raw == "all":
             removed = []
-            prefix = f"{s['pricer']}:"
             for key in list(chat_state["mutes"].keys()):
-                if key.startswith(prefix):
+                if key.startswith("BYBIT:") or key.startswith("CMC:"):
                     removed.append(key)
                     del chat_state["mutes"][key]
             save_state()
             await update.message.reply_text(f"✅ Снял mute: {len(removed)} шт.")
             return
-        sym = _normalize_bybit_pair(raw) if s["pricer"] == "BYBIT" else _normalize_cmc_symbol(raw)
-        key = _symbol_key(s["pricer"], sym)
-        if key in chat_state["mutes"]:
-            del chat_state["mutes"][key]
+        sym = _normalize_bybit_pair(raw)
+        keys = [_radar_mute_key(sym), *_legacy_mute_keys(sym)]
+        found = False
+        for key in keys:
+            if key in chat_state["mutes"]:
+                del chat_state["mutes"][key]
+                found = True
+        if found:
             save_state()
             await update.message.reply_text(f"✅ Снял mute с {sym}.")
         else:
@@ -1448,10 +1465,9 @@ async def alert_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == "mute" and len(parts) >= 5:
         async with _state_lock:
             chat_state = get_chat_state(query.message.chat_id)
-            source = parts[2].upper()
             sym = parts[3].upper()
             seconds = int(parts[4])
-            key = _symbol_key(source, sym)
+            key = _radar_mute_key(sym)
             until = time.time() + seconds
             chat_state["mutes"][key] = until
             save_state()
@@ -1590,8 +1606,8 @@ async def poll_engine_job(context: ContextTypes.DEFAULT_TYPE):
                     q = quotes.get(sym)
                     if not q:
                         continue
-                    key = _symbol_key("BYBIT", sym)
-                    mute_until = float(chat_state["mutes"].get(key, 0) or 0)
+                    key = _radar_mute_key(sym)
+                    mute_until = _read_effective_mute_until(chat_state, sym)
                     if mute_until > now:
                         continue
                     base = chat_state["baselines"].get(key) or {}
