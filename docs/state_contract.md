@@ -3,44 +3,51 @@
 ## 1. Назначение
 
 Этот документ определяет:
-- что должно жить в persistent chat state;
-- что должно жить в `.env`;
-- как должна работать миграция state.
+- что должно жить в persistent chat state
+- что должно жить в `.env`
+- как должна работать миграция state
 
 Документ нужен для того, чтобы снижать риск случайных регрессий при развитии продукта.
 
-## Source of truth order
+## 2. Связь с другими документами
 
-При конфликте описаний используется приоритет:
+Этот документ дополняет `docs/product_scope.md`.
+
+Если возникает конфликт между:
+- продуктовым поведением;
+- техническим state-контрактом;
+- README;
+- деталями реализации,
+
+то порядок приоритета такой:
 
 1. `docs/product_scope.md`
 2. `docs/state_contract.md`
 3. `README.md`
-4. code comments / implementation details
+4. детали реализации и комментарии в коде
 
-## 2. Модель владения
+## 3. Модель владения
 
 ### `.env`
 Используется для:
-- секретов;
-- дефолтных значений;
-- инфраструктурной и runtime-конфигурации;
-- порогов сигнала;
-- дефолтной частоты polling;
-- deployment-specific параметров.
-
-Примечание по `.env.example`: поля `BYBIT_PAIRS` и `WATCHLIST` — это legacy/default seed-поля (bootstrap/backward compatibility), а не основной путь управления пользовательским рабочим списком.
+- секретов
+- дефолтных значений
+- инфраструктурной и runtime-конфигурации
+- порогов сигнала
+- дефолтной частоты polling
+- deployment-specific параметров
+- legacy/default seed полей
 
 ### persistent chat state
 Используется для:
-- реального поведения конкретного чата;
-- активного режима радара;
-- пользовательского списка монет;
-- mute-данных;
-- временного chat workflow состояния;
-- per-chat runtime timestamps.
+- реального поведения конкретного чата
+- активного режима радара
+- пользовательского списка монет
+- mute-данных
+- временного chat workflow состояния
+- per-chat runtime timestamps
 
-## 3. Важные поля state
+## 4. Важные поля state
 
 ### Поля продуктового поведения
 - `settings.alert_universe_mode`
@@ -59,9 +66,25 @@
 - `mutes`
 - `baselines`
 
-`baselines` сохраняется как operational/runtime storage и legacy-compatible state. Это не трактуется как возврат к старой baseline-driven продуктовой модели.
+Важно:
+`baselines` в текущем коде — это operational/runtime storage и legacy-compatible state.
+Это не означает возврат к старой baseline-driven продуктовой модели как main path.
 
-## 4. Правила миграции legacy state
+## 5. Legacy/default seed поля в `.env`
+
+Поля вроде:
+- `BYBIT_PAIRS`
+- `WATCHLIST`
+
+могут оставаться в `.env.example` и в коде как:
+- legacy-compatible defaults
+- seed-значения для старых сценариев и миграции
+- технический мост для backward compatibility
+
+Но они не являются основным пользовательским способом управления рабочим списком.
+Основной пользовательский механизм — это per-chat `custom_pairs` в persistent state.
+
+## 6. Правила миграции legacy state
 
 Старые persisted chats могут не содержать:
 - `alert_universe_mode`
@@ -82,29 +105,29 @@
 Критичное правило:
 решения по миграции должны приниматься на основе raw persisted settings, а не уже default-merged settings.
 
-## 5. Правило правдивости состояния
+## 7. Правило правдивости состояния
 
 Все пользовательские поверхности должны согласованно отражать один и тот же активный state:
 
-- polling behavior;
-- `/status`;
-- settings text;
-- watchlist/list view;
-- help text там, где это релевантно.
+- polling behavior
+- `/status`
+- settings text
+- watchlist/list view
+- help text там, где это релевантно
 
 Пример:
 если алерты реально сканируют Top 100, `/status` не должен вести себя так, как будто существует только custom list.
 
-## 6. Правило backward compatibility
+## 8. Правило backward compatibility
 
 PR, который меняет структуру state, считается неполным, если он не покрывает миграционное поведение явно.
 
 Минимум нужно проверять:
-- legacy payload со старым `bybit_pairs`;
-- legacy payload со старым `watchlist`;
-- случай с явным пустым `custom_pairs`;
-- случай с явным `alert_universe_mode`.
+- legacy payload со старым `bybit_pairs`
+- legacy payload со старым `watchlist`
+- случай с явным пустым `custom_pairs`
+- случай с явным `alert_universe_mode`
 
-## 7. Политика изменений
+## 9. Политика изменений
 
 Любой PR, который добавляет или меняет persistent state fields, должен обновлять этот документ.
