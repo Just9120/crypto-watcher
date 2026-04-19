@@ -1,273 +1,78 @@
-# CryptoWatcher
+# CryptoWatcher — Bybit Spot Volume Radar
 
-Telegram-бот для мониторинга криптовалютных цен с алертами.
+Telegram-бот для ручной spot-торговли: показывает, где в рынок вошли деньги, и даёт one-click переход в терминал Bybit.
 
-## Что умеет
+## Новый MVP (product pivot)
 
-CryptoWatcher отслеживает цены и присылает алерты в Telegram, когда цена уходит от базовой точки на заданный процент.
+Основной path: **Bybit-only + watchlist/list**.
 
-Поддерживаются источники:
+Сигнал формируется только если одновременно выполнены 3 условия:
 
-- **Bybit**
-- **CoinMarketCap (CMC)**
+1. `abs(price_change_5m) >= PRICE_MOVE_MIN`
+2. `current_5m_turnover / sma_5m_turnover >= TURNOVER_SPIKE_MIN`
+3. `turnover24h >= LIQUIDITY_FLOOR_24H`
 
-Для каждого источника доступны два режима:
+`5m` сигнал считается по **закрытой** свече `v5/market/kline`.
 
-- **Top-N** — автоматически отслеживать N монет
-- **List** — свой список монет / пар
+## Alert формат
 
-Также бот умеет:
+```
+🚨 BTCUSDT
+5m: +2.3%
+Объём 5m: $1.2M (x4.8)
+Оборот 24h: $38.4M
+```
 
-- хранить настройки **отдельно для каждого чата**
-- менять настройки прямо в Telegram через **inline-кнопки** (`/settings`)
-- показывать текущий статус (`/status`)
-- временно отключать алерты по монете (`/mute`)
-- сбрасывать rolling baseline (`/resetbase`)
-- работать в Docker как фоновый сервис
-- сохранять состояние между перезапусками
-- ограничивать доступ через whitelist (`ALLOWED_CHAT_IDS`)
-
----
-
-## Как устроена логика алертов
-
-### Основной триггер
-
-`THRESHOLD_PERCENT` — порог изменения цены, при котором бот отправляет алерт.
-
-Важно:
-
-- это изменение **от базовой точки**
-- это **не** изменение за `POLL_INTERVAL`
-- это **не** изменение за `CHANGE_TF`
-
-### Два типа baseline
-
-В боте есть два типа baseline-логики.
-
-#### 1. Rolling baseline
-
-Используется для:
-
-- всех монет по умолчанию
-- всех non-core монет, даже если включён core baseline mode
-
-Как работает:
-
-- если у монеты ещё нет baseline, он создаётся на первом poll
-- бот считает отклонение от сохранённой базовой цены
-- когда алерт срабатывает, rolling baseline обновляется на текущую цену
-- `/resetbase` сбрасывает rolling baseline вручную
-
-Этот режим лучше подходит для:
-
-- scanner-сценариев
-- ноунейм / mid-cap / high-beta монет
-- повторных алертов по сильным движениям
-
-#### 2. Core reference baseline
-
-Используется только если включён **core baseline mode**.
-
-В этом режиме:
-
-- **core-монеты** используют reference baseline от фиксированного окна
-- **non-core монеты** продолжают использовать rolling baseline
-
-Поддерживаемые reference windows:
-
-- `1d`
-- `3d`
-- `7d`
-- `30d`
-
-Как работает:
-
-- бот определяет, является ли монета core
-- для core-монеты берётся reference price за выбранное окно
-- алерт срабатывает, когда текущая цена уходит от этой reference price на `THRESHOLD_PERCENT`
-- после алерта reference baseline **не** переезжает как rolling baseline
-- `COOLDOWN_MIN` по-прежнему защищает от спама повторными алертами
-
-Этот режим лучше подходит для:
-
-- BTC / ETH и других крупных монет
-- наблюдения за core assets
-- сценариев, где важно движение от периода, а не от последнего алерта
-
----
-
-## Что считается core монетами
-
-Core universe определяется через **CoinMarketCap market-cap ranking**.
-
-Пользователь выбирает:
-
-- **Top 20**
-- **Top 30**
-
-Логика нормализации символов учитывает разницу форматов источников, например:
-
-- `BTCUSDT` → `BTC`
-- `ETHUSDT` → `ETH`
-
----
-
-## Частота проверки
-
-`POLL_INTERVAL` — как часто бот проверяет рынок для конкретного чата.
-
-`ENGINE_INTERVAL_SEC` — как часто тикает внутренний polling engine.
-
----
-
-## Cooldown
-
-`COOLDOWN_MIN` — защита от спама повторными алертами по одной и той же монете.
-
----
-
-## Дополнительная TF-метрика
-
-`CHANGE_TF` — дополнительная информационная метрика по свечам. Она показывается в `/status` и алертах, но **не является триггером**.
-
-> ⚠️ При `SHOW_TF_CHANGE=1` и большом `TOP_LIMIT` количество API-запросов возрастает.
-
----
-
-## Core-aware baseline mode
-
-Если **core baseline mode выключен**, бот работает как раньше:
-
-- все монеты используют **rolling baseline**
-
-Если **core baseline mode включен**:
-
-- **core монеты** используют reference baseline (`1d / 3d / 7d / 30d`)
-- **все остальные монеты** продолжают использовать rolling baseline
-
-Это позволяет одновременно:
-
-- держать period-based логику для core assets
-- сохранять scanner-логику для более шумных монет
-
----
+Кнопки:
+- `⚡ Trade BTCUSDT` → deep-link `https://www.bybit.com/trade/spot/BTC/USDT`
+- `🔕 1h`
+- `🔕 24h`
+- `Монета` (single-symbol summary)
 
 ## Команды
 
-| Команда | Описание |
-|---------|----------|
-| `/start` | Активировать бот для этого чата |
-| `/status` | Текущее состояние цен и baseline-логики |
-| `/settings` | Настройки через inline-кнопки |
-| `/watchlist` | Показать текущий список / top-режим |
-| `/setlist BTC,ETH,SOL` | Обновить список для list-режима |
-| `/mute BTC 60` | Отключить алерты по монете на 60 минут |
-| `/unmute BTC` | Снять mute с монеты |
-| `/unmute all` | Снять все mute |
-| `/resetbase BTC` | Сбросить rolling baseline по монете |
-| `/resetbase all` | Сбросить все rolling baseline для текущего источника |
-| `/help` | Справка |
+- `/start`
+- `/status`
+- `/settings`
+- `/watchlist`
+- `/setlist BTC,ETH,SOL`
+- `/mute BTC 60`
+- `/unmute BTC`
+- `/unmute all`
+- `/help`
 
----
+## Конфиг (.env)
 
-## Что показывает `/status`
+Ключевые переменные:
 
-`/status` отображает текущие цены, служебные метрики и отклонение от baseline.
+- `TURNOVER_SPIKE_MIN=4.0`
+- `PRICE_MOVE_MIN=2.0`
+- `LIQUIDITY_FLOOR_24H=5000000`
+- `SMA_PERIODS=12`
+- `RADAR_POLL_SEC=90` (частый polling, отдельно от 5m timeframe)
 
-Для rolling-монет сообщение выглядит примерно так:
+См. полный пример в `.env.example`.
 
-- `Δ +12.4% от базы X`
+## Совместимость state
 
-Для core reference-монет:
+Бот сохраняет backward compatibility со старым state-файлом:
+- legacy ключи могут оставаться в JSON
+- `watchlist` и `mutes` продолжают работать
+- baseline/CMC поля не используются в новом main path
 
-- `Δ +4.8% от 7d ref X`
-- `Δ -6.1% от 1d ref X`
+## Запуск (Docker)
 
-Это сделано специально, чтобы было видно, **от какого типа базы считается движение**.
+```bash
+docker compose up -d --build
+```
 
-В статусе также отображаются настройки core baseline mode:
-
-- включён он или нет
-- какой core universe выбран (`Top 20` / `Top 30`)
-- какое reference window выбрано (`1d / 3d / 7d / 30d`)
-
----
-
-## Alert semantics
-
-В alert-сообщениях бот явно различает источник базовой точки:
-
-- для rolling path: `Δ от базы`
-- для core reference path: `Δ от 1d ref`, `Δ от 3d ref`, `Δ от 7d ref`, `Δ от 30d ref`
-
-Это помогает не путать rolling baseline и reference baseline.
-
----
-
-## Как использовать `/resetbase`
-
-### Для rolling монет
-
-`/resetbase` полезен, если нужно начать отсчёт заново от текущей цены.
-
-Например:
-
-- монета давно была в мониторинге
-- старый rolling baseline потерял смысл
-- нужно переякорить отсчёт на текущий момент
-
-### Для core reference mode
-
-Для core-монет в reference mode `/resetbase` не нужен.
-
-В этом режиме бот честно сообщает, что:
-
-- baseline считается автоматически от выбранного периода
-- manual reset для core reference symbol не требуется
-
-То же правило применяется и для inline reset из alert-кнопок.
-
----
-
-## Fail-soft поведение
-
-CryptoWatcher старается не ломать основной polling path из-за необязательных или деградирующих частей логики.
-
-Это касается и core-aware baseline mode:
-
-- core universe определяется отдельно и кэшируется
-- reference prices для core-монет получаются отдельно и кэшируются
-- если reference data временно недоступны, бот **не падает**
-- в таком случае пропускается только alert-evaluation для конкретной core-монеты в текущем цикле
-- rolling path продолжает работать как обычно
-
----
-
-## Ограничения historical/reference data
-
-Reference price для core-монет берётся через historical endpoint CoinMarketCap.
-
-Важно:
-
-- на некоторых CMC тарифах или квотах historical endpoint может быть ограничен
-- для части активов или окон historical data могут временно отсутствовать
-- в этом случае core alert по конкретной монете может быть временно пропущен
-- это не должно ломать весь poll cycle и не влияет на rolling ветку
-
----
-
-## Структура проекта
+## Структура
 
 ```text
-crypto_watcher/
-├── telegram_crypto_watcher.py   # основной код бота
-├── requirements.txt             # зависимости Python
-├── Dockerfile                   # сборка образа
-├── docker-compose.yml           # запуск контейнера
-├── .env                         # секреты и настройки (не в git)
-├── .env.example                 # пример конфигурации
-├── data/                        # runtime state (не в git)
-│   └── state_crypto_watcher.json
-├── .gitignore
-└── .dockerignore
+crypto-watcher/
+├── telegram_crypto_watcher.py
+├── .env.example
+├── Dockerfile
+├── docker-compose.yml
+└── requirements.txt
+```
