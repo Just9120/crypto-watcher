@@ -331,12 +331,26 @@ def _ensure_chat_shape(chat_state: dict) -> dict:
     base_settings["change_tf_label"] = tf_label
     base_settings["change_tf_bybit"] = tf_bybit
     legacy_radar_mode = "top" if current_mode(base_settings) == "top" else "custom"
-    raw_universe_mode = str(base_settings.get("alert_universe_mode", legacy_radar_mode)).lower()
+    has_explicit_universe_mode = isinstance(settings, dict) and "alert_universe_mode" in settings
+    raw_universe_mode = str(
+        base_settings.get("alert_universe_mode", legacy_radar_mode)
+        if has_explicit_universe_mode
+        else legacy_radar_mode
+    ).lower()
     base_settings["alert_universe_mode"] = "custom" if raw_universe_mode == "custom" else "top"
-    if "custom_pairs" in base_settings:
-        raw_custom_pairs = base_settings.get("custom_pairs") or []
+    has_explicit_custom_pairs = isinstance(settings, dict) and "custom_pairs" in settings
+    if has_explicit_custom_pairs:
+        raw_custom_pairs = settings.get("custom_pairs") or []
     else:
-        raw_custom_pairs = base_settings.get("bybit_pairs") or base_settings.get("watchlist") or []
+        raw_bybit_pairs = settings.get("bybit_pairs") if isinstance(settings, dict) else None
+        raw_watchlist = settings.get("watchlist") if isinstance(settings, dict) else None
+        raw_custom_pairs = (
+            raw_bybit_pairs
+            or raw_watchlist
+            or base_settings.get("bybit_pairs")
+            or base_settings.get("watchlist")
+            or []
+        )
     base_settings["custom_pairs"] = list(
         dict.fromkeys(_normalize_bybit_pair(x) for x in raw_custom_pairs if x)
     )
