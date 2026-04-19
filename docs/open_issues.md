@@ -1,39 +1,39 @@
-# CryptoWatcher — Open Issues
+# CryptoWatcher — Открытые вопросы и pre-deploy риски
 
-## Current pre-deploy issues to verify
+## Текущие вопросы, которые нужно проверить перед деплоем
 
-### 1. Legacy state migration
-Need to ensure that old persisted chats do not lose their list behavior after restart.
+### 1. Миграция legacy state
+Нужно убедиться, что старые persisted chats не теряют своё list behavior после рестарта.
 
-Risk:
-default-merged values can accidentally overwrite the intended legacy fallback.
+Риск:
+default-merged значения могут случайно затереть правильный legacy fallback.
 
-### 2. `/status` truthfulness in `top` mode
-Need to ensure that status output reflects the actual radar universe.
+### 2. Правдивость `/status` в режиме `top`
+Нужно убедиться, что status output отражает реальный radar universe.
 
-Risk:
-alerts may scan Top 100 while `/status` still behaves like custom-list-only mode.
+Риск:
+алерты могут реально сканировать Top 100, а `/status` при этом продолжает вести себя как custom-list-only режим.
 
-### 3. No-op settings taps
-Need to ensure repeated taps on already-selected settings do not fail with callback query errors.
+### 3. No-op действия в настройках
+Нужно убедиться, что повторные нажатия на уже выбранные настройки не приводят к callback query ошибкам.
 
-Risk:
-double callback acknowledgement may trigger Telegram-side errors.
+Риск:
+двойное подтверждение callback query может вызывать Telegram-side ошибки.
 
-## Already observed production-relevant regressions from earlier iterations
+## Уже наблюдавшиеся прод-значимые регрессии в прошлых итерациях
 
-- help/settings parse error
-- `Message is not modified`
-- noisy CMC fallback log spam
+- parse error в help/settings тексте;
+- `Message is not modified`;
+- шумный CMC fallback log spam.
 
-These should remain fixed and must not be reintroduced.
+Эти проблемы должны оставаться исправленными и не должны возвращаться.
 
-## Next cleanup candidates after safe deploy
+## Кандидаты на cleanup после безопасного деплоя
 
-These are not current blockers, but they are good follow-up work:
+Это не текущие блокеры, но это хороший follow-up:
 
-- remove dead legacy code paths not used by the main radar product path
-- split the large bot file into smaller modules
-- add lightweight regression checks for state migration and top-mode status behavior
-- validate server time sync assumptions
-- review Bybit request pressure in top-mode polling
+- удалить legacy/dead code, который больше не используется в основном radar-контуре;
+- разбить большой файл бота на более мелкие модули;
+- добавить лёгкие regression checks для migration и top-mode `/status`;
+- перепроверить предположение о корректности server time sync;
+- пересмотреть нагрузку на Bybit request limits в top-mode polling.
