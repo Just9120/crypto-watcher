@@ -195,7 +195,7 @@ CMC_API_KEY = os.getenv("CMC_API_KEY", "").strip()
 assert TELEGRAM_BOT_TOKEN, "Missing TELEGRAM_BOT_TOKEN in .env / environment"
 CMC_UNAVAILABLE_MESSAGE = "CMC недоступен на сервере (нет CMC_API_KEY). Используется BYBIT."
 
-DEFAULT_PRICER = os.getenv("PRICER", "CMC").strip().upper()
+DEFAULT_PRICER = os.getenv("PRICER", "BYBIT").strip().upper()
 DEFAULT_BYBIT_CATEGORY = os.getenv("BYBIT_CATEGORY", "spot").strip().lower()
 DEFAULT_WATCHLIST = _parse_csv(os.getenv("WATCHLIST", "BTC,ETH"))
 DEFAULT_BYBIT_PAIRS = _parse_csv(os.getenv("BYBIT_PAIRS", ""))
@@ -238,6 +238,22 @@ def _is_authorized(chat_id: int) -> bool:
     return chat_id in ALLOWED_CHAT_IDS
 
 
+_CMC_FALLBACK_WARNING_EMITTED = False
+
+
+def _resolve_pricer(raw_pricer: str, *, warn_context: str = "") -> str:
+    global _CMC_FALLBACK_WARNING_EMITTED
+    pricer = (raw_pricer or "BYBIT").strip().upper()
+    if pricer not in ("BYBIT", "CMC"):
+        return "BYBIT"
+    if pricer == "CMC" and not CMC_API_KEY:
+        if warn_context and not _CMC_FALLBACK_WARNING_EMITTED:
+            logging.warning(f"{warn_context}: CMC_API_KEY is missing, falling back to BYBIT")
+            _CMC_FALLBACK_WARNING_EMITTED = True
+        return "BYBIT"
+    return pricer
+
+
 # ---------------------------------------------------------------
 # State model
 # ---------------------------------------------------------------
@@ -245,10 +261,7 @@ state: Dict[str, dict] = {"version": 2, "chats": {}}
 
 
 def _default_settings() -> dict:
-    default_pricer = DEFAULT_PRICER
-    if default_pricer == "CMC" and not CMC_API_KEY:
-        logging.warning("Default PRICER=CMC ignored: CMC_API_KEY is missing, falling back to BYBIT")
-        default_pricer = "BYBIT"
+    default_pricer = _resolve_pricer(DEFAULT_PRICER, warn_context="Default PRICER=CMC ignored")
     return {
         "pricer": default_pricer,
         "threshold_percent": DEFAULT_THRESHOLD_PERCENT,
@@ -295,10 +308,7 @@ def _ensure_chat_shape(chat_state: dict) -> dict:
         base_settings.update(settings)
     base_settings["bybit_pairs"] = [_normalize_bybit_pair(x) for x in base_settings.get("bybit_pairs", []) if x]
     base_settings["watchlist"] = [_normalize_cmc_symbol(x) for x in base_settings.get("watchlist", []) if x]
-    base_settings["pricer"] = str(base_settings.get("pricer", DEFAULT_PRICER)).upper()
-    if base_settings["pricer"] == "CMC" and not CMC_API_KEY:
-        logging.warning("Chat settings fallback: pricer=CMC but CMC_API_KEY is missing; forcing BYBIT")
-        base_settings["pricer"] = "BYBIT"
+    base_settings["pricer"] = _resolve_pricer(str(base_settings.get("pricer", DEFAULT_PRICER)))
     base_settings["bybit_category"] = str(base_settings.get("bybit_category", DEFAULT_BYBIT_CATEGORY)).lower()
     base_settings["threshold_percent"] = float(base_settings.get("threshold_percent", DEFAULT_THRESHOLD_PERCENT))
     base_settings["poll_interval_sec"] = int(base_settings.get("poll_interval_sec", DEFAULT_POLL_INTERVAL_SEC))
