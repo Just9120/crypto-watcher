@@ -1,78 +1,72 @@
 # CryptoWatcher — Bybit Spot Volume Radar
 
-Telegram-бот для ручной spot-торговли: показывает, где в рынок вошли деньги, и даёт one-click переход в терминал Bybit.
+Telegram-бот для ручной spot-торговли: ловит ускорение объёма/движения цены и отправляет алерты по рынку Bybit.
 
-## Новый MVP (product pivot)
+## Продуктовая модель (текущий scope)
 
-Основной path: **Bybit-only + watchlist/list**.
+- **Режим алертов по умолчанию:** `Top 100 Bybit`.
+- **Альтернативный режим:** `Мой список` (кастомный список пользователя).
+- Кастомный список хранится **в persistent state по каждому чату**, а не управляется в `.env` как основной механизм.
+- `/status` по умолчанию сфокусирован на рабочем пользовательском списке трейдера.
 
-Сигнал формируется только если одновременно выполнены 3 условия:
+## Композитный сигнал
+
+Алерт отправляется только если одновременно выполнены все условия:
 
 1. `abs(price_change_5m) >= PRICE_MOVE_MIN`
-2. `current_5m_turnover / sma_5m_turnover >= TURNOVER_SPIKE_MIN`
+2. `turnover_spike_ratio >= TURNOVER_SPIKE_MIN`
 3. `turnover24h >= LIQUIDITY_FLOOR_24H`
 
-`5m` сигнал считается по **закрытой** свече `v5/market/kline`.
+Где `turnover_spike_ratio = current_5m_turnover / sma_5m_turnover`, а расчёт идёт по закрытой 5m свече.
 
-## Alert формат
+## Telegram UX
 
-```
-🚨 BTCUSDT
-5m: +2.3%
-Объём 5m: $1.2M (x4.8)
-Оборот 24h: $38.4M
-```
-
-Кнопки:
-- `⚡ Trade BTCUSDT` → deep-link `https://www.bybit.com/trade/spot/BTC/USDT`
-- `🔕 1h`
-- `🔕 24h`
-- `Монета` (single-symbol summary)
+- Основной UX — **persistent bottom keyboard**.
+- Slash-команды остаются как вторичный интерфейс.
+- Есть глоссарий через `/terms` (и кнопку `Термины`).
+- Пользователь может переключать режим радара:
+  - `Радар: Top 100`
+  - `Радар: Мой список`
+- Пользователь может управлять кастомным списком из Telegram:
+  - `Список`
+  - `Добавить монету`
+  - `Удалить монету`
+  - `Очистить список`
 
 ## Команды
 
-- `/start`
-- `/status`
-- `/settings`
-- `/watchlist`
-- `/setlist BTC,ETH,SOL`
-- `/mute BTC 60`
-- `/unmute BTC`
-- `/unmute all`
+- `/start` — активировать бота в чате
+- `/status` — текущий статус радара
+- `/settings` — настройки радара
+- `/terms` — краткий глоссарий сигналов
+- `/watchlist` — показать режим и пользовательский список
+- `/setlist BTC,ETH,SOL` — перезаписать пользовательский список
+- `/addcoin` — добавить монеты в пользовательский список
+- `/removecoin` — удалить монеты из пользовательского списка
+- `/clearlist` — очистить пользовательский список
+- `/radar_top` — включить `Top 100 Bybit`
+- `/radar_custom` — включить `Мой список`
+- `/mute BTC 60`, `/unmute BTC`, `/unmute all`
 - `/help`
 
-## Конфиг (.env)
+## Что в `.env`, а что в chat state
 
-Ключевые переменные:
+### `.env` (дефолты и техпараметры)
 
-- `TURNOVER_SPIKE_MIN=4.0`
-- `PRICE_MOVE_MIN=2.0`
-- `LIQUIDITY_FLOOR_24H=5000000`
-- `SMA_PERIODS=12`
-- `RADAR_POLL_SEC=90` (частый polling, отдельно от 5m timeframe)
+- токены/ключи (`TELEGRAM_BOT_TOKEN`, и т.д.)
+- дефолтные интервалы/тайминги (`RADAR_POLL_SEC`, `ENGINE_INTERVAL_SEC`, ...)
+- пороги сигнала (`PRICE_MOVE_MIN`, `TURNOVER_SPIKE_MIN`, `LIQUIDITY_FLOOR_24H`)
+- прочие технические параметры (`STATE_FILE`, whitelist, retry/TTL настройки)
 
-См. полный пример в `.env.example`.
+### Chat state (активное поведение пользователя)
 
-## Совместимость state
+- `alert_universe_mode` (`top` / `custom`)
+- `custom_pairs` (активный кастомный список)
+- пользовательский workflow в чате (например, шаг add/remove)
+- mute/baseline/runtime для конкретного чата
 
-Бот сохраняет backward compatibility со старым state-файлом:
-- legacy ключи могут оставаться в JSON
-- `watchlist` и `mutes` продолжают работать
-- baseline/CMC поля не используются в новом main path
-
-## Запуск (Docker)
+## Запуск
 
 ```bash
 docker compose up -d --build
-```
-
-## Структура
-
-```text
-crypto-watcher/
-├── telegram_crypto_watcher.py
-├── .env.example
-├── Dockerfile
-├── docker-compose.yml
-└── requirements.txt
 ```
