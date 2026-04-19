@@ -768,13 +768,17 @@ async def _prepare_core_context(settings: dict, quotes: Dict[str, dict]) -> Tupl
 
 
 def _symbols_for_radar(settings: dict) -> List[str]:
-    # Migration-safe priority:
-    # legacy chats usually keep real user intent in watchlist, while bybit_pairs may be stale defaults.
+    # Migration-safe selection:
+    # - list mode: legacy chats usually keep user intent in watchlist, while bybit_pairs may be stale defaults.
+    # - top mode: prefer bybit_pairs (top/bybit universe), fallback to watchlist.
     watchlist = [_normalize_bybit_pair(x) for x in (settings.get("watchlist") or []) if x]
-    if watchlist:
-        return list(dict.fromkeys(watchlist))
     pairs = [_normalize_bybit_pair(x) for x in (settings.get("bybit_pairs") or []) if x]
-    return list(dict.fromkeys(pairs))
+    mode = current_mode(settings)
+    ordered = [watchlist, pairs] if mode == "list" else [pairs, watchlist]
+    for group in ordered:
+        if group:
+            return list(dict.fromkeys(group))
+    return []
 
 
 def _radar_mute_key(sym: str) -> str:
@@ -788,10 +792,15 @@ def _legacy_mute_keys(sym: str) -> List[str]:
     ]
 
 
+def _all_mute_keys(sym: str) -> List[str]:
+    # Keep BYBIT namespace canonical for radar, but keep reading/cleanup of legacy CMC keys.
+    # dict.fromkeys preserves order while deduplicating.
+    return list(dict.fromkeys([_radar_mute_key(sym), *_legacy_mute_keys(sym)]))
+
+
 def _read_effective_mute_until(chat_state: dict, sym: str) -> float:
     mutes = chat_state.get("mutes", {})
-    vals = [float(mutes.get(_radar_mute_key(sym), 0) or 0)]
-    vals.extend(float(mutes.get(k, 0) or 0) for k in _legacy_mute_keys(sym))
+    vals = [float(mutes.get(k, 0) or 0) for k in _all_mute_keys(sym)]
     return max(vals) if vals else 0.0
 
 
@@ -1211,7 +1220,7 @@ async def unmute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"✅ Снял mute: {len(removed)} шт.")
             return
         sym = _normalize_bybit_pair(raw)
-        keys = [_radar_mute_key(sym), *_legacy_mute_keys(sym)]
+        keys = _all_mute_keys(sym)
         found = False
         for key in keys:
             if key in chat_state["mutes"]:
