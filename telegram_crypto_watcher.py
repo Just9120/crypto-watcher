@@ -1089,7 +1089,7 @@ def status_text(
     now = time.time()
     lines = []
     symbols = _symbols_for_status(s, quotes)
-    max_rows = 12
+    max_rows = 12 if s.get("alert_universe_mode") == "top" else max(12, len(symbols))
     rendered_symbols = symbols[:max_rows]
     for sym in rendered_symbols:
         q = quotes.get(sym)
