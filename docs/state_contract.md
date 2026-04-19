@@ -1,94 +1,97 @@
-# CryptoWatcher — State Contract
+# CryptoWatcher — Контракт state и миграции
 
-## 1. Purpose
+## 1. Назначение
 
-This document defines what belongs in persistent chat state, what belongs in `.env`, and how migration must behave.
+Этот документ определяет:
+- что должно жить в persistent chat state;
+- что должно жить в `.env`;
+- как должна работать миграция state.
 
-It exists to reduce accidental regressions during product iteration.
+Документ нужен для того, чтобы снижать риск случайных регрессий при развитии продукта.
 
-## 2. Ownership model
+## 2. Модель владения
 
 ### `.env`
-Used for:
-- secrets
-- default values
-- infrastructure/runtime configuration
-- signal thresholds
-- polling cadence defaults
-- deployment-specific parameters
+Используется для:
+- секретов;
+- дефолтных значений;
+- инфраструктурной и runtime-конфигурации;
+- порогов сигнала;
+- дефолтной частоты polling;
+- deployment-specific параметров.
 
 ### persistent chat state
-Used for:
-- actual per-chat behavior
-- active radar mode
-- custom symbol list
-- mute data
-- temporary chat workflow state
-- per-chat runtime timestamps
+Используется для:
+- реального поведения конкретного чата;
+- активного режима радара;
+- пользовательского списка монет;
+- mute-данных;
+- временного chat workflow состояния;
+- per-chat runtime timestamps.
 
-## 3. Important state fields
+## 3. Важные поля state
 
-### Product behavior
+### Поля продуктового поведения
 - `settings.alert_universe_mode`
-  - allowed values: `top`, `custom`
-  - defines which alert universe is active
+  - допустимые значения: `top`, `custom`
+  - определяет, какой alert universe активен
 
 - `settings.custom_pairs`
-  - normalized Bybit symbols
-  - per-chat active custom list
+  - нормализованные Bybit symbols
+  - активный пользовательский список текущего чата
 
 ### Runtime
 - `runtime.last_poll_ts`
 - `runtime.pending_action`
 
-### Operational
+### Операционные данные
 - `mutes`
 - `baselines`
 
-## 4. Legacy migration rules
+## 4. Правила миграции legacy state
 
-Older persisted chats may not contain:
+Старые persisted chats могут не содержать:
 - `alert_universe_mode`
 - `custom_pairs`
 
-Migration rules:
+Правила миграции:
 
-1. If raw persisted `alert_universe_mode` exists, it is authoritative.
-2. If raw persisted `alert_universe_mode` does not exist, derive mode from legacy behavior.
-3. If raw persisted `custom_pairs` exists, it is authoritative, including an explicit empty list.
-4. If `custom_pairs` does not exist, derive it from legacy raw fields in this order:
+1. Если raw persisted `alert_universe_mode` существует, он считается authoritative.
+2. Если raw persisted `alert_universe_mode` отсутствует, режим должен выводиться из legacy-поведения.
+3. Если raw persisted `custom_pairs` существует, он считается authoritative, включая случай явного пустого списка.
+4. Если `custom_pairs` отсутствует, он должен выводиться из legacy raw fields в таком порядке:
    - `bybit_pairs`
    - `watchlist`
-   - otherwise empty list
-5. Normalize symbols with `_normalize_bybit_pair`.
-6. Preserve order while deduplicating.
+   - иначе пустой список
+5. Символы должны нормализоваться через `_normalize_bybit_pair`.
+6. Дедупликация должна сохранять порядок элементов.
 
-Critical rule:
-migration decisions must use raw persisted settings, not already default-merged settings.
+Критичное правило:
+решения по миграции должны приниматься на основе raw persisted settings, а не уже default-merged settings.
 
-## 5. Truthfulness rule
+## 5. Правило правдивости состояния
 
-All user-facing surfaces must agree on active state:
+Все пользовательские поверхности должны согласованно отражать один и тот же активный state:
 
-- polling behavior
-- `/status`
-- settings text
-- watchlist/list view
-- help text where relevant
+- polling behavior;
+- `/status`;
+- settings text;
+- watchlist/list view;
+- help text там, где это релевантно.
 
-Example:
-if alerts scan Top 100, status must not behave as if only the custom list exists.
+Пример:
+если алерты реально сканируют Top 100, `/status` не должен вести себя так, как будто существует только custom list.
 
-## 6. Backward compatibility rule
+## 6. Правило backward compatibility
 
-A PR that changes state structure is incomplete unless it explicitly covers migration behavior.
+PR, который меняет структуру state, считается неполным, если он не покрывает миграционное поведение явно.
 
-At minimum, verify:
-- legacy payload with old `bybit_pairs`
-- legacy payload with old `watchlist`
-- explicit empty `custom_pairs`
-- explicit `alert_universe_mode`
+Минимум нужно проверять:
+- legacy payload со старым `bybit_pairs`;
+- legacy payload со старым `watchlist`;
+- случай с явным пустым `custom_pairs`;
+- случай с явным `alert_universe_mode`.
 
-## 7. Change policy
+## 7. Политика изменений
 
-Any PR that adds or changes persistent state fields must update this document.
+Любой PR, который добавляет или меняет persistent state fields, должен обновлять этот документ.
