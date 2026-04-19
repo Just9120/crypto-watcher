@@ -210,6 +210,18 @@ def _fmt_liquidity_threshold(value: float) -> str:
     return f"${amount:,.0f}"
 
 
+def _fmt_usd_compact(value: float) -> str:
+    amount = float(value)
+    abs_amount = abs(amount)
+    if abs_amount >= 1_000_000_000:
+        return f"${amount / 1_000_000_000:.1f}B"
+    if abs_amount >= 1_000_000:
+        return f"${amount / 1_000_000:.1f}M"
+    if abs_amount >= 1_000:
+        return f"${amount / 1_000:.1f}K"
+    return f"${amount:.1f}"
+
+
 # ---------------------------------------------------------------
 # Env defaults
 # ---------------------------------------------------------------
@@ -1076,19 +1088,19 @@ def settings_keyboard(chat_state: dict) -> InlineKeyboardMarkup:
     turnover_spike_min = float(s.get("turnover_spike_min", TURNOVER_SPIKE_MIN))
     liquidity_floor_24h = float(s.get("liquidity_floor_24h", LIQUIDITY_FLOOR_24H))
     kb = [
-        [InlineKeyboardButton("Таймфрейм сигнала", callback_data="st:noop")],
-        [
-            InlineKeyboardButton(_selected("1m", signal_timeframe == "1m"), callback_data="st:sgtf:1m"),
-            InlineKeyboardButton(_selected("3m", signal_timeframe == "3m"), callback_data="st:sgtf:3m"),
-            InlineKeyboardButton(_selected("5m", signal_timeframe == "5m"), callback_data="st:sgtf:5m"),
-            InlineKeyboardButton(_selected("15m", signal_timeframe == "15m"), callback_data="st:sgtf:15m"),
-        ],
         [InlineKeyboardButton("Проверка рынка", callback_data="st:noop")],
         [
             InlineKeyboardButton(_selected("1m", int(s.get("radar_poll_sec", 0)) == 60), callback_data="st:rdr:60"),
             InlineKeyboardButton(_selected("90s", int(s.get("radar_poll_sec", 0)) == 90), callback_data="st:rdr:90"),
             InlineKeyboardButton(_selected("2m", int(s.get("radar_poll_sec", 0)) == 120), callback_data="st:rdr:120"),
             InlineKeyboardButton(_selected("3m", int(s.get("radar_poll_sec", 0)) == 180), callback_data="st:rdr:180"),
+        ],
+        [InlineKeyboardButton("Таймфрейм сигнала", callback_data="st:noop")],
+        [
+            InlineKeyboardButton(_selected("1m", signal_timeframe == "1m"), callback_data="st:sgtf:1m"),
+            InlineKeyboardButton(_selected("3m", signal_timeframe == "3m"), callback_data="st:sgtf:3m"),
+            InlineKeyboardButton(_selected("5m", signal_timeframe == "5m"), callback_data="st:sgtf:5m"),
+            InlineKeyboardButton(_selected("15m", signal_timeframe == "15m"), callback_data="st:sgtf:15m"),
         ],
         [InlineKeyboardButton("Движение цены", callback_data="st:noop")],
         [
@@ -1113,8 +1125,8 @@ def settings_keyboard(chat_state: dict) -> InlineKeyboardMarkup:
         ],
         [InlineKeyboardButton("ℹ️ Что значат настройки", callback_data="st:help")],
         [
-            InlineKeyboardButton("📊 Status", callback_data="st:status"),
-            InlineKeyboardButton("🔄 Refresh", callback_data="st:refresh"),
+            InlineKeyboardButton("📊 Статус", callback_data="st:status"),
+            InlineKeyboardButton("🔄 Обновить", callback_data="st:refresh"),
         ],
     ]
     return InlineKeyboardMarkup(kb)
@@ -1187,21 +1199,27 @@ def status_text(
             continue
         muted_until = _read_effective_mute_until(chat_state, sym)
         mute_flag = " 🔕" if muted_until > now else ""
-        signal_flag = " 🚨" if q.get("meets_signal") else ""
-        lines.append(f"{sym}: {q['price']:.6g} USDT{mute_flag}{signal_flag}")
-        lines.append(
-            f"{signal_timeframe} {q['price_change_tf']:+.2f}% · "
-            f"Объём {signal_timeframe} ${q['current_tf_turnover']:,.0f} (x{q['turnover_spike_ratio']:.2f})"
-        )
-        lines.append(f"Ликвидность 24ч ${q['turnover24h']:,.0f}")
+        price_change_tf = float(q.get("price_change_tf") or 0.0)
+        turnover_spike_ratio = float(q.get("turnover_spike_ratio") or 0.0)
+        turnover24h = float(q.get("turnover24h") or 0.0)
+        price_pass = abs(price_change_tf) >= price_move_min
+        spike_pass = turnover_spike_ratio >= turnover_spike_min
+        liquidity_pass = turnover24h >= liquidity_floor_24h
+        meets_signal = bool(price_pass and spike_pass and liquidity_pass)
+        signal_flag = " 🚨" if meets_signal else ""
+        lines.append(f"{sym} — {q['price']:.6g} USDT{mute_flag}{signal_flag}")
+        lines.append(f"Движение цены ({signal_timeframe}): {price_change_tf:+.2f}% {'✅' if price_pass else '❌'}")
+        lines.append(f"Спайк объёма ({signal_timeframe}): x{turnover_spike_ratio:.2f} {'✅' if spike_pass else '❌'}")
+        lines.append(f"Ликвидность 24ч: {_fmt_usd_compact(turnover24h)} {'✅' if liquidity_pass else '❌'}")
+        lines.append(f"Итог: {'сигнал есть' if meets_signal else 'сигнала нет'}")
         lines.append("")
 
     header = (
         "📊 *Bybit Spot Volume Radar*\n\n"
-        f"*Mode:* {radar_mode_label(s)}\n"
-        f"*Проверка рынка:* {_fmt_interval(int(s.get('radar_poll_sec', DEFAULT_RADAR_POLL_SEC)))} | *Cooldown:* {s['cooldown_min']} min\n"
+        f"*Режим:* {radar_mode_label(s)}\n"
+        f"*Проверка рынка:* {_fmt_interval(int(s.get('radar_poll_sec', DEFAULT_RADAR_POLL_SEC)))}\n"
         f"*Таймфрейм сигнала:* {signal_timeframe}\n"
-        f"*Сигнал:* Движение цены ≥ {_fmt_price_move_threshold(price_move_min)}, "
+        f"*Порог сигнала:* Движение цены ≥ {_fmt_price_move_threshold(price_move_min)}, "
         f"Спайк объёма ≥ {_fmt_spike_threshold(turnover_spike_min)}, "
         f"Ликвидность 24ч ≥ {_fmt_liquidity_threshold(liquidity_floor_24h)}\n"
         f"*Tracking:* {radar_tracking_desc(s)}\n"
