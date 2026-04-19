@@ -40,13 +40,15 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from dotenv import load_dotenv
-from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update
 from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
+    MessageHandler,
+    filters,
 )
 
 load_dotenv(dotenv_path=Path(__file__).with_name(".env"))
@@ -280,6 +282,8 @@ def _default_settings() -> dict:
         "core_baseline_enabled": False,
         "core_top_n": 20,
         "core_reference_tf": "7d",
+        "alert_universe_mode": "top",
+        "custom_pairs": [],
     }
 
 
@@ -326,6 +330,16 @@ def _ensure_chat_shape(chat_state: dict) -> dict:
     tf_label, tf_bybit = _parse_change_tf(str(base_settings.get("change_tf_label", DEFAULT_CHANGE_TF_LABEL)))
     base_settings["change_tf_label"] = tf_label
     base_settings["change_tf_bybit"] = tf_bybit
+    legacy_radar_mode = "top" if current_mode(base_settings) == "top" else "custom"
+    raw_universe_mode = str(base_settings.get("alert_universe_mode", legacy_radar_mode)).lower()
+    base_settings["alert_universe_mode"] = "custom" if raw_universe_mode == "custom" else "top"
+    if "custom_pairs" in base_settings:
+        raw_custom_pairs = base_settings.get("custom_pairs") or []
+    else:
+        raw_custom_pairs = base_settings.get("bybit_pairs") or base_settings.get("watchlist") or []
+    base_settings["custom_pairs"] = list(
+        dict.fromkeys(_normalize_bybit_pair(x) for x in raw_custom_pairs if x)
+    )
     base["settings"] = base_settings
     if isinstance(chat_state.get("baselines"), dict):
         base["baselines"] = chat_state["baselines"]
@@ -423,35 +437,23 @@ def tracked_desc(settings: dict) -> str:
 
 
 def _radar_tracking_source(settings: dict) -> str:
-    watchlist = [_normalize_bybit_pair(x) for x in (settings.get("watchlist") or []) if x]
-    if watchlist:
-        return "watchlist"
-    pairs = [_normalize_bybit_pair(x) for x in (settings.get("bybit_pairs") or []) if x]
-    if pairs:
-        return "bybit_pairs"
-    return "none"
+    return "top100" if settings.get("alert_universe_mode") == "top" else "custom"
 
 
 def radar_mode_label(settings: dict) -> str:
     source = _radar_tracking_source(settings)
-    configured_mode = current_mode(settings)
-    if source in ("watchlist", "bybit_pairs"):
-        if configured_mode == "top":
-            return "List/watchlist (effective; top configured)"
-        return "List/watchlist"
-    return "No symbols configured"
+    if source == "top100":
+        return "Top 100 Bybit"
+    return "Мой список"
 
 
 def radar_tracking_desc(settings: dict) -> str:
-    source = _radar_tracking_source(settings)
-    symbols = _symbols_for_radar(settings)
+    symbols = _symbols_for_status(settings)
     if not symbols:
         return "Список пуст"
-    if source == "watchlist":
-        return f"Watchlist: {_truncate_list(symbols)}"
-    if source == "bybit_pairs":
-        return f"Bybit pairs: {_truncate_list(symbols)}"
-    return _truncate_list(symbols)
+    if settings.get("alert_universe_mode") == "top":
+        return f"Top 100 Bybit (статус: {_truncate_list(symbols)})"
+    return f"Мой список: {_truncate_list(symbols)}"
 
 
 def price_unit(settings: dict) -> str:
@@ -811,12 +813,7 @@ async def _prepare_core_context(settings: dict, quotes: Dict[str, dict]) -> Tupl
 
 
 def _symbols_for_radar(settings: dict) -> List[str]:
-    # Migration-safe priority:
-    # legacy chats usually keep real user intent in watchlist, while bybit_pairs may be stale defaults.
-    watchlist = [_normalize_bybit_pair(x) for x in (settings.get("watchlist") or []) if x]
-    if watchlist:
-        return list(dict.fromkeys(watchlist))
-    pairs = [_normalize_bybit_pair(x) for x in (settings.get("bybit_pairs") or []) if x]
+    pairs = [_normalize_bybit_pair(x) for x in (settings.get("custom_pairs") or []) if x]
     return list(dict.fromkeys(pairs))
 
 
@@ -916,10 +913,19 @@ def _fetch_symbol_radar(settings: dict, sym: str, ticker: dict) -> Tuple[str, Op
 
 
 def fetch_radar_snapshot(settings: dict) -> Dict[str, dict]:
-    symbols = _symbols_for_radar(settings)
+    tickers = _fetch_tickers_map(settings)
+    if settings.get("alert_universe_mode") == "top":
+        limit = 100
+        top_items = sorted(
+            tickers.values(),
+            key=lambda it: float(it.get("turnover24h") or 0.0),
+            reverse=True,
+        )[:limit]
+        symbols = [str(it.get("symbol", "")).upper() for it in top_items if it.get("symbol")]
+    else:
+        symbols = _symbols_for_radar(settings)
     if not symbols:
         return {}
-    tickers = _fetch_tickers_map(settings)
     futures = {}
     for sym in symbols:
         ticker = tickers.get(sym)
@@ -1012,6 +1018,22 @@ def settings_keyboard(chat_state: dict) -> InlineKeyboardMarkup:
         ],
     ]
     return InlineKeyboardMarkup(kb)
+
+
+def main_menu_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        [
+            ["📊 Статус", "⚙️ Настройки"],
+            ["Радар: Top 100", "Радар: Мой список"],
+            ["Список", "Добавить монету"],
+            ["Удалить монету", "Очистить список"],
+            ["Термины"],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+    )
+
+
 def alert_keyboard(source: str, sym: str) -> InlineKeyboardMarkup:
     base = sym[:-4] if sym.endswith("USDT") else sym
     quote = "USDT" if sym.endswith("USDT") else ""
@@ -1030,14 +1052,8 @@ def alert_keyboard(source: str, sym: str) -> InlineKeyboardMarkup:
     )
 
 
-def _symbols_for_status(settings: dict, quotes: Dict[str, dict]) -> List[str]:
-    mode = current_mode(settings)
-    if mode == "top":
-        ranked = sorted(quotes.items(), key=lambda item: item[1].get("rank") or 999999)
-        return [sym for sym, _ in ranked[:20]]
-    if settings["pricer"] == "BYBIT":
-        return settings["bybit_pairs"]
-    return settings["watchlist"]
+def _symbols_for_status(settings: dict) -> List[str]:
+    return _symbols_for_radar(settings)
 
 
 def status_text(
@@ -1111,18 +1127,37 @@ def help_text() -> str:
         "/start — активировать бот для этого чата\n"
         "/status — текущее состояние\n"
         "/settings — настройки через кнопки\n"
-        "/watchlist — показать текущий список / top-режим\n"
-        "/setlist BTC,ETH,SOL — обновить список для list-режима\n"
+        "/watchlist — показать режим радара и пользовательский список\n"
+        "/setlist BTC,ETH,SOL — перезаписать пользовательский список\n"
+        "/addcoin — добавить монеты в пользовательский список\n"
+        "/removecoin — удалить монеты из пользовательского списка\n"
+        "/clearlist — очистить пользовательский список\n"
+        "/radar_top — включить режим Top 100 Bybit\n"
+        "/radar_custom — включить режим Мой список\n"
+        "/terms — глоссарий сигналов и метрик\n"
         "/mute BTC 60 — отключить алерты по монете на 60 минут\n"
         "/unmute BTC — снять mute с монеты\n"
         "/unmute all — снять все mute\n"
         "/help — эта справка\n\n"
         "Как работает бот:\n"
-        "- Bybit-only radar для watchlist/list.\n"
+        "- Bybit-only radar.\n"
+        "- Режимы радара: Top 100 Bybit или Мой список.\n"
         f"- Сигнал: |5m| >= {PRICE_MOVE_MIN:.1f}% + spike >= x{TURNOVER_SPIKE_MIN:.1f} + 24h turnover >= ${LIQUIDITY_FLOOR_24H:,.0f}.\n"
         "- Сигнал строится по закрытой 5m kline.\n"
         "- /mute временно отключает алерты по монете.\n"
         "- Кнопка Монета показывает карточку конкретного символа."
+    )
+
+
+def terms_text() -> str:
+    return (
+        "📚 Термины\n\n"
+        "*price_change_5m* — изменение цены на закрытой 5m свече.\n"
+        "*current_5m_turnover* — оборот текущей закрытой 5m свечи.\n"
+        f"*sma_5m_turnover* — средний 5m оборот за {SMA_PERIODS} свечей.\n"
+        "*turnover_spike_ratio* — current_5m_turnover / sma_5m_turnover.\n"
+        "*turnover24h* — оборот пары за 24 часа по Bybit.\n"
+        "*Signal* — алерт только если все условия выполнены одновременно."
     )
 
 
@@ -1171,10 +1206,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         + "\n\nКоманды: /status /settings /watchlist /help"
     )
     await update.message.reply_text(text, reply_markup=settings_keyboard(chat_state), parse_mode="Markdown")
+    await update.message.reply_text("Главное меню:", reply_markup=main_menu_keyboard())
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(help_text())
+    await update.message.reply_text(help_text(), reply_markup=main_menu_keyboard())
+
+
+async def terms_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(terms_text(), parse_mode="Markdown", reply_markup=main_menu_keyboard())
 
 
 async def settings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1186,14 +1226,21 @@ async def settings_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=settings_keyboard(chat_state),
         parse_mode="Markdown",
     )
+    await update.message.reply_text("Главное меню:", reply_markup=main_menu_keyboard())
 
 
 async def watchlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _is_authorized(update.effective_chat.id):
         return
     chat_state = get_chat_state(update.effective_chat.id)
-    lst = _symbols_for_radar(chat_state["settings"])
-    txt = "Текущий watchlist/list:\n" + (", ".join(lst) if lst else "Список пуст")
+    s = chat_state["settings"]
+    lst = _symbols_for_radar(s)
+    mode_label = "Top 100 Bybit" if s.get("alert_universe_mode") == "top" else "Мой список"
+    txt = (
+        f"Режим радара: {mode_label}\n"
+        "Текущий пользовательский список:\n"
+        + (", ".join(lst) if lst else "Список пуст")
+    )
     await update.message.reply_text(txt)
 
 
@@ -1212,13 +1259,73 @@ async def setlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Список пуст.")
             return
         s["pricer"] = "BYBIT"
-        s["bybit_pairs"] = [_normalize_bybit_pair(x) for x in items]
-        s["watchlist"] = [_normalize_cmc_symbol(x) for x in items]
-        set_mode(s, "list")
-        msg = "✅ Обновил Bybit watchlist:\n" + ", ".join(s["bybit_pairs"])
+        s["alert_universe_mode"] = "custom"
+        s["custom_pairs"] = list(dict.fromkeys(_normalize_bybit_pair(x) for x in items))
+        msg = "✅ Обновил пользовательский список:\n" + ", ".join(s["custom_pairs"])
         chat_state["runtime"]["last_poll_ts"] = 0
         save_state()
     await update.message.reply_text(msg)
+
+
+def _parse_symbols_input(raw: str) -> List[str]:
+    normalized = raw.replace("\n", ",").replace(" ", "")
+    return list(dict.fromkeys(_normalize_bybit_pair(x) for x in normalized.split(",") if x.strip()))
+
+
+async def addcoin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_authorized(update.effective_chat.id):
+        return
+    async with _state_lock:
+        chat_state = get_chat_state(update.effective_chat.id)
+        chat_state["runtime"]["pending_action"] = "add"
+        save_state()
+    await update.message.reply_text("Отправьте символы через запятую, например: BTC,ETH,SOL")
+
+
+async def removecoin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_authorized(update.effective_chat.id):
+        return
+    async with _state_lock:
+        chat_state = get_chat_state(update.effective_chat.id)
+        chat_state["runtime"]["pending_action"] = "remove"
+        save_state()
+    await update.message.reply_text("Отправьте символы для удаления, например: ETH,SOL")
+
+
+async def clearlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_authorized(update.effective_chat.id):
+        return
+    async with _state_lock:
+        chat_state = get_chat_state(update.effective_chat.id)
+        chat_state["settings"]["custom_pairs"] = []
+        chat_state["runtime"]["last_poll_ts"] = 0
+        chat_state["runtime"]["pending_action"] = ""
+        save_state()
+    await update.message.reply_text("🧹 Пользовательский список очищен.")
+
+
+async def set_radar_mode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE, mode: str):
+    if not _is_authorized(update.effective_chat.id):
+        return
+    async with _state_lock:
+        chat_state = get_chat_state(update.effective_chat.id)
+        s = chat_state["settings"]
+        s["alert_universe_mode"] = "custom" if mode == "custom" else "top"
+        s["pricer"] = "BYBIT"
+        chat_state["runtime"]["last_poll_ts"] = 0
+        save_state()
+    if mode == "top":
+        await update.message.reply_text("✅ Радар переключён: Top 100 Bybit.")
+    else:
+        await update.message.reply_text("✅ Радар переключён: Мой список.")
+
+
+async def radar_top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await set_radar_mode_cmd(update, context, "top")
+
+
+async def radar_custom_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await set_radar_mode_cmd(update, context, "custom")
 
 
 async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1351,6 +1458,72 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     text = status_text(chat_state, quotes)
     await update.message.reply_text(text, parse_mode="Markdown")
+
+
+async def text_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text:
+        return
+    if not _is_authorized(update.effective_chat.id):
+        return
+
+    text = update.message.text.strip()
+    chat_id = update.effective_chat.id
+
+    if text == "📊 Статус":
+        await status_cmd(update, context)
+        return
+    if text == "⚙️ Настройки":
+        await settings_cmd(update, context)
+        return
+    if text == "Радар: Top 100":
+        await set_radar_mode_cmd(update, context, "top")
+        return
+    if text == "Радар: Мой список":
+        await set_radar_mode_cmd(update, context, "custom")
+        return
+    if text == "Список":
+        await watchlist_cmd(update, context)
+        return
+    if text == "Добавить монету":
+        await addcoin_cmd(update, context)
+        return
+    if text == "Удалить монету":
+        await removecoin_cmd(update, context)
+        return
+    if text == "Очистить список":
+        await clearlist_cmd(update, context)
+        return
+    if text == "Термины":
+        await terms_cmd(update, context)
+        return
+
+    async with _state_lock:
+        chat_state = get_chat_state(chat_id)
+        pending_action = str(chat_state.get("runtime", {}).get("pending_action", "") or "")
+        if pending_action not in ("add", "remove"):
+            return
+        symbols = _parse_symbols_input(text)
+        if not symbols:
+            await update.message.reply_text("Не распознал символы. Пример: BTC,ETH,SOL")
+            return
+        current = list(dict.fromkeys(_normalize_bybit_pair(x) for x in chat_state["settings"].get("custom_pairs", []) if x))
+        current_set = set(current)
+        if pending_action == "add":
+            for sym in symbols:
+                if sym not in current_set:
+                    current.append(sym)
+            chat_state["settings"]["custom_pairs"] = current
+            result_msg = "✅ Добавил: " + ", ".join(symbols)
+        else:
+            to_remove = set(symbols)
+            chat_state["settings"]["custom_pairs"] = [sym for sym in current if sym not in to_remove]
+            result_msg = "✅ Удалил: " + ", ".join(symbols)
+        chat_state["runtime"]["pending_action"] = ""
+        chat_state["runtime"]["last_poll_ts"] = 0
+        save_state()
+        final_list = chat_state["settings"]["custom_pairs"]
+    await update.message.reply_text(result_msg)
+    await update.message.reply_text("Текущий список:\n" + (", ".join(final_list) if final_list else "Список пуст"))
 
 
 # ---------------------------------------------------------------
@@ -1488,8 +1661,14 @@ async def _register_bot_commands(app: Application) -> None:
         BotCommand("start", "Активировать бот в чате"),
         BotCommand("status", "Текущее состояние радара"),
         BotCommand("settings", "Открыть настройки"),
-        BotCommand("watchlist", "Показать список отслеживания"),
-        BotCommand("setlist", "Обновить watchlist"),
+        BotCommand("watchlist", "Показать режим и пользовательский список"),
+        BotCommand("setlist", "Перезаписать пользовательский список"),
+        BotCommand("addcoin", "Добавить монеты в пользовательский список"),
+        BotCommand("removecoin", "Удалить монеты из пользовательского списка"),
+        BotCommand("clearlist", "Очистить пользовательский список"),
+        BotCommand("radar_top", "Режим радара Top 100 Bybit"),
+        BotCommand("radar_custom", "Режим радара Мой список"),
+        BotCommand("terms", "Глоссарий терминов"),
         BotCommand("mute", "Временно отключить алерты по монете"),
         BotCommand("unmute", "Снять mute с монеты или всех"),
         BotCommand("help", "Справка по командам"),
@@ -1728,8 +1907,14 @@ def main():
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(CommandHandler("settings", settings_cmd))
+    app.add_handler(CommandHandler("terms", terms_cmd))
     app.add_handler(CommandHandler("watchlist", watchlist_cmd))
     app.add_handler(CommandHandler("setlist", setlist_cmd))
+    app.add_handler(CommandHandler("addcoin", addcoin_cmd))
+    app.add_handler(CommandHandler("removecoin", removecoin_cmd))
+    app.add_handler(CommandHandler("clearlist", clearlist_cmd))
+    app.add_handler(CommandHandler("radar_top", radar_top_cmd))
+    app.add_handler(CommandHandler("radar_custom", radar_custom_cmd))
     app.add_handler(CommandHandler("mute", mute_cmd))
     app.add_handler(CommandHandler("unmute", unmute_cmd))
     app.add_handler(CommandHandler("resetbase", resetbase_cmd))
@@ -1738,6 +1923,7 @@ def main():
     app.add_handler(CallbackQueryHandler(settings_callback, pattern=r"^st:"))
     app.add_handler(CallbackQueryHandler(alert_callback, pattern=r"^al:"))
     app.add_handler(CallbackQueryHandler(resetallbase_callback, pattern=r"^rb:"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_menu_handler))
 
     app.job_queue.run_repeating(poll_engine_job, interval=ENGINE_INTERVAL_SEC, first=5)
 
