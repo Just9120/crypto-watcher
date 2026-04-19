@@ -1,109 +1,109 @@
-# CryptoWatcher — Product Scope
+# CryptoWatcher — Текущий продуктовый scope
 
-## 1. Purpose
+## 1. Назначение
 
-CryptoWatcher is a Telegram bot for manual spot trading on Bybit.
+CryptoWatcher — это Telegram-бот для ручной spot-торговли на Bybit.
 
-The current product goal is not generic price monitoring and not portfolio tracking.
-The bot must detect actionable short-term radar signals on Bybit Spot and send trader-friendly alerts to Telegram.
+Текущая цель продукта — не общий мониторинг цены и не трекинг портфеля.
+Бот должен находить прикладные краткосрочные сигналы на Bybit Spot и отправлять трейдеру понятные алерты в Telegram.
 
-## 2. Current MVP scope
+## 2. Текущий MVP scope
 
-Current MVP = Bybit Spot Volume Radar.
+Текущий MVP = Bybit Spot Volume Radar.
 
-Core user outcome:
-the user opens Telegram, receives alerts about unusual short-term activity on liquid Bybit spot pairs, and can quickly jump into the Bybit terminal.
+Ключевой пользовательский результат:
+пользователь открывает Telegram, получает алерты о необычной краткосрочной активности по ликвидным spot-парам Bybit и может быстро перейти в терминал Bybit.
 
-Current MVP includes:
+В текущий MVP входят:
 
-- Bybit Spot as the primary and default product path.
-- Composite radar signal based on short-term price move, turnover spike, and 24h liquidity floor.
-- Default alert universe = Top 100 Bybit pairs by 24h turnover.
-- Alternative alert universe = per-chat custom list.
-- Persistent Telegram bottom keyboard as the main user interface.
-- Russian Telegram UX texts.
-- Quick symbol actions from alerts.
-- Glossary / terms explanation inside Telegram.
-- Per-chat persistent state for radar mode, custom list, mute state, and runtime workflow.
+- Bybit Spot как основной и дефолтный продуктовый контур.
+- Композитный radar-сигнал на основе краткосрочного движения цены, спайка оборота и порога 24h ликвидности.
+- Alert universe по умолчанию = Top 100 Bybit пар по `turnover24h`.
+- Альтернативный alert universe = пользовательский список на уровне чата.
+- Постоянная нижняя Telegram-клавиатура как основной пользовательский интерфейс.
+- Русские тексты в Telegram UX.
+- Быстрые действия по монете из алерта.
+- Глоссарий / объяснение терминов внутри Telegram.
+- Персистентный state на уровне чата для режима радара, пользовательского списка, mute-состояния и runtime workflow.
 
-## 3. Non-goals for current MVP
+## 3. Что не входит в текущий MVP
 
-The following are explicitly out of scope for the current MVP:
+Следующее явно находится вне scope текущего MVP:
 
-- CoinMarketCap as a primary product path.
-- Old baseline-driven percent monitor as the main alerting model.
+- CoinMarketCap как основной продуктовый контур.
+- Старый baseline-driven percent monitor как основная модель алертов.
 - Futures mode.
-- Portfolio/account integration.
-- Order execution from Telegram.
-- Multi-exchange routing.
-- Rich analytics dashboards.
-- Returning to `.env` as the main user list management mechanism.
+- Интеграция с аккаунтом / портфелем.
+- Исполнение ордеров из Telegram.
+- Мультибиржевой режим.
+- Богатые аналитические дашборды.
+- Возврат к `.env` как основному механизму управления пользовательским списком.
 
-These ideas may be explored later, but they are not part of the current MVP contract.
+Эти идеи можно рассматривать позже, но они не являются частью текущего MVP-контракта.
 
-## 4. Product principles
+## 4. Продуктовые принципы
 
-1. Main path first.
-The main user path is Bybit Spot Volume Radar, not legacy monitor behavior.
+1. Main path first.  
+Главный пользовательский путь — Bybit Spot Volume Radar, а не legacy-monitor поведение.
 
-2. Actionability over noise.
-Signals should prioritize trader usefulness over raw message volume.
+2. Actionability over noise.  
+Сигналы должны максимизировать пользу для трейдера, а не просто увеличивать число сообщений.
 
-3. Telegram-first UX.
-The bot should feel like a compact control deck, not a slash-command-only utility.
+3. Telegram-first UX.  
+Бот должен ощущаться как компактный control deck, а не как утилита, которой можно пользоваться только через slash-команды.
 
-4. Per-chat state.
-User-specific behavior belongs in persistent chat state, not in static server config.
+4. Per-chat state.  
+Пользовательское поведение должно жить в persistent chat state, а не в статическом серверном конфиге.
 
-5. Safe iteration.
-New work must not silently break migrated legacy chats.
+5. Safe iteration.  
+Новые изменения не должны молча ломать уже существующие legacy-чаты после миграции.
 
-## 5. Signal contract
+## 5. Контракт сигнала
 
-An alert is emitted only if all conditions are true:
+Алерт отправляется только если одновременно выполнены все условия:
 
 1. `abs(price_change_5m) >= PRICE_MOVE_MIN`
 2. `turnover_spike_ratio >= TURNOVER_SPIKE_MIN`
 3. `turnover24h >= LIQUIDITY_FLOOR_24H`
 
-Where:
+Где:
 
-- `price_change_5m` = move on the closed 5m candle
+- `price_change_5m` — изменение цены на закрытой 5m свече
 - `turnover_spike_ratio` = `current_5m_turnover / sma_5m_turnover`
-- `sma_5m_turnover` = average turnover over the configured number of prior 5m candles
-- `turnover24h` = Bybit 24h turnover for the symbol
+- `sma_5m_turnover` — средний оборот по заданному количеству предыдущих 5m свечей
+- `turnover24h` — 24h оборот пары на Bybit
 
-Important product rule:
-signal logic must use closed 5m candles only.
-Do not build the main alert decision on still-forming candles.
+Важное продуктовое правило:
+основная логика сигнала должна использовать только закрытые 5m свечи.
+Нельзя строить основное решение об алерте на ещё формирующейся свече.
 
-## 6. Alert universe contract
+## 6. Контракт alert universe
 
-Two supported alert universe modes exist:
+Поддерживаются два продуктовых режима alert universe:
 
 ### `top`
-Default mode.
+Режим по умолчанию.
 
-Behavior:
-- Radar scans Top 100 Bybit spot pairs by 24h turnover.
-- This is the default mode for fresh chats unless explicitly changed.
+Поведение:
+- радар сканирует Top 100 Bybit spot пар по `turnover24h`;
+- это режим по умолчанию для новых чатов, если пользователь явно не переключился.
 
 ### `custom`
-Alternative mode.
+Альтернативный режим.
 
-Behavior:
-- Radar scans only the per-chat custom list.
-- Custom list is managed from Telegram and stored in chat state.
+Поведение:
+- радар сканирует только пользовательский список текущего чата;
+- пользовательский список управляется из Telegram и хранится в chat state.
 
-Important rule:
-`top` and `custom` are product-level modes.
-Status, settings, help text, and alert behavior must all describe the same active mode truthfully.
+Важное правило:
+`top` и `custom` — это продуктовые режимы верхнего уровня.
+`/status`, настройки, help-тексты и фактическое поведение радара должны правдиво отражать один и тот же активный режим.
 
-## 7. Telegram UX contract
+## 7. Контракт Telegram UX
 
-Main UX is a persistent bottom keyboard.
+Основной UX — постоянная нижняя клавиатура.
 
-Expected main controls:
+Ожидаемые основные элементы управления:
 
 - `📊 Статус`
 - `⚙️ Настройки`
@@ -115,78 +115,78 @@ Expected main controls:
 - `Очистить список`
 - `Термины`
 
-Slash commands remain supported as a secondary interface.
+Slash-команды остаются поддерживаемым, но вторичным интерфейсом.
 
-Expected UX behavior:
+Ожидаемое UX-поведение:
 
-- The bot should be usable without memorizing slash commands.
-- User list operations should work through a simple conversational flow.
-- Alerts should include a fast path to the Bybit trading screen.
-- Terms and settings text should be understandable without reading source code or `.env`.
+- ботом можно пользоваться без запоминания slash-команд;
+- операции со списком должны работать через простой диалоговый flow;
+- алерты должны содержать быстрый переход в терминал Bybit;
+- тексты help и settings должны быть понятны без чтения кода или `.env`.
 
-## 8. State ownership rules
+## 8. Правила владения state
 
-`.env` is for defaults and technical parameters.
+`.env` используется для дефолтов и технических параметров.
 
-Persistent chat state is for active user behavior.
+Persistent chat state используется для активного пользовательского поведения.
 
-### `.env` owns:
-- secrets and tokens
-- technical polling intervals
-- signal thresholds
-- runtime infrastructure parameters
-- default values
+### `.env` отвечает за:
+- секреты и токены;
+- технические интервалы polling;
+- пороги сигнала;
+- runtime / infrastructure параметры;
+- значения по умолчанию.
 
-### chat state owns:
-- `alert_universe_mode`
-- `custom_pairs`
-- per-chat mute state
-- per-chat runtime workflow such as add/remove pending action
-- other per-chat operational state
+### chat state отвечает за:
+- `alert_universe_mode`;
+- `custom_pairs`;
+- mute-состояние на уровне чата;
+- runtime workflow на уровне чата, например шаг add/remove;
+- остальное операционное состояние конкретного чата.
 
-Important rule:
-do not move active user list management back into `.env`.
+Важное правило:
+нельзя возвращать управление активным пользовательским списком обратно в `.env`.
 
-## 9. Backward compatibility rules
+## 9. Правила backward compatibility
 
-Changes must preserve safe migration for legacy persisted chats.
+Изменения должны обеспечивать безопасную миграцию для legacy persisted chats.
 
-When new state fields are introduced:
-- old chats must continue to work after restart
-- legacy list behavior must not be silently lost
-- migration must use raw persisted legacy data, not accidentally overwritten default-merged values
+Когда добавляются новые поля state:
+- старые чаты должны продолжать работать после рестарта;
+- legacy list behavior не должно молча теряться;
+- логика миграции должна опираться на raw persisted legacy data, а не на случайно затёртые default-merged значения.
 
-## 10. Deployment readiness rules
+## 10. Правила deploy readiness
 
-A change is deployable only if:
+Изменение считается готовым к деплою только если:
 
-- it preserves current MVP scope
-- it does not reintroduce legacy CMC-first behavior into the main path
-- state migration is safe
-- `/status` reflects real radar behavior
-- no-op settings interactions do not fail noisily
-- Telegram help/settings text renders without parse errors
-- runtime startup succeeds under the current Docker deployment path
+- оно сохраняет текущий MVP scope;
+- оно не возвращает legacy CMC-first поведение в основной путь;
+- миграция state безопасна;
+- `/status` отражает реальное поведение радара;
+- no-op действия в настройках не падают шумно;
+- help/settings текст рендерится без parse errors;
+- startup проходит корректно в текущем Docker deployment flow.
 
-## 11. Current accepted limitations
+## 11. Текущие допустимые ограничения
 
-These are known and accepted for the MVP stage:
+На стадии текущего MVP считаются допустимыми следующие ограничения:
 
-- the bot depends on server time being sane
-- top-mode radar may put pressure on rate limits if scaled much further
-- legacy dead code may still exist outside the main product path
-- current architecture is intentionally simple and single-process
+- бот зависит от корректности серверного времени;
+- top-mode радар может оказывать давление на rate limits при сильном масштабировании;
+- вне основного продуктового пути ещё может оставаться legacy/dead code;
+- текущая архитектура специально остаётся простой и однопроцессной.
 
-These are not blockers for the current MVP unless they cause user-visible incorrect behavior.
+Это не считается блокером для текущего MVP, пока не вызывает пользовательски значимого некорректного поведения.
 
-## 12. Change policy
+## 12. Политика изменений
 
-Any new PR must preserve this scope unless it explicitly states a scope change.
+Любой новый PR должен сохранять этот scope, если только в нём явно не заявлено изменение scope.
 
-In particular, do not:
-- restore CMC as the main path
-- restore the old percent/baseline monitor as the main product model
-- move user list management back to `.env`
-- ship status/help/settings text that contradict actual runtime behavior
+В частности, нельзя:
+- возвращать CMC как основной путь;
+- возвращать старый percent/baseline monitor как основную продуктовую модель;
+- переносить управление пользовательским списком обратно в `.env`;
+- выпускать `/status`, help или settings тексты, которые противоречат фактическому runtime-поведению.
 
-If scope changes, this document must be updated in the same PR.
+Если scope меняется, этот документ должен обновляться в том же PR.
