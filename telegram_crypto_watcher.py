@@ -307,9 +307,10 @@ def _ensure_chat_shape(chat_state: dict) -> dict:
     base["enabled"] = bool(chat_state.get("enabled", True))
     base["created_at"] = chat_state.get("created_at", base["created_at"])
     settings = chat_state.get("settings", {})
+    raw_settings = settings if isinstance(settings, dict) else {}
     base_settings = _default_settings()
-    if isinstance(settings, dict):
-        base_settings.update(settings)
+    if raw_settings:
+        base_settings.update(raw_settings)
     base_settings["bybit_pairs"] = [_normalize_bybit_pair(x) for x in base_settings.get("bybit_pairs", []) if x]
     base_settings["watchlist"] = [_normalize_cmc_symbol(x) for x in base_settings.get("watchlist", []) if x]
     base_settings["pricer"] = _resolve_pricer(str(base_settings.get("pricer", DEFAULT_PRICER)))
@@ -330,16 +331,29 @@ def _ensure_chat_shape(chat_state: dict) -> dict:
     tf_label, tf_bybit = _parse_change_tf(str(base_settings.get("change_tf_label", DEFAULT_CHANGE_TF_LABEL)))
     base_settings["change_tf_label"] = tf_label
     base_settings["change_tf_bybit"] = tf_bybit
-    legacy_radar_mode = "top" if current_mode(base_settings) == "top" else "custom"
-    raw_universe_mode = str(base_settings.get("alert_universe_mode", legacy_radar_mode)).lower()
-    base_settings["alert_universe_mode"] = "custom" if raw_universe_mode == "custom" else "top"
-    if "custom_pairs" in base_settings:
-        raw_custom_pairs = base_settings.get("custom_pairs") or []
+    raw_has_custom_pairs = "custom_pairs" in raw_settings
+    raw_has_universe_mode = "alert_universe_mode" in raw_settings
+    if raw_has_custom_pairs:
+        raw_custom_pairs = raw_settings.get("custom_pairs") or []
     else:
-        raw_custom_pairs = base_settings.get("bybit_pairs") or base_settings.get("watchlist") or []
+        raw_custom_pairs = raw_settings.get("bybit_pairs") or raw_settings.get("watchlist") or []
     base_settings["custom_pairs"] = list(
         dict.fromkeys(_normalize_bybit_pair(x) for x in raw_custom_pairs if x)
     )
+    if raw_has_universe_mode:
+        raw_universe_mode = str(raw_settings.get("alert_universe_mode", "")).lower()
+        base_settings["alert_universe_mode"] = "custom" if raw_universe_mode == "custom" else "top"
+    else:
+        legacy_top_limit = raw_settings.get("bybit_top_limit")
+        if legacy_top_limit is None:
+            legacy_top_limit = raw_settings.get("cmc_top_limit")
+        if legacy_top_limit is not None:
+            try:
+                base_settings["alert_universe_mode"] = "top" if int(legacy_top_limit) > 0 else "custom"
+            except Exception:
+                base_settings["alert_universe_mode"] = "custom" if base_settings["custom_pairs"] else "top"
+        else:
+            base_settings["alert_universe_mode"] = "custom" if base_settings["custom_pairs"] else "top"
     base["settings"] = base_settings
     if isinstance(chat_state.get("baselines"), dict):
         base["baselines"] = chat_state["baselines"]
@@ -448,11 +462,11 @@ def radar_mode_label(settings: dict) -> str:
 
 
 def radar_tracking_desc(settings: dict) -> str:
-    symbols = _symbols_for_status(settings)
+    if settings.get("alert_universe_mode") == "top":
+        return "Top 100 Bybit"
+    symbols = _symbols_for_radar(settings)
     if not symbols:
         return "Список пуст"
-    if settings.get("alert_universe_mode") == "top":
-        return f"Top 100 Bybit (статус: {_truncate_list(symbols)})"
     return f"Мой список: {_truncate_list(symbols)}"
 
 
@@ -1052,7 +1066,13 @@ def alert_keyboard(source: str, sym: str) -> InlineKeyboardMarkup:
     )
 
 
-def _symbols_for_status(settings: dict) -> List[str]:
+def _symbols_for_status(settings: dict, quotes: Dict[str, dict]) -> List[str]:
+    if settings.get("alert_universe_mode") == "top":
+        return sorted(
+            quotes.keys(),
+            key=lambda sym: float((quotes.get(sym) or {}).get("turnover24h") or 0.0),
+            reverse=True,
+        )
     return _symbols_for_radar(settings)
 
 
@@ -1068,8 +1088,10 @@ def status_text(
     s = chat_state["settings"]
     now = time.time()
     lines = []
-    symbols = _symbols_for_radar(s)
-    for sym in symbols:
+    symbols = _symbols_for_status(s, quotes)
+    max_rows = 12
+    rendered_symbols = symbols[:max_rows]
+    for sym in rendered_symbols:
         q = quotes.get(sym)
         if not q:
             continue
@@ -1090,7 +1112,11 @@ def status_text(
     )
     if not lines:
         return header + "\nНет данных по текущей конфигурации."
-    return header + "\n" + "\n".join(lines).rstrip()
+    body = "\n".join(lines).rstrip()
+    hidden = len(symbols) - len(rendered_symbols)
+    if hidden > 0:
+        body += f"\n\n… и ещё {hidden} символов (показаны первые {len(rendered_symbols)})."
+    return header + "\n" + body
 
 
 def single_symbol_summary_text(
@@ -1183,7 +1209,6 @@ async def _safe_edit_settings_message(query, chat_state: dict) -> None:
         )
     except BadRequest as e:
         if "Message is not modified" in str(e):
-            await query.answer("Без изменений", show_alert=False)
             return
         raise
 
