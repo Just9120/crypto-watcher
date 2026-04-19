@@ -1,39 +1,34 @@
-# CryptoWatcher — Открытые вопросы и pre-deploy риски
+# CryptoWatcher — Post-fix follow-up и операционные риски
 
-## Текущие вопросы, которые нужно проверить перед деплоем
+Этот список отражает задачи после фиксов миграции/state truthfulness/no-op UX.
+Это **не блокеры текущего деплоя**, а realistic follow-up backlog.
 
-### 1. Миграция legacy state
-Нужно убедиться, что старые persisted chats не теряют своё list behavior после рестарта.
+## 1) Операционная устойчивость top-mode
 
-Риск:
-default-merged значения могут случайно затереть правильный legacy fallback.
+- Оценить фактическую нагрузку на Bybit API при росте числа чатов в режиме `Top 100 Bybit`.
+- При необходимости ввести более явный rate-limit budgeting/telemetry для `fetch_radar_snapshot`.
 
-### 2. Правдивость `/status` в режиме `top`
-Нужно убедиться, что status output отражает реальный radar universe.
+Риск: при масштабировании возможны деградация latency и частичные пропуски snapshot.
 
-Риск:
-алерты могут реально сканировать Top 100, а `/status` при этом продолжает вести себя как custom-list-only режим.
+## 2) Лёгкие regression checks в CI
 
-### 3. No-op действия в настройках
-Нужно убедиться, что повторные нажатия на уже выбранные настройки не приводят к callback query ошибкам.
+- Добавить минимальные автопроверки для:
+  - миграции legacy state (`bybit_pairs`, `watchlist`, empty `custom_pairs`);
+  - truthfulness `/status` в top-mode;
+  - no-op interaction (`Message is not modified`) без callback-failure.
 
-Риск:
-двойное подтверждение callback query может вызывать Telegram-side ошибки.
+Риск: ручная проверка может пропустить повторную регрессию в следующих PR.
 
-## Уже наблюдавшиеся прод-значимые регрессии в прошлых итерациях
+## 3) Технический cleanup legacy/dead paths
 
-- parse error в help/settings тексте;
-- `Message is not modified`;
-- шумный CMC fallback log spam.
+- Пошагово изолировать/удалить неиспользуемые ветки старого поведения, не меняя main product path.
+- Сохранять обратную совместимость state, но сокращать поверхность случайных side-effects.
 
-Эти проблемы должны оставаться исправленными и не должны возвращаться.
+Риск: чем больше legacy-кода остаётся рядом с основным путём, тем выше вероятность случайного отката scope.
 
-## Кандидаты на cleanup после безопасного деплоя
+## 4) Модульность кода без изменения архитектуры деплоя
 
-Это не текущие блокеры, но это хороший follow-up:
+- Разделить крупный `telegram_crypto_watcher.py` на небольшие модули (state, render, handlers, radar-engine).
+- Делать это инкрементально, без смены runtime/deploy модели.
 
-- удалить legacy/dead code, который больше не используется в основном radar-контуре;
-- разбить большой файл бота на более мелкие модули;
-- добавить лёгкие regression checks для migration и top-mode `/status`;
-- перепроверить предположение о корректности server time sync;
-- пересмотреть нагрузку на Bybit request limits в top-mode polling.
+Риск: без декомпозиции скорость безопасных изменений со временем снижается.

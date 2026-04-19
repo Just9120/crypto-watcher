@@ -9,6 +9,15 @@
 
 Документ нужен для того, чтобы снижать риск случайных регрессий при развитии продукта.
 
+## Source of truth order
+
+При конфликте описаний используется приоритет:
+
+1. `docs/product_scope.md`
+2. `docs/state_contract.md`
+3. `README.md`
+4. code comments / implementation details
+
 ## 2. Модель владения
 
 ### `.env`
@@ -19,6 +28,8 @@
 - порогов сигнала;
 - дефолтной частоты polling;
 - deployment-specific параметров.
+
+Примечание по `.env.example`: поля `BYBIT_PAIRS` и `WATCHLIST` — это legacy/default seed-поля (bootstrap/backward compatibility), а не основной путь управления пользовательским рабочим списком.
 
 ### persistent chat state
 Используется для:
@@ -47,6 +58,8 @@
 ### Операционные данные
 - `mutes`
 - `baselines`
+
+`baselines` сохраняется как operational/runtime storage и legacy-compatible state. Это не трактуется как возврат к старой baseline-driven продуктовой модели.
 
 ## 4. Правила миграции legacy state
 
