@@ -19,3 +19,10 @@ __pycache__/
 
 # backups
 backup/
+
+.venv-g1/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.cache-g1/

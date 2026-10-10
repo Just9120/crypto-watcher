@@ -1,12 +1,24 @@
 services:
   crypto_watcher:
-    build: .
+    image: ${CW_IMAGE:?Set immutable CW_IMAGE}
     container_name: crypto-watcher
     restart: unless-stopped
     working_dir: /app
     env_file:
-      - .env
+      - ${CW_ENV_FILE:?Set absolute CW_ENV_FILE}
     environment:
-      TZ: Europe/Amsterdam
+      TZ: UTC
+      SOURCE_REVISION: ${CW_SOURCE_REVISION:?Set source SHA matching CW_IMAGE}
+      OWNER_USER_ID: '233382575'
+      DELIVERY_CHAT_ID: '233382575'
+      EXPECTED_BOT_ID: '7523865123'
+      DATABASE_FILE: /data/sqlite/cryptowatcher.sqlite3
+      STATE_FILE: /data/state_crypto_watcher.json
     volumes:
-      - ./data:/data
+      - ${CW_DATA_DIR:?Set absolute CW_DATA_DIR}:/data
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    stop_grace_period: 30s

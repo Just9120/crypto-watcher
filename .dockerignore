@@ -1,8 +1,9 @@
-.venv
-__pycache__
-*.pyc
-*.pyo
-*.pyd
-.env
-state_crypto_watcher.json
-README.md
+# Only the application and hash lock are build inputs.
+**
+!Dockerfile
+!requirements.txt
+!telegram_crypto_watcher.py
+!cryptowatcher/
+!cryptowatcher/**
+cryptowatcher/**/__pycache__/**
+cryptowatcher/**/*.pyc
