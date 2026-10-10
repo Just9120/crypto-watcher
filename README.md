@@ -82,4 +82,4 @@ docker build --build-arg SOURCE_REVISION=000000000000000000000000000000000000000
 python scripts/image_checks.py cryptowatcher:local 0000000000000000000000000000000000000000
 ```
 
-Production secrets не входят в image/context/logs. SQLite migration, host permission setup и SSH credential bootstrap первой поставки выполняются только по concrete gated procedure. Последующие eligible merges доставляются автоматически после включения проверенного target; не меняют unit trading agent.
+Production secrets не входят в image/context/logs. SQLite migration и SSH credential bootstrap выполняются по concrete gated procedure. [Одноразовое подключение CD](docs/runbooks/delivery.md#одноразовое-подключение-cd) скачивает проверенные scripts непосредственно на VPS и сохраняет существующий SSH access. Последующие eligible merges доставляются автоматически без ручного переноса файлов; unit trading agent не меняется.
