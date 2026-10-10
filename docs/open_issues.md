@@ -36,77 +36,49 @@ Snapshot: 2026-10-10, проверка около 10:00–10:15 Europe/Moscow; `
 | G5 — Derivatives enrichment / calibration | Optional Spot derivatives context и ручная статистическая калибровка profiles/detectors | P2; G2–G3; нет automatic production tuning |
 | Cleanup/consolidation | Убрать superseded CMC/reset UX, подтвердить helpers, объединить docs и commands | По риску вместе с выбранной Goal; F02–F04/F23–F24; preserve migration/state |
 
-## Current Goal — G1 (IMPLEMENT)
+## Current Goal — G2A (IMPLEMENT)
 
-Поручение: владелец 2026-10-10 явно поручил реализовать весь согласованный план G1 → G2A → G2B → G4/G3 → G5 → G6. Повторный выбор этих Goals не требуется. К следующему основному PR переходим после обязательной поставки предыдущего. Внешний blocker не отменяет независимую подготовку.
+Основание: владелец 2026-10-10 поручил весь roadmap G1 → G2A → G2B → G4/G3 → G5 → G6. G1 DONE: 8/8 AC, PR20–23 merged; actual production CD38087285142 на main `40882eb8b555991ce1f22c87fe95b3951507d74c` PASS 2026-10-10T21:24:37Z. Backup/source/image/health/persistence/market100/100 PASS. Владелец подтвердил sample/Mutes/settings controls («вроде работает»); screenshot подтверждает rendering/current thresholds/revision1/buttons, остальные clicks — owner assertion. Рабочие ветки G1 удалены после проверки exact merged heads; ignored operator artifacts сохранены отдельно.
 
-Результат G1: сохранить существующий composite и owner controls, закрыть доступ для чужих пользователей, отделить revisioned owner configuration от delivery/runtime, безопасно мигрировать JSON v2 в SQLite, добавить regression suite, reproducible dependencies, CI/CD и подтвердить первую поставку.
+Результат G2A: shared realtime данные широких Spot USDT и USDT Perpetual universe, native1m/3m/5m/15m одновременно, REST bootstrap/recovery, объяснимые completeness/freshness и typed watchlist; composite сохраняет formula/equality и owner thresholds.
 
-Один основной PR20 merged в main `d3b0a4fc8f68078db0a9553b033e15614aa1fb46`; initial run38042532465 failed clean-checkout temp setup, исправление включено в PR20. Latest PR CI38042697848 PASS на test merge06d6203d…; merged release38042801619 PASS, artifact11666203721. Actual CD PENDING first gate. Audit PR19 имел CD N/A.
+Ветка `codex/g2a-dual-market-ingestion-20261011`, base `40882eb8b555991ce1f22c87fe95b3951507d74c`, root worktree, initial clean main; GitHub strict ci-required/protection и production CD проверены до начала. Один основной PR; до завершения scope/локальных checks push не выполняется.
 
-PR21 portable image identity merged: main `065e49d112637d5eff4fd309c13aaab30fb53756`, required CI38046767071 и release38046940245 PASS. EVG8 подтверждает restore rehearsal и первую production migration/switch на этот artifact. Automatic CD ещё не включён.
+### Scope, зависимости и DoD
 
-Sample hotfix PR22 merged в main `54b2ce0c47194ee8e05fdc06910de2ad31b7d1d1`; required CI38073135295 и release38073301959 PASS. Runtime delivery не подтверждена. Owner export EVG9 выявил regression `/sample_alert`; код исправлен без изменения formulas/schema/auth/config. Отдельная ручная доставка sample отменена в пользу первой automatic CD.
+11 затронутых AC: AC-02-01…04, AC-03-01…05, AC-04-01, AC-07-02. AC-03-04: ingestion/recovery часть G2A; полный criterion также включает incomplete outcome horizons будущей G3 и остаётся IN_PROGRESS до их проверки. Foundation не закрывает будущие episodes/provenance/outcome criteria. Findings F08–F11/F16/F20/F22/F29 обновляются по фактическому Evidence; F09/F16/F20/F22 имеют остаток в следующих Goals.
 
-Current necessary delivery hotfix: `codex/g1-cd-bootstrap-20261010`, base `54b2ce0c47194ee8e05fdc06910de2ad31b7d1d1`, clean root worktree. Поручение владельца 2026-10-10: доставлять исправления через CD вместо повторных SFTP transfers. Scope: canonical одноразовый bootstrap receiver/target/restricted public key, принимающий проверенный migrated runtime065e49d либо уже подтверждённый sample runtime54b2ce0; существующие keys/config/data сохраняются. Script загружается оператором по immutable verified revision/hash, image передаёт Actions. DoD: fault/regression tests и required CI PASS, merge/release подтверждены; actual bootstrap/access/Environment readback и bounded Actions delivery PASS, включая sample owner smoke после CD. Non-goals: новая JSON migration, смена SSH daemon configuration, broad root access, product features или ослабление runtime/backup/version gates. Известная sample regression остаётся blocker G1 DONE до первой CD, но не требует ручной установки перед подключением CD.
+DoD G2A: scope реализован, meaningful tests и latest required CI/self-review PASS, PR merged, automatic CD на expected source/image PASS; bounded production smoke подтверждает metadata/subscriptions обоих рынков/4TF и usable persisted closed candles, отсутствие historical alert flood. G1 owner settings/preferences/data сохранены. Production schema1 сохраняется: новые source records используют versioned логические namespaces существующей runtime key/value table; physical DDL/JSON migration отсутствуют. Backup включает source records через тот же SQLite backup API. Если потребуется schema change, NONE не применяем: сначала отдельная reviewed delivery classification/procedure.
 
-### Scope и DoD
-
-Критерии G1: AC-01-03, AC-01-04, AC-07-03 (сохранение control deck), AC-08-02, AC-10-03, AC-12-01, AC-12-02, AC-12-04. AC-10-01 — foundation: его формулировка включает history schema, поэтому полный READY зависит от G2B/G3; это уточнение трассировки, не удаление требования. READY существующих AC-01-01/02/05, AC-03-03/05, AC-04-01/05 сохраняем regression checks. Foundation AC-08-01/12-03 не закрывает ещё отсутствующие market/analytics/integration функции.
-
-Findings: F02–F07, F21, F23, F25–F30 в соответствующем scope; F16/F22/F29/F31 — foundation, остаток явно сохраняется. F24 только подтверждённый cleanup после entrypoint/registration/history review. Non-goals: WS, broad dual-market universe, новые detectors, episodes/outcomes/digest/enrichment/agent integration.
-
-DoD: scope реализован и self-review выполнен; обязательные checks актуальной PR revision PASS; merge подтверждён; backup/restore rehearsal и согласованная первая migration PASS; running revision/digest и обязательные post-checks VPS подтверждены. EVG8 подтверждает первую migration/runtime; EVG9 owner smoke PARTIAL и regression F33. До G1 DONE нужны поставка sample hotfix и validated automatic CD. Владелец выполняет команды в MobaXterm и возвращает sanitized output. Direct BatchMode SSH не авторизован; dedicated forced-command CD credential setup входит в reviewed delivery gate. Это не блокирует независимую подготовку; production checks не N/A.
+Non-goals: новые detector families/profiles кроме watchlist multiplier, episodes, durable Telegram/agent queues, outcomes/digest/enrichment, изменение trading agent. Эти части идут в G2B/G3/G4/G5. Сохранённые значения не заменяются preset; selected TF остаётся представлением карточки, все четыре streams активны. Широкий universe заменяет legacy fixed Top100 после verified metadata refresh.
 
 ### Задачи
 
-- [x] VPS inventory: EVG3/6 подтверждают app/unit/data/time/resources/code hashes, project/amd64/config ownership/clean checkout и единственный owner chat.
-- [x] Адаптировать AGENTS/ci-cd rules и сохранить canonical paths. Local branch; CI/runtime evidence отдельно.
-- [x] Fail-closed owner/user/private-chat guards всех entrypoints. Local branch; CI/runtime evidence отдельно.
-- [x] Validated revisioned config и защита concurrent fetch/settings changes. Local branch; CI/runtime evidence отдельно.
-- [x] SQLite WAL ownership/schema, JSON migration, backup/restore/unknown-version protection. Local branch; CI/runtime evidence отдельно.
-- [x] Разделить config/state/render/Bybit composite/Telegram boundaries; сохранить работающие controls. Local branch; CI/runtime evidence отдельно.
-- [x] Deprecate CMC/reset paths с безопасными old callbacks. Local branch; CI/runtime evidence отдельно.
-- [x] Lock/hash dependencies, meaningful regression tests и canonical checks. Local branch; CI/runtime evidence отдельно.
-- [x] PR20 required CI/release и actual protection/production Environment readback PASS; DEPLOY_ENABLED отсутствует.
-- [x] PR21 исправил portable image identity; CI112 tests/image round-trip, actual restore rehearsal и первая migration/switch PASS EVG8.
-- [x] Восстановить `/sample_alert` по current settings и baseline buttons; PR22/required CI/release PASS, runtime delivery ещё PENDING.
-- [x] Read-only SSH inventory2026-10-10T17:49:49Z: root22, Ed25519 allowed, strict modes, known host fingerprint и сохранение existing keys доступны; production secret names пусты.
-- [ ] Canonical bootstrap без ручного hotfix/image transfer; fault tests/CI/merge, actual restricted SSH setup и automatic CD.
-- [x] README/state contract/architecture/delivery procedure и findings Evidence. Local branch; CI/runtime evidence отдельно.
-- [ ] Завершить hotfix delivery и automatic CD; первая manual production migration уже PASS.
+- [x] Закрыть G1 по primary records и owner smoke; безопасно очистить ветки.
+- [x] Проверить новую base/protections, Bybit metadata/WS contracts и закрепить scope/Validation Plan до implementation.
+- [ ] Metadata classification/quarantine, полная linear pagination, ticker/liquidity refresh и typed watchlist с sensitivity.
+- [ ] Shared concurrent WS streams, ack/heartbeat/reconnect, bounded REST bootstrap и priority gap recovery.
+- [ ] Closed-candle persistence/provenance, bounded memory, duplicates/conflicts/out-of-order/gaps/freshness; historical data не публикуются как live.
+- [ ] Подключить composite обоих рынков/4TF, market-specific controls/links/status и CLI diagnostics.
+- [ ] Meaningful regression/fault/load fixtures; docs/state contract и self-review.
+- [ ] Latest required PR CI, merge, automatic CD и bounded dual-market/4TF smoke.
 
 ### Validation Plan
 
-| AC / риск | Expected result | Canonical command/tool, cwd | Environment / этап | Gate |
+| AC / риск | Проверка / expected result | Canonical tool, cwd | Environment / этап | Gate |
 | --- | --- | --- | --- | --- |
-| Auth/config/migration/race/composite | Owner positive, stranger/group/empty-config denied; original state preserved; revision race suppressed; formulas unchanged | `python -m pytest`, root | Isolated local fixtures / targeted during development; Linux Python3.11 CI full suite | REQUIRED |
-| Conventions/types | Lint/format/type checks detect meaningful violations | `python scripts/checks.py`, root; commands installed with G1 | Local cheap checks and CI | REQUIRED |
-| Install/build | Hash-locked install, pip check, Linux image startup/version/migration on disposable data | Docker build and fixture image checks in CI | Linux container / PR | REQUIRED; local Docker unavailable is limitation, not N/A |
-| Artifact/host identity | Один archive принимается classic/containerd по связанным config/OCI digest; неверный ID, source/build/rootfs/platform блокируют switch | `tests/test_image_identity.py`; `scripts/package_release.py` save/load/readback | Local targeted fixtures; PR/release Docker round-trip; actual target rehearsal | REQUIRED |
-| Sample regression / AC-07-03 preservation | Current TF/market/metrics, Bybit/mute/coin buttons; явно sample, без REST/cooldown/settings writes; valid finite extremes не дают inf/nan | `python -m pytest tests/test_bot.py`, root; quality checks | Local targeted fixtures; Linux3.11 PR suite; delivered sample smoke | REQUIRED |
-| CD bootstrap / AC-12-02 | Only reviewed migrated runtime; invalid artifact/host/key/state rejected; old SSH keys preserved, no restart/DB writes, partial install stops with record | `python -m pytest tests/test_cd_bootstrap.py`, root; `scripts/bootstrap_cd.py` reviewed procedure | Isolated local faults; Linux3.11 CI; actual root SSH bootstrap and restricted access | REQUIRED |
-| CI/revision/review | Latest applicable jobs PASS on test merge revision, self-review and actual protections respected | GitHub primary records | GitHub / pre-merge | REQUIRED |
-| Backup/migration/recovery | Original JSON unchanged; consistent DB backup restores and integrity/owner/settings match on isolated copy | Migration/restore fixtures + reviewed delivery runbook | Isolated copy / before first stateful delivery | REQUIRED |
-| CD/runtime | Expected source/image digest; exact unit; owner controls; persistent state; liveness and applicable composite smoke | Reviewed target-specific procedure and primary deployment records | Contabo / post-merge | REQUIRED, BLOCKED until inventory/access |
-| Secret/config inventory | No secrets in tracked output, errors or image; exact dependency advisory review | Negative tests + locked artifact inventory | Local/CI and VPS inventory | REQUIRED |
+| E02 metadata/liquidity | >100 eligible instruments, repeated cursor rejected, identical symbols isolated; TradFi/tokenized/non-USDT/prelisting/unknown type denied; boundary liquidity changes active set | Targeted pytest universe/ingestion fixtures, root | Disposable local; full Linux3.11 CI | REQUIRED |
+| AC-02-04 configuration | Typed market identity validated against metadata, empty list preserved, multiplier finite/positive and survives restart; concurrent setting update cancels obsolete result | Targeted config/Telegram/storage fixtures, root | Local and PR CI | REQUIRED |
+| E03 stream integrity | Native4TF both markets; only confirm=true; duplicates/out-of-order/conflicts/gap/reconnect/rate-limit bounded recovery; no historical live alerts | Controlled WS/HTTP adapters and SQLite, pytest, root | Local targeted fault tests; Linux full CI | REQUIRED |
+| AC-04-01 / 07-02 | Composite inclusive equality/custom thresholds preserved on both markets; URL/callback identity correct | Existing plus targeted market/bot tests, root | Local and CI; safe link smoke after delivery | REQUIRED |
+| Source persistence/restart | Versioned per-stream sources restore with original times; in-memory window bounded; same DB backup includes sources; no owner/import corruption | SQLite source/recovery fixtures, root | Local/CI and production persistence readback | REQUIRED |
+| Conventions/installation | Docs/Ruff/mypy PASS; precise dependency/hash locks; Linux3.11 image/version/health/state checks | `python scripts/checks.py quality`, root; required CI all/image checks | Local cheap checks; CI full merge gate | REQUIRED |
+| Delivery / live adapters | Actual expected revision/image; both markets metadata and four TF subscriptions acknowledged; usable closed candles, degraded causes visible; backup/persistence/source PASS | Current delivery runbook, Actions primary records and CLI diagnostics | Production automatic CD plus bounded smoke | REQUIRED; unavailable evidence is not N/A |
+| Resource growth / broad universe | Shared dataset and bounded queues/windows; measure source rate/backlog/memory/disk against actual universe | Controlled load fixtures; bounded VPS diagnostics | Local/CI correctness; actual capacity expanded G6 | RECOMMENDED; no assumed CPU/RAM limits |
 
-### Текущее G1 evidence (не main audit readiness)
+### AC progress текущей Goal
 
-Snapshot: 2026-10-10, verified main54b2ce0… (PR22). Required CI38073135295/release38073301959 PASS; первая migration/runtime065e49d PASS EVG8. Local Python3.12.10/Windows, 35 targeted bot tests PASS EVG10. Actual sample delivery и automatic CD PENDING. Нет нового процента проекта/эпиков; реализовано по коду7/8 AC текущей Goal. AC-07-03 на последней подтверждённой deployed065e49d имеет regression F33, исправленную в main; до исправления было6/8, denominator не изменён.
-
-| AC / scope | Текущее состояние | Evidence / оставшееся |
-| --- | --- | --- |
-| AC-01-03 / 01-04 | READY в main | EVG1: единственный Bybit adapter, shared sender+private-chat guard, invalid/empty identity closed; tests all commands/callbacks/group/terms |
-| AC-07-03 | READY в main54b2ce0; IN_PROGRESS на последней подтверждённой deployed065e49d | EVG1 controls и EVG10 sample regression fixtures/PR22 CI PASS; baseline sample restored/current TF/market/buttons. EVG9 runtime smoke PARTIAL: commands/settings PASS, old sample regression confirmed. Нажатия refresh/no-op не доказаны HTML; mutes проверять кнопкой «🔕 Mutes», slash `/mutes` не зарегистрирован. Sample runtime smoke после первой CD PENDING |
-| AC-08-02 | READY в main | EVG1: validation finite/range/schema, settings CAS revision, fetch race cancellation, runtime apply without restart |
-| AC-10-03 | READY | EVG1 tests и EVG8 actual production migration/immutable original/archive/restore/all-table readback PASS, owner settings/delivery/custom empty/mutes сохранены |
-| AC-12-04 | READY в main для G1 | EVG1/2: negative error/token fixtures, hash locks, advisory/config review. Новые integration/export secrets checks расширяются в следующих Goals |
-| AC-12-01 | READY для G1 | PR21 Linux image persistence/reopen/health PASS; EVG8 target CLI restore/reopen и application boot persistent readback/non-root/source/health PASS. Дополнительный live restart ради Evidence не выполнялся; будущие pending subsystems проверяются в своих Goals |
-| AC-12-02 | IN_PROGRESS | CI/protections/Environment/trusted release PASS; first manual migration/runtime PASS. Dedicated SSH setup и actual automatic CD PENDING |
-| AC-10-01 / 08-01 / 12-03 | IN_PROGRESS | Owner/delivery/runtime storage boundaries и diagnostics foundation; history/new subsystem settings ещё не реализованы |
-
-Validation EVG1: первоначальные67 tests PASS; после изменений targeted suites и21 deployment/selector/trust tests PASS, всего96 collected. Ruff lint/format + mypy9 package files + canonical docs PASS. Linux/full latest CI будет primary merge evidence. Self-review охватывает code/config/state/render/Telegram/CI/CD changes; исправлены numeric legacy timestamp, сохранение unmute-all, startup/third-party log token redaction и требование нового poll для post-check.
+Начало G2A: существующие AC-03-03/05 и AC-04-01 сохраняют regression implementation; соответствие dual-market/shared ingestion ещё проверяется. Новые AC пока IN_PROGRESS; готовность всего проекта/эпиков не пересчитывается. После подтверждения частей обновляем X/11 с явным остатком AC-03-04 в G3.
 
 ### Утверждённый roadmap всего scope
 
@@ -284,8 +256,6 @@ Confidence: HIGH по code/fixture-backed gaps и inventory; MEDIUM у orphan ex
 
 ## Checkpoint и следующий шаг
 
-IMPLEMENT G1 unfinished; authorized full roadmap persists. Main065e49d… содержит merged PR20/21; required CI38046767071/release38046940245 PASS. Actual first production migration/switch2026-10-10T17:22:15Z PASS EVG8: SQLite schema1, original JSON archived, settings/config revision1 preserved, source/image/health/persistence/market100 of100 confirmed. Legacy writer остановлен; first migration не повторять. Compatible forward delivery использует migrated DB, без JSON rollback/downgrade/restore поверх live state.
+2026-10-11 Europe/Moscow: G1 DONE по primary records, verified main40882eb и actual production run38087285142/artifact11682629335; image manifest38d238a6…/config7666f323…, backup pre-40882eb…-1791667365.sqlite3. Owner sample screenshot SHA256401ddabd… и ответ «вроде работает» подтверждают bounded owner smoke с указанными ограничениями. Production Environment DEPLOY_ENABLED=true; dedicated forced-command SSH и strict host key verification проверены; последующие eligible runtime merges доставляет CD. Первое failed CD38086969847 не дошло до authentication/target: Windows CRLF private-key stdin repaired binary transfer, verified bounded run38087285142 PASS. Credentials не хранятся в repository; existing SSH keys/unit другого приложения сохранены.
 
-Current branch `codex/g1-cd-bootstrap-20261010`, base54b2ce0c47194ee8e05fdc06910de2ad31b7d1d1. Fresh Git/GitHub inventory2026-10-10T20:20Z: clean main/base, one root worktree, no open PR; Just9120 admin, strict ci-required/protections unchanged. PR22 merged; CI/release PASS, actual delivery PENDING. Владелец поручил использовать CD вместо SFTP. Canonical bootstrap проверяет migrated runtime и сохраняет existing SSH keys без runtime restart/DB changes. EVG11: isolated fault tests по обеим verified revisions, invalid source/host/key/state, concurrent keys, partial install и wrong unit PASS; Linux CI/actual bootstrap/access пока PENDING. Local quality PASS. До последнего push: required current CI/review → merge/release → одноразовый verified script download/root bootstrap → strict dedicated SSH/Environment setup → первая Actions delivery с sample/owner smoke. Runtime не объявляется актуальным по одному Telegram screenshot.
-
-Automatic CD остаётся NOT_ENABLED: production Environment variable DEPLOY_ENABLED UNSET, secret names empty по readback20:20Z. SSH inventory17:49:49Z подтвердил strict modes, Ed25519 и trusted host key; bootstrap перепроверяет их в момент записи. Installation NOT_RUN. После reviewed setup нужны strict host verification, secret/variable readback и bounded actual Actions delivery. Operator returns sanitized results; no passwords/private keys in chat. G1 остаётся unfinished; G2A primary PR после всей G1 поставки, включая hotfix. Subsequent approved Goals продолжаются без повторного выбора. Полный readiness audit остаётся G6; snapshot7/58 не обновлялся.
+Current G2A branch/base указаны выше; реализации новых features ещё нет. Следующий шаг — shared universe/source/WS ingestion и meaningful fixtures, затем Telegram/composite wiring и один основной PR. Не повторять first migration или deploy ради восстановления статуса. Отдельный metadata-only follow-up PR не создаётся; G1 результат включён в substantive G2A commit. Snapshot audit7/58 остаётся историческим; полный пересчёт только G6.

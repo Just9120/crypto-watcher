@@ -62,7 +62,8 @@ def read_legacy(path: Path) -> tuple[dict[str, Any], bytes, str]:
 def _legacy_settings(raw: dict[str, Any], defaults: OwnerSettings) -> OwnerSettings:
     values = defaults.payload()
     for field in OwnerSettings.__dataclass_fields__:
-        if field in raw:
+        # Legacy "watchlist" is an untyped alias, not the new market-identity field.
+        if field in raw and field not in ("watchlist", "watchlist_multiplier"):
             values[field] = raw[field]
     if "custom_pairs" in raw:
         pairs = raw["custom_pairs"]
