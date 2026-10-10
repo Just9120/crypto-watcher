@@ -34,6 +34,7 @@ def settings_text(snapshot: Snapshot) -> str:
         f"Composite: все три условия одновременно.\nEpisodes: новый detector/TF либо strength×1.5; coalesce2s.\n"
         f"Profile: {s.profile}\nTelegram detectors: {', '.join(s.alert_detectors) or 'выключены'}\n"
         f"Watchlist sensitivity multiplier: {s.watchlist_multiplier:g}\n"
+        f"Outcome horizons: {','.join(map(str, s.outcome_horizons))} min · digest interval {s.digest_interval_min} min\n"
         f"Configuration revision: {snapshot.revision}"
         + "\nActual detector parameters:\n"
         + ", ".join(f"{key}={value:g}" for key, value in effective_parameters(s).items())
@@ -50,7 +51,8 @@ def menu() -> ReplyKeyboardMarkup:
             ["🔔 Alerts", "🔕 Mutes"],
             ["Термины", "Диагностика"],
             ["Detectors", "Profiles"],
-            ["История"],
+            ["История", "Outcomes"],
+            ["Статистика", "Digest"],
         ],
         resize_keyboard=True,
         is_persistent=True,
@@ -152,8 +154,55 @@ def history_keyboard(events: list[dict[str, Any]]) -> InlineKeyboardMarkup:
 def event_keyboard(event: dict[str, Any]) -> InlineKeyboardMarkup:
     rows = alert_keyboard(event["symbol"], event["market_type"]).inline_keyboard
     return InlineKeyboardMarkup(
-        [*rows, [InlineKeyboardButton("Событие", callback_data="event:" + event["event_id"])]]
+        [
+            *rows,
+            [
+                InlineKeyboardButton("Событие", callback_data="event:" + event["event_id"]),
+                InlineKeyboardButton("Outcome", callback_data="outcomes:" + event["event_id"]),
+            ],
+        ]
     )
+
+
+def digest_keyboard(enabled: bool) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "Выключить digest" if enabled else "Включить digest",
+                    callback_data="digest:" + ("off" if enabled else "on"),
+                ),
+                InlineKeyboardButton("Обновить", callback_data="digest:status"),
+            ]
+        ]
+    )
+
+
+def outcome_text(event: dict[str, Any], outcomes: list[Any], horizons: tuple[int, ...]) -> str:
+    lines = [
+        f"{event['market_type']}/{event['symbol']} · {event['detector_id']} · TF {event['timeframe']} · {event['direction']}",
+        f"Event {event['event_id']} · immutable reference {event['reference_price']:g} USDT",
+        "Reference time: "
+        + datetime.fromtimestamp(event["reference_time_ms"] / 1000, timezone.utc).isoformat(),
+    ]
+    for horizon, outcome in zip(horizons, outcomes):
+        if outcome is None:
+            lines.append(f"{horizon} min: PENDING (horizon или очередь ещё не завершены)")
+            continue
+        lines.append(
+            f"{horizon} min · {outcome['state']} · methodology v{outcome['methodology_version']} · revision {outcome['revision']}"
+        )
+        if outcome["state"] != "COMPLETE":
+            lines.append(
+                f"Данные {outcome.get('observed_candles', 'UNSET')}/{outcome.get('expected_candles', 'UNSET')}; {outcome.get('recovery_reason', outcome.get('reason', 'ожидается полное окно'))}. Return не подменяется нулём."
+            )
+        else:
+            lines += [f"{name}: {value:.3f}%" for name, value in outcome["metrics"].items()]
+            lines.append(
+                f"{outcome['classification']} · {outcome['classification_reason']} · noise={outcome['noise_threshold_pct']}"
+            )
+    lines.append("Late analytics; не входили в исходный decision context. Не торговая рекомендация.")
+    return "\n".join(lines)
 
 
 def event_text(event: dict[str, Any], now_ms: int) -> str:

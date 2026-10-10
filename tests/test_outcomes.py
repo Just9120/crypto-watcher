@@ -13,6 +13,55 @@ from cryptowatcher.storage import Store, encode
 NOW = 1_800_000_000_000
 
 
+def test_upgrade_g2b_payload_and_history_preserves_original_and_all_row_backup(tmp_path):
+    from cryptowatcher.config import OwnerSettings
+
+    path = tmp_path / "old.sqlite"
+    store = Store(path, 233382575)
+    store.initialize(OwnerSettings())
+    worker = OutcomeWorker(store)
+    observe(store, worker)
+    history = History(store)
+    # A saved G2B owner/event has neither of the new G3 fields.
+    with store.db:
+        owner = store.snapshot().settings.payload()
+        owner.pop("outcome_horizons")
+        owner.pop("digest_interval_min")
+        store.db.execute("UPDATE owner_settings SET settings_json=?", (encode(owner),))
+        for key, value in history.items("event:"):
+            value["settings_snapshot"] = owner
+            store.db.execute(
+                "UPDATE runtime SET payload_json=? WHERE key=?", (encode(value), "radar:v1:" + key)
+            )
+        for key, _ in history.items("outcome-job:") + history.items("outcome-pending:"):
+            history.delete(key)
+        history.delete("outcome-admission")
+    original = store.db.execute(
+        "SELECT key,payload_json FROM runtime WHERE key LIKE 'radar:v1:event:%' ORDER BY key"
+    ).fetchall()
+    store.close()
+    store = Store(path, 233382575)
+    worker = OutcomeWorker(store)
+    worker.bootstrap()
+    assert store.snapshot().settings.outcome_horizons == (5, 15, 30, 60)
+    assert store.db.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert (
+        store.db.execute(
+            "SELECT key,payload_json FROM runtime WHERE key LIKE 'radar:v1:event:%' ORDER BY key"
+        ).fetchall()
+        == original
+    )
+    assert History(store).count("outcome-job:") == len(original) * 4
+    backup = tmp_path / "backup.sqlite"
+    store.backup(backup)
+    restored = Store(backup, store.owner_id, readonly=True)
+    assert (
+        restored.db.execute("SELECT key,payload_json FROM runtime ORDER BY key").fetchall()
+        == store.db.execute("SELECT key,payload_json FROM runtime ORDER BY key").fetchall()
+    )
+    restored.close()
+
+
 def event(direction="UP"):
     return {
         "reference_time_ms": NOW,
@@ -33,6 +82,12 @@ def future(start=NOW):
         )
         for i in range(5)
     ]
+
+
+@pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf"), True])
+def test_invalid_reference_is_an_error_not_a_zero_or_fabricated_outcome(value):
+    with pytest.raises(ValueError, match="reference"):
+        calculate({**event(), "reference_price": value}, 5, future())
 
 
 def observe(store, worker, now=NOW):

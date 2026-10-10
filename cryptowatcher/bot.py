@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -19,6 +20,8 @@ from telegram.ext import (
     filters,
 )
 
+from .analytics import cohorts
+from .analytics_recovery import AnalyticsRecovery
 from .config import (
     ConfigError,
     Infrastructure,
@@ -28,19 +31,23 @@ from .config import (
     number,
 )
 from .detector_config import FAMILIES, PARAMETERS
+from .digest import Digest
 from .events import EventEngine, History
 from .ingestion import BybitRadar
 from .market import BybitREST, MarketError
+from .outcomes import OutcomeWorker, Retention
 from .render import (
     SAMPLE_SYMBOL,
     TERMS,
     alert_keyboard,
     detectors_keyboard,
+    digest_keyboard,
     event_keyboard,
     event_text,
     history_keyboard,
     menu,
     notification_text,
+    outcome_text,
     profiles_keyboard,
     quote_text,
     sample_alert_text,
@@ -48,6 +55,7 @@ from .render import (
     settings_text,
     status_text,
 )
+from .source_context import context as public_context
 from .storage import RevisionConflict, Store
 from .telegram_delivery import TelegramDelivery
 
@@ -76,6 +84,10 @@ COMMANDS = {
     "detectors": "Telegram detectors",
     "history": "История событий",
     "event": "Сохранённое событие",
+    "outcomes": "Последующее движение события",
+    "horizons": "Настроить outcome horizons",
+    "analytics": "Статистика detectors",
+    "digest": "Управление дайджестом",
     "resetbase": "Устаревшее действие",
     "resetallbase": "Устаревшее действие",
 }
@@ -96,6 +108,9 @@ MENU_ACTIONS = {
     "Detectors": "detectors",
     "Profiles": "profiles",
     "История": "history",
+    "Outcomes": "outcomes",
+    "Статистика": "analytics",
+    "Digest": "digest",
 }
 MANUAL_FIELDS = {
     "watchlist_multiplier",
@@ -105,6 +120,7 @@ MANUAL_FIELDS = {
     "turnover_spike_min",
     "liquidity_floor_24h",
     "sma_periods",
+    "digest_interval_min",
 }
 MANUAL_FIELDS.update(PARAMETERS)
 
@@ -115,8 +131,13 @@ class Controller:
         self.store = store
         self.market = market
         self.history = History(store)
+        self.recovery = AnalyticsRecovery(store, market) if isinstance(market, BybitRadar) else None
+        self.outcomes = OutcomeWorker(store, self.recovery.request if self.recovery else None)
+        self.retention = Retention(store)
+        self.digest = Digest(store, infrastructure.delivery_chat_id)
+        self.analytics_lock = asyncio.Lock()
         self.engine = (
-            EventEngine(store, source_revision=infrastructure.source_revision)
+            EventEngine(store, source_revision=infrastructure.source_revision, on_event=self.outcomes.admit)
             if isinstance(market, BybitRadar)
             else None
         )
@@ -130,7 +151,13 @@ class Controller:
         if isinstance(market, BybitRadar) and self.engine is not None:
             engine = self.engine
             market.on_observation = lambda stream, candles, liquidity, tick, now, live: engine.observe(
-                stream, candles, liquidity, tick, now, live=live
+                stream,
+                candles,
+                liquidity,
+                tick,
+                now,
+                live=live,
+                source_context=public_context(store, stream.rsplit("/", 1)[0], now),
             )
 
     async def send(self, update: Update, text: str, markup: Any = None) -> None:
@@ -155,12 +182,16 @@ class Controller:
             "telegram_delivery": self.store.get_runtime("telegram_delivery", {"state": "PENDING"}),
             "ingestion": self.store.get_runtime("ingestion", {"state": "PENDING"}),
             "radar": self.history.diagnostics(),
+            "outcomes": self.outcomes.diagnostics(),
+            "analytics": self.store.get_runtime("analytics", {"state": "PENDING"}),
+            "analytics_recovery": self.recovery.diagnostics() if self.recovery else {"state": "N/A"},
+            "digest": self.digest.diagnostics(),
             "capabilities": {
                 "composite": True,
                 "websocket": isinstance(self.market, BybitRadar),
                 "detectors": list(FAMILIES) if self.engine else ["composite"],
                 "episodes": self.engine is not None,
-                "outcomes": False,
+                "outcomes": True,
                 "agent_delivery": False,
             },
         }
@@ -344,6 +375,88 @@ class Controller:
                 await self.send(update, event_text(event, now_ms), event_keyboard(event))
             else:
                 await self.send(update, "Событие не найдено.")
+        elif command == "horizons":
+            if raw:
+                parts = raw.replace(",", " ").split()
+                if not parts or any(not part.isdecimal() for part in parts):
+                    raise ConfigError("Horizons: положительные целые минуты через запятую")
+                self.change(outcome_horizons=tuple(int(part) for part in parts))
+            await self.send(
+                update,
+                "Outcome horizons, min: "
+                + ", ".join(map(str, self.store.snapshot().settings.outcome_horizons))
+                + "\n/horizons 5,15,30,60. Изменение применяется к новым событиям; старые reference/settings сохраняются.",
+            )
+        elif command == "outcomes":
+            if raw:
+                try:
+                    event_id = str(uuid.UUID(raw.strip()))
+                except ValueError as exc:
+                    raise ConfigError("Invalid event ID") from exc
+                events = [self.history.get("event-head:" + event_id)]
+            else:
+                events = self.history.events(5)
+            if not events or events[0] is None:
+                await self.send(update, "История пока пуста или событие не найдено.")
+            else:
+                for event in events:
+                    from .config import OwnerSettings
+                    from .events import identity
+                    from .outcomes import METHOD
+
+                    horizons = OwnerSettings.from_payload(event["settings_snapshot"]).outcome_horizons
+                    outcomes = [
+                        self.history.get(
+                            "outcome-head:" + identity(f"outcome/{event['event_id']}/{h}/{METHOD}")
+                        )
+                        for h in horizons
+                    ]
+                    await self.send(update, outcome_text(event, outcomes, horizons), event_keyboard(event))
+        elif command == "analytics":
+            groups = (
+                tuple(raw.replace(",", " ").split())
+                if raw
+                else ("detector", "version", "settings", "market", "timeframe", "direction")
+            )
+            try:
+                statistics = cohorts(self.store, groups, limit=20)
+            except ValueError as exc:
+                raise ConfigError(
+                    "Groups: detector/version/settings/market/timeframe/instrument/universe/direction/strength"
+                ) from exc
+            lines = [
+                "Статистика detectors · return %, описательная оценка информативности",
+                f"Неполных outcomes: {statistics['incomplete_outcomes']}. Horizons считаются отдельно.",
+            ]
+            for row in statistics["cohorts"]:
+                lines.append(
+                    f"{row['group']}\nN={row['sample_size']} · mean {row['mean']:.3f}% · median {row['median']:.3f}% · p10/p90 {row['p10']:.3f}/{row['p90']:.3f}%\nno-signal N={row['comparator_sample_size']} · mean={row['comparator_mean']} · {row['classifications']}\nFrozen noise: {row['noise_min_pct']}…{row['noise_max_pct']}% · N={row['noise_sample_size']}"
+                )
+            if statistics["truncated"]:
+                lines.append("Показаны первые20 cohorts. Полная выборка доступна через CLI export CSV.")
+            lines.append(
+                "Малое N/неполная история ограничивают выводы; события могут быть зависимы. Это не доходность стратегии и не рекомендация."
+            )
+            await self.send(update, "\n".join(lines))
+        elif command == "digest":
+            now = (
+                (self.market.server_now() or int(time.time() * 1000))
+                if isinstance(self.market, BybitRadar)
+                else int(time.time() * 1000)
+            )
+            parts = raw.lower().split()
+            if parts:
+                if parts[0] not in ("on", "off") or len(parts) > 2:
+                    raise ConfigError("Формат /digest on [interval_min] или /digest off")
+                if len(parts) == 2:
+                    self.change(digest_interval_min=parts[1])
+                self.digest.configure(parts[0] == "on", now)
+            enabled = self.digest.preference()["enabled"]
+            await self.send(
+                update,
+                f"Digest {'ON' if enabled else 'OFF'} · interval {self.store.snapshot().settings.digest_interval_min} min\nНезависим от alerts/mutes. После включения — следующий полный UTC interval. /digest on 60 · /digest off",
+                digest_keyboard(enabled),
+            )
         elif command == "sample_alert":
             await self.send(
                 update,
@@ -370,8 +483,10 @@ class Controller:
         parts = str(query.data or "").split(":")
         if parts[0] == "deck" and len(parts) == 2 and parts[1] in ("profiles", "detectors"):
             await self.command(update, parts[1])
-        elif parts[0] in ("profile", "event") and len(parts) == 2:
+        elif parts[0] in ("profile", "event", "outcomes") and len(parts) == 2:
             await self.command(update, parts[0], parts[1])
+        elif parts[0] == "digest" and len(parts) == 2 and parts[1] in ("on", "off", "status"):
+            await self.command(update, "digest", "" if parts[1] == "status" else parts[1])
         elif parts[0] == "detector" and len(parts) == 3:
             if parts[1] not in FAMILIES or parts[2] not in ("on", "off"):
                 raise ConfigError("Invalid detector selection")
@@ -569,6 +684,29 @@ class Controller:
             return  # Establish exchange clock after restart before deciding pending expiry.
         self.engine.tick(now_ms)
         await self.delivery.send_due(context.bot, now_ms, clock=self.market.server_now)
+        self.digest.schedule(self.market.server_now())
+        await self.digest.send_due(context.bot, self.market.server_now())
+
+    async def analytics_job(self, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not isinstance(self.market, BybitRadar) or self.recovery is None:
+            return
+        now = self.market.server_now()
+        if now <= 0:
+            return
+        async with self.analytics_lock:
+            try:
+                from .analytics import ComparisonWorker
+
+                self.outcomes.work(now)
+                ComparisonWorker(self.store).work(now)
+                self.retention.work(now)
+                await self.recovery.work(now)
+                self.store.put_runtime("analytics", {"state": "OK", "at_ms": self.market.server_now()})
+            except Exception as exc:
+                self.store.put_runtime(
+                    "analytics", {"state": "FAILED", "error_class": type(exc).__name__, "at_ms": now}
+                )
+                logger.error("Analytics worker failure: %s", type(exc).__name__)
 
     async def heartbeat(self, context: ContextTypes.DEFAULT_TYPE) -> None:
         self.store.put_runtime(
@@ -576,8 +714,10 @@ class Controller:
             {
                 "at": time.time(),
                 "revision": self.infrastructure.source_revision,
-                "components_healthy": not isinstance(self.market, BybitRadar)
-                or self.market.components_healthy(),
+                "components_healthy": (
+                    not isinstance(self.market, BybitRadar) or self.market.components_healthy()
+                )
+                and self.store.get_runtime("analytics", {}).get("state") != "FAILED",
             },
         )
 
@@ -623,4 +763,5 @@ def application(controller: Controller) -> Application[Any, Any, Any, Any, Any, 
     app.job_queue.run_repeating(controller.poll, interval=controller.infrastructure.engine_interval, first=1)
     app.job_queue.run_repeating(controller.heartbeat, interval=20, first=1)
     app.job_queue.run_repeating(controller.deliver, interval=2, first=2)
+    app.job_queue.run_repeating(controller.analytics_job, interval=5, first=5)
     return app

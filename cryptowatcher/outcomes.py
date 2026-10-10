@@ -61,6 +61,17 @@ def calculate(event: dict[str, Any], horizon: int, candles: list[Candle]) -> dic
     if type(horizon) is not int or horizon <= 0:
         raise ValueError("Invalid outcome horizon")
     start = event["reference_time_ms"]
+    reference = event["reference_price"]
+    if (
+        type(start) is not int
+        or start < 0
+        or not isinstance(reference, (int, float))
+        or isinstance(reference, bool)
+        or not math.isfinite(reference)
+        or reference <= 0
+        or event["direction"] not in ("UP", "DOWN", "NEUTRAL")
+    ):
+        raise ValueError("Invalid immutable outcome reference")
     end = start + horizon * MINUTE
     candles = sorted(candles, key=lambda c: c.start)
     gaps = missing_ranges(candles, start, end)
@@ -82,7 +93,6 @@ def calculate(event: dict[str, Any], horizon: int, candles: list[Candle]) -> dic
     }
     if gaps:
         return base
-    reference = event["reference_price"]
     price_return = 100 * (candles[-1].close / reference - 1)
     rise = 100 * (max(c.high for c in candles) / reference - 1)
     fall = 100 * (min(c.low for c in candles) / reference - 1)
@@ -173,11 +183,20 @@ class OutcomeWorker:
             self.history.put(hold, {"start": event["reference_time_ms"], "end": due})
         comparison = "comparison-job:" + event["event_id"]
         if self.history.get(comparison) is None:
+            comparison_pending = pending_key(event["available_at_ms"], event["event_id"]).replace(
+                "outcome-pending:", "comparison-pending:", 1
+            )
             self.history.put(
                 comparison,
-                {"event_id": event["event_id"], "event_revision": event["revision"], "state": "PENDING"},
+                {
+                    "event_id": event["event_id"],
+                    "event_revision": event["revision"],
+                    "state": "PENDING",
+                    "pending_key": comparison_pending,
+                    "next_attempt_ms": event["available_at_ms"],
+                },
             )
-            self.history.put("comparison-pending:" + event["event_id"], {"event_id": event["event_id"]})
+            self.history.put(comparison_pending, {"event_id": event["event_id"]})
             lookback = max(
                 16,
                 int(max(v for k, v in event["effective_parameters"].items() if k.endswith("lookback"))) + 2,
@@ -271,8 +290,8 @@ class OutcomeWorker:
     def diagnostics(self) -> dict[str, Any]:
         return {
             "methodology_version": METHOD,
-            "pending": len(self.history.items("outcome-pending:")),
-            "comparison_pending": len(self.history.items("comparison-pending:")),
+            "pending": self.history.count("outcome-pending:"),
+            "comparison_pending": self.history.count("comparison-pending:"),
             "admission": self.history.get("outcome-admission", {"complete": False}),
         }
 

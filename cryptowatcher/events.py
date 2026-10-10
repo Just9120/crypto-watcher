@@ -8,7 +8,7 @@ import math
 import re
 import uuid
 from dataclasses import asdict
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from .detector_config import FAMILIES, effective_parameters
 from .detectors import FORMULAS, UNITS, VERSIONS, Detection, DetectorUnavailable, atr14, evaluate, freshness
@@ -47,6 +47,21 @@ class History:
             values += (limit,)
         return [(row[0][len(PREFIX) :], json.loads(row[1])) for row in self.store.db.execute(sql, values)]
 
+    def scan(self, prefix: str) -> Iterator[tuple[str, Any]]:
+        start = PREFIX + prefix
+        for row in self.store.db.execute(
+            "SELECT key,payload_json FROM runtime WHERE key>=? AND key<? ORDER BY key", (start, start + "~")
+        ):
+            yield row[0][len(PREFIX) :], json.loads(row[1])
+
+    def count(self, prefix: str) -> int:
+        start = PREFIX + prefix
+        return int(
+            self.store.db.execute(
+                "SELECT COUNT(*) FROM runtime WHERE key>=? AND key<?", (start, start + "~")
+            ).fetchone()[0]
+        )
+
     def version(self, kind: str, value: dict[str, Any]) -> None:
         key = value[f"{kind}_id"]
         version_key = f"{kind}:{key}:{value['revision']:010d}"
@@ -72,8 +87,8 @@ class History:
 
     def diagnostics(self) -> dict[str, Any]:
         return {
-            "active_episodes": len(self.items("active:")),
-            "telegram_pending": len(self.items("pending:telegram:")),
+            "active_episodes": self.count("active:"),
+            "telegram_pending": self.count("pending:telegram:"),
             "detector_errors": {key: value for key, value in self.items("diagnostic:", 50)},
             "telegram_target": self.get("target:telegram", {"state": "READY"}),
             "schema": "cryptowatcher.radar.v1",
@@ -155,6 +170,7 @@ class EventEngine:
         now_ms: int,
         *,
         live: bool,
+        source_context: dict[str, Any] | None = None,
     ) -> None:
         if not candles:
             return
@@ -334,6 +350,7 @@ class EventEngine:
                             encode([asdict(c) for c in inputs]).encode()
                         ).hexdigest(),
                         "source_inputs": [asdict(c) for c in inputs],
+                        "source_context": source_context or {"ticker": None, "instrument": None},
                         "producer_source_revision": self.source_revision,
                         "outcome_context_completeness": "COMPLETE"
                         if noise is not None
