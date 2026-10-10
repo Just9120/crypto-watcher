@@ -34,7 +34,7 @@ def normalize_pair(raw: str) -> str:
     pair = raw.strip().upper().replace("/", "")
     if not pair.endswith("USDT"):
         pair += "USDT"
-    if not re.fullmatch(r"[A-Z0-9]{2,60}USDT", pair):
+    if not re.fullmatch(r"[A-Z0-9]{1,60}USDT", pair):
         raise ConfigError("Invalid instrument symbol")
     return pair
 

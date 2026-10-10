@@ -20,6 +20,7 @@ def main() -> int:
             [sys.executable, "-m", "mypy"],
         ]
     if args.stage in ("test", "all"):
+        (ROOT / ".cache-g1").mkdir(exist_ok=True)
         commands.append([sys.executable, "-m", "pytest", "--basetemp", ".cache-g1/pytest-temp", "-q"])
     for command in commands:
         result = subprocess.run(command, cwd=ROOT, check=False)

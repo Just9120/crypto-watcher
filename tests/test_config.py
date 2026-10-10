@@ -47,3 +47,10 @@ def test_token_error_does_not_echo_secret():
 
 def test_defaults_preserve_zero_length_watchlist():
     assert OwnerSettings().custom_pairs == ()
+
+
+def test_single_character_crypto_symbol_is_valid():
+    from cryptowatcher.config import normalize_pair
+
+    assert normalize_pair("S") == "SUSDT"
+    assert normalize_pair("WUSDT") == "WUSDT"
