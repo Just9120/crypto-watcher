@@ -2,34 +2,40 @@
 
 ## Фактический target
 
-Источник: owner-assisted read-only SSH inventory 2026-10-10 09:23:18 UTC; Git blob comparison в локальной G1. Scope — только CryptoWatcher.
+Источник: owner-assisted read-only SSH inventory 2026-10-10 09:23:18, 10:08:53 и 10:49:10 UTC; Git blob/archive comparison в G1. Scope — только CryptoWatcher. Работающий legacy writer может менять JSON после snapshot.
 
 | Объект | Проверенное значение |
 | --- | --- |
 | Host / account | Contabo `167.86.68.98`, SSH root:22, owner MobaXterm; локальный BatchMode SSH не авторизован |
 | App directory / Compose file | `/opt/crypto_watcher`, `/opt/crypto_watcher/docker-compose.yml` |
 | Unit / container | `crypto_watcher` / `crypto-watcher` |
-| Compose project | UNSET до readback container project label; script требует exact target configuration |
+| Compose project | `crypto_watcher`, подтверждён container project label |
 | Persistent bind | `/opt/crypto_watcher/data` → `/data`, rw |
 | Runtime image | `sha256:153f7a33fa4a96bdc5e63ff53afa1ee5350931625ff9d3d19bee141d83975dcc`; source label отсутствует |
 | Code identity | Startup file SHA256 `b38b2209adc4fc931d5ce93c7d0469e4b26382e61b6aab2354d011437474a6ed`, requirements `3bfa2c84e43ed8ad947dbee85c486294205f48a9be1696083f1fa8882311326f`: совпадают с blobs проверенного main33e0e6; полный image source revision UNSET |
 | Versions | Python3.11.15, PTB20.8, requests2.33.1, dotenv1.2.2; Docker29.8.1, Compose5.5.1 |
 | Data inventory | JSON55915 bytes и legacy `.bak.2026-04-19-152305`14704 bytes; пригодность старого backup UNSET |
 | Time / resource snapshot | NTP synchronized, Europe/Berlin; RAM11960MiB / available7441MiB, disk36GiB free, swap0; достаточность будущего full-universe workload не доказана |
-| Architecture / config owners / Git changes | UNSET до следующего owner readback |
+| Architecture / storage | amd64; Docker overlayfs с `io.containerd.snapshotter.v1` |
+| Config owners / Git | App/data root:root0755; `.env` и legacy JSON root:root0644; checkout main8ace3638b9193444948d0beb88e0c49e9f2f068e clean. Restrict `.env`0600 в reviewed first procedure |
+| Owner mapping / legacy state | Schema2, единственный private chat233382575, configured bot7523865123; alerts enabled, custom list явно пустой, mutes0, baselines380. Settings Spot/Top100/3m/2%/x3/1M USDT/poll60s/cooldown10min |
 | Runtime environment | Единственное production приложение; Spot/Perpetual и profiles — продуктовые настройки |
 
 Trading agent в `/opt/claude-bybit-trading-agent` — отдельный runtime и не target этих scripts. Inventory не доказывает Telegram smoke, data restore либо все файлы baseline.
 
 ## GitHub checks, artifact и environment
 
-PR workflow: `pull_request` к main, GitHub-hosted Ubuntu24.04, Python3.11, `contents:read`, без production secrets. Checkout проверяет PR test merge SHA. Select conservatively запускает suite/image для любых недокументационных/неизвестных inputs; docs-only — link/fence check. Aggregate `ci-required` при `always()` проверяет success каждого применимого job; fail/cancel/неожиданный skip не становится green. Branch protection должен требовать этот gate, forbid force-push/delete и учитывать admin; default human approvals0 + self-review. Фактический protection readback до настройки PENDING.
+PR workflow: `pull_request` к main, GitHub-hosted Ubuntu24.04, Python3.11, `contents:read`, без production secrets. Checkout проверяет PR test merge SHA. Select conservatively запускает suite/image для любых недокументационных/неизвестных inputs; docs-only — link/fence check. Aggregate `ci-required` при `always()` проверяет success каждого применимого job; fail/cancel/неожиданный skip не становится green. Фактический admin API readback2026-10-10: strict `ci-required` от GitHub Actions app15368, enforce admins, forbid force-push/delete, conversation resolution; required human approvals0 + self-review. PR20 latest run38042697848 PASS; новые revisions требуют своих applicable checks.
 
 Trusted release: push main либо ручной dispatch только main текущего repository. Exact merged SHA проверяется заново; автоматический reuse пока не реализован. External Actions pinned full SHA. Default Docker build — Linux target architecture; проверенная VPS architecture должна совпасть, иначе stop.
 
-Artifact — immutable GitHub Actions artifact `cryptowatcher-SHA-RUN_ID`, retention90 days, внутри bundle tar с allowlist `manifest.json`, `docker-compose.yml`, `image.tar.gz`. Manifest связывает source SHA, build run, Docker image ID, image archive SHA256, Compose SHA256, schema и architecture. Это Docker config digest/image ID и archive SHA256; registry manifest digest N/A, registry в этой модели не используется. PR image пересобирается trusted build после merge; его не выдаём за тот же binary artifact. На host загружается именно archive trusted build.
+Artifact — immutable GitHub Actions artifact `cryptowatcher-SHA-RUN_ID`, retention90 days, внутри bundle tar с allowlist `manifest.json`, `docker-compose.yml`, `image.tar.gz`. Release v1 связывает source SHA, build run, build Docker image ID, image archive SHA256, Compose SHA256, schema и architecture. Дополнительные `image_config_digest` и `image_manifest_digest` выводятся из config bytes и OCI manifest bytes самого архива; старый v1 без этих полей проверяется тем же способом. Registry digest N/A: registry в этой модели не используется, OCI archive manifest digest доступен отдельно.
 
-Один GitHub Environment `production`: eligible main builds/deploys; target только таблица выше, owner runtime configuration — host `.env`, owner domain settings — SQLite. Environment должен разрешать только protected main. До verified первой миграции `DEPLOY_ENABLED` отсутствует/false: build/artifact success означает delivery PENDING gate. После настройки нужны environment secrets `CW_DEPLOY_SSH_KEY`, `CW_SSH_KNOWN_HOSTS` и variable `DEPLOY_ENABLED=true`. Нет человеческого approval для каждого routine CD после первой проверенной поставки; future protections не обходятся.
+Classic Docker и containerd могут иметь разные image ID для одного архива. Проверенный G1 artifact run38042801619 имеет config digest4ce9bd17… и OCI manifest digest50ba81d6…; VPS containerd возвращает второй. Receiver читает exact archived tag только для resolution, проверяет returned ID по этим криптографически связанным digest, OS/architecture/rootfs/source/build/user, затем запускает immutable host ID. Один matching tag/label без digest недостаточен; неизвестный ID блокирует switch. Archive должен содержать одну image/один OCI manifest. PR CI и trusted packaging проверяют save→load→identity round-trip; cross-store/подмена проверяются regression fixtures. Это не заменяет actual target rehearsal.
+
+PR image пересобирается trusted build после merge; его не выдаём за тот же binary artifact. На host загружается именно archive trusted build. Deployment record хранит host `image_id`, build image ID и оба archive digest; для post-check сравнивается immutable host ID.
+
+Один GitHub Environment `production`: eligible main builds/deploys; target только таблица выше, owner runtime configuration — host `.env`, owner domain settings — SQLite. Environment создан и protected-branches-only policy подтверждена admin API2026-10-10. До verified первой миграции `DEPLOY_ENABLED` отсутствует/false: build/artifact success означает delivery PENDING gate. После настройки нужны environment secrets `CW_DEPLOY_SSH_KEY`, `CW_SSH_KNOWN_HOSTS` и variable `DEPLOY_ENABLED=true`. Нет человеческого approval для каждого routine CD после первой проверенной поставки; future protections не обходятся.
 
 GitHub workflow concurrency без cancellation stateful операции плюс host `flock` сериализуют switch/post-checks. Receiver повторно читает public primary main SHA после target lock и перед switch; старый candidate не перезапишет новую main revision. Новая main во время switch допускает завершение операции, затем следующий queued deploy. Если docs merge superseded pending code candidate, stale deploy прекращается; reviewed manual dispatch на текущем main восстанавливает delivery. Не повторять deployment ради RESUME.
 
