@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import uuid
 from dataclasses import asdict
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from .detector_config import FAMILIES, effective_parameters
 from .detectors import FORMULAS, UNITS, VERSIONS, Detection, DetectorUnavailable, atr14, evaluate, freshness
@@ -46,6 +47,21 @@ class History:
             values += (limit,)
         return [(row[0][len(PREFIX) :], json.loads(row[1])) for row in self.store.db.execute(sql, values)]
 
+    def scan(self, prefix: str) -> Iterator[tuple[str, Any]]:
+        start = PREFIX + prefix
+        for row in self.store.db.execute(
+            "SELECT key,payload_json FROM runtime WHERE key>=? AND key<? ORDER BY key", (start, start + "~")
+        ):
+            yield row[0][len(PREFIX) :], json.loads(row[1])
+
+    def count(self, prefix: str) -> int:
+        start = PREFIX + prefix
+        return int(
+            self.store.db.execute(
+                "SELECT COUNT(*) FROM runtime WHERE key>=? AND key<?", (start, start + "~")
+            ).fetchone()[0]
+        )
+
     def version(self, kind: str, value: dict[str, Any]) -> None:
         key = value[f"{kind}_id"]
         version_key = f"{kind}:{key}:{value['revision']:010d}"
@@ -71,8 +87,8 @@ class History:
 
     def diagnostics(self) -> dict[str, Any]:
         return {
-            "active_episodes": len(self.items("active:")),
-            "telegram_pending": len(self.items("pending:telegram:")),
+            "active_episodes": self.count("active:"),
+            "telegram_pending": self.count("pending:telegram:"),
             "detector_errors": {key: value for key, value in self.items("diagnostic:", 50)},
             "telegram_target": self.get("target:telegram", {"state": "READY"}),
             "schema": "cryptowatcher.radar.v1",
@@ -82,7 +98,12 @@ class History:
 
 class EventEngine:
     def __init__(
-        self, store: Store, detector: Callable[..., Detection] = evaluate, *, source_revision: str = "UNSET"
+        self,
+        store: Store,
+        detector: Callable[..., Detection] = evaluate,
+        *,
+        source_revision: str = "UNSET",
+        on_event: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         if not re.fullmatch(r"[0-9a-f]{40}|UNSET", source_revision):
             raise ValueError("Invalid detector source revision")
@@ -90,6 +111,7 @@ class EventEngine:
         self.history = History(store)
         self.detector = detector
         self.source_revision = source_revision
+        self.on_event = on_event
         with store.db:
             for family in FAMILIES:
                 key = f"detector-metadata:{family}:{VERSIONS[family]}"
@@ -148,6 +170,7 @@ class EventEngine:
         now_ms: int,
         *,
         live: bool,
+        source_context: dict[str, Any] | None = None,
     ) -> None:
         if not candles:
             return
@@ -279,6 +302,9 @@ class EventEngine:
                         atr = atr14(candles)
                     except ValueError:
                         atr = None
+                    noise = max(2 * tick_size, 0.1 * atr) / current.close * 100 if atr is not None else None
+                    if noise is not None and not math.isfinite(noise):
+                        noise = None
                     inputs = tuple(
                         candles[
                             -max(
@@ -319,15 +345,18 @@ class EventEngine:
                         "completeness": "COMPLETE",
                         "tick_size": tick_size,
                         "reference_atr14": atr,
-                        "continuation_threshold_pct": max(2 * tick_size, 0.1 * atr) / current.close * 100
-                        if atr is not None
-                        else None,
+                        "continuation_threshold_pct": noise,
                         "source_window_id": hashlib.sha256(
                             encode([asdict(c) for c in inputs]).encode()
                         ).hexdigest(),
                         "source_inputs": [asdict(c) for c in inputs],
+                        "source_context": source_context or {"ticker": None, "instrument": None},
                         "producer_source_revision": self.source_revision,
-                        "outcome_context_completeness": "COMPLETE" if atr is not None else "ATR_UNAVAILABLE",
+                        "outcome_context_completeness": "COMPLETE"
+                        if noise is not None
+                        else "ATR_UNAVAILABLE"
+                        if atr is None
+                        else "NONFINITE_REFERENCE_THRESHOLD",
                         "live": is_live and not suppressed,
                         "observation_reason": reason,
                         "rearm_from_complete_sources": recovered_rearm,
@@ -335,6 +364,8 @@ class EventEngine:
                         "model_invoked": False,
                     }
                     self.history.version("event", event)
+                    if self.on_event is not None:
+                        self.on_event(event)  # Admission shares this event/episode/outbox transaction.
                     self.history.put(f"history:{current.end:016d}:{event_id}", {"event_id": event_id})
                     self.history.put(
                         f"episode-event:{episode['episode_id']}:{current.end:016d}:{event_id}",

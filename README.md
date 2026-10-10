@@ -2,7 +2,7 @@
 
 Deterministic radar Bybit для владельца в Telegram. Согласованный результат — Spot USDT и USDT Perpetual, четыре одновременных TF, пять detectors, episodes/history/outcomes и advisory context для отдельного trading agent. Radar не исполняет ордера и не вызывает LLM.
 
-Radar обрабатывает широкий metadata/liquidity universe обоих рынков и native `1m/3m/5m/15m` одновременно через public WebSocket. Пять versioned detectors создают persistent events и episodes; Telegram delivery имеет независимые attempts/retry. Custom thresholds сохранены. Telegram управляет typed watchlist, profiles/manual settings без restart, detectors, market-specific mutes, alerts toggle и историей. Статусы поставки и следующих подсистем — в [плане](docs/open_issues.md).
+Radar обрабатывает широкий metadata/liquidity universe обоих рынков и native `1m/3m/5m/15m` одновременно через public WebSocket. Пять versioned detectors создают persistent events и episodes; Telegram delivery имеет независимые attempts/retry. Custom thresholds сохранены. Telegram управляет typed watchlist, profiles/manual settings без restart, detectors, market-specific mutes, alerts/digest toggles, историей и outcomes. Статусы поставки и следующих подсистем — в [плане](docs/open_issues.md).
 
 ## Документация
 
@@ -69,13 +69,30 @@ python -m ruff format .
 
 Постоянная клавиатура: status/settings, universe/custom, список/add/remove/clear, alerts, mutes, terms, diagnostics, detectors, profiles и история. Settings показывают actual thresholds/revision и TF карточки; realtime1m/3m/5m/15m активны одновременно. `/profile normal|conservative|sensitive` явно применяет preset; обновление приложения сохраняет custom values. `/set price_3m 2.5`, `/set breakout_lookback 20` меняют отдельный параметр и переводят profile в custom; `/set price_move_min 2.5` устанавливает одинаковый manual price threshold всех TF. `/help` показывает допустимые поля. Lookback, превышающий доступные256 candles, даёт insufficient-history diagnostic без ложного сигнала.
 
-`/detectors` выбирает families для Telegram; вычисление и history всех пяти продолжаются. После upgrade по умолчанию уведомляет только composite. `/history` показывает12 последних events; кнопка или `/event EVENT_ID` открывает сохранённые metrics/provenance, freshness и связь с episode. Outcomes и export добавляются в G3.
+`/detectors` выбирает families для Telegram; вычисление и history всех пяти продолжаются. После upgrade по умолчанию уведомляет только composite. `/history` показывает12 последних events; кнопка или `/event EVENT_ID` открывает сохранённые metrics/provenance, freshness и связь с episode. Кнопка Outcome или `/outcomes EVENT_ID` показывает immutable reference, выбранные horizons, return/MFE/MAE либо neutral metrics и completeness. `/horizons 5,15,30,60` меняет horizons новых events; старые settings/results сохраняются. `/analytics` показывает ограниченные20 cohorts с N, distribution/noise и prior no-signal comparisons; список group fields доступен через ошибку/CLI.
 
 `/setlist spot/BTC,linear/ETH`, `/mute linear/BTC 60`, `/unmute linear/BTC`, `/unmute all` сохраняются. Bare symbol выбирает рынок карточки. Неизвестный/запрещённый или недостаточно ликвидный instrument отклоняется без изменения списка. Watchlist multiplier меняется через `/set watchlist_multiplier 0.75`; он применяется к detector trigger thresholds, liquidity eligibility сохраняется. Invalid effective ratio≤1 даёт diagnostic; значения не подменяются. `/alerts on|off` управляет доставкой; `/alerts on` также возобновляет target после постоянной Telegram error. No-op buttons не создают ошибку. `/sample_alert` показывает демонстрационный composite. Старые CMC/reset callbacks возвращают сообщение об изменении.
 
 Composite использует `100 × (close / previous_close − 1)`, оборот закрытой свечи / среднее предыдущих SMA periods и ticker turnover24h. Все три threshold comparisons включают equality. Price, turnover, breakout и volatility имеют отдельные formulas/directions/strength; `/terms` объясняет их, точные policy — в [spec](docs/product_scope.md). REST использует Bybit response clock, WebSocket — confirm=true и candle boundaries. Invalid/gapped windows ограничивают affected detector до восстановления.
 
 Episodes разделены по instrument/market/direction. Новый detector/TF либо strength≥1.5 предыдущего уведомлённого значения создаёт update; подтверждения объединяются2s. Inactivity2×longestTF или maxlife60min закрывают episode; продолжающееся условие re-arm после2 полных non-signal candles. Events сохраняются независимо от mute, alerts off и Telegram failure. Receipt/retry не освежают event: обычно fresh1TF/expire2TF, breakout2TF/4TF. Expired/historical sources не отправляются как live. Successful notification state меняется только после ack; при потере ack возможен повтор того же delivery identity, это отражено в diagnostics.
+
+## Outcomes, digest и export
+
+`/digest` показывает preference и interval; `/digest on 60` включает, `/digest off` выключает независимо от `/alerts` и mutes. Default OFF/60min; первый digest — следующий закрытый UTC interval. Digest использует оба рынка/все detector events, strongest period episodes и ongoing episodes на момент сборки. Restart отправляет последний завершённый период, фиксирует skipped intervals и сохраняет delivery identity/frozen text. Unknown acknowledgement допускает повтор того же сообщения; подтверждённый interval не отправляется повторно.
+
+Outcomes используют полный subsequent1m диапазон от immutable observation/reference close. Gaps/invalid sources означают INCOMPLETE/INVALID_SOURCE без нулевого return; recovery работает и для inactive instruments в shared REST budget ниже current ingestion. Historical composite comparator требует действительно доступного prior ticker snapshot: будущая liquidity не подставляется. Малые N и partial prior28days history явно ограничивают comparisons; результаты замораживаются, более поздняя source history не переписывает их автоматически. Это оценка информативности detector, не Strategy backtest или доходность.
+
+Read-only CLI из root, существующая owner-bound DB и `OWNER_USER_ID`/`DATABASE_FILE` из environment. Production используется этот же CLI внутри текущего container; export не требует Telegram/trading credentials и не включает transport/infrastructure state. `--destination` создаёт только новый файл; существующий не перезаписывается.
+
+```bash
+python -m cryptowatcher export --format ndjson --market spot --detector price --detector-version 1 --destination events.ndjson
+python -m cryptowatcher export --format csv --destination summary.csv
+python -m cryptowatcher analytics --groups detector,version,settings,market,timeframe,direction
+python -m cryptowatcher context --event-id EVENT_ID --cutoff-ms UNIX_MILLISECONDS
+```
+
+Export поддерживает `[--start-ms --end-ms)` в UTC UNIX milliseconds, detector/version/market filters. NDJSON schema v1 содержит manifest, все выбранные event revisions, связанные episode revisions, outcomes/comparisons, исторические settings/methodology и frozen source provenance, затем completion counts. Related episode snapshots могут ссылаться на events вне выбранного фильтра; IDs сохранены, фильтр относится к event selection. Pagination100/read-only WAL snapshot обеспечивает полноту и согласованность; отсутствие completion означает частичный/неуспешный export. CSV streamed cohorts сохраняет actual N, distribution/noise/comparator counts. CLI analytics/Telegram ограничивают число возвращаемых cohorts с явным truncated flag; export не ограничивает число групп.
 
 ## Docker и delivery
 

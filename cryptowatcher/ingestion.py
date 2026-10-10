@@ -15,6 +15,7 @@ from websockets.asyncio.client import connect
 from .config import TIMEFRAMES, ConfigError, OwnerSettings
 from .detector_config import effective_parameters
 from .market import BybitREST, MarketError, RadarResult, evaluate_composite, finite
+from .source_context import save
 from .sources import WINDOW_SIZE, Candle, Sources
 from .storage import Store, encode
 from .universe import CLASSIFICATION_VERSION, Instrument, active_instruments, discover
@@ -155,6 +156,21 @@ class BybitRadar(BybitREST):
                     ]
                     with self.store.db:
                         self.store.db.executemany("INSERT OR REPLACE INTO runtime VALUES (?,?)", records)
+                        for key, value in instruments.items():
+                            save(
+                                self.store,
+                                "instrument",
+                                key,
+                                {
+                                    "schema": "cryptowatcher.public-instrument.v1",
+                                    "classification": CLASSIFICATION_VERSION,
+                                    "metadata": value.metadata,
+                                    "tick_size": value.tick_size,
+                                    "market_observation_ms": self.server_now(),
+                                    "available_at_ms": self.server_now(),
+                                    "source": "BYBIT_REST_INSTRUMENTS",
+                                },
+                            )
                     self.instruments = {
                         **{k: v for k, v in self.instruments.items() if v.market != market},
                         **instruments,
@@ -173,6 +189,23 @@ class BybitRadar(BybitREST):
                         if key in tickers:
                             raise MarketError("duplicate_ticker")
                         tickers[key] = row
+                    with self.store.db:
+                        for key, row in tickers.items():
+                            if key not in self.instruments:
+                                continue
+                            save(
+                                self.store,
+                                "ticker",
+                                key,
+                                {
+                                    "schema": "cryptowatcher.public-ticker.v1",
+                                    "values": row,
+                                    "units": {"turnover24h": "USDT"},
+                                    "market_observation_ms": int(result["time"]),
+                                    "available_at_ms": self.server_now(),
+                                    "source": "BYBIT_REST_TICKERS",
+                                },
+                            )
                     self.tickers = {
                         **{k: v for k, v in self.tickers.items() if not k.startswith(market + "/")},
                         **tickers,
@@ -180,7 +213,7 @@ class BybitRadar(BybitREST):
                     self.tickers_at[market] = time.monotonic()
                     self.ticker_server_ms[market] = int(result["time"])
                 self.market_errors.pop(market, None)
-            except (MarketError, KeyError, TypeError) as exc:
+            except (MarketError, KeyError, TypeError, ValueError) as exc:
                 self.market_errors[market] = (
                     str(exc) if isinstance(exc, MarketError) else "invalid_discovery_response"
                 )

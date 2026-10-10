@@ -70,6 +70,8 @@ class OwnerSettings:
     profile: str = "custom"
     detector_parameters: tuple[tuple[str, float], ...] = ()
     alert_detectors: tuple[str, ...] = ("composite",)
+    outcome_horizons: tuple[int, ...] = (5, 15, 30, 60)
+    digest_interval_min: int = 60
 
     def __post_init__(self) -> None:
         if self.bybit_category not in ("spot", "linear"):
@@ -114,6 +116,14 @@ class OwnerSettings:
             or len(set(self.alert_detectors)) != len(self.alert_detectors)
         ):
             raise ConfigError("Invalid alert_detectors")
+        if (
+            not isinstance(self.outcome_horizons, tuple)
+            or not self.outcome_horizons
+            or any(type(x) is not int or x <= 0 for x in self.outcome_horizons)
+            or len(set(self.outcome_horizons)) != len(self.outcome_horizons)
+        ):
+            raise ConfigError("Invalid outcome_horizons")
+        number(self.digest_interval_min, "digest_interval_min", integer=True)
 
     def instruments(self) -> tuple[str, ...]:
         return self.watchlist or tuple(instrument_key(x, self.bybit_category) for x in self.custom_pairs)
@@ -129,7 +139,7 @@ class OwnerSettings:
         if set(values) - set(fields):
             raise ConfigError("Unknown owner settings field")
         parsed = dict(values)
-        for key in ("custom_pairs", "watchlist", "alert_detectors"):
+        for key in ("custom_pairs", "watchlist", "alert_detectors", "outcome_horizons"):
             if key in parsed:
                 if not isinstance(parsed[key], (list, tuple)):
                     raise ConfigError(f"Invalid {key}")
@@ -139,7 +149,7 @@ class OwnerSettings:
                 parsed["detector_parameters"] = validate_parameters(parsed["detector_parameters"])
             except ValueError as exc:
                 raise ConfigError(str(exc)) from exc
-        for key in ("radar_poll_sec", "cooldown_min", "sma_periods"):
+        for key in ("radar_poll_sec", "cooldown_min", "sma_periods", "digest_interval_min"):
             if key in parsed:
                 parsed[key] = int(number(parsed[key], key, integer=True))
         for key in ("price_move_min", "turnover_spike_min", "liquidity_floor_24h", "watchlist_multiplier"):

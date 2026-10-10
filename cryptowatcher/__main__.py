@@ -26,7 +26,18 @@ def main() -> int:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=("run", "check-config", "migrate", "diagnostics", "health", "backup", "state-check"),
+        choices=(
+            "run",
+            "check-config",
+            "migrate",
+            "diagnostics",
+            "health",
+            "backup",
+            "state-check",
+            "export",
+            "analytics",
+            "context",
+        ),
         default="run",
     )
     parser.add_argument("--version", action="store_true")
@@ -35,6 +46,15 @@ def main() -> int:
     parser.add_argument("--backup-dir", type=Path)
     parser.add_argument("--destination", type=Path)
     parser.add_argument("--owner-id", type=int)
+    parser.add_argument("--format", choices=("ndjson", "csv"), default="ndjson")
+    parser.add_argument("--start-ms", type=int, default=0)
+    parser.add_argument("--end-ms", type=int, default=9_999_999_999_999_999)
+    parser.add_argument("--detector")
+    parser.add_argument("--detector-version")
+    parser.add_argument("--market", choices=("spot", "linear"))
+    parser.add_argument("--groups")
+    parser.add_argument("--event-id")
+    parser.add_argument("--cutoff-ms", type=int)
     args = parser.parse_args()
     if args.version:
         revision = os.getenv("SOURCE_REVISION", "UNSET")
@@ -63,11 +83,56 @@ def main() -> int:
                 )
             print(json.dumps(result))
             return 0
-        if args.command in ("diagnostics", "health", "backup", "state-check"):
+        if args.command in (
+            "diagnostics",
+            "health",
+            "backup",
+            "state-check",
+            "export",
+            "analytics",
+            "context",
+        ):
             database = args.database or Path(os.environ.get("DATABASE_FILE", "/data/cryptowatcher.sqlite3"))
             owner = args.owner_id or int(os.environ.get("OWNER_USER_ID", "0"))
             store = Store(database, owner, readonly=True)
             try:
+                if args.command == "export":
+                    from .export import Selection, csv_summary, ndjson
+
+                    selection = Selection(
+                        args.start_ms, args.end_ms, args.detector, args.detector_version, args.market
+                    )
+                    selection.validate()
+                    stream = (
+                        ndjson(store, selection) if args.format == "ndjson" else csv_summary(store, selection)
+                    )
+                    output = (
+                        args.destination.open("x", encoding="utf-8", newline="")
+                        if args.destination
+                        else sys.stdout
+                    )
+                    try:
+                        if args.destination and os.name != "nt":
+                            args.destination.chmod(0o600)
+                        for chunk in stream:
+                            output.write(chunk)
+                    finally:
+                        if args.destination:
+                            output.close()
+                    return 0
+                if args.command == "analytics":
+                    from .analytics import GROUPS, cohorts
+
+                    groups = tuple(args.groups.split(",")) if args.groups else GROUPS
+                    print(encode(cohorts(store, groups, cutoff_ms=args.cutoff_ms)))
+                    return 0
+                if args.command == "context":
+                    from .analytics import decision_context
+
+                    if args.event_id is None or args.cutoff_ms is None:
+                        raise ConfigError("context requires event-id and cutoff-ms")
+                    print(encode(decision_context(History(store), args.event_id, args.cutoff_ms)))
+                    return 0
                 snapshot = store.snapshot()
                 heartbeat = store.get_runtime("heartbeat", {})
                 if args.command == "state-check":
@@ -115,6 +180,17 @@ def main() -> int:
                                 ),
                                 "ingestion": store.get_runtime("ingestion", {"state": "PENDING"}),
                                 "radar": History(store).diagnostics(),
+                                "outcomes": {
+                                    "pending": History(store).count("outcome-pending:"),
+                                    "admission": History(store).get("outcome-admission", {}),
+                                },
+                                "analytics": store.get_runtime("analytics", {"state": "PENDING"}),
+                                "digest": {
+                                    "preferences": History(store).get(
+                                        "digest-preferences", {"enabled": False}
+                                    ),
+                                    "pending": History(store).count("digest-pending:"),
+                                },
                             }
                         )
                     )
