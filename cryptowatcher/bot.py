@@ -18,7 +18,15 @@ from telegram.ext import (
     filters,
 )
 
-from .config import ConfigError, Infrastructure, authorized, normalize_pair, number
+from .config import (
+    ConfigError,
+    Infrastructure,
+    authorized,
+    instrument_key,
+    normalize_pair,
+    number,
+)
+from .ingestion import BybitRadar
 from .market import BybitREST, MarketError
 from .render import (
     SAMPLE_SYMBOL,
@@ -60,6 +68,7 @@ MENU_ACTIONS = {
     "📊 Статус": "status",
     "⚙️ Настройки": "settings",
     "Радар: Top 100": "radar_top",
+    "Радар: Universe": "radar_top",
     "Радар: Мой список": "radar_custom",
     "Список": "watchlist",
     "Добавить монету": "addcoin",
@@ -71,6 +80,7 @@ MENU_ACTIONS = {
     "Диагностика": "diagnostics",
 }
 MANUAL_FIELDS = {
+    "watchlist_multiplier",
     "signal_timeframe",
     "radar_poll_sec",
     "cooldown_min",
@@ -107,9 +117,10 @@ class Controller:
             "telegram_alerts_enabled": self.store.enabled(),
             "last_poll": self.store.get_runtime("last_poll_status", {"state": "PENDING"}),
             "telegram_delivery": self.store.get_runtime("telegram_delivery", {"state": "PENDING"}),
+            "ingestion": self.store.get_runtime("ingestion", {"state": "PENDING"}),
             "capabilities": {
                 "composite": True,
-                "websocket": False,
+                "websocket": isinstance(self.market, BybitRadar),
                 "episodes": False,
                 "outcomes": False,
                 "agent_delivery": False,
@@ -157,11 +168,16 @@ class Controller:
             await self.send(update, TERMS, menu())
         elif command == "watchlist":
             await self.send(
-                update, "Мой список:\n" + (", ".join(snapshot.settings.custom_pairs) or "Список пуст")
+                update,
+                "Мой список (market/symbol):\n"
+                + (", ".join(snapshot.settings.instruments()) or "Список пуст"),
             )
         elif command in ("addcoin", "removecoin"):
             self.store.put_runtime("pending_action", "add" if command == "addcoin" else "remove")
-            await self.send(update, "Отправьте символы через запятую: BTC,ETH,SOL")
+            await self.send(
+                update,
+                "Отправьте market/symbol через запятую: spot/BTC,linear/ETH. Без market — выбранный рынок карточки.",
+            )
         elif command in ("setlist", "input"):
             action = "set" if command == "setlist" else self.store.get_runtime("pending_action", "")
             if action not in ("add", "remove", "set"):
@@ -170,8 +186,12 @@ class Controller:
             parts = [part for part in raw.replace("\n", ",").replace(" ", ",").split(",") if part]
             if not parts:
                 raise ConfigError("Invalid custom list")
-            pairs = tuple(dict.fromkeys(normalize_pair(part) for part in parts))
-            current_pairs = snapshot.settings.custom_pairs
+            pairs = tuple(
+                dict.fromkeys(instrument_key(part, snapshot.settings.bybit_category) for part in parts)
+            )
+            if action != "remove" and isinstance(self.market, BybitRadar):
+                await self.market.validate_instruments(pairs)
+            current_pairs = snapshot.settings.instruments()
             next_pairs = (
                 pairs
                 if action == "set"
@@ -179,14 +199,22 @@ class Controller:
                 if action == "add"
                 else tuple(pair for pair in current_pairs if pair not in pairs)
             )
-            values: dict[str, Any] = {"custom_pairs": next_pairs}
+            values: dict[str, Any] = {
+                "watchlist": next_pairs,
+                "custom_pairs": tuple(
+                    p.split("/")[1]
+                    for p in next_pairs
+                    if p.startswith(snapshot.settings.bybit_category + "/")
+                ),
+            }
             if action == "set":
                 values["alert_universe_mode"] = "custom"
-            self.change(**values)
+            self.store.update(snapshot.revision, snapshot.settings.changed(**values))
+            self.store.put_runtime("last_poll_ts", 0)
             self.store.put_runtime("pending_action", "")
             await self.send(update, "Список сохранён:\n" + (", ".join(next_pairs) or "Список пуст"))
         elif command == "clearlist":
-            self.change(custom_pairs=())
+            self.change(custom_pairs=(), watchlist=())
             self.store.put_runtime("pending_action", "")
             await self.send(update, "Пользовательский список очищен.")
         elif command in ("radar_top", "radar_custom"):
@@ -210,7 +238,7 @@ class Controller:
                     self.store.db.execute("DELETE FROM mutes")
                 await self.send(update, "Все mutes сняты.")
                 return
-            symbol = normalize_pair(parts[0])
+            symbol = instrument_key(parts[0], snapshot.settings.bybit_category)
             duration = number(parts[1], "mute minutes") * 60 if len(parts) == 2 else 3600
             self.store.mute(symbol, 0 if command == "unmute" else time.time() + duration)
             await self.send(update, "Mute сохранён." if command == "mute" else "Mute снят.")
@@ -295,23 +323,44 @@ class Controller:
             if parts[2] != "BYBIT":
                 await self.command(update, "resetbase")
                 return
-            symbol = normalize_pair(parts[3])
-            if parts[1] == "mute" and len(parts) == 5:
-                duration = number(parts[4], "mute seconds")
-                self.store.mute(symbol, time.time() + duration)
+            snapshot = self.store.snapshot()
+            if parts[3] in ("spot", "linear") and len(parts) >= 5:
+                category, symbol = parts[3], normalize_pair(parts[4])
+                duration_index = 5
+            else:
+                # Preserve old callbacks: their original rendered market is the identity.
+                text = str(getattr(getattr(query, "message", None), "text", ""))
+                category = "linear" if "USDT Perpetual" in text else "spot" if "Spot USDT" in text else ""
+                if not category:
+                    await self.send(
+                        update, "У этого старого сообщения не указан рынок. Откройте новый пример/карточку."
+                    )
+                    return
+                symbol, duration_index = normalize_pair(parts[3]), 4
+            identity = instrument_key(f"{category}/{symbol}")
+            if parts[1] == "mute" and len(parts) == duration_index + 1:
+                duration = number(parts[duration_index], "mute seconds")
+                self.store.mute(identity, time.time() + duration)
                 await self.send(update, "Mute сохранён.")
             elif parts[1] == "coin":
-                snapshot = self.store.snapshot()
                 result = await self.market.snapshot(
-                    snapshot.settings.changed(alert_universe_mode="custom", custom_pairs=(symbol,))
+                    snapshot.settings.changed(
+                        alert_universe_mode="custom",
+                        custom_pairs=(),
+                        watchlist=(identity,),
+                        bybit_category=category,
+                    )
+                )
+                quote = result.quotes.get(
+                    f"{identity}/{snapshot.settings.signal_timeframe}", result.quotes.get(symbol)
                 )
                 if self.store.snapshot().revision != snapshot.revision:
                     await self.send(update, "Настройки изменились; повторите запрос.")
-                elif symbol in result.quotes:
+                elif quote:
                     await self.send(
                         update,
-                        quote_text(symbol, result.quotes[symbol], snapshot.settings),
-                        alert_keyboard(symbol, snapshot.settings.bybit_category),
+                        quote_text(symbol, quote, snapshot.settings.changed(bybit_category=category)),
+                        alert_keyboard(symbol, category),
                     )
                 else:
                     await self.send(update, "Данные инструмента неполны/недоступны.")
@@ -338,7 +387,11 @@ class Controller:
         self.store.put_runtime(
             "last_poll_status",
             {
-                "state": "DEGRADED" if result.errors else "OK",
+                "state": "WARMING"
+                if isinstance(self.market, BybitRadar) and not self.market.delivery_ready(result)
+                else "DEGRADED"
+                if result.errors
+                else "OK",
                 "at": now,
                 "available": len(result.quotes),
                 "requested": result.requested,
@@ -346,16 +399,33 @@ class Controller:
                 "configuration_revision": snapshot.revision,
             },
         )
-        for symbol, quote in result.quotes.items():
+        for item, quote in result.quotes.items():
             if self.store.snapshot().revision != snapshot.revision:
                 break
-            if not quote["meets_signal"] or not self.store.enabled() or self.store.muted(symbol, now):
+            symbol = quote.get("symbol", item)
+            category = quote.get("market", snapshot.settings.bybit_category)
+            tf = quote["signal_timeframe"]
+            identity = instrument_key(f"{category}/{symbol}")
+            if (
+                not quote["meets_signal"]
+                or not self.store.enabled()
+                or self.store.muted(identity, now)
+                or (category == snapshot.settings.bybit_category and self.store.muted(symbol, now))
+                or quote.get("live") is False
+                or quote.get("freshness", "FRESH") != "FRESH"
+                or (
+                    isinstance(self.market, BybitRadar)
+                    and not 0 <= self.market.server_now() - quote["candle_end_ms"] <= int(tf[:-1]) * 60_000
+                )
+            ):
                 continue
-            key = (
-                f"last_alert:{snapshot.settings.bybit_category}:{symbol}:{snapshot.settings.signal_timeframe}"
-            )
+            key = f"last_alert:{category}:{symbol}:{tf}"
             sent = self.store.get_runtime(key, {})
-            legacy = self.store.get_runtime("legacy_baselines", {}).get(f"BYBIT:{symbol}", {})
+            legacy = (
+                self.store.get_runtime("legacy_baselines", {}).get(f"BYBIT:{symbol}", {})
+                if category == snapshot.settings.bybit_category
+                else {}
+            )
             last_alert = sent.get("at", legacy.get("last_alert", 0))
             if (
                 now - last_alert < snapshot.settings.cooldown_min * 60
@@ -365,9 +435,11 @@ class Controller:
             try:
                 await context.bot.send_message(
                     self.infrastructure.delivery_chat_id,
-                    quote_text(symbol, quote, snapshot.settings)
+                    quote_text(
+                        symbol, quote, snapshot.settings.changed(bybit_category=category, signal_timeframe=tf)
+                    )
                     + f"\nSettings revision: {snapshot.revision}",
-                    reply_markup=alert_keyboard(symbol, snapshot.settings.bybit_category),
+                    reply_markup=alert_keyboard(symbol, category),
                 )
             except TelegramError as exc:
                 self.store.put_runtime(
@@ -387,7 +459,13 @@ class Controller:
 
     async def heartbeat(self, context: ContextTypes.DEFAULT_TYPE) -> None:
         self.store.put_runtime(
-            "heartbeat", {"at": time.time(), "revision": self.infrastructure.source_revision}
+            "heartbeat",
+            {
+                "at": time.time(),
+                "revision": self.infrastructure.source_revision,
+                "components_healthy": not isinstance(self.market, BybitRadar)
+                or self.market.components_healthy(),
+            },
         )
 
 
@@ -407,6 +485,8 @@ def application(controller: Controller) -> Application[Any, Any, Any, Any, Any, 
         controller.store.put_runtime(
             "heartbeat", {"at": time.time(), "revision": controller.infrastructure.source_revision}
         )
+        if isinstance(controller.market, BybitRadar):
+            await controller.market.start()
 
     async def shutdown(app: Application[Any, Any, Any, Any, Any, Any]) -> None:
         await controller.market.close()

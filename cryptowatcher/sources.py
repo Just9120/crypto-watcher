@@ -100,7 +100,11 @@ class Sources:
         window = self.windows[stream]
         previous = max(window, default=-1)
         writes = []
+        incoming: dict[int, Candle] = {}
         for candle in candles:
+            if candle.start in incoming and incoming[candle.start].row() != candle.row():
+                raise MarketError("conflicting_recovery_candle")
+            incoming[candle.start] = candle
             existing = window.get(candle.start)
             if existing and existing.row() != candle.row() and not recovery:
                 self.blocked[stream] = "conflicting_closed_candle"

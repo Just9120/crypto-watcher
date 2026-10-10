@@ -59,3 +59,21 @@ python -m cryptowatcher backup --database PATH_TO_DB --destination PATH_TO_NEW_B
 Legacy source и archived other chats автоматически не удаляются. G1 backup names уникальны; housekeeping manual до measured policy. Согласованные 90-day candles и permanent referenced event inputs относятся к будущей history schema, не к удалению JSON/backups.
 
 До new-runtime write можно восстановить прежний application с сохранённым JSON по approved sequence. После write legacy JSON отстаёт от SQLite: blind rollback приложения теряет новые settings/runtime. Нужен compatible schema1 rollback или forward-fix; DB restore поверх live данных требует отдельного scoped approval и writer quiescence. Наличие файла `.bak` само по себе не подтверждает пригодность восстановления.
+
+## G2A source record contract
+
+Physical SQLite user_version1 не меняется. Логически независимые record families существуют в key/value `runtime`, owner settings и delivery preferences остаются в своих таблицах. Index по primary key поддерживает prefix range + ORDER BY key DESC LIMIT256; source keys имеют padded start timestamp, поэтому не требуется читать всю историю для detector window.
+
+| Namespace | Значение |
+| --- | --- |
+| source:v1:metadata:market/symbol | Validated instrument metadata, classification version, server timestamp |
+| source:v1:quarantine:market/symbol | Exclusion reason/version/time; quarantine не становится eligible universe |
+| source:v1:candle:market/symbol/TF:start | Closed OHLCV/turnover, interval/start, source, exchange/receipt times; quote units USDT |
+| source:v1:gap:market/symbol/TF | Durable start/end historical recovery cursor и PENDING/COMPLETE |
+| ingestion | Actual source/market errors, subscription acknowledgements, TF, pending/buffer diagnostics |
+
+Native свечи закрыты по confirm=true либо REST exchange time. Historical/bootstrap/recovered записи сохраняются, но live eligibility — process-local и после restart пуста. Cached window≤256; остальные rows остаются в DB. Online backup schema1 включает все source namespaces. 90-day raw retention/protected event snapshots вводятся в G3; owner/import/backup data автоматически не удаляются.
+
+Settings дополняются typed `watchlist` и `watchlist_multiplier` (default0.75). Отсутствующие fields старой schema1 принимают defaults без переписывания сохранённого owner record; legacy custom_pairs остаются исходным migration evidence и fallback выбранного рынка. Новый список содержит spot/symbol либо linear/symbol; explicit clear очищает оба representations, empty list не получает seed. Legacy JSON watchlist остаётся untyped alias при import, не интерпретируется как новый field. Saved numeric thresholds не заменяются preset. Typed mutes имеют market/symbol; сохранённые legacy symbol mutes действуют только на selected legacy category.
+
+После записи новых owner fields приложение G1 не поддерживает typed payload: автоматического rollback на G1 нет, recovery — forward-fix либо проверенная compatible G2A revision. DB schema downgrade/restore поверх live data не выполняется. Новая versioned physical schema, если понадобится следующим Goals, требует своей явной delivery classification, NONE не подменяет migration gate.

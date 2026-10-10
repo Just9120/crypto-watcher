@@ -20,12 +20,14 @@ def market_label(settings: OwnerSettings) -> str:
 def settings_text(snapshot: Snapshot) -> str:
     s = snapshot.settings
     return (
-        f"⚙️ Bybit {market_label(s)} · composite\n"
-        f"Режим: {'Top 100' if s.alert_universe_mode == 'top' else 'Мой список'}\n"
-        f"Проверка рынка: {s.radar_poll_sec}s\nТаймфрейм сигнала: {s.signal_timeframe}\n"
+        f"⚙️ Bybit Spot USDT + USDT Perpetual · composite\n"
+        f"Режим: {'Широкий universe' if s.alert_universe_mode == 'top' else 'Мой список'}\n"
+        f"Проверка сигналов: {s.radar_poll_sec}s\nStreams: 1m/3m/5m/15m одновременно\n"
+        f"Карточка/пример: {market_label(s)} · {s.signal_timeframe}\n"
         f"Движение цены: ≥ {s.price_move_min:g}%\nСпайк оборота: ≥ x{s.turnover_spike_min:g}\n"
         f"Ликвидность 24ч: ≥ {s.liquidity_floor_24h:,.0f} USDT\nSMA periods: {s.sma_periods}\n"
         f"Все три условия выполняются одновременно.\nCooldown: {s.cooldown_min}min\n"
+        f"Watchlist sensitivity multiplier: {s.watchlist_multiplier:g}\n"
         f"Configuration revision: {snapshot.revision}"
     )
 
@@ -34,7 +36,7 @@ def menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         [
             ["📊 Статус", "⚙️ Настройки"],
-            ["Радар: Top 100", "Радар: Мой список"],
+            ["Радар: Universe", "Радар: Мой список"],
             ["Список", "Добавить монету"],
             ["Удалить монету", "Очистить список"],
             ["🔔 Alerts", "🔕 Mutes"],
@@ -50,7 +52,7 @@ def settings_keyboard(snapshot: Snapshot) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     groups = (
         ("Проверка рынка", "rdr", (60, 90, 120, 180), s.radar_poll_sec),
-        ("Таймфрейм сигнала", "sgtf", TIMEFRAMES, s.signal_timeframe),
+        ("Таймфрейм карточки (все streams активны)", "sgtf", TIMEFRAMES, s.signal_timeframe),
         ("Движение цены (%)", "pm", (1.0, 1.5, 2.0, 3.0), s.price_move_min),
         ("Спайк оборота (x)", "sp", (2.0, 3.0, 4.0, 5.0), s.turnover_spike_min),
         (
@@ -99,10 +101,10 @@ def alert_keyboard(symbol: str, category: str) -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton(f"Bybit {symbol}", url=trade_url(symbol, category))],
             [
-                InlineKeyboardButton("🔕 1h", callback_data=f"al:mute:BYBIT:{symbol}:3600"),
-                InlineKeyboardButton("🔕 24h", callback_data=f"al:mute:BYBIT:{symbol}:86400"),
+                InlineKeyboardButton("🔕 1h", callback_data=f"al:mute:BYBIT:{category}:{symbol}:3600"),
+                InlineKeyboardButton("🔕 24h", callback_data=f"al:mute:BYBIT:{category}:{symbol}:86400"),
             ],
-            [InlineKeyboardButton("Монета", callback_data=f"al:coin:BYBIT:{symbol}")],
+            [InlineKeyboardButton("Монета", callback_data=f"al:coin:BYBIT:{category}:{symbol}")],
         ]
     )
 
@@ -150,9 +152,13 @@ def status_text(snapshot: Snapshot, result: RadarResult, enabled: bool) -> str:
         :12
     ]
     for symbol, q in ranked:
-        s = snapshot.settings
+        s = (
+            OwnerSettings.from_payload(q["effective_settings"])
+            if "effective_settings" in q
+            else snapshot.settings
+        )
         text += (
-            f"\n{symbol}\nДвижение цены ({s.signal_timeframe}): {q['price_change_tf']:+.2f}% "
+            f"\n{symbol} · {q.get('freshness', 'N/A')}\nДвижение цены ({q['signal_timeframe']}): {q['price_change_tf']:+.2f}% "
             f"{'✅' if abs(q['price_change_tf']) >= s.price_move_min else '❌'}\n"
             f"Спайк оборота: x{q['turnover_spike_ratio']:.2f} "
             f"{'✅' if q['turnover_spike_ratio'] >= s.turnover_spike_min else '❌'}\n"
@@ -171,7 +177,9 @@ TERMS = (
     "Оборот — объём в USDT; объём в базовом asset имеет другую единицу.\n"
     "Спайк — оборот текущей закрытой свечи / средний оборот предыдущих candles.\n"
     "Ликвидность — оборот инструмента за 24 часа.\n"
-    "TF определяет размер свечи, проверка рынка — частоту REST polling.\n"
+    "TF определяет размер свечи; 1m/3m/5m/15m поступают одновременно через WebSocket.\n"
+    "Проверка сигналов — отдельная cadence, selected TF/market выбирают карточку.\n"
+    "Universe основан на metadata/liquidity; watchlist имеет market identity и отдельный multiplier.\n"
     "Положительное/отрицательное движение описывает рынок.\n"
     "Radar не даёт торговых полномочий и не использует trading API credentials."
 )

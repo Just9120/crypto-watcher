@@ -41,7 +41,10 @@ def normalize_pair(raw: str) -> str:
 
 def instrument_key(raw: str, default_market: str = "spot") -> str:
     parts = raw.strip().split("/", 1)
-    market, symbol = parts if len(parts) == 2 else (default_market, parts[0])
+    if len(parts) == 2 and parts[1].upper() == "USDT":
+        market, symbol = default_market, raw
+    else:
+        market, symbol = parts if len(parts) == 2 else (default_market, parts[0])
     market = market.lower()
     if market not in ("spot", "linear"):
         raise ConfigError("Invalid instrument market")

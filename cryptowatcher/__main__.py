@@ -91,7 +91,10 @@ def main() -> int:
                     )
                     return 0
                 if args.command == "health":
-                    alive = 0 <= time.time() - heartbeat.get("at", 0) <= 120
+                    alive = (
+                        0 <= time.time() - heartbeat.get("at", 0) <= 120
+                        and heartbeat.get("components_healthy") is not False
+                    )
                     print(json.dumps({"live": alive, "source_revision": heartbeat.get("revision", "UNSET")}))
                     return 0 if alive else 1
                 if args.command == "backup":
@@ -109,6 +112,7 @@ def main() -> int:
                                 "telegram_delivery": store.get_runtime(
                                     "telegram_delivery", {"state": "PENDING"}
                                 ),
+                                "ingestion": store.get_runtime("ingestion", {"state": "PENDING"}),
                             }
                         )
                     )
@@ -128,13 +132,13 @@ def main() -> int:
             )
             return 0
         from .bot import Controller, application
-        from .market import BybitREST
+        from .ingestion import BybitRadar
 
         with RuntimeLease(infrastructure.database):
             store = Store(infrastructure.database, infrastructure.owner_id)
             try:
                 store.initialize(infrastructure.defaults, legacy=infrastructure.legacy_state)
-                controller = Controller(infrastructure, store, BybitREST())
+                controller = Controller(infrastructure, store, BybitRadar(store))
                 application(controller).run_polling()
             finally:
                 store.close()

@@ -2,7 +2,7 @@
 
 Deterministic radar Bybit для владельца в Telegram. Согласованный результат — Spot USDT и USDT Perpetual, четыре одновременных TF, пять detectors, episodes/history/outcomes и advisory context для отдельного trading agent. Radar не исполняет ордера и не вызывает LLM.
 
-Текущая G1 сохраняет composite и owner controls: Top100/custom, один selected `1m/3m/5m/15m`, настройки без restart, mutes и alerts toggle. Первая production migration в SQLite и запуск G1 подтверждены; оставшиеся delivery gates и подсистемы указаны в [плане](docs/open_issues.md).
+G2A обрабатывает широкий metadata/liquidity universe обоих рынков и native `1m/3m/5m/15m` одновременно через public WebSocket. Composite и custom thresholds сохранены. Telegram управляет typed watchlist, sensitivity, settings без restart, market-specific mutes и alerts toggle. Статусы поставки и остальных подсистем — в [плане](docs/open_issues.md).
 
 ## Документация
 
@@ -15,7 +15,7 @@ Deterministic radar Bybit для владельца в Telegram. Согласо�
 
 ## Stack и установка
 
-Target runtime: Python 3.11/Linux; PTB20.8 с job queue, HTTPx async и стандартный SQLite. Lockfiles с hashes генерируются uv для Python3.11; `requirements.in` / `requirements-dev.in` — inputs, соответствующие `.txt` — canonical installation locks. Нужны только Telegram Bot API и public Bybit endpoints; Redis/DB server не требуются. Tests используют disposable fixtures и mocked adapters, без API tokens и сети.
+Target runtime: Python 3.11/Linux; PTB20.8 с job queue, HTTPx async, websockets17.1 и стандартный SQLite. Lockfiles с hashes генерируются uv для Python3.11; `requirements.in` / `requirements-dev.in` — inputs, соответствующие `.txt` — canonical installation locks. Нужны только Telegram Bot API и public Bybit endpoints; Redis/DB server не требуются. Tests используют disposable fixtures и mocked adapters, без API tokens и сети.
 
 Команды выполняются из root repository. Создать virtual environment:
 
@@ -67,9 +67,9 @@ python -m ruff format .
 
 ## Telegram controls
 
-Постоянная клавиатура: status/settings, Top100/custom, список/add/remove/clear, alerts, mutes, terms и diagnostics. Settings показывают actual thresholds/TF/revision; значения меняются presets либо `/set price_move_min 2.5`. `/setlist BTC,ETH`, `/mute BTC 60`, `/unmute BTC`, `/unmute all` сохраняются. `/alerts on|off` управляет доставкой; расчёт рынка продолжается. No-op buttons не создают ошибку. `/sample_alert` показывает пример. Старые CMC/reset callbacks возвращают сообщение об изменении.
+Постоянная клавиатура: status/settings, universe/custom, список/add/remove/clear, alerts, mutes, terms и diagnostics. Settings показывают actual thresholds/revision и TF карточки; realtime1m/3m/5m/15m активны одновременно; значения меняются presets либо `/set price_move_min 2.5`. `/setlist spot/BTC,linear/ETH`, `/mute linear/BTC 60`, `/unmute linear/BTC`, `/unmute all` сохраняются. Bare symbol выбирает рынок карточки. Неизвестный/запрещённый или недостаточно ликвидный instrument отклоняется без изменения списка. Watchlist multiplier меняется через `/set watchlist_multiplier 0.75`; он применяется к price/spike thresholds, liquidity eligibility сохраняется. Invalid effective spike threshold≤1 даёт диагностируемое отсутствие расчёта; значения не подменяются. `/alerts on|off` управляет доставкой; расчёт рынка продолжается. No-op buttons не создают ошибку. `/sample_alert` показывает пример. Старые CMC/reset callbacks возвращают сообщение об изменении.
 
-Composite использует `100 × (close / previous_close − 1)`, оборот закрытой свечи / среднее предыдущих SMA periods и ticker turnover24h. Все три threshold comparisons включают equality. Bybit response clock определяет closure; invalid/gapped windows показываются как неполные. TF и polling cadence различны. Широкий eligible universe, concurrent TF и episode freshness остаются G2A/G2B.
+Composite использует `100 × (close / previous_close − 1)`, оборот закрытой свечи / среднее предыдущих SMA periods и ticker turnover24h. Все три threshold comparisons включают equality. REST использует Bybit response clock, WebSocket — confirm=true и candle boundaries. Invalid/gapped windows ограничивают calculation до восстановления. Source timestamps и freshness не обновляются receipt/retry; stale и historical sources не доставляются как live alerts. TF карточки и notification cadence различны. Episodes и detector-specific freshness развиваются в G2B.
 
 ## Docker и delivery
 
@@ -83,3 +83,11 @@ python scripts/image_checks.py cryptowatcher:local 00000000000000000000000000000
 ```
 
 Production secrets не входят в image/context/logs. SQLite migration и SSH credential bootstrap выполняются по concrete gated procedure. [Одноразовое подключение CD](docs/runbooks/delivery.md#одноразовое-подключение-cd) скачивает проверенные scripts непосредственно на VPS и сохраняет существующий SSH access. Последующие eligible merges доставляются автоматически без ручного переноса файлов; unit trading agent не меняется.
+
+## Ingestion и диагностика
+
+Metadata refresh10min, liquidity refresh5min, REST budget5req/s/concurrency4, heartbeat20s, reconnect1–60s с jitter. Spot discovery не имеет pagination; linear проходит весь cursor. Eligibility учитывает Trading/USDT/settlement/perpetual/prelisting, известные crypto types и versioned tokenized-gold exclusions; unknown special types quarantined. Ни fixed Top100, ни symbol suffix не определяют eligible universe.
+
+Native closed candles сохраняются в общей SQLite, memory window≤256 на active stream. Bootstrap получает256 closed bars; gaps приоритетно восстанавливают текущий window, затем older missing history постранично без live alerts. Cursor переживает restart; optional historical work не опережает current recovery. Initial bootstrap progressive: status показывает actual available/requested и причины ограничений. CLI diagnostics включает metadata counts/quarantine/acks/TF/buffers/pending/gaps. Новые subscribers проверяются только по validated metadata/liquidity.
+
+Raw candle retention90days и permanent event/outcome source protection завершаются в G3; автоматического удаления event inputs сейчас нет. Перед длительной эксплуатацией capacity/backup housekeeping проверяется по реальным measurements в G6.
