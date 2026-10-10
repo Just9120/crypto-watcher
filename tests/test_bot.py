@@ -108,9 +108,9 @@ async def test_sample_uses_active_settings_and_preserves_alert_controls(controll
     buttons = [button for row in reply.kwargs["reply_markup"].inline_keyboard for button in row]
     assert [button.url for button in buttons if button.url] == [url]
     assert {button.callback_data for button in buttons if button.callback_data} == {
-        "al:mute:BYBIT:SOLUSDT:3600",
-        "al:mute:BYBIT:SOLUSDT:86400",
-        "al:coin:BYBIT:SOLUSDT",
+        f"al:mute:BYBIT:{category}:SOLUSDT:3600",
+        f"al:mute:BYBIT:{category}:SOLUSDT:86400",
+        f"al:coin:BYBIT:{category}:SOLUSDT",
     }
     assert controller.store.snapshot() == before
     assert controller.store.db.total_changes == changes
@@ -199,7 +199,9 @@ async def test_mute_and_delivery_off_keep_market_calculation(controller):
     controller.market.snapshot.assert_awaited_once()
     context.bot.send_message.assert_not_awaited()
     await controller.handle(update("/alerts on"), None)
-    await controller.handle(update(callback="al:mute:BYBIT:BTCUSDT:3600"), None)
+    legacy = update(callback="al:mute:BYBIT:BTCUSDT:3600")
+    legacy.callback_query.message = SimpleNamespace(text="BTCUSDT · Spot USDT")
+    await controller.handle(legacy, None)
     controller.store.put_runtime("last_poll_ts", 0)
     await controller.poll(context)
     context.bot.send_message.assert_not_awaited()

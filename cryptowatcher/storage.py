@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .config import ConfigError, OwnerSettings, normalize_pair, number
+from .config import ConfigError, OwnerSettings, instrument_key, normalize_pair, number
 
 SCHEMA_VERSION = 1
 
@@ -62,7 +62,8 @@ def read_legacy(path: Path) -> tuple[dict[str, Any], bytes, str]:
 def _legacy_settings(raw: dict[str, Any], defaults: OwnerSettings) -> OwnerSettings:
     values = defaults.payload()
     for field in OwnerSettings.__dataclass_fields__:
-        if field in raw:
+        # Legacy "watchlist" is an untyped alias, not the new market-identity field.
+        if field in raw and field not in ("watchlist", "watchlist_multiplier"):
             values[field] = raw[field]
     if "custom_pairs" in raw:
         pairs = raw["custom_pairs"]
@@ -212,7 +213,7 @@ class Store:
         return bool(row and row[0] > now)
 
     def mute(self, symbol: str, until: float) -> None:
-        symbol = normalize_pair(symbol)
+        symbol = instrument_key(symbol) if "/" in symbol else normalize_pair(symbol)
         if not math.isfinite(until) or until < 0:
             raise ConfigError("Invalid mute duration")
         with self.db:

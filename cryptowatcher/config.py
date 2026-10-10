@@ -39,11 +39,25 @@ def normalize_pair(raw: str) -> str:
     return pair
 
 
+def instrument_key(raw: str, default_market: str = "spot") -> str:
+    parts = raw.strip().split("/", 1)
+    if len(parts) == 2 and parts[1].upper() == "USDT":
+        market, symbol = default_market, raw
+    else:
+        market, symbol = parts if len(parts) == 2 else (default_market, parts[0])
+    market = market.lower()
+    if market not in ("spot", "linear"):
+        raise ConfigError("Invalid instrument market")
+    return f"{market}/{normalize_pair(symbol)}"
+
+
 @dataclass(frozen=True)
 class OwnerSettings:
     bybit_category: str = "spot"
     alert_universe_mode: str = "top"
     custom_pairs: tuple[str, ...] = ()
+    watchlist: tuple[str, ...] = ()
+    watchlist_multiplier: float = 0.75
     signal_timeframe: str = "5m"
     price_move_min: float = 2.0
     turnover_spike_min: float = 3.0
@@ -70,6 +84,16 @@ class OwnerSettings:
             raise ConfigError("Invalid custom_pairs")
         if len(set(self.custom_pairs)) != len(self.custom_pairs):
             raise ConfigError("Duplicate custom_pairs")
+        if not isinstance(self.watchlist, tuple) or any(
+            not isinstance(x, str) or instrument_key(x) != x for x in self.watchlist
+        ):
+            raise ConfigError("Invalid watchlist")
+        if len(set(self.watchlist)) != len(self.watchlist):
+            raise ConfigError("Duplicate watchlist")
+        number(self.watchlist_multiplier, "watchlist_multiplier")
+
+    def instruments(self) -> tuple[str, ...]:
+        return self.watchlist or tuple(instrument_key(x, self.bybit_category) for x in self.custom_pairs)
 
     def payload(self) -> dict[str, Any]:
         return asdict(self)
@@ -82,14 +106,15 @@ class OwnerSettings:
         if set(values) - set(fields):
             raise ConfigError("Unknown owner settings field")
         parsed = dict(values)
-        if "custom_pairs" in parsed:
-            if not isinstance(parsed["custom_pairs"], (list, tuple)):
-                raise ConfigError("Invalid custom_pairs")
-            parsed["custom_pairs"] = tuple(parsed["custom_pairs"])
+        for key in ("custom_pairs", "watchlist"):
+            if key in parsed:
+                if not isinstance(parsed[key], (list, tuple)):
+                    raise ConfigError(f"Invalid {key}")
+                parsed[key] = tuple(parsed[key])
         for key in ("radar_poll_sec", "cooldown_min", "sma_periods"):
             if key in parsed:
                 parsed[key] = int(number(parsed[key], key, integer=True))
-        for key in ("price_move_min", "turnover_spike_min", "liquidity_floor_24h"):
+        for key in ("price_move_min", "turnover_spike_min", "liquidity_floor_24h", "watchlist_multiplier"):
             if key in parsed:
                 parsed[key] = number(parsed[key], key)
         return cls(**parsed)
