@@ -1,3 +1,4 @@
+import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -72,6 +73,64 @@ async def test_owner_control_deck_list_mutations_and_restart(controller):
         assert reopened.snapshot().settings.custom_pairs == ()
     finally:
         reopened.close()
+
+
+@pytest.mark.parametrize(
+    ("category", "timeframe", "url"),
+    [
+        ("spot", "1m", "https://www.bybit.com/trade/spot/SOL/USDT"),
+        ("linear", "15m", "https://www.bybit.com/trade/usdt/SOLUSDT"),
+    ],
+)
+async def test_sample_uses_active_settings_and_preserves_alert_controls(controller, category, timeframe, url):
+    controller.change(
+        bybit_category=category,
+        signal_timeframe=timeframe,
+        price_move_min=7,
+        turnover_spike_min=6,
+        liquidity_floor_24h=20_000_000,
+        sma_periods=20,
+    )
+    before = controller.store.snapshot()
+    changes = controller.store.db.total_changes
+    message = update("/sample_alert")
+    await controller.handle(message, None)
+    reply = message.effective_message.reply_text.call_args
+    text = reply.args[0]
+    assert "Пример алерта" in text and "Демонстрационные данные" in text
+    assert f"TF {timeframe} · +7.3%" in text
+    assert "Спайк оборота: x6.2" in text
+    assert "Оборот 24ч: 20,000,000.0 USDT" in text
+    assert "Средний оборот (20 candles)" in text
+    assert "≥ 7%, ≥ x6, ≥ 20,000,000 USDT" in text
+    assert f"Configuration revision: {before.revision}" in text
+    assert ("Spot USDT" if category == "spot" else "USDT Perpetual") in text
+    buttons = [button for row in reply.kwargs["reply_markup"].inline_keyboard for button in row]
+    assert [button.url for button in buttons if button.url] == [url]
+    assert {button.callback_data for button in buttons if button.callback_data} == {
+        "al:mute:BYBIT:SOLUSDT:3600",
+        "al:mute:BYBIT:SOLUSDT:86400",
+        "al:coin:BYBIT:SOLUSDT",
+    }
+    assert controller.store.snapshot() == before
+    assert controller.store.db.total_changes == changes
+    controller.market.snapshot.assert_not_awaited()
+
+
+async def test_sample_accepts_finite_extremes_without_overflow(controller):
+    from cryptowatcher.render import sample_alert_text
+
+    controller.change(
+        price_move_min=sys.float_info.max,
+        turnover_spike_min=sys.float_info.max,
+        liquidity_floor_24h=sys.float_info.max,
+    )
+    # The old sample's liquidity multiplier overflowed valid finite settings.
+    text = sample_alert_text(controller.store.snapshot())
+    assert "inf" not in text.lower() and "nan" not in text.lower()
+    message = update("/sample_alert")
+    await controller.handle(message, None)
+    assert message.effective_message.reply_text.call_args.kwargs["reply_markup"] is not None
 
 
 async def test_noop_and_message_not_modified_are_quiet(controller):
