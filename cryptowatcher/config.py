@@ -9,6 +9,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from .detector_config import FAMILIES, effective_parameters, preset, validate_parameters
+
 TIMEFRAMES = ("1m", "3m", "5m", "15m")
 
 
@@ -65,6 +67,9 @@ class OwnerSettings:
     radar_poll_sec: int = 90
     cooldown_min: int = 10
     sma_periods: int = 12
+    profile: str = "custom"
+    detector_parameters: tuple[tuple[str, float], ...] = ()
+    alert_detectors: tuple[str, ...] = ("composite",)
 
     def __post_init__(self) -> None:
         if self.bybit_category not in ("spot", "linear"):
@@ -91,6 +96,24 @@ class OwnerSettings:
         if len(set(self.watchlist)) != len(self.watchlist):
             raise ConfigError("Duplicate watchlist")
         number(self.watchlist_multiplier, "watchlist_multiplier")
+        if self.profile not in ("custom", "normal", "conservative", "sensitive"):
+            raise ConfigError("Invalid sensitivity profile")
+        if not isinstance(self.detector_parameters, tuple) or any(
+            not isinstance(p, tuple) for p in self.detector_parameters
+        ):
+            raise ConfigError("Invalid immutable detector parameters")
+        try:
+            validate_parameters(self.detector_parameters)
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
+        if self.profile != "custom" and dict(self.detector_parameters) != dict(preset(self.profile)):
+            raise ConfigError("Profile parameters do not match preset")
+        if (
+            not isinstance(self.alert_detectors, tuple)
+            or any(not isinstance(x, str) or x not in FAMILIES for x in self.alert_detectors)
+            or len(set(self.alert_detectors)) != len(self.alert_detectors)
+        ):
+            raise ConfigError("Invalid alert_detectors")
 
     def instruments(self) -> tuple[str, ...]:
         return self.watchlist or tuple(instrument_key(x, self.bybit_category) for x in self.custom_pairs)
@@ -106,11 +129,16 @@ class OwnerSettings:
         if set(values) - set(fields):
             raise ConfigError("Unknown owner settings field")
         parsed = dict(values)
-        for key in ("custom_pairs", "watchlist"):
+        for key in ("custom_pairs", "watchlist", "alert_detectors"):
             if key in parsed:
                 if not isinstance(parsed[key], (list, tuple)):
                     raise ConfigError(f"Invalid {key}")
                 parsed[key] = tuple(parsed[key])
+        if "detector_parameters" in parsed:
+            try:
+                parsed["detector_parameters"] = validate_parameters(parsed["detector_parameters"])
+            except ValueError as exc:
+                raise ConfigError(str(exc)) from exc
         for key in ("radar_poll_sec", "cooldown_min", "sma_periods"):
             if key in parsed:
                 parsed[key] = int(number(parsed[key], key, integer=True))
@@ -120,7 +148,29 @@ class OwnerSettings:
         return cls(**parsed)
 
     def changed(self, **changes: Any) -> OwnerSettings:
+        if self.detector_parameters and "detector_parameters" not in changes:
+            parameters = dict(self.detector_parameters)
+            if "price_move_min" in changes:
+                parameters.update({f"price_{tf}": changes["price_move_min"] for tf in TIMEFRAMES})
+            if "turnover_spike_min" in changes:
+                parameters["turnover_ratio"] = changes["turnover_spike_min"]
+            if "sma_periods" in changes:
+                parameters["turnover_lookback"] = changes["sma_periods"]
+            if any(k in changes for k in ("price_move_min", "turnover_spike_min", "sma_periods")):
+                changes.update(profile="custom", detector_parameters=tuple(parameters.items()))
         return OwnerSettings.from_payload({**self.payload(), **changes})
+
+    def with_profile(self, name: str) -> OwnerSettings:
+        try:
+            values = preset(name)
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
+        return self.changed(profile=name, detector_parameters=values)
+
+    def with_parameter(self, key: str, value: Any) -> OwnerSettings:
+        parameters = effective_parameters(self)
+        parameters[key] = value
+        return self.changed(profile="custom", detector_parameters=tuple(parameters.items()))
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> OwnerSettings:

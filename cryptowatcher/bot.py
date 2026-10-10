@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+import uuid
 from typing import Any
 
 from telegram import BotCommand, BotCommandScopeChat, Update
@@ -26,13 +27,21 @@ from .config import (
     normalize_pair,
     number,
 )
+from .detector_config import FAMILIES, PARAMETERS
+from .events import EventEngine, History
 from .ingestion import BybitRadar
 from .market import BybitREST, MarketError
 from .render import (
     SAMPLE_SYMBOL,
     TERMS,
     alert_keyboard,
+    detectors_keyboard,
+    event_keyboard,
+    event_text,
+    history_keyboard,
     menu,
+    notification_text,
+    profiles_keyboard,
     quote_text,
     sample_alert_text,
     settings_keyboard,
@@ -40,6 +49,7 @@ from .render import (
     status_text,
 )
 from .storage import RevisionConflict, Store
+from .telegram_delivery import TelegramDelivery
 
 logger = logging.getLogger(__name__)
 COMMANDS = {
@@ -53,7 +63,7 @@ COMMANDS = {
     "addcoin": "Добавить монету",
     "removecoin": "Удалить монету",
     "clearlist": "Очистить список",
-    "radar_top": "Top100",
+    "radar_top": "Широкий universe",
     "radar_custom": "Мой список",
     "sample_alert": "Пример alert",
     "mute": "Отключить alerts монеты",
@@ -61,6 +71,11 @@ COMMANDS = {
     "alerts": "Включить/выключить alerts",
     "set": "Ручная настройка",
     "diagnostics": "Диагностика",
+    "profiles": "Sensitivity profiles",
+    "profile": "Выбрать profile",
+    "detectors": "Telegram detectors",
+    "history": "История событий",
+    "event": "Сохранённое событие",
     "resetbase": "Устаревшее действие",
     "resetallbase": "Устаревшее действие",
 }
@@ -78,17 +93,20 @@ MENU_ACTIONS = {
     "🔔 Alerts": "alerts",
     "🔕 Mutes": "mutes",
     "Диагностика": "diagnostics",
+    "Detectors": "detectors",
+    "Profiles": "profiles",
+    "История": "history",
 }
 MANUAL_FIELDS = {
     "watchlist_multiplier",
     "signal_timeframe",
     "radar_poll_sec",
-    "cooldown_min",
     "price_move_min",
     "turnover_spike_min",
     "liquidity_floor_24h",
     "sma_periods",
 }
+MANUAL_FIELDS.update(PARAMETERS)
 
 
 class Controller:
@@ -96,6 +114,24 @@ class Controller:
         self.infrastructure = infrastructure
         self.store = store
         self.market = market
+        self.history = History(store)
+        self.engine = (
+            EventEngine(store, source_revision=infrastructure.source_revision)
+            if isinstance(market, BybitRadar)
+            else None
+        )
+        self.delivery = TelegramDelivery(
+            store,
+            infrastructure.delivery_chat_id,
+            notification_text,
+            event_keyboard,
+            self.engine.reconcile_notifications if self.engine else None,
+        )
+        if isinstance(market, BybitRadar) and self.engine is not None:
+            engine = self.engine
+            market.on_observation = lambda stream, candles, liquidity, tick, now, live: engine.observe(
+                stream, candles, liquidity, tick, now, live=live
+            )
 
     async def send(self, update: Update, text: str, markup: Any = None) -> None:
         message = update.effective_message
@@ -118,10 +154,12 @@ class Controller:
             "last_poll": self.store.get_runtime("last_poll_status", {"state": "PENDING"}),
             "telegram_delivery": self.store.get_runtime("telegram_delivery", {"state": "PENDING"}),
             "ingestion": self.store.get_runtime("ingestion", {"state": "PENDING"}),
+            "radar": self.history.diagnostics(),
             "capabilities": {
                 "composite": True,
                 "websocket": isinstance(self.market, BybitRadar),
-                "episodes": False,
+                "detectors": list(FAMILIES) if self.engine else ["composite"],
+                "episodes": self.engine is not None,
                 "outcomes": False,
                 "agent_delivery": False,
             },
@@ -227,7 +265,11 @@ class Controller:
                     update, "Формат: /set price_move_min 2.5. Поля: " + ", ".join(sorted(MANUAL_FIELDS))
                 )
                 return
-            self.change(**{parts[0]: parts[1]})
+            if parts[0] in PARAMETERS:
+                self.store.update(snapshot.revision, snapshot.settings.with_parameter(parts[0], parts[1]))
+                self.store.put_runtime("last_poll_ts", 0)
+            else:
+                self.change(**{parts[0]: parts[1]})
             await self.send(update, settings_text(self.store.snapshot()))
         elif command in ("mute", "unmute"):
             parts = raw.split()
@@ -252,6 +294,8 @@ class Controller:
                 raise ConfigError("Invalid alerts preference")
             enabled = raw.lower() == "on" if raw else not self.store.enabled()
             self.store.set_enabled(enabled)
+            if enabled:
+                self.delivery.resume()
             await self.send(update, f"Alerts {'ON' if enabled else 'OFF'}. Расчёт рынка продолжается.")
         elif command in ("resetbase", "resetallbase"):
             await self.send(
@@ -260,6 +304,46 @@ class Controller:
             )
         elif command == "diagnostics":
             await self.send(update, json.dumps(self.diagnostics(), ensure_ascii=False, indent=2))
+        elif command in ("profiles", "profile"):
+            if command == "profile" and raw:
+                self.store.update(snapshot.revision, snapshot.settings.with_profile(raw.strip().lower()))
+                self.store.put_runtime("last_poll_ts", 0)
+            await self.send(update, settings_text(self.store.snapshot()), profiles_keyboard())
+        elif command == "detectors":
+            await self.send(
+                update,
+                "Все пять families сохраняют history. Кнопки выбирают Telegram alerts; новые families изначально silent.\n"
+                + settings_text(snapshot),
+                detectors_keyboard(snapshot),
+            )
+        elif command == "history":
+            events = self.history.events(12)
+            await self.send(
+                update,
+                "Последние сохранённые события, включая historical/suppressed и muted observations.\n"
+                + "\n".join(
+                    f"{e['symbol']} · {e['market_type']} · {e['detector_id']} · {e['timeframe']} · {e['direction']} · strength {e['strength']:.2f}"
+                    for e in events
+                )
+                if events
+                else "История пока пуста.",
+                history_keyboard(events),
+            )
+        elif command == "event":
+            try:
+                event_id = str(uuid.UUID(raw.strip()))
+            except ValueError as exc:
+                raise ConfigError("Invalid event ID") from exc
+            event = self.history.get("event-head:" + event_id)
+            if event:
+                now_ms = (
+                    self.market.server_now()
+                    if isinstance(self.market, BybitRadar)
+                    else int(time.time() * 1000)
+                )
+                await self.send(update, event_text(event, now_ms), event_keyboard(event))
+            else:
+                await self.send(update, "Событие не найдено.")
         elif command == "sample_alert":
             await self.send(
                 update,
@@ -284,7 +368,22 @@ class Controller:
             return
         await query.answer()
         parts = str(query.data or "").split(":")
-        if parts[0] == "st":
+        if parts[0] == "deck" and len(parts) == 2 and parts[1] in ("profiles", "detectors"):
+            await self.command(update, parts[1])
+        elif parts[0] in ("profile", "event") and len(parts) == 2:
+            await self.command(update, parts[0], parts[1])
+        elif parts[0] == "detector" and len(parts) == 3:
+            if parts[1] not in FAMILIES or parts[2] not in ("on", "off"):
+                raise ConfigError("Invalid detector selection")
+            snapshot = self.store.snapshot()
+            selected = set(snapshot.settings.alert_detectors)
+            selected.add(parts[1]) if parts[2] == "on" else selected.discard(parts[1])
+            self.store.update(
+                snapshot.revision,
+                snapshot.settings.changed(alert_detectors=tuple(f for f in FAMILIES if f in selected)),
+            )
+            await self.command(update, "detectors")
+        elif parts[0] == "st":
             action = parts[1] if len(parts) > 1 else ""
             if action == "noop":
                 return
@@ -343,14 +442,17 @@ class Controller:
                 self.store.mute(identity, time.time() + duration)
                 await self.send(update, "Mute сохранён.")
             elif parts[1] == "coin":
-                result = await self.market.snapshot(
-                    snapshot.settings.changed(
+                card_settings = (
+                    snapshot.settings.changed(bybit_category=category)
+                    if isinstance(self.market, BybitRadar)
+                    else snapshot.settings.changed(
                         alert_universe_mode="custom",
                         custom_pairs=(),
                         watchlist=(identity,),
                         bybit_category=category,
                     )
                 )
+                result = await self.market.snapshot(card_settings)
                 quote = result.quotes.get(
                     f"{identity}/{snapshot.settings.signal_timeframe}", result.quotes.get(symbol)
                 )
@@ -399,6 +501,8 @@ class Controller:
                 "configuration_revision": snapshot.revision,
             },
         )
+        if self.engine is not None:
+            return  # Persisted observation producer and durable episode queue own live delivery.
         for item, quote in result.quotes.items():
             if self.store.snapshot().revision != snapshot.revision:
                 break
@@ -457,6 +561,15 @@ class Controller:
             )
             self.store.put_runtime("telegram_delivery", {"state": "DELIVERED", "at": time.time()})
 
+    async def deliver(self, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if self.engine is None or not isinstance(self.market, BybitRadar):
+            return
+        now_ms = self.market.server_now()
+        if now_ms <= 0:
+            return  # Establish exchange clock after restart before deciding pending expiry.
+        self.engine.tick(now_ms)
+        await self.delivery.send_due(context.bot, now_ms, clock=self.market.server_now)
+
     async def heartbeat(self, context: ContextTypes.DEFAULT_TYPE) -> None:
         self.store.put_runtime(
             "heartbeat",
@@ -509,4 +622,5 @@ def application(controller: Controller) -> Application[Any, Any, Any, Any, Any, 
         raise ConfigError("Telegram job-queue dependency missing")
     app.job_queue.run_repeating(controller.poll, interval=controller.infrastructure.engine_interval, first=1)
     app.job_queue.run_repeating(controller.heartbeat, interval=20, first=1)
+    app.job_queue.run_repeating(controller.deliver, interval=2, first=2)
     return app

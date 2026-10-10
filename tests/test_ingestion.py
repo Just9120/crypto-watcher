@@ -1,11 +1,13 @@
 import asyncio
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 from cryptowatcher.bot import Controller
 from cryptowatcher.config import TIMEFRAMES, OwnerSettings
+from cryptowatcher.events import History
 from cryptowatcher.ingestion import BybitRadar, shards, topic
 from cryptowatcher.market import MarketError
 from cryptowatcher.sources import Candle
@@ -369,3 +371,44 @@ async def test_reconnect_recovers_known_gap_even_when_latest_boundary_is_current
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         await radar.close()
+
+
+async def test_persisted_ws_producer_durable_delivery_no_legacy_double_send(radar, infrastructure):
+    controller = Controller(infrastructure, radar.store, radar)
+    stream = "spot/BTCUSDT/1m"
+    history_store = History(radar.store)
+    radar.accept_message("spot", message("1m", confirm=False), radar.streams)
+    assert not history_store.events()
+    radar.accept_message("spot", message("1m"), radar.streams)
+    events = history_store.events()
+    assert {e["detector_id"] for e in events} >= {"price", "turnover", "breakout", "composite"}
+    assert all(e["source_inputs"][-1]["start"] == NOW for e in events)
+    source_row = radar.store.get_runtime(radar.sources.prefix(stream) + f"{NOW:016d}")
+    assert source_row["source"] == "websocket"
+    before = radar.store.db.total_changes
+    radar.accept_message("spot", message("1m"), radar.streams)
+    assert radar.store.db.total_changes == before
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=8)))
+    await controller.poll(SimpleNamespace(bot=bot))
+    bot.send_message.assert_not_called()
+    radar.server_now = lambda: NOW + 62_001
+    await controller.deliver(SimpleNamespace(bot=bot))
+    bot.send_message.assert_awaited_once()
+    text = bot.send_message.call_args.args[1]
+    assert "composite v1" in text and "FRESH" in text and "Settings revision: 1" in text
+    assert "Причина: первое уведомление" in text and "Episode revision" in text
+    radar.sources.blocked[stream] = "candle_gap"
+    count = len(history_store.events())
+    radar.publish_observation(stream, live=True)
+    assert len(history_store.events()) == count
+    await radar.close()
+
+
+async def test_rest_bootstrap_history_never_queues_live(radar, infrastructure):
+    Controller(infrastructure, radar.store, radar)
+    radar._get = AsyncMock(return_value={"time": NOW, "result": {"list": history()}})
+    await radar.backfill("spot/BTCUSDT/1m")
+    saved = History(radar.store)
+    assert saved.events() and all(not e["live"] for e in saved.events())
+    assert not saved.items("pending:") and not saved.items("active:")
+    await radar.close()

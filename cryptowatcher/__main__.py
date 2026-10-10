@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 from . import __version__
 from .config import ConfigError, Infrastructure, OwnerSettings
+from .events import History
 from .lease import RuntimeLease
 from .logging_utils import configure_logging
 from .storage import StateError, Store, encode, migrate_legacy
@@ -113,6 +114,7 @@ def main() -> int:
                                     "telegram_delivery", {"state": "PENDING"}
                                 ),
                                 "ingestion": store.get_runtime("ingestion", {"state": "PENDING"}),
+                                "radar": History(store).diagnostics(),
                             }
                         )
                     )
