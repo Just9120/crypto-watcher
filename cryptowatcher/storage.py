@@ -1,0 +1,334 @@
+"""Single-writer SQLite state and non-destructive legacy import."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import os
+import sqlite3
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from .config import ConfigError, OwnerSettings, normalize_pair, number
+
+SCHEMA_VERSION = 1
+
+
+class StateError(RuntimeError):
+    pass
+
+
+class RevisionConflict(StateError):
+    pass
+
+
+def encode(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def _reject_constant(value: str) -> None:
+    raise StateError("Non-finite legacy JSON")
+
+
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise StateError("Duplicate legacy JSON key")
+        result[key] = value
+    return result
+
+
+def read_legacy(path: Path) -> tuple[dict[str, Any], bytes, str]:
+    try:
+        content = path.read_bytes()
+        raw = json.loads(content, parse_constant=_reject_constant, object_pairs_hook=_unique_object)
+    except (OSError, ValueError, UnicodeError) as exc:
+        raise StateError("Cannot read legacy state; original preserved") from exc
+    if not isinstance(raw, dict):
+        raise StateError("Invalid legacy state root")
+    version = raw.get("version")
+    if isinstance(version, bool) or version not in (None, 1, 2):
+        raise StateError("Unsupported legacy schema; original preserved")
+    if version == 2 and not isinstance(raw.get("chats"), dict):
+        raise StateError("Invalid legacy chats")
+    if version != 2 and not any(key in raw for key in ("chat_id", "settings", "baselines", "chats")):
+        raise StateError("Unrecognized legacy state")
+    return raw, content, hashlib.sha256(content).hexdigest()
+
+
+def _legacy_settings(raw: dict[str, Any], defaults: OwnerSettings) -> OwnerSettings:
+    values = defaults.payload()
+    for field in OwnerSettings.__dataclass_fields__:
+        if field in raw:
+            values[field] = raw[field]
+    if "custom_pairs" in raw:
+        pairs = raw["custom_pairs"]
+    else:
+        pairs = raw.get("bybit_pairs") or raw.get("watchlist") or []
+    if not isinstance(pairs, list) or any(not isinstance(x, str) for x in pairs):
+        raise StateError("Invalid legacy custom list")
+    values["custom_pairs"] = tuple(dict.fromkeys(normalize_pair(x) for x in pairs))
+    if "alert_universe_mode" not in raw:
+        limit = raw.get("bybit_top_limit", raw.get("cmc_top_limit"))
+        if limit is not None:
+            try:
+                if isinstance(limit, bool) or not float(limit).is_integer() or float(limit) < 0:
+                    raise ValueError
+                values["alert_universe_mode"] = "top" if int(limit) > 0 else "custom"
+            except (ValueError, TypeError, OverflowError) as exc:
+                raise StateError("Invalid legacy universe mode") from exc
+        else:
+            values["alert_universe_mode"] = "custom" if pairs else "top"
+    # The legacy contract explicitly uses 5m when persisted TF is absent.
+    values["signal_timeframe"] = raw.get("signal_timeframe", "5m")
+    try:
+        return OwnerSettings.from_payload(values)
+    except ConfigError as exc:
+        raise StateError(str(exc)) from exc
+
+
+@dataclass(frozen=True)
+class Snapshot:
+    revision: int
+    settings: OwnerSettings
+
+
+class Store:
+    def __init__(self, path: Path, owner_id: int, *, readonly: bool = False) -> None:
+        number(owner_id, "owner_id", integer=True)
+        self.path = path
+        self.owner_id = owner_id
+        self.readonly = readonly
+        if path.exists():
+            probe = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+            try:
+                version = probe.execute("PRAGMA user_version").fetchone()[0]
+                if version != SCHEMA_VERSION:
+                    raise StateError("Unsupported database schema; database preserved")
+                binding = probe.execute("SELECT owner_id FROM owner_settings").fetchone()
+                if binding is not None and binding[0] != owner_id:
+                    raise StateError("Database owner mismatch")
+            except sqlite3.DatabaseError as exc:
+                raise StateError("Invalid database; database preserved") from exc
+            finally:
+                probe.close()
+        elif readonly:
+            raise StateError("Database missing")
+        else:
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.db = sqlite3.connect(
+            f"{path.resolve().as_uri()}?mode=ro" if readonly else str(path),
+            uri=readonly,
+            timeout=5,
+        )
+        self.db.row_factory = sqlite3.Row
+        self.db.execute("PRAGMA foreign_keys=ON")
+        self.db.execute("PRAGMA busy_timeout=5000")
+        if not readonly:
+            self.db.execute("PRAGMA journal_mode=WAL")
+            self.db.execute("PRAGMA synchronous=FULL")
+            self.db.executescript("""
+                CREATE TABLE IF NOT EXISTS owner_settings (
+                    owner_id INTEGER PRIMARY KEY, revision INTEGER NOT NULL CHECK(revision>0),
+                    settings_json TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS delivery_preferences (
+                    chat_id INTEGER PRIMARY KEY, enabled INTEGER NOT NULL CHECK(enabled IN (0,1)));
+                CREATE TABLE IF NOT EXISTS mutes (
+                    symbol TEXT PRIMARY KEY, mute_until REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS runtime (
+                    key TEXT PRIMARY KEY, payload_json TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS legacy_import (
+                    source_sha256 TEXT PRIMARY KEY, original_json TEXT NOT NULL,
+                    backup_name TEXT NOT NULL);
+                PRAGMA user_version=1;
+            """)
+            if os.name != "nt":
+                path.chmod(0o600)
+
+    def close(self) -> None:
+        self.db.close()
+
+    def initialize(self, defaults: OwnerSettings, *, legacy: Path | None = None) -> None:
+        if self.db.execute("SELECT 1 FROM owner_settings").fetchone():
+            self.snapshot()  # Validate persisted values before any runtime writes.
+            return
+        if legacy is not None and legacy.exists():
+            raise StateError("Legacy state needs reviewed explicit migration")
+        with self.db:
+            self.db.execute(
+                "INSERT INTO owner_settings VALUES (?,1,?)", (self.owner_id, encode(defaults.payload()))
+            )
+            self.db.execute("INSERT INTO delivery_preferences VALUES (?,1)", (self.owner_id,))
+
+    def snapshot(self) -> Snapshot:
+        row = self.db.execute(
+            "SELECT revision,settings_json FROM owner_settings WHERE owner_id=?", (self.owner_id,)
+        ).fetchone()
+        if row is None:
+            raise StateError("Owner configuration missing")
+        try:
+            return Snapshot(
+                int(row["revision"]), OwnerSettings.from_payload(json.loads(row["settings_json"]))
+            )
+        except (ValueError, TypeError) as exc:
+            raise StateError("Invalid persisted owner configuration") from exc
+
+    def update(self, expected_revision: int, settings: OwnerSettings) -> Snapshot:
+        # Revalidate even objects supplied by an internal caller.
+        settings = OwnerSettings.from_payload(settings.payload())
+        current = self.snapshot()
+        if current.revision != expected_revision:
+            raise RevisionConflict("Owner settings changed; reread before updating")
+        if current.settings == settings:
+            return current
+        with self.db:
+            cursor = self.db.execute(
+                "UPDATE owner_settings SET revision=revision+1,settings_json=? WHERE owner_id=? AND revision=?",
+                (encode(settings.payload()), self.owner_id, expected_revision),
+            )
+            if cursor.rowcount != 1:
+                raise RevisionConflict("Owner settings changed; reread before updating")
+        return self.snapshot()
+
+    def enabled(self) -> bool:
+        row = self.db.execute(
+            "SELECT enabled FROM delivery_preferences WHERE chat_id=?", (self.owner_id,)
+        ).fetchone()
+        return bool(row and row[0])
+
+    def set_enabled(self, enabled: bool) -> None:
+        if not isinstance(enabled, bool):
+            raise ConfigError("Invalid delivery preference")
+        with self.db:
+            self.db.execute(
+                "INSERT OR REPLACE INTO delivery_preferences VALUES (?,?)", (self.owner_id, int(enabled))
+            )
+
+    def muted(self, symbol: str, now: float) -> bool:
+        row = self.db.execute("SELECT mute_until FROM mutes WHERE symbol=?", (symbol,)).fetchone()
+        return bool(row and row[0] > now)
+
+    def mute(self, symbol: str, until: float) -> None:
+        symbol = normalize_pair(symbol)
+        if not math.isfinite(until) or until < 0:
+            raise ConfigError("Invalid mute duration")
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO mutes VALUES (?,?)", (symbol, until))
+
+    def get_runtime(self, key: str, default: Any = None) -> Any:
+        row = self.db.execute("SELECT payload_json FROM runtime WHERE key=?", (key,)).fetchone()
+        return json.loads(row[0]) if row else default
+
+    def put_runtime(self, key: str, payload: Any) -> None:
+        with self.db:
+            self.db.execute("INSERT OR REPLACE INTO runtime VALUES (?,?)", (key, encode(payload)))
+
+    def backup(self, destination: Path) -> None:
+        if destination.exists() or destination.resolve() == self.path.resolve():
+            raise StateError("Backup destination must be new")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        backup = sqlite3.connect(destination)
+        try:
+            self.db.backup(backup)
+            if backup.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                raise StateError("Backup integrity check failed")
+        finally:
+            backup.close()
+        if os.name != "nt":
+            destination.chmod(0o600)
+
+
+def migrate_legacy(
+    source: Path, database: Path, owner_id: int, backup_dir: Path, defaults: OwnerSettings
+) -> dict[str, Any]:
+    """Caller must quiesce the old writer. Validate before creating the database."""
+    raw, content, fingerprint = read_legacy(source)
+    chats = raw.get("chats")
+    if not isinstance(chats, dict):
+        legacy_id = str(raw.get("chat_id", ""))
+        if not legacy_id:
+            raise StateError("Legacy chat identity missing; explicit owner mapping required")
+        chats = {legacy_id: raw}
+    owner = chats.get(str(owner_id))
+    if not isinstance(owner, dict):
+        raise StateError("Owner absent from legacy state; original preserved")
+    settings_raw = owner.get("settings", {})
+    if not isinstance(settings_raw, dict):
+        raise StateError("Invalid legacy owner settings")
+    settings = _legacy_settings(settings_raw, defaults)
+    enabled = owner.get("enabled", True)
+    if not isinstance(enabled, bool):
+        raise StateError("Invalid legacy delivery preference")
+    mutes = owner.get("mutes", {})
+    if not isinstance(mutes, dict):
+        raise StateError("Invalid legacy mutes")
+    normalized_mutes: dict[str, float] = {}
+    for key, value in mutes.items():
+        if not isinstance(key, str):
+            raise StateError("Invalid legacy mute identity")
+        try:
+            until = float(value)
+            if isinstance(value, bool) or not math.isfinite(until) or until < 0:
+                raise ValueError
+            symbol = normalize_pair(key.rsplit(":", 1)[-1])
+        except (ValueError, TypeError) as exc:
+            raise StateError("Invalid legacy mute; original preserved") from exc
+        normalized_mutes[symbol] = max(until, normalized_mutes.get(symbol, 0))
+    baselines = owner.get("baselines", {})
+    if not isinstance(baselines, dict):
+        raise StateError("Invalid legacy baselines")
+    normalized_baselines = json.loads(encode(baselines))
+    for value in normalized_baselines.values():
+        if isinstance(value, dict) and "last_alert" in value:
+            try:
+                timestamp = float(value["last_alert"])
+                if isinstance(value["last_alert"], bool) or not math.isfinite(timestamp) or timestamp < 0:
+                    raise ValueError
+                value["last_alert"] = timestamp
+            except (ValueError, TypeError) as exc:
+                raise StateError("Invalid legacy last_alert") from exc
+    if source.resolve() == database.resolve() or backup_dir.resolve() == source.resolve():
+        raise StateError("Migration paths must be distinct")
+    backup_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    backup_file = backup_dir / f"legacy-{fingerprint}.json"
+    if backup_file.exists():
+        if backup_file.read_bytes() != content:
+            raise StateError("Existing backup differs; preserved")
+    else:
+        with backup_file.open("xb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if os.name != "nt":
+            backup_file.chmod(0o600)
+    if source.read_bytes() != content:
+        raise StateError("Legacy writer still active; stop before migration")
+    store = Store(database, owner_id)
+    try:
+        existing = store.db.execute("SELECT source_sha256 FROM legacy_import").fetchone()
+        if existing:
+            if existing[0] != fingerprint:
+                raise StateError("Different legacy import already exists")
+            store.snapshot()
+            return {"status": "already_imported", "source_sha256": fingerprint}
+        if store.db.execute("SELECT 1 FROM owner_settings").fetchone():
+            raise StateError("Existing owner configuration must not be overwritten")
+        with store.db:
+            store.db.execute(
+                "INSERT INTO owner_settings VALUES (?,1,?)", (owner_id, encode(settings.payload()))
+            )
+            store.db.execute("INSERT INTO delivery_preferences VALUES (?,?)", (owner_id, int(enabled)))
+            store.db.executemany("INSERT INTO mutes VALUES (?,?)", normalized_mutes.items())
+            store.db.execute(
+                "INSERT INTO legacy_import VALUES (?,?,?)", (fingerprint, encode(raw), backup_file.name)
+            )
+            store.db.execute(
+                "INSERT INTO runtime VALUES (?,?)", ("legacy_baselines", encode(normalized_baselines))
+            )
+        store.snapshot()
+        return {"status": "imported", "source_sha256": fingerprint, "archived_chats": len(chats) - 1}
+    finally:
+        store.close()

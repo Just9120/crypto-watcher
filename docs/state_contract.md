@@ -1,211 +1,61 @@
-# CryptoWatcher — Контракт state и миграции
+# CryptoWatcher — state contract
 
-## 1. Назначение
+## Владение и precedence
 
-Этот документ определяет:
-- что должно жить в persistent chat state
-- что должно жить в `.env`
-- как должна работать миграция state
+Product requirements задаёт [spec](product_scope.md); текущие задачи/Evidence — [план](open_issues.md). Этот контракт уточняет persistence и compatibility, operational gate — [runbook](runbooks/delivery.md).
 
-Документ нужен для того, чтобы снижать риск случайных регрессий при развитии продукта.
+Один владелец и его private delivery chat. Infrastructure secrets, owner/bot binding и пути — environment/host `.env`. Env процесса выше `.env` (`load_dotenv(override=False)`). Owner settings уже в DB выше initial defaults; Telegram изменение создаёт новую revision без restart. Invalid values не заменяют сохранённые данные и не выводятся в error text. Invalid infrastructure или corrupt owner record блокирует startup с field/class diagnostic.
 
-## 2. Связь с другими документами
+Retired `.env` keys: ALLOWED_CHAT_IDS, PRICER/CMC, BYBIT_PAIRS/WATCHLIST seeds. Они не включают второй chat и не перезаписывают существующий список. Infrastructure defaults отсутствующих обычных settings описаны `.env.example`; raw legacy payload определяет migration behavior.
 
-Этот документ дополняет `docs/product_scope.md`.
+## SQLite schema1
 
-Если возникает конфликт между:
-- продуктовым поведением
-- техническим state-контрактом
-- README
-- деталями реализации
+Persistent DB: container `/data/sqlite/cryptowatcher.sqlite3`, host `/opt/crypto_watcher/data/sqlite/cryptowatcher.sqlite3`. WAL + synchronous FULL + busy_timeout5000ms + foreign keys; приложение имеет process lease по sidecar `.lock`, один writer. Network I/O вне транзакций. Online backup использует SQLite backup API, включая согласованный WAL state; простое копирование основного `.sqlite3` активного writer недостаточно.
 
-то порядок приоритета такой:
+| Table / namespace | Owner / значение |
+| --- | --- |
+| owner_settings | Единственный owner_id, revision>0, validated domain settings JSON |
+| delivery_preferences | Единственный разрешённый private chat; alerts enabled, отдельно от расчёта |
+| mutes | Нормализованный symbol и timestamp; текущая G1 имеет выбранный market, typed identity расширяется G2A |
+| runtime | Heartbeat, poll/delivery diagnostics, successful notifications, owner input workflow, preserved legacy baselines |
+| legacy_import | Source SHA256, полный original payload, имя exact-byte backup; другие chats архивируются, не становятся consumers |
+| Events / episodes / outcomes / outbox | Ещё отсутствуют в G1; versioned schema G2B/G3/G4, поэтому полный AC-10-01/10-02 не закрыт одной foundation |
 
-1. `docs/product_scope.md`
-2. `docs/state_contract.md`
-3. `README.md`
-4. детали реализации и комментарии в коде
+Owner settings: category spot/linear, top/custom, custom_pairs, selected signal TF, price/turnover/liquidity thresholds, poll/cooldown/SMA. Finite positive validation, spike>1, integer cadence/cooldown/lookback, SMA>1; invalid field остаётся без mutation. CAS expected_revision предотвращает lost update. Результат market fetch со старой revision отменяется; successful notification сохраняет применённую revision и candle identity. Failed send не расходует successful cooldown. Durable retry/outbox не заявляется до G2B.
 
-## 3. Модель владения
+Known owner/schema проверяются до writable open. Unknown/future DB version и чужой owner не изменяются. Diagnostics/health/state-check работают read-only. Schema change после1 требует versioned миграции и delivery classification.
 
-### `.env`
-Используется для:
-- секретов
-- дефолтных значений
-- инфраструктурной и runtime-конфигурации
-- дефолтной частоты polling
-- default timeframe сигнала
-- дефолтных порогов сигнала
-- deployment-specific параметров
-- legacy/default seed полей
+## JSON legacy migration
 
-### persistent chat state
-Используется для:
-- реального поведения конкретного чата
-- активного режима радара
-- пользовательского списка монет
-- активного timeframe сигнала
-- активных порогов сигнала
-- mute-данных
-- временного chat workflow состояния
-- per-chat runtime timestamps
+Accepted inputs: version2 с chats object; legacy1/неверсионированный recognized payload только при explicit chat identity. Duplicate keys, non-finite JSON, corrupt/unknown version, отсутствие owner record либо invalid settings/mutes блокируют import; source остаётся неизменным. Незнакомые fields и other chats сохраняются полностью для owner review.
 
-## 4. Важные поля state
+Правила импорта owner233382575:
 
-### Поля продуктового поведения
-- `settings.alert_universe_mode`
-  - допустимые значения: `top`, `custom`
-  - определяет, какой alert universe активен
+1. Raw settings читаются до normalization/default shaping. `custom_pairs`, включая явный `[]`, имеет приоритет. При отсутствии — legacy bybit_pairs/watchlist из JSON. Env seeds не добавляются.
+2. Явный alert_universe_mode сохраняется. Иначе legacy top_limit>0 → top, 0 → custom; без него infer по raw списку. Negative/non-integer limit отклоняется.
+3. Сохранённый TF сохраняется; отсутствующий legacy TF →5m независимо от env seed. Все допустимые сохранённые thresholds/category/cadence/overrides имеют приоритет над defaults. Unknown retired fields остаются в archive, не включают CMC path.
+4. Enabled bool и mutes сохраняются. Legacy CMC/BYBIT mute identity нормализуется к USDT symbol, для совпадающего symbol используется максимальный срок. Такой mapping отражает old single-market behavior, не создаёт второй market target.
+5. Полные baselines сохраняются в original archive и runtime. Numeric last_alert нормализуется для безопасного cooldown; новый event/episode runtime не генерирует историю из старых alerts.
+6. Other chats не объединяются с owner configuration. Owner absent/conflict требует отдельного решения, не выбора первого chat.
+7. Перед записью создаётся exact-byte JSON backup с SHA256, fsync и source readback. Caller обязан остановить old writer для финальной production migration. Изменившийся source блокирует import.
+8. One transaction сохраняет owner/settings/preferences/mutes/baselines/import record. Повтор same source SHA возвращает already_imported. Existing owner либо другой imported SHA не перезаписываются. Source JSON не удаляется.
 
-- `settings.custom_pairs`
-  - нормализованные Bybit symbols
-  - активный пользовательский список текущего чата
+Требуемые paths должны быть различны; production schema/name определены выше. Новые directories app-owned0700, DB/backup0600. Не делать recursive chown legacy data. Windows permission model проверяется отдельно от Linux fixture; production POSIX ownership требует host readback.
 
-- `settings.signal_timeframe`
-  - допустимые значения: `1m`, `3m`, `5m`, `15m`
-  - определяет, по каким закрытым свечам считаются движение цены, объём и spike ratio
+## Canonical CLI
 
-- `settings.price_move_min`
-  - порог `Движение цены` для конкретного чата
-  - дефолт берётся из `.env` (`PRICE_MOVE_MIN`)
+Из repository root / установленного image, с validated defaults и explicit owner:
 
-- `settings.turnover_spike_min`
-  - порог `Спайк объёма` для конкретного чата
-  - дефолт берётся из `.env` (`TURNOVER_SPIKE_MIN`)
+```bash
+python -m cryptowatcher migrate --legacy PATH_TO_QUIESCED_JSON --database PATH_TO_NEW_DB --backup-dir PATH_TO_BACKUPS --owner-id 233382575
+python -m cryptowatcher state-check --database PATH_TO_DB --owner-id 233382575
+python -m cryptowatcher backup --database PATH_TO_DB --destination PATH_TO_NEW_BACKUP --owner-id 233382575
+```
 
-- `settings.liquidity_floor_24h`
-  - порог `Ликвидность 24ч` для конкретного чата
-  - дефолт берётся из `.env` (`LIQUIDITY_FLOOR_24H`)
+Это placeholders для isolated fixture либо reviewed paths; production sequence требует first-delivery gate. Startup при существующем legacy без imported settings отвечает explicit migration required, не создаёт пустого owner state. `state-check` выводит integrity/schema/owner/revision/settings hash/import hash/preference, без secrets. Backup destination обязан быть новым; overwrite/restore команда отсутствует намеренно. Restore проверяется открытием нового isolated backup и сравнениями owner/settings/mutes/runtime.
 
-### Runtime
-- `runtime.last_poll_ts`
-- `runtime.pending_action`
+## Recovery и retention
 
-### Операционные данные
-- `mutes`
-- `baselines`
+Legacy source и archived other chats автоматически не удаляются. G1 backup names уникальны; housekeeping manual до measured policy. Согласованные 90-day candles и permanent referenced event inputs относятся к будущей history schema, не к удалению JSON/backups.
 
-Важно:
-`baselines` в текущем коде — это operational/runtime storage и legacy-compatible state.
-Это не означает возврат к старой baseline-driven продуктовой модели как main path.
-
-## 5. Legacy/default seed поля в `.env`
-
-Поля вроде:
-- `BYBIT_PAIRS`
-- `WATCHLIST`
-
-могут оставаться в `.env.example` и в коде как:
-- legacy-compatible defaults
-- seed-значения для старых сценариев и миграции
-- технический мост для backward compatibility
-
-Но они не являются основным пользовательским способом управления рабочим списком.
-Основной пользовательский механизм — это per-chat `custom_pairs` в persistent state.
-
-## 6. Дефолты vs per-chat overrides
-
-В этом проекте `.env` не должен считаться единственным активным источником пользовательских настроек.
-
-Правило такое:
-- `.env` задаёт дефолты
-- если пользователь в Telegram меняет timeframe сигнала или пороги сигнала, активными становятся значения из chat state
-- старые или новые чаты без override получают env-backed дефолты
-
-Это относится как минимум к:
-- `signal_timeframe`
-- `price_move_min`
-- `turnover_spike_min`
-- `liquidity_floor_24h`
-
-## 7. Правила миграции legacy state
-
-Старые persisted chats могут не содержать:
-- `alert_universe_mode`
-- `custom_pairs`
-- `signal_timeframe`
-- `price_move_min`
-- `turnover_spike_min`
-- `liquidity_floor_24h`
-
-Правила миграции:
-
-1. Если raw persisted `alert_universe_mode` существует, он считается authoritative.
-2. Если raw persisted `alert_universe_mode` отсутствует, режим должен выводиться из legacy-поведения.
-3. Если raw persisted `custom_pairs` существует, он считается authoritative, включая случай явного пустого списка.
-4. Если `custom_pairs` отсутствует, он должен выводиться из legacy raw fields в таком порядке:
-   - `bybit_pairs`
-   - `watchlist`
-   - иначе пустой список
-5. Если `signal_timeframe` отсутствует, должен использоваться безопасный дефолт `5m`.
-6. Если threshold-поля отсутствуют, они должны безопасно заполняться дефолтами из `.env`.
-7. Символы должны нормализоваться через `_normalize_bybit_pair`.
-8. Дедупликация должна сохранять порядок элементов.
-
-Критичное правило:
-решения по миграции должны приниматься на основе raw persisted settings, а не уже default-merged settings.
-
-## 8. Правило правдивости состояния
-
-Все пользовательские поверхности должны согласованно отражать один и тот же активный state:
-
-- polling behavior
-- `/status`
-- settings text
-- watchlist/list view
-- terms/help text там, где это релевантно
-
-Пример:
-если алерты реально сканируют Top 100 и считают сигнал по `3m` с порогом спайка `x3.0`, UI не должен вести себя так, как будто режим `custom`, timeframe `5m` или спайк `x4.0`.
-
-Дополнение для `/status`:
-- хедер обязан показывать активные per-chat значения `signal_timeframe`, `price_move_min`, `turnover_spike_min`, `liquidity_floor_24h`
-- по каждому символу должны показываться текущие значения фильтров и pass/fail относительно активных порогов чата
-- итог по символу (`сигнал есть` / `сигнала нет`) должен вычисляться из этих же активных per-chat порогов, без hardcoded констант в рендеринге
-- в пользовательском тексте не должно быть hardcoded `5m` там, где должен использоваться активный `signal_timeframe`
-
-## 9. Правило timeframe
-
-`signal_timeframe` и `radar_poll_sec` — разные настройки.
-
-- `signal_timeframe` определяет, по каким закрытым свечам считаются метрики сигнала
-- `radar_poll_sec` определяет, как часто бот перепроверяет рынок
-
-`SMA periods` трактуется как количество предыдущих свечей выбранного timeframe.
-
-Примеры:
-- `signal_timeframe = 5m`, `SMA periods = 12` → средний оборот считается примерно за предыдущий час
-- `signal_timeframe = 15m`, `SMA periods = 12` → средний оборот считается примерно за предыдущие три часа
-
-## 10. Правило signal thresholds
-
-Пользовательские названия фильтров в UI:
-
-- `Движение цены`
-- `Спайк объёма`
-- `Ликвидность 24ч`
-
-Технические поля могут называться иначе, но в пользовательском интерфейсе должны использоваться именно понятные русские названия.
-
-Настройка порогов через бот должна использовать:
-- per-chat state
-- безопасные preset-значения
-- понятное отображение текущего активного значения
-
-Свободный ввод произвольных чисел не является обязательной частью текущего MVP.
-
-## 11. Правило backward compatibility
-
-PR, который меняет структуру state, считается неполным, если он не покрывает миграционное поведение явно.
-
-Минимум нужно проверять:
-- legacy payload со старым `bybit_pairs`
-- legacy payload со старым `watchlist`
-- отсутствие `signal_timeframe`
-- отсутствие новых полей порогов сигнала
-- случай с явным пустым `custom_pairs`
-- случай с явным `alert_universe_mode`
-
-## 12. Политика изменений
-
-Любой PR, который добавляет или меняет persistent state fields, должен обновлять этот документ.
+До new-runtime write можно восстановить прежний application с сохранённым JSON по approved sequence. После write legacy JSON отстаёт от SQLite: blind rollback приложения теряет новые settings/runtime. Нужен compatible schema1 rollback или forward-fix; DB restore поверх live данных требует отдельного scoped approval и writer quiescence. Наличие файла `.bak` само по себе не подтверждает пригодность восстановления.

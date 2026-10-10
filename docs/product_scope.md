@@ -27,7 +27,7 @@ S01 и последующие явные решения владельца за�
 - D04: baseline-driven monitor и CMC не возвращаются в основной путь. Существующие CMC/reset handlers исследуются перед deprecation; совместимость state отделяется от сохранения устаревшего UX.
 - D05: история и outcome analytics развиваются параллельно интеграции. Накопление статистики и калибровка не блокируют базовую доставку events.
 - D06: enrichment Spot derivatives — после стабилизации radar обоих рынков. 30m/1h context и stablecoin exclusions допустимы; обязательных новых realtime alerts/фиксированных exclusions источник не задаёт.
-- D07: численные SLO, capacity limits, database/transport implementation, число GitHub Environments и конкретные detector/episode/TTL параметры пока UNSET; не подменять их предположениями.
+- D07: исходные implementation unknowns сохранены как история решения; D09–D20 задают согласованные database/transport/Environment/detector/episode/TTL defaults. Численные SLO/capacity limits не придуманы и остаются UNSET.
 - D08: история прежних требований сохранена в Git. Старых стабильных AC IDs не было; новые AC имеют IDs `AC-<epic>-<number>`. Связи отменённых контрактов записаны в D01–D04, остальные полезные правила миграции/closed candles/UX сохранены.
 
 ## Интерфейсы, данные и зависимости
@@ -36,9 +36,9 @@ S01 и последующие явные решения владельца за�
 
 Event содержит ID/revision, Episode ID, instrument/market, detector/version/settings snapshot, direction, исходные timeframes, reproducible metrics/units/data provenance, market/detection/receipt timestamps и freshness. Episode хранит начало, последнее обновление, strength и связь с исходными events/revisions. Outcome содержит immutable observation time/reference price, horizon, dataset completeness и calculated metrics. Context первоначального решения не дополняется будущими outcomes/max strength.
 
-Telegram и trading agent — независимые consumers общей event history. Mute меняет Telegram delivery, не domain detection/history/agent delivery. Agent delivery требует authorization, durable pending state, retry/replay и idempotency по Event ID/revision; owner diagnostics доступны независимо от Telegram. API/webhook предпочтителен; endpoint/auth/schema negotiation UNSET до согласования consumer contract.
+Telegram и trading agent — независимые consumers общей event history. Mute меняет Telegram delivery, не domain detection/history/agent delivery. Agent delivery требует authorization, durable pending state, retry/replay и idempotency по Event ID/revision; owner diagnostics доступны независимо от Telegram. API/webhook contract согласован в D18; production availability prepared receiver остаётся prerequisite G4.
 
-Owner configuration отделяется от secrets/infrastructure (.env), chat delivery state, runtime cursors и analytics. Persistent schema/migration выбирается в implementation Goal, с сохранением существующих данных. Текущий runtime — Python 3.11 Docker, dependency manifest requirements.txt, Compose service crypto_watcher; фактическая VPS version отдельно требует evidence. Настройка Actions выполняется только в выбранной Goal по ci-cd-rules.md.
+Owner configuration отделяется от secrets/infrastructure (.env), chat delivery state, runtime cursors и analytics. Persistent store — SQLite WAL по D10; versioned migration сохраняет существующие данные по state contract. Текущий runtime — Python 3.11 Docker, dependency manifest requirements.txt, Compose service crypto_watcher; фактическая VPS version отдельно требует evidence. Настройка Actions выполняется только в выбранной Goal по ci-cd-rules.md.
 
 ## Эпики, business rules и AC
 
@@ -62,7 +62,7 @@ Requirement `REQ-E01`; трассировка: S01 / ПРОДУКТ; ГРАНИ�
 
 Requirement `REQ-E02`; трассировка: S01 / MARKET DATA / ALERT UNIVERSE.
 
-Широкие динамические universe Spot USDT и USDT Perpetual раздельны. Eligibility учитывает crypto instrument type, Trading Status, quote/settle currency и настраиваемую liquidity. xStocks/TradFi/RWA/Event Contracts и неизвестные специальные типы автоматически не включаются. Stablecoin/stablecoin допускается исключать отдельным объяснимым правилом. Custom watchlist содержит Instrument + Market Type и допускает более чувствительные условия.
+Широкие динамические universe Spot USDT и USDT Perpetual раздельны. Eligibility учитывает crypto instrument type, Trading Status, quote/settle currency и настраиваемую liquidity. xStocks/TradFi/Event Contracts, tokenized stocks/gold и неизвестные специальные типы автоматически не включаются. Обычные crypto tokens сектора RWA допускаются по metadata/liquidity (D09). Stablecoin/stablecoin допускается исключать отдельным объяснимым правилом. Custom watchlist содержит Instrument + Market Type и допускает более чувствительные условия.
 
 | AC | Критерий и способ проверки |
 | --- | --- |
@@ -214,12 +214,12 @@ Requirement `REQ-E12`; трассировка: S01 / ТЕХНИЧЕСКИЙ КО
 
 | ID | Существенный неизвестный параметр | Влияние / когда решить |
 | --- | --- | --- |
-| Q01 | Формулы/lookbacks/default thresholds/versioning новых detectors; strength, direction neutral, episode correlation/escalation/termination/re-arm/max lifetime; type/TF freshness | E04–E06: до их implementation зафиксировать воспроизводимые правила. Старый composite — baseline, не утверждённая формула всех detectors |
-| Q02 | Trading agent repository, endpoint/transport/auth, schema ownership и consumer-side contract | E09 и joint tests. Не менять другой проект в рамках этого audit |
-| Q03 | Mapping нескольких legacy chats в одного owner, конфликтующие settings/watchlists/mutes | E08/E10: безопасная migration на копии state; production state не исследован |
-| Q04 | Outcome neutral/continuation/reversal/comparator periods, экспорт format/retention | E06: до analytics implementation; отсутствие retention/SLO не даёт права удалить историю |
-| Q05 | SSH account/procedure, deployment unit/path, artifact identity, config owners, queue/version policy, backup/recovery, health/readiness/smoke | E12: VPS host назван владельцем, остальные значения UNSET; runtime delivery блокируется до установления процедуры |
-| Q06 | Нужно ли сохранять доступные legacy CMC/reset actions как compatibility tools или убрать | D04/F23/F24: источник исключает CMC из v1; внешние Python consumers UNSET, persisted fields мигрируют отдельно |
+| Q01 | RESOLVED_POLICY: D11–D15 задают versioned detector/episode/freshness formulas и defaults. Эффективность параметров ещё измеряется; это не blocker implementation. | Основание: approved full implementation plan 2026-10-10 и Current Goal G1; детали в canonical плане/runbook |
+| Q02 | CONTRACT_IDENTIFIED: основной claude-bybit-trading-agent, prepared v1 receiver и D18/v2 scope. Delivery receiver в main/production остаётся prerequisite; endpoint availability/secret binding проверяются в G4. | Основание: approved full implementation plan 2026-10-10 и Current Goal G1; детали в canonical плане/runbook |
+| Q03 | G1: import только private owner233382575; other chats архивируются без объединения. Фактический owner record/mapping и production backup требуют readback/rehearsal. | Основание: approved full implementation plan 2026-10-10 и Current Goal G1; детали в canonical плане/runbook |
+| Q04 | RESOLVED_POLICY: D16 задаёт horizons/neutral/comparator/export/retention. Implementation и causal completeness tests — G3. | Основание: approved full implementation plan 2026-10-10 и Current Goal G1; детали в canonical плане/runbook |
+| Q05 | PARTIAL: root:22 operator-assisted SSH, app /opt/crypto_watcher, service crypto_watcher, persistent data подтверждены inventory. Artifact/gates/queue заданы delivery runbook; project label/architecture/config ownership и first migration/CD credentials ещё требуют evidence. | Основание: approved full implementation plan 2026-10-10 и Current Goal G1; детали в canonical плане/runbook |
+| Q06 | RESOLVED_UI: G1 deprecates CMC/reset callbacks с понятным ответом; migration archive сохраняет legacy fields/baselines. External private Python helper consumers не подтверждены: F24 остаётся DOCUMENT/DEFER candidate. | Основание: approved full implementation plan 2026-10-10 и Current Goal G1; детали в canonical плане/runbook |
 
 Denominator AC определён как 58 текущих критериев. Значения Q01–Q05 не придуманы; связанные AC остаются BLOCKED/не READY. Изменение поведения/формул требует явного решения владельца; уточнение проверок понятного требования само по себе scope не меняет.
 
@@ -238,4 +238,4 @@ Denominator AC определён как 58 текущих критериев. �
 - D17: Telegram alerts/digest независимы, digest60min initiallyOFF. Mute меняет Telegram delivery, history/agent продолжаются. New detectors могут работать silent до owner enable; actual settings/capabilities видны. BotAPI ambiguity не позволяет обещать exactly-once messages.
 - D18: использовать prepared trading-agent receiver POST /integrations/cryptowatcher/events после его merge/CD. Backward-compatible v2 с settings/profile/provenance/freshness/episode/completeness/enrichment и explicit live/historical update kind; v1 поддерживается. HMAC-SHA256 raw immutable body, receiver limit65536bytes, outbox retry1–300s, expiry и cutoff independent of receipt. No execution fields; receiver не запускает model/trade. Full raw windows сохраняются producer-side для export. Primary source prepared counterpart branch43c7e88f; counterpart main40a3147172 на момент проверки ещё не содержит receiver.
 - D19: optional asset-matched Spot derivatives context после core; ticker1min/OI5min cadence, explicit source/units/timestamps, missing/stale data nonblocking. Separate Perpetual detection сохраняется.
-- D20: Contabo167.86.68.98 SSHroot:22/MobaXterm; unit/path/revision/backup UNSET до inventory. First migration отдельный safety gate; затем automatic CI→merge→CD. Production Environment один; artifact sourceSHA/digest immutable, exact target lock/eligibility/recovery/postchecks. Решения supersede соответствующие UNSET в D07/Q01–Q05; operational факты продолжают требовать evidence.
+- D20: Contabo167.86.68.98 SSHroot:22/MobaXterm; unit/path известны по inventory в delivery runbook; complete image source revision/backup fitness требуют evidence. First migration отдельный safety gate; затем automatic CI→merge→CD. Production Environment один; artifact sourceSHA/digest immutable, exact target lock/eligibility/recovery/postchecks. Решения supersede соответствующие UNSET в D07/Q01–Q05; operational факты продолжают требовать evidence.
