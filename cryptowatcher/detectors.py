@@ -11,6 +11,13 @@ from .detector_config import FAMILIES, effective_parameters
 from .sources import Candle
 
 VERSIONS = {family: "1" for family in FAMILIES}
+FORMULAS = {
+    "price": "abs(100*(close/previous_close-1)) >= price_threshold_tf",
+    "turnover": "turnover/mean(previous_lookback_turnover) >= turnover_ratio",
+    "breakout": "close > max(previous_highs)+buffer*previous_ATR14 or close < min(previous_lows)-buffer*previous_ATR14",
+    "volatility": "current_true_range/mean(previous_lookback_true_ranges) >= volatility_ratio",
+    "composite": "price AND turnover AND ticker_turnover24h >= liquidity_floor; inclusive boundaries",
+}
 UNITS = {
     "price_return": "%",
     "price_threshold": "%",

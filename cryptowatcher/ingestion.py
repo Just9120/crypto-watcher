@@ -13,6 +13,7 @@ import httpx
 from websockets.asyncio.client import connect
 
 from .config import TIMEFRAMES, ConfigError, OwnerSettings
+from .detector_config import effective_parameters
 from .market import BybitREST, MarketError, RadarResult, evaluate_composite, finite
 from .sources import WINDOW_SIZE, Candle, Sources
 from .storage import Store, encode
@@ -71,6 +72,23 @@ class BybitRadar(BybitREST):
         self._sequence = 0
         self._last_market = "linear"
         self._started = False
+        self.on_observation: Callable[[str, list[Candle], float, float, int, bool], None] | None = None
+
+    def publish_observation(self, stream: str, *, live: bool, through: int | None = None) -> None:
+        if self.on_observation is None or stream in self.sources.blocked:
+            return
+        instrument = stream.rsplit("/", 1)[0]
+        candles = sorted(self.sources.windows[stream].values(), key=lambda c: c.start)
+        if through is not None:
+            candles = [c for c in candles if c.start <= through]
+        self.on_observation(
+            stream,
+            candles,
+            finite(self.tickers[instrument]["turnover24h"]),
+            self.instruments[instrument].tick_size,
+            self.server_now(),
+            live,
+        )
 
     def server_now(self) -> int:
         return self._server_ms + int((time.monotonic() - self._server_at) * 1000) if self._server_ms else 0
@@ -277,6 +295,7 @@ class BybitRadar(BybitREST):
         if previous_end and previous_end < oldest:
             self.record_gap(stream, previous_end, oldest - 1)
         self.sources.put(stream, candles, recovery=True)
+        self.publish_observation(stream, live=False)
         if stream in self._history:
             gap = self._history[stream]
             gap["end"] = min(gap["end"], oldest - 1)
@@ -418,7 +437,10 @@ class BybitRadar(BybitREST):
                 previous_end = max((c.end for c in self.sources.windows[stream].values()), default=0)
                 if previous_end and candle.start > previous_end:
                     self.record_gap(stream, previous_end, candle.start - 1)
-                self.sources.put(stream, [candle], live=fresh)
+                previous = self.sources.windows[stream].get(candle.start)
+                advanced = self.sources.put(stream, [candle], live=fresh)
+                if previous is None:
+                    self.publish_observation(stream, live=advanced, through=candle.start)
                 if (
                     stream in self.sources.blocked
                     or len(self.sources.windows[stream]) < self.store.snapshot().settings.sma_periods + 2
@@ -550,12 +572,14 @@ class BybitRadar(BybitREST):
                         raise MarketError("subscription_pending")
                     if stream in self.sources.blocked:
                         raise MarketError(self.sources.blocked[stream])
-                    effective = settings.changed(bybit_category=market, signal_timeframe=tf)
-                    if instrument.key in settings.instruments():
-                        effective = effective.changed(
-                            price_move_min=settings.price_move_min * settings.watchlist_multiplier,
-                            turnover_spike_min=settings.turnover_spike_min * settings.watchlist_multiplier,
-                        )
+                    parameters = effective_parameters(settings, instrument.key)
+                    effective = settings.changed(
+                        bybit_category=market,
+                        signal_timeframe=tf,
+                        price_move_min=parameters[f"price_{tf}"],
+                        turnover_spike_min=parameters["turnover_ratio"],
+                        sma_periods=parameters["turnover_lookback"],
+                    )
                     payload = evaluate_composite(
                         self.sources.rows(stream, effective.sma_periods + 2),
                         self.tickers[instrument.key],

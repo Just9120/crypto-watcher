@@ -75,6 +75,52 @@ async def test_owner_control_deck_list_mutations_and_restart(controller):
         reopened.close()
 
 
+async def test_profiles_manual_detectors_history_and_callbacks_remain_owner_scoped(controller):
+    before = controller.store.snapshot()
+    await controller.handle(update("/profiles"), None)
+    assert controller.store.snapshot() == before
+    await controller.handle(update(callback="profile:normal"), None)
+    assert controller.store.snapshot().settings.profile == "normal"
+    await controller.handle(update("/set breakout_lookback 28"), None)
+    current = controller.store.snapshot()
+    assert (
+        current.settings.profile == "custom"
+        and dict(current.settings.detector_parameters)["breakout_lookback"] == 28
+    )
+    await controller.handle(update("/set volatility_ratio nan"), None)
+    assert controller.store.snapshot() == current
+    await controller.handle(update(callback="detector:price:on"), None)
+    assert "price" in controller.store.snapshot().settings.alert_detectors
+    state = controller.store.snapshot()
+    for callback in (
+        "deck:detectors",
+        "profile:sensitive",
+        "detector:composite:off",
+        "event:00000000-0000-0000-0000-000000000000",
+    ):
+        await controller.handle(update(owner=False, callback=callback), None)
+        assert controller.store.snapshot() == state
+    message = update("/history")
+    await controller.handle(message, None)
+    assert "пуста" in message.effective_message.reply_text.call_args.args[0]
+
+
+async def test_preset_status_and_sample_show_effective_values_not_legacy_fields(controller):
+    controller.change(price_move_min=7, turnover_spike_min=6, sma_periods=20, signal_timeframe="15m")
+    await controller.handle(update("/profile normal"), None)
+    snapshot = controller.store.snapshot()
+    assert snapshot.settings.price_move_min == 7 and snapshot.settings.sma_periods == 20
+    message = update("/settings")
+    await controller.handle(message, None)
+    text = "".join(call.args[0] for call in message.effective_message.reply_text.call_args_list)
+    assert "15m: ≥ 4%" in text and "SMA periods: 12" in text and "Спайк оборота: ≥ x3" in text
+    message = update("/sample_alert")
+    await controller.handle(message, None)
+    assert "TF 15m · +4.3%" in message.effective_message.reply_text.call_args.args[0]
+    assert "Средний оборот (12 candles)" in message.effective_message.reply_text.call_args.args[0]
+    assert controller.store.snapshot() == snapshot
+
+
 @pytest.mark.parametrize(
     ("category", "timeframe", "url"),
     [

@@ -98,14 +98,20 @@ class OwnerSettings:
         number(self.watchlist_multiplier, "watchlist_multiplier")
         if self.profile not in ("custom", "normal", "conservative", "sensitive"):
             raise ConfigError("Invalid sensitivity profile")
+        if not isinstance(self.detector_parameters, tuple) or any(
+            not isinstance(p, tuple) for p in self.detector_parameters
+        ):
+            raise ConfigError("Invalid immutable detector parameters")
         try:
             validate_parameters(self.detector_parameters)
         except ValueError as exc:
             raise ConfigError(str(exc)) from exc
+        if self.profile != "custom" and dict(self.detector_parameters) != dict(preset(self.profile)):
+            raise ConfigError("Profile parameters do not match preset")
         if (
             not isinstance(self.alert_detectors, tuple)
+            or any(not isinstance(x, str) or x not in FAMILIES for x in self.alert_detectors)
             or len(set(self.alert_detectors)) != len(self.alert_detectors)
-            or any(x not in FAMILIES for x in self.alert_detectors)
         ):
             raise ConfigError("Invalid alert_detectors")
 

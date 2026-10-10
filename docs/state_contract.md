@@ -16,12 +16,12 @@ Persistent DB: container `/data/sqlite/cryptowatcher.sqlite3`, host `/opt/crypto
 | --- | --- |
 | owner_settings | Единственный owner_id, revision>0, validated domain settings JSON |
 | delivery_preferences | Единственный разрешённый private chat; alerts enabled, отдельно от расчёта |
-| mutes | Нормализованный symbol и timestamp; текущая G1 имеет выбранный market, typed identity расширяется G2A |
+| mutes | Typed market/symbol и timestamp; legacy symbol применяется к selected legacy category |
 | runtime | Heartbeat, poll/delivery diagnostics, successful notifications, owner input workflow, preserved legacy baselines |
 | legacy_import | Source SHA256, полный original payload, имя exact-byte backup; другие chats архивируются, не становятся consumers |
-| Events / episodes / outcomes / outbox | Ещё отсутствуют в G1; versioned schema G2B/G3/G4, поэтому полный AC-10-01/10-02 не закрыт одной foundation |
+| runtime:radar:v1 | Versioned event/episode history, immutable source snapshots, detector registry, notification decisions и Telegram outbox/attempts; outcomes/agent добавляются G3/G4 |
 
-Owner settings: category spot/linear, top/custom, custom_pairs, selected signal TF, price/turnover/liquidity thresholds, poll/cooldown/SMA. Finite positive validation, spike>1, integer cadence/cooldown/lookback, SMA>1; invalid field остаётся без mutation. CAS expected_revision предотвращает lost update. Результат market fetch со старой revision отменяется; successful notification сохраняет применённую revision и candle identity. Failed send не расходует successful cooldown. Durable retry/outbox не заявляется до G2B.
+Owner settings: category spot/linear, top/custom, custom_pairs/typed watchlist, selected card TF, price/turnover/liquidity thresholds, poll/cooldown/SMA, sensitivity profile/manual detector parameters и Telegram family selection. Finite positive validation, ratios>1, integer cadence/cooldown/lookback, legacy SMA>1; invalid field остаётся без mutation. CAS expected_revision предотвращает lost update. Результат market fetch со старой revision отменяется. Pending delivery старой revision не отправляется как решение по новой; ACK уже in-flight сообщения помечается DELIVERED_PRIOR_SETTINGS. Failed send не расходует successful episode notification state. Legacy cooldown сохранён, production episode consumer его не использует.
 
 Known owner/schema проверяются до writable open. Unknown/future DB version и чужой owner не изменяются. Diagnostics/health/state-check работают read-only. Schema change после1 требует versioned миграции и delivery classification.
 
@@ -56,7 +56,7 @@ python -m cryptowatcher backup --database PATH_TO_DB --destination PATH_TO_NEW_B
 
 ## Recovery и retention
 
-Legacy source и archived other chats автоматически не удаляются. G1 backup names уникальны; housekeeping manual до measured policy. Согласованные 90-day candles и permanent referenced event inputs относятся к будущей history schema, не к удалению JSON/backups.
+Legacy source и archived other chats автоматически не удаляются. Backup names уникальны; housekeeping manual до measured policy. Event source snapshots автоматически не удаляются. Согласованные90-day ordinary candles и защиту иных outcome/comparator sources реализует G3; это не поручение удаления JSON/backups.
 
 До new-runtime write можно восстановить прежний application с сохранённым JSON по approved sequence. После write legacy JSON отстаёт от SQLite: blind rollback приложения теряет новые settings/runtime. Нужен compatible schema1 rollback или forward-fix; DB restore поверх live данных требует отдельного scoped approval и writer quiescence. Наличие файла `.bak` само по себе не подтверждает пригодность восстановления.
 
@@ -77,3 +77,24 @@ Native свечи закрыты по confirm=true либо REST exchange time. 
 Settings дополняются typed `watchlist` и `watchlist_multiplier` (default0.75). Отсутствующие fields старой schema1 принимают defaults без переписывания сохранённого owner record; legacy custom_pairs остаются исходным migration evidence и fallback выбранного рынка. Новый список содержит spot/symbol либо linear/symbol; explicit clear очищает оба representations, empty list не получает seed. Legacy JSON watchlist остаётся untyped alias при import, не интерпретируется как новый field. Saved numeric thresholds не заменяются preset. Typed mutes имеют market/symbol; сохранённые legacy symbol mutes действуют только на selected legacy category.
 
 После записи новых owner fields приложение G1 не поддерживает typed payload: автоматического rollback на G1 нет, recovery — forward-fix либо проверенная compatible G2A revision. DB schema downgrade/restore поверх live data не выполняется. Новая versioned physical schema, если понадобится следующим Goals, требует своей явной delivery classification, NONE не подменяет migration gate.
+
+## G2B radar logical schema v1
+
+SQLite user_version остаётся1; existing runtime primary key обеспечивает prefix queries. Logical record schema `cryptowatcher.radar.v1`, event `cryptowatcher.event.v1`. Online backup включает все namespaces и проверяется all-row readback на isolated copy.
+
+| `radar:v1:` namespace | Контракт |
+| --- | --- |
+| detector-metadata:family:version | Immutable formula, baseline/ATR/strength methodology; изменение без новой version блокирует startup |
+| event:UUID:revision / event-head:UUID | Append-only revisions и latest head; immutable reference close/time, settings/effective parameters, market/detection/receipt/availability timestamps, metrics/units, direction/strength, source inputs/hash и producer revision |
+| history:observationTime:UUID / episode-event:UUID:time:event | Indexed recent history и полная связь events с episode |
+| episode:UUID:revision / episode-head:UUID | Lifecycle/confirmations/conditions и immutable causal snapshots; late revision не регрессирует head |
+| active:market/symbol/direction / condition:stream:family:direction | Active index, last closed observation, two non-signal bars и forced-closure re-arm block |
+| decision:telegram:event / decision:telegram:event:revision | Latest reason и сохранённые notification decision revisions, включая silent/muted/historical/suppressed |
+| outbox:telegram:UUID / pending:telegram:dueTime:UUID | Durable identity, exact event revisions/episode snapshot/settings revision, frozen text, attempts/acks и retry index |
+| target:telegram / diagnostic:stream:family | Permanent target failure/re-enable и localized calculation errors |
+
+Event identity включает stream/family/version/settings revision/candle start; episode identity основана на первом event. Episode grouping имеет market identity и direction. История сохраняет все detected events, включая historical/suppressed и muted; updates событий/episodes append-only, current heads отдельно. Каждый используемый input заморожен в event, поэтому последующая REST correction обычного source row не меняет исходную методику. ATR availability для будущего outcome помечается отдельно; недостающий контекст не превращается в нулевое значение.
+
+Event + episode + decision + initial outbox сохраняются одной transaction до отправки. Consumer замораживает exact event revisions и text; receipt/retry не меняют observation time или TTL. Failed/expired/obsolete attempts остаются history; successful-notification baseline меняется только после ack. Unknown ack отмечается AMBIGUOUS_AFTER_RESTART/UNKNOWN, повтор сохраняет identity. Новое подтверждение во время I/O может создать отдельный follow-up после ack; future event revisions не включаются в прежний payload.
+
+Отсутствующие profile/parameters/alert_detectors читаются compatible defaults: custom legacy thresholds и Telegram composite only. Upgrade не записывает новый preset автоматически. Явная owner операция создаёт revision; preset definition полностью validated, manual edit переводит profile в custom. После записи этих fields G1/G2A images не считаются compatible rollback; recovery только forward-fix либо verified compatible G2B application. JSON import не повторяется, physical DDL/DB downgrade отсутствуют.
