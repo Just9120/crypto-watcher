@@ -10,6 +10,8 @@ from .config import TIMEFRAMES, OwnerSettings
 from .market import RadarResult
 from .storage import Snapshot
 
+SAMPLE_SYMBOL = "SOLUSDT"
+
 
 def market_label(settings: OwnerSettings) -> str:
     return "Spot USDT" if settings.bybit_category == "spot" else "USDT Perpetual"
@@ -115,6 +117,29 @@ def quote_text(symbol: str, quote: dict[str, Any], settings: OwnerSettings) -> s
         f"Спайк оборота: x{quote['turnover_spike_ratio']:.1f}\n"
         f"Оборот 24ч: {quote['turnover24h']:,.1f} USDT\n"
         f"Composite: {'сработал' if quote['meets_signal'] else 'условия не выполнены'}"
+    )
+
+
+def sample_alert_text(snapshot: Snapshot) -> str:
+    s = snapshot.settings
+    spike = max(s.turnover_spike_min + 0.2, 2.0)
+    turnover = 1_850_000.0
+    quote = {
+        "price": 182.45,
+        "signal_timeframe": s.signal_timeframe,
+        "price_change_tf": max(s.price_move_min + 0.3, 2.3),
+        "current_tf_turnover": turnover,
+        "sma_tf_turnover": turnover / spike,
+        "turnover_spike_ratio": spike,
+        "turnover24h": max(s.liquidity_floor_24h, 8_500_000.0),
+        "meets_signal": True,
+    }
+    return (
+        "🧪 Пример алерта\nДемонстрационные данные, не рыночное событие.\n"
+        + quote_text(SAMPLE_SYMBOL, quote, s)
+        + f"\nПороги: ≥ {s.price_move_min:g}%, ≥ x{s.turnover_spike_min:g}, "
+        f"≥ {s.liquidity_floor_24h:,.0f} USDT. Все три условия одновременно."
+        f"\nConfiguration revision: {snapshot.revision}"
     )
 
 

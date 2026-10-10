@@ -20,7 +20,17 @@ from telegram.ext import (
 
 from .config import ConfigError, Infrastructure, authorized, normalize_pair, number
 from .market import BybitREST, MarketError
-from .render import TERMS, alert_keyboard, menu, quote_text, settings_keyboard, settings_text, status_text
+from .render import (
+    SAMPLE_SYMBOL,
+    TERMS,
+    alert_keyboard,
+    menu,
+    quote_text,
+    sample_alert_text,
+    settings_keyboard,
+    settings_text,
+    status_text,
+)
 from .storage import RevisionConflict, Store
 
 logger = logging.getLogger(__name__)
@@ -225,7 +235,8 @@ class Controller:
         elif command == "sample_alert":
             await self.send(
                 update,
-                "Пример: BTCUSDT · TF3m · +2.4% · оборот100000 USDT · x4.2. Для сигнала должны выполняться все три active thresholds.",
+                sample_alert_text(snapshot),
+                alert_keyboard(SAMPLE_SYMBOL, snapshot.settings.bybit_category),
             )
         elif command == "status":
             result = await self.market.snapshot(snapshot.settings)

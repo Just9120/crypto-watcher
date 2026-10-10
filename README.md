@@ -2,7 +2,7 @@
 
 Deterministic radar Bybit для владельца в Telegram. Согласованный результат — Spot USDT и USDT Perpetual, четыре одновременных TF, пять detectors, episodes/history/outcomes и advisory context для отдельного trading agent. Radar не исполняет ордера и не вызывает LLM.
 
-Текущая поставляемая G1 сохраняет composite и owner controls: Top100/custom, один selected `1m/3m/5m/15m`, настройки без restart, mutes и alerts toggle. Остальные подсистемы реализуются по [плану](docs/open_issues.md). Работающий production baseline сохраняется до проверенной первой миграции.
+Текущая G1 сохраняет composite и owner controls: Top100/custom, один selected `1m/3m/5m/15m`, настройки без restart, mutes и alerts toggle. Первая production migration в SQLite и запуск G1 подтверждены; оставшиеся delivery gates и подсистемы указаны в [плане](docs/open_issues.md).
 
 ## Документация
 

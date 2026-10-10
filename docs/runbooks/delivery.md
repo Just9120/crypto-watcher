@@ -2,7 +2,7 @@
 
 ## Фактический target
 
-Источник: owner-assisted read-only SSH inventory 2026-10-10 09:23:18, 10:08:53 и 10:49:10 UTC; Git blob/archive comparison в G1. Scope — только CryptoWatcher. Работающий legacy writer может менять JSON после snapshot.
+Источник initial baseline: owner-assisted read-only SSH inventory 2026-10-10 09:23:18, 10:08:53 и 10:49:10 UTC; Git blob/archive comparison в G1. Scope — только CryptoWatcher. Таблица сохраняет прежний runtime для compatibility/recovery; актуальная первая поставка зафиксирована ниже.
 
 | Объект | Проверенное значение |
 | --- | --- |
@@ -11,7 +11,7 @@
 | Unit / container | `crypto_watcher` / `crypto-watcher` |
 | Compose project | `crypto_watcher`, подтверждён container project label |
 | Persistent bind | `/opt/crypto_watcher/data` → `/data`, rw |
-| Runtime image | `sha256:153f7a33fa4a96bdc5e63ff53afa1ee5350931625ff9d3d19bee141d83975dcc`; source label отсутствует |
+| Legacy runtime image | `sha256:153f7a33fa4a96bdc5e63ff53afa1ee5350931625ff9d3d19bee141d83975dcc`; source label отсутствует; после первой migration не запускать с устаревшим JSON |
 | Code identity | Startup file SHA256 `b38b2209adc4fc931d5ce93c7d0469e4b26382e61b6aab2354d011437474a6ed`, requirements `3bfa2c84e43ed8ad947dbee85c486294205f48a9be1696083f1fa8882311326f`: совпадают с blobs проверенного main33e0e6; полный image source revision UNSET |
 | Versions | Python3.11.15, PTB20.8, requests2.33.1, dotenv1.2.2; Docker29.8.1, Compose5.5.1 |
 | Data inventory | JSON55915 bytes и legacy `.bak.2026-04-19-152305`14704 bytes; пригодность старого backup UNSET |
@@ -22,6 +22,14 @@
 | Runtime environment | Единственное production приложение; Spot/Perpetual и profiles — продуктовые настройки |
 
 Trading agent в `/opt/claude-bybit-trading-agent` — отдельный runtime и не target этих scripts. Inventory не доказывает Telegram smoke, data restore либо все файлы baseline.
+
+### Первая production migration — подтверждённый snapshot
+
+Owner-authorized MobaXterm procedure2026-10-10T17:22:15Z: source `065e49d112637d5eff4fd309c13aaab30fb53756`, release38046940245, host image/OCI manifest `sha256:a2d59bc276d6e8bd4034593bf5aa48706f746ba18a52d4cc1178bf67a56398fe`, config digest `sha256:14a9a6ebfc4664296d84d46c6c8438906aa061d5f1eaba52e3097cc74c9ac0e2`. Migration/restore/all-table readback/source/health/persistence PASS; usable Bybit data100/100. Settings/config revision1 сохранены, custom empty list/mutes0/alerts ON. Env root0600 после comments-only UTF8 repair с проверкой неизменных active bytes и Compose values.
+
+Primary record: `/opt/crypto_watcher/releases/first-38046940245-20261010T172100Z-775978f9/deployment.json`; recovery copies в его `recovery/`. Runtime запущен из release Compose в этом же directory, а не из прежнего checkout Compose. Migrated DB: `/opt/crypto_watcher/data/sqlite/cryptowatcher.sqlite3`, migration receipt `.g1-migration.json` в том же sqlite directory. Legacy writer остановлен; повтор first-delivery helper запрещён при существующей migrated DB. Следующие schema1/NONE revisions используют routine procedure с online backup, без повторного JSON import или DB downgrade.
+
+Owner export17:27:31–17:28:47 UTC подтвердил основные commands/settings; sample regression требует hotfix, callback clicks/mutes button ещё не подтверждены. Automatic CD NOT_ENABLED: dedicated receiver/key setup и bounded Actions delivery PENDING. Snapshot не гарантирует неизменность runtime после этого момента; последующие операции сверяют actual primary records/version.
 
 ## GitHub checks, artifact и environment
 
