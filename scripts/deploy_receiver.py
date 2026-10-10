@@ -87,6 +87,135 @@ def run(args: list[str], *, env: dict[str, str] | None = None, timeout: int = 12
     return result.stdout.strip()
 
 
+def archive_image_identity(path: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    """Derive config and OCI identities from the verified single-image archive.
+
+    Classic Docker addresses config digests; containerd addresses manifest
+    digests. Neither a tag alone nor source labels prove artifact identity.
+    """
+    revision = manifest.get("source_sha")
+    build_run = manifest.get("build_run")
+    require(bool(re.fullmatch(r"[0-9a-f]{40}", str(revision))), "Invalid source identity")
+    require(type(build_run) is int and build_run > 0, "Invalid build identity")
+    image_ref = f"cryptowatcher:{revision}"
+    with tarfile.open(path, "r:gz") as archive:
+        members = archive.getmembers()
+        require(len({m.name for m in members}) == len(members), "Duplicate image archive member")
+        by_name = {m.name: m for m in members}
+
+        def read(name: str) -> bytes:
+            member = by_name.get(name)
+            require(
+                member is not None and member.isfile() and 0 < member.size <= 1024 * 1024,
+                "Invalid image metadata member",
+            )
+            stream = archive.extractfile(member)
+            require(stream is not None, "Missing image metadata")
+            assert stream is not None
+            with stream:
+                return stream.read()
+
+        entries = json.loads(read("manifest.json"))
+        require(isinstance(entries, list) and len(entries) == 1, "Expected one archived image")
+        entry = entries[0]
+        require(isinstance(entry, dict) and entry.get("RepoTags") == [image_ref], "Archived tag mismatch")
+        config_name = entry.get("Config")
+        require(
+            isinstance(config_name, str)
+            and bool(re.fullmatch(r"(?:blobs/sha256/[0-9a-f]{64}|[0-9a-f]{64}\.json)", config_name)),
+            "Invalid archived config path",
+        )
+        config_bytes = read(config_name)
+        config_digest = "sha256:" + hashlib.sha256(config_bytes).hexdigest()
+        expected_config_path = (
+            "blobs/sha256/" + config_digest[7:]
+            if config_name.startswith("blobs/")
+            else config_digest[7:] + ".json"
+        )
+        require(config_name == expected_config_path, "Archived config digest mismatch")
+        config = json.loads(config_bytes)
+        require(isinstance(config, dict), "Invalid archived config")
+        require(
+            config.get("os") == "linux" and config.get("architecture") == manifest.get("architecture"),
+            "Archived platform mismatch",
+        )
+        settings = config.get("config", {})
+        require(settings.get("User") == "10001:10001", "Unexpected archived application user")
+        labels = settings.get("Labels", {})
+        require(
+            labels.get("org.opencontainers.image.revision") == revision
+            and labels.get("io.cryptowatcher.build-run") == str(build_run),
+            "Archived source/build mismatch",
+        )
+        layers = entry.get("Layers")
+        diff_ids = config.get("rootfs", {}).get("diff_ids")
+        require(
+            isinstance(layers, list)
+            and isinstance(diff_ids, list)
+            and len(layers) == len(diff_ids) > 0
+            and all(isinstance(d, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", d) for d in diff_ids)
+            and all(isinstance(n, str) and n in by_name and by_name[n].isfile() for n in layers),
+            "Archived root filesystem mismatch",
+        )
+        manifest_digest = None
+        if "index.json" in by_name:
+            index = json.loads(read("index.json"))
+            descriptors = index.get("manifests", [])
+            require(len(descriptors) == 1, "Expected one OCI manifest")
+            descriptor = descriptors[0]
+            require(
+                descriptor.get("mediaType") == "application/vnd.oci.image.manifest.v1+json"
+                and bool(re.fullmatch(r"sha256:[0-9a-f]{64}", str(descriptor.get("digest")))),
+                "Unsupported OCI image descriptor",
+            )
+            manifest_digest = descriptor["digest"]
+            oci_bytes = read("blobs/sha256/" + manifest_digest[7:])
+            require(
+                "sha256:" + hashlib.sha256(oci_bytes).hexdigest() == manifest_digest
+                and len(oci_bytes) == descriptor.get("size"),
+                "OCI manifest digest mismatch",
+            )
+            oci = json.loads(oci_bytes)
+            require(oci.get("config", {}).get("digest") == config_digest, "OCI config binding mismatch")
+            require(oci.get("config", {}).get("size") == len(config_bytes), "OCI config size mismatch")
+            require(
+                ["blobs/sha256/" + d["digest"][7:] for d in oci.get("layers", [])] == layers,
+                "OCI layer binding mismatch",
+            )
+    identities = {config_digest}
+    if manifest_digest:
+        identities.add(manifest_digest)
+    require(manifest.get("image_id") in identities, "Build image identity differs from archive")
+    for field, value in (("image_config_digest", config_digest), ("image_manifest_digest", manifest_digest)):
+        require(field not in manifest or manifest[field] == value, "Release image provenance mismatch")
+    return {
+        "image_ref": image_ref,
+        "config_digest": config_digest,
+        "manifest_digest": manifest_digest,
+        "identities": identities,
+        "diff_ids": diff_ids,
+    }
+
+
+def loaded_image_id(identity: dict[str, Any], manifest: dict[str, Any]) -> str:
+    """Resolve the tag only to validate it, then return the immutable host ID."""
+    info = json.loads(run(["docker", "image", "inspect", identity["image_ref"]]))[0]
+    require(info["Id"] in identity["identities"], "Loaded image differs from verified archive")
+    require(
+        info["Os"] == "linux" and info["Architecture"] == manifest["architecture"],
+        "Loaded platform mismatch",
+    )
+    require(info["RootFS"]["Layers"] == identity["diff_ids"], "Loaded root filesystem mismatch")
+    require(info["Config"]["User"] == "10001:10001", "Unexpected application user")
+    labels = info["Config"].get("Labels", {})
+    require(
+        labels.get("org.opencontainers.image.revision") == manifest["source_sha"]
+        and labels.get("io.cryptowatcher.build-run") == str(manifest["build_run"]),
+        "Loaded source/build mismatch",
+    )
+    return info["Id"]
+
+
 def main_revision() -> str:
     request = urllib.request.Request(
         "https://api.github.com/repos/Just9120/crypto-watcher/git/ref/heads/main",
@@ -163,15 +292,9 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
         manifest = extract_bundle(bundle, release)
         require(manifest.get("source_sha") == revision, "Source identity mismatch")
         require(manifest.get("architecture") == target["architecture"], "Target architecture mismatch")
-        image = manifest["image_id"]
+        identity = archive_image_identity(release / "image.tar.gz", manifest)
         run(["docker", "load", "-i", str(release / "image.tar.gz")], timeout=180)
-        info = json.loads(run(["docker", "image", "inspect", image]))[0]
-        require(
-            info["Id"] == image
-            and info["Config"]["Labels"].get("org.opencontainers.image.revision") == revision,
-            "Loaded image mismatch",
-        )
-        require(info["Config"]["User"] == "10001:10001", "Unexpected application user")
+        image = loaded_image_id(identity, manifest)
         environment = {
             **os.environ,
             "CW_IMAGE": image,
@@ -265,6 +388,9 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
             "state": "SWITCHING",
             "source_sha": revision,
             "image_id": image,
+            "build_image_id": manifest["image_id"],
+            "image_config_digest": identity["config_digest"],
+            "image_manifest_digest": identity["manifest_digest"],
             "bundle_sha256": digest,
             "build_run": manifest["build_run"],
             "at": time.time(),

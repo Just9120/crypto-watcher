@@ -43,9 +43,11 @@ jobs:
       - run: python scripts/checks.py all
       - env:
           REVISION: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
         run: |
-          docker build --build-arg SOURCE_REVISION="$REVISION" -t cryptowatcher:ci .
-          python scripts/image_checks.py cryptowatcher:ci "$REVISION"
+          docker build --build-arg SOURCE_REVISION="$REVISION" --build-arg BUILD_RUN="$RUN_ID" -t "cryptowatcher:$REVISION" .
+          python scripts/image_checks.py "cryptowatcher:$REVISION" "$REVISION"
+          python scripts/package_release.py "$REVISION" "$RUN_ID" "cryptowatcher:$REVISION" .cache-g1/ci-release
   ci-required:
     needs: [select, documentation, validation]
     if: always()

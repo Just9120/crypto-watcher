@@ -10,6 +10,11 @@ import subprocess
 import tarfile
 from pathlib import Path
 
+if __package__:
+    from .deploy_receiver import archive_image_identity, loaded_image_id, run
+else:
+    from deploy_receiver import archive_image_identity, loaded_image_id, run
+
 
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -56,6 +61,14 @@ def main() -> None:
         "migration_class": "NONE",
         "architecture": inspection["Architecture"],
     }
+    identity = archive_image_identity(archive, manifest)
+    run(["docker", "load", "-i", str(archive)], timeout=180)
+    loaded_image_id(identity, manifest)
+    manifest.update(
+        image_config_digest=identity["config_digest"],
+        image_manifest_digest=identity["manifest_digest"],
+        archive_round_trip="PASS",
+    )
     (output / "manifest.json").write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
     bundle = output / "bundle.tar"
     with tarfile.open(bundle, "w") as handle:
