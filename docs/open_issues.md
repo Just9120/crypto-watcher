@@ -36,38 +36,61 @@ Snapshot: 2026-10-10, проверка около 10:00–10:15 Europe/Moscow; `
 | G5 — Derivatives enrichment / calibration | Optional Spot derivatives context и ручная статистическая калибровка profiles/detectors | P2; G2–G3; нет automatic production tuning |
 | Cleanup/consolidation | Убрать superseded CMC/reset UX, подтвердить helpers, объединить docs и commands | По риску вместе с выбранной Goal; F02–F04/F23–F24; preserve migration/state |
 
-## Current Goal
+## Current Goal — G1 (IMPLEMENT)
 
-**Implementation Goal не выбрана и не активирована.** Основание текущей работы — явный запрос AUDIT; audit docs PR не поручает исправления findings или pipeline.
+Поручение: владелец 2026-10-10 явно поручил реализовать весь согласованный план G1 → G2A → G2B → G4/G3 → G5 → G6. Повторный выбор этих Goals не требуется. К следующему основному PR переходим после обязательной поставки предыдущего. Внешний blocker не отменяет независимую подготовку.
 
-Текущий scope: обновить только `docs/product_scope.md` и `docs/open_issues.md`, полный audit quality review, один docs PR до merge по приложенному AGENTS. Non-goals: код, Docker/config, workflows/settings, README/state_contract/router, внешний Doc, trading agent, Telegram сообщения, production state/deploy.
+Результат G1: сохранить существующий composite и owner controls, закрыть доступ для чужих пользователей, отделить revisioned owner configuration от delivery/runtime, безопасно мигрировать JSON v2 в SQLite, добавить regression suite, reproducible dependencies, CI/CD и подтвердить первую поставку.
 
-Audit DoD: все обязательные разделы S01 покрыты AC либо SPEC gap; statuses/denominator просчитаны на проверенном main; findings имеют evidence/action/priority/confidence/dependencies; documentation validation/self-review PASS; PR с ровно двумя canonical файлами, актуальные gates проверены, merge подтверждён. CD N/A: этот PR не меняет runtime/artifact/config.
+Branch: `codex/g1-safe-foundation-20261010`; base `33e0e6304bca3c0a02343c2456d6473655b1d0c0`; исходный worktree, clean до начала. Один основной PR. PR/head/CI/CD records PENDING до primary evidence. Предыдущий audit завершён PR19, merge этой base; audit CD N/A.
 
-Branch: `codex/audit-2026-10-10`. Base SHA: `8ace3638b9193444948d0beb88e0c49e9f2f068e`. Worktree: исходный repository, без чужих изменений. PR number/head/merge revision: PENDING до primary records; восстанавливать по этой branch, title audit docs и GitHub PR records, не создавать metadata-only follow-up commit ради собственного SHA.
+### Scope и DoD
 
-### Предлагаемый scope G1 — требуется выбор владельца
+Полные критерии G1: AC-01-03, AC-01-04, AC-07-03 (сохранение control deck), AC-08-02, AC-10-01, AC-10-03, AC-12-01, AC-12-02, AC-12-04. READY существующих AC-01-01/02/05, AC-03-03/05, AC-04-01/05 сохраняем regression checks. Foundation AC-08-01/12-03 не закрывает ещё отсутствующие market/analytics/integration функции.
 
-Результат: бот продолжает legacy Spot мониторинг, domain settings безопасно принадлежат единственному owner и сохраняются при restart; damaged/forward state не теряется; changes проверяются CI и поставляются на существующий VPS с идентифицируемой revision.
+Findings: F02–F07, F21, F23, F25–F30 в соответствующем scope; F16/F22/F29/F31 — foundation, остаток явно сохраняется. F24 только подтверждённый cleanup после entrypoint/registration/history review. Non-goals: WS, broad dual-market universe, новые detectors, episodes/outcomes/digest/enrichment/agent integration.
 
-Полные AC: AC-01-04, AC-08-01, AC-08-02, AC-10-01, AC-10-03, AC-12-01, AC-12-02. Для AC-08-01 future settings schema создаётся без включения нереализованных detectors/outcomes; UI явно отмечает доступные функции. Safety integration: один runtime остаётся допустимым, existing Spot behavior сохранён, owner migration на копиях с rollback; новые market features ещё не включены. Findings closure: F03–F07/F16/F21/F25–F28 и F02/F04/F26/F30 по затронутому scope; F21 закрывается и для legacy poll/status. Один основной PR; необходимость двух пока не установлена.
+DoD: scope реализован и self-review выполнен; обязательные checks актуальной PR revision PASS; merge подтверждён; первая migration имеет backup/restore rehearsal и согласованную конкретную procedure; running revision/digest и обязательные post-checks VPS подтверждены. Runtime delivery сейчас BLOCKED: CLI SSH `root@167.86.68.98:22` отклонён; unit/path/config/backup UNSET. Без доступа подготовка кода/CI продолжается, production checks не объявляются N/A.
 
-Non-goals G1: широкий universe, WS, новые detectors, episodes, history/outcomes/digest, derivatives enrichment, agent integration, произвольный cleanup. Эти части остаются в G2–G5. Dependencies: B01 delivery access/procedure, Q03 owner mapping на безопасной копии. Criteria закрытия: 7 AC READY с meaningful tests, актуальные required CI/review успешны, PR merged, expected artifact/revision на VPS, state/owner/status smoke и обязательные post-checks PASS; неизвестный target/gate не считается N/A.
+### Задачи
+
+- [ ] Read-only VPS inventory: process/unit/path/volume/config owners/revision/time sync/resources/backup.
+- [ ] Адаптировать AGENTS/ci-cd rules и сохранить canonical paths.
+- [ ] Fail-closed owner/user/private-chat guards всех entrypoints.
+- [ ] Validated revisioned config и защита concurrent fetch/settings changes.
+- [ ] SQLite WAL ownership/schema, JSON migration, backup/restore/unknown-version protection.
+- [ ] Разделить config/state/render/Bybit composite/Telegram boundaries; сохранить работающие controls.
+- [ ] Deprecate CMC/reset paths с безопасными old callbacks.
+- [ ] Lock/hash dependencies, meaningful regression tests и canonical checks.
+- [ ] Minimal CI + immutable artifact/CD scripts, production settings при доступных правах.
+- [ ] README/state contract/architecture/delivery procedure и findings Evidence.
+- [ ] PR → required CI/review → merge → verified first delivery.
 
 ### Validation Plan
 
-| AC / риск | Проверка / expected result | Команда/tool, cwd | Environment / этап | Обязательность / условия |
+| AC / риск | Expected result | Canonical command/tool, cwd | Environment / этап | Gate |
 | --- | --- | --- | --- | --- |
-| Audit docs: scope/источники/AC | 58 unique AC в spec и плане, все statuses/evidence, непротиворечивая арифметика, ссылки существуют, нет внешних links | Markdown/AC checker вне repo; `git diff --check`; root | Local audit / до PR | REQUIRED; PASS до initial push |
-| Audit docs: origin/main и gates | remote SHA/base/divergence/PR inventory; ровно 2 docs files; required checks/reviews latest head | Git fetch + GitHub primary APIs | GitHub / до merge | REQUIRED; отсутствие checks установлено, не имитация PASS CI |
-| Audit code evidence | Compile in memory; targeted synthetic composite/auth/state/delivery/race/migration/render scenarios | Внешний `diagnostics.py` с PTB20.8; root | Windows Python3.12 / audit | REQUIRED для READY/подтверждённых findings; scripts не добавляются в repo |
-| Audit dependencies | Reinstall compatible manifest, pip check, PyPI advisories всей runtime closure | Изолированное environment вне repo; external `dependencies.py` | Windows Python3.12 / audit | RECOMMENDED; target Linux3.11/VPS inventory не проверен |
-| G1: access/settings/migration/race | Owner/unauthorized/group/empty config; corrupt/forward/legacy/explicit-empty/invalid settings; concurrent apply; restore на копиях | Будущая canonical suite/command UNSET до implementation; закрепить в README/scripts | Local targeted + CI / G1 | REQUIRED; не выдумывать существующий test command |
-| G1: install/config/build | Reproducible dependency resolution, compile/import, config validation, image build/start/restart with persisted state | `python -m pip install -r requirements.txt` сейчас manifest install; Docker build/Compose; root | Python3.11 Linux container / CI | REQUIRED в G1; Docker локально unavailable, это не N/A |
-| G1: CI/review | Minimal suite/build на предусмотренной revision; triggers/runners/permissions/required checks зафиксированы | GitHub Actions, будущие canonical scripts | GitHub / pre-merge | REQUIRED; настройка по ci-cd-rules.md только после выбора Goal |
-| G1: CD/version/recovery | Exact artifact/revision, no conflicting deploy, backup/migration preconditions, owner status/state smoke, live version/health, rollback procedure | Project delivery procedure UNSET; VPS deployment unit UNSET | VPS Contabo / post-merge | REQUIRED для runtime Goal; B01 пока BLOCKED |
-| Telegram live rendering | No parse/length errors, current settings и controls, правильные market links | Безопасный owner smoke/test bot по согласованной процедуре | Test/owner Telegram / соответствующая Goal | RECOMMENDED пока нет отдельного production smoke gate; audit не отправляет сообщения |
-| Performance/recovery расширенные | Реальный universe stream/subscription/rate/cadence/backlog и restart/outage replay | Tools/limits UNSET до G2 architecture | Controlled non-production / G2 | По риску REQUIRED для correctness и RECOMMENDED для capacity; SLO не придуманы |
+| Auth/config/migration/race/composite | Owner positive, stranger/group/empty-config denied; original state preserved; revision race suppressed; formulas unchanged | `python -m pytest`, root | Isolated local fixtures / targeted during development; Linux Python3.11 CI full suite | REQUIRED |
+| Conventions/types | Lint/format/type checks detect meaningful violations | `python scripts/checks.py`, root; commands installed with G1 | Local cheap checks and CI | REQUIRED |
+| Install/build | Hash-locked install, pip check, Linux image startup/version/migration on disposable data | Docker build and fixture image checks in CI | Linux container / PR | REQUIRED; local Docker unavailable is limitation, not N/A |
+| CI/revision/review | Latest applicable jobs PASS on test merge revision, self-review and actual protections respected | GitHub primary records | GitHub / pre-merge | REQUIRED |
+| Backup/migration/recovery | Original JSON unchanged; consistent DB backup restores and integrity/owner/settings match on isolated copy | Migration/restore fixtures + reviewed delivery runbook | Isolated copy / before first stateful delivery | REQUIRED |
+| CD/runtime | Expected source/image digest; exact unit; owner controls; persistent state; liveness and applicable composite smoke | Reviewed target-specific procedure and primary deployment records | Contabo / post-merge | REQUIRED, BLOCKED until inventory/access |
+| Secret/config inventory | No secrets in tracked output, errors or image; exact dependency advisory review | Negative tests + locked artifact inventory | Local/CI and VPS inventory | REQUIRED |
+
+### Утверждённый roadmap всего scope
+
+| Goal | Результат / AC | Dependencies / delivery |
+| --- | --- | --- |
+| G1 | Safe foundation, access/config/migration/tests/CI/CD; scope выше | Один основной PR; verified first migration/delivery |
+| G2A | E02/E03 + AC-04-01/07-02: оба рынка, широкий eligible universe, WS/4TF/gaps/typed watchlist/correct links | После G1 delivery; один основной PR |
+| G2B | E04/E05 + AC-06-01/07-01/04/07/08-03: пять detectors, profiles/manual, episodes/freshness/history/Telegram pending | После G2A delivery; один основной PR |
+| G4 | AC-09-01…05, independence часть09-06, agent часть07-05: signed v2 delivery/outbox/replay/diagnostics | После G2B и поставки подготовленного receiver основного проекта. Два основных PR обоснованы разными repositories: consumer-first backward-compatible v2 с CI/CD, затем producer с CI/CD |
+| G3 | AC-06-02…07/07-06/11-01/02, analytics часть09-06/digest часть07-05: outcomes/cohorts/export/digest/retention | После G2B; независим от G4/calibration, история уже накапливается; один основной PR |
+| G5 | AC-11-03/04 и завершение08-01/12-03: optional reliable derivatives enrichment + manual calibration tools | После стабильного core; один основной PR; no auto tuning |
+| G6 | Полный AUDIT актуального origin/main, всех AC/Evidence/findings, capacity/recovery и consolidated docs | После deliveries; один audit docs PR; необходимые substantive fixes поставляются по implementation flow |
+
+Связанные AC-07-05/09-06/10-04 становятся READY после всех соответствующих subsystems. Все32 findings остаются в реестре ниже; F24/F31/F32 остаются кандидатами до подтверждения необходимости. Проценты во время Goals не пересчитываются.
 
 ## Состояние AC и Evidence baseline
 
