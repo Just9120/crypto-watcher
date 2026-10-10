@@ -1,5 +1,4 @@
 # CryptoWatcher — delivery plan
-
 Canonical plan: этот файл. Canonical spec: [product_scope.md](product_scope.md). Прежние follow-up темы сохранены в F09/F22/F24/F25/F32; старые номерные разделы не были AC IDs. Исторический audit snapshot ниже не обновляет процент во время IMPLEMENT. Текущее branch evidence отдельно; подробный audit report остаётся вне repository.
 
 ## Audit baseline и независимая оценка
@@ -98,7 +97,7 @@ Digest initiallyOFF, default60min, независимая delivery preference. O
 
 G4 prerequisite перепроверен2026-10-10T22:47Z: counterpart maincc8c632cf574fdd7af389b54c1286082ee53bb22 уже содержит v1 receiver, source/schema/context blobs verified. v2 отсутствует; vault binding/live endpoint evidence UNSET. Last main deployment38084741177 FAIL, предыдущий38081459133/a7fe1db… SUCCESS; exact running source/activation требует primary runtime records. Чужой workspace имеет unrelated tracked/untracked changes и другой текущий scope; не изменяется. B02 зависит от v2/qualified runtime/binding и перенесён на итоговый blocker register; G3/G5 независимы.
 
-Следующий шаг — outcomes/scheduler foundation и meaningful fixtures в одной G3 ветке. До всего scope/local checks/self-review push нет. После G3 и G5 вернуться к G4/external prerequisites, затем G6; необходимая receiver/producer поставка выполняется consumer-first согласно approved plan. Raw audit/operator materials остаются вне tracked repository.
+Outcomes foundation подготовлен: validated horizons, full-window directed/neutral metrics/noise, bounded durable admission/retry, atomic protected sources и retention guard. Windows Python3.12:68 targeted outcome/detector/event/config tests PASS, docs/Ruff/mypy PASS. Проверены incomplete→complete/restart/backup, frozen horizons/reference, no silent recalculation, extreme valid horizon ordering, transactional disk fault и сохранность protected/pending inputs. Runtime/controller integration и comparator/export/digest ещё отсутствуют; G3 остаётся0/10. Следующий шаг — comparator/cohorts/causal export, затем runtime/UI/digest. До всего scope/local checks/self-review push нет. После G3 и G5 вернуться к G4/external prerequisites, затем G6; receiver/producer поставка consumer-first. Raw audit/operator materials остаются вне tracked repository.
 
 ### Утверждённый roadmap всего scope
 

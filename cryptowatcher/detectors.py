@@ -68,7 +68,10 @@ def baseline(candles: list[Candle], count: int) -> list[Candle]:
 
 def atr14(candles: list[Candle]) -> float:
     window = baseline(candles, 16)  # Previous 14 TR each require its own previous close.
-    return sum(true_range(window[i], window[i - 1]) for i in range(1, 15)) / 14
+    value = sum(true_range(window[i], window[i - 1]) for i in range(1, 15)) / 14
+    if not math.isfinite(value):
+        raise DetectorUnavailable("nonfinite_atr_baseline")
+    return value
 
 
 def evaluate(
