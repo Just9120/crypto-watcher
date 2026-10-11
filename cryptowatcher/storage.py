@@ -301,7 +301,9 @@ class Store:
         with self.db:
             self.db.execute("INSERT OR REPLACE INTO runtime VALUES (?,?)", (key, encode(payload)))
 
-    def backup(self, destination: Path, *, timeout_seconds: float = 900) -> dict[str, float | str]:
+    def backup(
+        self, destination: Path, *, timeout_seconds: float = 900, validation_directory: Path | None = None
+    ) -> dict[str, float | str]:
         if destination.exists() or destination.resolve() == self.path.resolve():
             raise StateError("Backup destination must be new")
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -312,15 +314,21 @@ class Store:
         deadline = started + timeout_seconds
         phase = "COPY"
         copied_at: float | None = None
+        validated_hash: str | None = None
 
         def metrics() -> dict[str, float | str]:
             now = time.monotonic()
-            return {
+            result: dict[str, float | str] = {
                 "phase": phase,
                 "copy_seconds": round((copied_at if copied_at is not None else now) - started, 3),
                 "integrity_seconds": round(now - copied_at, 3) if copied_at is not None else 0.0,
                 "elapsed_seconds": round(now - started, 3),
             }
+            if validation_directory is not None:
+                result["validation_mode"] = "TMPFS"
+            if validated_hash is not None:
+                result["sha256"] = validated_hash
+            return result
 
         def progress(status: int, remaining: int, total: int) -> None:
             if time.monotonic() >= deadline:
@@ -339,7 +347,13 @@ class Store:
                     source.backup(backup, pages=256, progress=progress, sleep=0.01)
                 copied_at = time.monotonic()
                 phase = "INTEGRITY"
-                check_integrity(backup, deadline=deadline)
+                if validation_directory is None:
+                    check_integrity(backup, deadline=deadline)
+            if validation_directory is not None:
+                from .validation import validate_backup
+
+                validation = validate_backup(destination, validation_directory, deadline=deadline)
+                validated_hash = str(validation["sha256"])
         except IntegrityError as exc:
             exc.backup_metrics = metrics()
             raise

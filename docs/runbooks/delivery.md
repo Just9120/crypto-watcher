@@ -72,6 +72,42 @@ Bootstrap берёт existing target lock, сохраняет backup `authorized
 
 ## Routine CD: schema1 / NONE
 
+### Полная проверка многогигабайтной SQLite
+
+Source и persistent backup остаются обязательными full integrity gates до switch.
+Проверочные контейнеры имеют отдельный private tmpfs `/validation`, UID/GID10001,
+read-only root, network none, cap-drop ALL, CPU1 и memory-swap=memory (без swap).
+Бот и другие service units эти limits не получают. RAM allocation определяется
+по WAL-aware `database.snapshot_bytes` diagnostics: округление до MiB,
+scratch=bytes+64MiB, memory=bytes+512MiB; host MemAvailable должен оставить
+1536MiB reserve сверх memory cap. Недоступный размер, недостаток RAM/space или
+рост сверх allocation блокирует поставку до switch. Увеличение VPS resources,
+очистка данных и ослабление validation не выполняются автоматически.
+
+CLI [validation.py](../../cryptowatcher/validation.py) использует explicit
+`--validation-directory /validation` только для `state-check` и `backup`.
+Directory должен быть отдельным tmpfs mount текущего UID с mode700, без symlinks.
+Для source state-check SQLite backup API копирует pinned WAL snapshot в RAM;
+live reader освобождается до full writable integrity, а owner/settings/import
+metadata возвращаются из того же проверенного snapshot. Persistent backup
+по-прежнему создаётся online copy в established backup directory. После закрытия
+он копируется byte-for-byte в RAM, проходит full writable integrity и SHA256
+сверку RAM/persistent bytes до и после validation. Temporary workspace удаляется
+при любом результате; persistent incomplete backup сохраняется для диагностики.
+Default CLI без flag сохраняет прежний disk mode, CD использует mandatory TMPFS.
+Все copy/hash/check действия входят в прежний общий stage budget, максимум900s.
+
+В deployment record сохраняются resource allocations, completed backup hash и
+source/image/health/persistence/market post-checks. CI capture принимает PASS только
+с COMPLETE/TMPFS/full-backup SHA256 proof, source/build/artifact identity и
+успешным transport. Неизвестные fields и secret-bearing errors не экспортируются.
+Existing root-owned receiver9569f32c обновляется один раз до merge hash-bound
+operator installer; SSH key/target и forced-command permissions сохраняются.
+Rehearsal2026-10-11T15:44–15:48UTC: closed5,422,329,856byte copy/hash/full writable
+integrity PASS201.800s, actual integrity31.721s; constraint negative control и
+original/live preservation PASS. Это snapshot qualification, не гарантия capacity
+растущей production DB. Required Linux CI/image checks и actual CD остаются gates.
+
 ### Hotfix receiver update до merge
 
 При подтверждённом mismatch установленных operation timeouts с multi-GiB history применяется [update_cd_receiver.py](../../scripts/update_cd_receiver.py). Это один operator setup step из существующей root SSH session; restricted Actions key не получает shell/self-update permissions. Подготовленный installer и receiver берутся из immutable reviewed PR head с проверенными hashes. Preflight и execute требуют unchanged expected main/base/head, trusted repository и latest successful `ci-required` app15368. До изменения проверяются exact host/account, target hash, old receiver hash/permissions, healthy running G5 revision и отсутствие competing deploy под target lock. Execute сохраняет verified old receiver, атомарно заменяет только root-owned receiver и записывает receipt; app/data/SSH/secrets не меняет. Unknown/partial state не повторяется вслепую. После receipt PASS агент merges PR через обычные gates; последующий CD проверяет новый main artifact.

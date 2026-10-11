@@ -57,6 +57,8 @@ def parsed_record(value: bytes) -> dict:
 
 def delivery_result(result, *, revision: str, digest: str, build_run: int) -> tuple[dict, int]:
     success = parsed_record(result.stdout)
+    proof = success.get("backup_validation")
+    proof = proof if isinstance(proof, dict) else {}
     if (
         result.returncode == 0
         and success.get("state") == "PASS"
@@ -68,8 +70,34 @@ def delivery_result(result, *, revision: str, digest: str, build_run: int) -> tu
         and success.get("image_id")
         in (success.get("image_config_digest"), success.get("image_manifest_digest"))
         and re.fullmatch(r"sha256:[0-9a-f]{64}", str(success.get("image_id")))
+        and proof.get("phase") == "COMPLETE"
+        and proof.get("validation_mode") == "TMPFS"
+        and re.fullmatch(r"[0-9a-f]{64}", str(proof.get("sha256")))
     ):
-        return {key: value for key, value in success.items() if key in SUCCESS_FIELDS}, 0
+        record = {key: value for key, value in success.items() if key in SUCCESS_FIELDS}
+        record["backup_validation"] = {
+            "phase": "COMPLETE",
+            "validation_mode": "TMPFS",
+            "sha256": proof["sha256"],
+        }
+        for name in ("state_validation_resources", "backup_validation_resources"):
+            resource = success.get(name)
+            if isinstance(resource, dict):
+                record[name] = {
+                    key: value
+                    for key, value in resource.items()
+                    if key
+                    in {
+                        "snapshot_bytes",
+                        "scratch_bytes",
+                        "memory_limit_bytes",
+                        "host_available_bytes",
+                        "host_reserve_bytes",
+                    }
+                    and type(value) is int
+                    and value > 0
+                }
+        return record, 0
     failure = parsed_record(result.stderr)
     if failure.get("state") != "BLOCKED":
         failure = {}

@@ -23,6 +23,7 @@ def success(**changes):
         "image_config_digest": IMAGE,
         "post_checks": "source/image/health/persistence/market PASS",
         "phase": "COMPLETE",
+        "backup_validation": {"phase": "COMPLETE", "validation_mode": "TMPFS", "sha256": "f" * 64},
         **changes,
     }
 
@@ -84,6 +85,8 @@ def test_failed_delivery_artifact_is_nonempty_safe_and_retains_strict_transport(
         ({"build_run": RUN + 1}, 0),
         ({"post_checks": None}, 0),
         ({"phase": "SWITCH"}, 0),
+        ({"backup_validation": {}}, 0),
+        ({"backup_validation": {"phase": "COMPLETE", "validation_mode": "DISK", "sha256": "f" * 64}}, 0),
         ({}, 1),
     ],
 )
@@ -94,6 +97,20 @@ def test_success_requires_exact_source_artifact_checks_and_successful_transport(
     value, status = delivery_result(raw, revision=REVISION, digest=DIGEST, build_run=RUN)
     assert (status == 0) == (not changes and exit_status == 0)
     assert "fixture-secret" not in json.dumps(value) and "raw-private-error" not in json.dumps(value)
+
+
+def test_backup_and_memory_proof_reject_unknown_secret_fields():
+    payload = success()
+    payload["backup_validation"]["unknown"] = "fixture-secret"
+    payload["state_validation_resources"] = {
+        "snapshot_bytes": 4096,
+        "host_available_bytes": "fixture-secret",
+        "unknown": "fixture-secret",
+    }
+    raw = CompletedProcess([], 0, stdout=json.dumps(payload).encode(), stderr=b"")
+    value, status = delivery_result(raw, revision=REVISION, digest=DIGEST, build_run=RUN)
+    assert status == 0 and value["state_validation_resources"] == {"snapshot_bytes": 4096}
+    assert "fixture-secret" not in json.dumps(value)
 
 
 @pytest.mark.parametrize(

@@ -60,6 +60,44 @@ def database_timeout(size: int) -> int:
     return min(900, 180 + ((size + (1 << 30) - 1) // (1 << 30)) * 150)
 
 
+def validation_resources(size: int, available: int) -> dict[str, int]:
+    require(type(size) is int and size > 0, "Validated snapshot size unavailable")
+    require(type(available) is int and available > 0, "Host memory evidence unavailable")
+    mib = 1024 * 1024
+    rounded = ((size + mib - 1) // mib) * mib
+    limit = rounded + 512 * mib
+    reserve = 1536 * mib
+    require(available >= limit + reserve, "Insufficient available RAM for full validation")
+    return {
+        "snapshot_bytes": size,
+        "scratch_bytes": rounded + 64 * mib,
+        "memory_limit_bytes": limit,
+        "host_available_bytes": available,
+        "host_reserve_bytes": reserve,
+    }
+
+
+def memory_available() -> int:
+    values = dict(line.split(":", 1) for line in Path("/proc/meminfo").read_text().splitlines())
+    return int(values["MemAvailable"].split()[0]) * 1024
+
+
+def validation_args(container_args: list[str], allocation: dict[str, int]) -> list[str]:
+    return [
+        *container_args[:-1],
+        "--memory",
+        str(allocation["memory_limit_bytes"]),
+        "--memory-swap",
+        str(allocation["memory_limit_bytes"]),
+        "--cpus",
+        "1",
+        "--tmpfs",
+        "/validation"
+        + f":rw,noexec,nosuid,nodev,size={allocation['scratch_bytes']},mode=0700,uid=10001,gid=10001",
+        container_args[-1],
+    ]
+
+
 def stop_candidate() -> None:
     if ACTIVE_RECORD is None or not ACTIVE_RECORD.get("candidate_name"):
         return
@@ -421,42 +459,71 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
         budget = database_timeout(database_size)
         ACTIVE_RECORD.update(database_bytes=database_size, database_timeout_seconds=budget)
         record_phase("CHECK_STATE_INTEGRITY")
+        allocation = validation_resources(
+            before.get("database", {}).get("snapshot_bytes"), memory_available()
+        )
+        ACTIVE_RECORD["state_validation_resources"] = allocation
+        record_phase("CHECK_STATE_INTEGRITY")
+        checks = validation_args(container_args, allocation)
         state = json.loads(
             run(
                 [
-                    *container_args,
+                    *checks,
                     "python",
                     "-m",
                     "cryptowatcher",
                     "state-check",
                     "--timeout-seconds",
                     str(budget - 15),
+                    "--validation-directory",
+                    "/validation",
                 ],
                 timeout=budget,
             )
         )
         receipt = json.loads((APP / "data/sqlite/.g1-migration.json").read_text(encoding="utf-8"))
         require(state["legacy_sha256"] == receipt["legacy_sha256"], "Migration identity mismatch")
+        require(state.get("validation_mode") == "TMPFS", "Full RAM state validation missing")
         backups = APP / "data/sqlite/backups"
         require(backups.is_dir(), "Reviewed backup directory missing")
         backup_name = f"pre-{revision}-{int(time.time())}.sqlite3"
         require(shutil.disk_usage(APP).free > database_size + 512 * 1024 * 1024, "Insufficient backup disk")
         ACTIVE_RECORD.update(backup=backup_name)
         record_phase("BACKUP_AND_VALIDATE")
-        run(
-            [
-                *container_args,
-                "python",
-                "-m",
-                "cryptowatcher",
-                "backup",
-                "--timeout-seconds",
-                str(budget - 15),
-                "--destination",
-                f"/data/sqlite/backups/{backup_name}",
-            ],
-            timeout=budget,
+        refreshed = json.loads(run([*container_args, "python", "-m", "cryptowatcher", "diagnostics"]))
+        allocation = validation_resources(
+            refreshed.get("database", {}).get("snapshot_bytes"), memory_available()
         )
+        ACTIVE_RECORD["backup_validation_resources"] = allocation
+        record_phase("BACKUP_AND_VALIDATE")
+        backup = json.loads(
+            run(
+                [
+                    *validation_args(container_args, allocation),
+                    "python",
+                    "-m",
+                    "cryptowatcher",
+                    "backup",
+                    "--timeout-seconds",
+                    str(budget - 15),
+                    "--destination",
+                    f"/data/sqlite/backups/{backup_name}",
+                    "--validation-directory",
+                    "/validation",
+                ],
+                timeout=budget,
+            )
+        )
+        proof = backup.get("backup", {})
+        require(
+            backup.get("status") == "backup_integrity_ok"
+            and proof.get("phase") == "COMPLETE"
+            and proof.get("validation_mode") == "TMPFS"
+            and bool(re.fullmatch(r"[0-9a-f]{64}", str(proof.get("sha256")))),
+            "Full persistent backup validation missing",
+        )
+        ACTIVE_RECORD["backup_validation"] = proof
+        record_phase("BACKUP_AND_VALIDATE")
         # Recheck immediately before switching. New main arriving during this operation queues next deploy.
         require(main_revision() == revision, "Candidate changed during preparation")
         previous = json.loads(run(["docker", "inspect", "crypto-watcher"]))[0]
@@ -480,6 +547,9 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
             "at": time.time(),
             "previous_image": previous["Image"],
             "backup": backup_name,
+            "backup_validation": proof,
+            "state_validation_resources": ACTIVE_RECORD["state_validation_resources"],
+            "backup_validation_resources": ACTIVE_RECORD["backup_validation_resources"],
         }
         ACTIVE_RECORD.update(record, switch_started=True)
         record_phase("SWITCH")

@@ -10,7 +10,17 @@ from pathlib import Path
 OWNER = "233382575"
 
 
-def run(image: str, directory: Path, *command: str, success: bool = True) -> str:
+def run(image: str, directory: Path, *command: str, success: bool = True, validation: bool = False) -> str:
+    validation_options = (
+        [
+            "--tmpfs=/validation:rw,noexec,nosuid,nodev,size=128m,mode=0700,uid=10001,gid=10001",
+            "--memory=256m",
+            "--memory-swap=256m",
+            "--cpus=1",
+        ]
+        if validation
+        else []
+    )
     result = subprocess.run(
         [
             "docker",
@@ -21,6 +31,7 @@ def run(image: str, directory: Path, *command: str, success: bool = True) -> str
             "--cap-drop=ALL",
             "--security-opt=no-new-privileges:true",
             "--tmpfs=/tmp:rw,noexec,nosuid,size=16m",
+            *validation_options,
             "-v",
             f"{directory.resolve()}:/data",
             "-e",
@@ -109,6 +120,68 @@ def main() -> None:
             "assert s.snapshot().settings.custom_pairs==(); assert not s.enabled(); "
             "assert s.muted('BTCUSDT',100); s.close()",
         )
+        state = json.loads(
+            run(
+                args.image,
+                directory,
+                "-m",
+                "cryptowatcher",
+                "state-check",
+                "--database",
+                "/data/store.db",
+                "--validation-directory",
+                "/validation",
+                validation=True,
+            )
+        )
+        assert state["validation_mode"] == "TMPFS" and not state["alerts_enabled"]
+        proof = json.loads(
+            run(
+                args.image,
+                directory,
+                "-m",
+                "cryptowatcher",
+                "backup",
+                "--database",
+                "/data/store.db",
+                "--destination",
+                "/data/ram-restore.db",
+                "--validation-directory",
+                "/validation",
+                validation=True,
+            )
+        )["backup"]
+        actual_hash = run(
+            args.image,
+            directory,
+            "-c",
+            "import hashlib; from pathlib import Path; print(hashlib.sha256(Path('/data/ram-restore.db').read_bytes()).hexdigest())",
+        ).strip()
+        assert proof["phase"] == "COMPLETE" and proof["validation_mode"] == "TMPFS"
+        assert proof["sha256"] == actual_hash
+        run(
+            args.image,
+            directory,
+            "-c",
+            """from contextlib import closing
+import sqlite3, time
+from pathlib import Path
+from cryptowatcher.validation import validate_backup
+from cryptowatcher.storage import IntegrityError
+with closing(sqlite3.connect('/data/constraint.db')) as db:
+    db.execute('CREATE TABLE checked(value INTEGER CHECK(value>0))')
+    db.execute('PRAGMA ignore_check_constraints=ON')
+    db.execute('INSERT INTO checked VALUES (-1)')
+    db.commit()
+try:
+    validate_backup(Path('/data/constraint.db'), Path('/validation'), deadline=time.monotonic()+30)
+except IntegrityError as error:
+    assert error.code == 'DATABASE_CORRUPT'
+else:
+    raise AssertionError('Constraint violation was accepted')
+""",
+            validation=True,
+        )
         run(
             args.image,
             directory,
@@ -145,7 +218,9 @@ def main() -> None:
         source.write_text('{"version":99,"chats":{}}')
         run(args.image, directory, *migration, success=False)
         assert source.read_text() == '{"version":99,"chats":{}}'
-    print("Image non-root / offline migration / backup readback / restart / liveness: PASS")
+    print(
+        "Image non-root / offline migration / full tmpfs validation / backup hash / restart / liveness: PASS"
+    )
 
 
 if __name__ == "__main__":

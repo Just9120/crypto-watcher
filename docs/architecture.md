@@ -40,6 +40,14 @@ G3 реализует outcomes/cohorts/export/retention; G4 добавит не�
 
 Image: pinned Python base digest, hash-locked dependencies, UID/GID10001, read-only root, no capabilities. `/data/sqlite` и его backups принадлежат приложению; исходный `/data/state_crypto_watcher.json` сохраняется. Health проверяет recent application heartbeat, а не внешний Bybit uptime. Market/data availability и Telegram delivery отображаются отдельно. Resource limits не назначены без измерений actual workload.
 
+Delivery validation использует отдельный resource-bounded offline container с
+private tmpfs; это не ограничение runtime. Source WAL snapshot освобождается после
+copy, full writable integrity проверяет private snapshot. Persistent backup также
+проверяется на byte-identical RAM copy с original/RAM SHA256 до и после проверки.
+RAM/space/deadline failure останавливает pre-switch stage; history не удаляется,
+DB restore/downgrade и снижение полноты checks не выполняются. Детали allocation,
+receiver update и обязательных post-checks — в [delivery runbook](runbooks/delivery.md).
+
 Operational target, trust boundaries, artifact identity, queue и recovery описаны в [delivery runbook](runbooks/delivery.md); ownership/migration — в [state contract](state_contract.md).
 
 ## G2A shared ingestion
