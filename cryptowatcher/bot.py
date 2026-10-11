@@ -20,7 +20,7 @@ from telegram.ext import (
     filters,
 )
 
-from .analytics import cohorts
+from .analytics import ComparisonWorker, cohorts
 from .analytics_recovery import AnalyticsRecovery
 from .config import (
     ConfigError,
@@ -32,6 +32,7 @@ from .config import (
 )
 from .detector_config import FAMILIES, PARAMETERS
 from .digest import Digest
+from .enrichment_runtime import Enrichment
 from .events import EventEngine, History
 from .ingestion import BybitRadar
 from .market import BybitREST, MarketError
@@ -42,6 +43,8 @@ from .render import (
     alert_keyboard,
     detectors_keyboard,
     digest_keyboard,
+    enrichment_keyboard,
+    enrichment_text,
     event_keyboard,
     event_text,
     history_keyboard,
@@ -87,6 +90,10 @@ COMMANDS = {
     "outcomes": "Последующее движение события",
     "horizons": "Настроить outcome horizons",
     "analytics": "Статистика detectors",
+    "compare": "Сравнение profiles и versions",
+    "recompare": "Пересчитать prior comparators события",
+    "enrichment": "Включить derivatives context",
+    "derivatives": "Derivatives context Spot монеты",
     "digest": "Управление дайджестом",
     "resetbase": "Устаревшее действие",
     "resetallbase": "Устаревшее действие",
@@ -111,6 +118,8 @@ MENU_ACTIONS = {
     "Outcomes": "outcomes",
     "Статистика": "analytics",
     "Digest": "digest",
+    "Derivatives": "derivatives",
+    "Сравнение": "compare",
 }
 MANUAL_FIELDS = {
     "watchlist_multiplier",
@@ -136,6 +145,7 @@ class Controller:
         self.retention = Retention(store)
         self.digest = Digest(store, infrastructure.delivery_chat_id)
         self.analytics_lock = asyncio.Lock()
+        self.enrichment = Enrichment(store, market) if isinstance(market, BybitRadar) else None
         self.engine = (
             EventEngine(store, source_revision=infrastructure.source_revision, on_event=self.outcomes.admit)
             if isinstance(market, BybitRadar)
@@ -158,7 +168,16 @@ class Controller:
                 now,
                 live=live,
                 source_context=public_context(store, stream.rsplit("/", 1)[0], now),
+                enrichment=self.enrichment_context(stream.rsplit("/", 1)[0], candles[-1].end),
             )
+
+    def enrichment_context(self, key: str, cutoff: int) -> dict[str, Any]:
+        if self.enrichment is None:
+            return {"state": "N/A", "reason": "REALTIME_RADAR_REQUIRED", "detector_input": False}
+        try:
+            return self.enrichment.context(key, cutoff)
+        except Exception as exc:
+            return {"state": "INVALID", "reason": type(exc).__name__, "detector_input": False}
 
     async def send(self, update: Update, text: str, markup: Any = None) -> None:
         message = update.effective_message
@@ -186,12 +205,14 @@ class Controller:
             "analytics": self.store.get_runtime("analytics", {"state": "PENDING"}),
             "analytics_recovery": self.recovery.diagnostics() if self.recovery else {"state": "N/A"},
             "digest": self.digest.diagnostics(),
+            "enrichment": self.enrichment.diagnostics() if self.enrichment else {"state": "N/A"},
             "capabilities": {
                 "composite": True,
                 "websocket": isinstance(self.market, BybitRadar),
                 "detectors": list(FAMILIES) if self.engine else ["composite"],
                 "episodes": self.engine is not None,
                 "outcomes": True,
+                "derivatives_enrichment": self.enrichment is not None,
                 "agent_delivery": False,
             },
         }
@@ -412,17 +433,58 @@ class Controller:
                         for h in horizons
                     ]
                     await self.send(update, outcome_text(event, outcomes, horizons), event_keyboard(event))
-        elif command == "analytics":
+        elif command == "enrichment":
+            if raw:
+                if raw.lower() not in ("on", "off"):
+                    raise ConfigError("Формат /enrichment on или /enrichment off")
+                self.change(enrichment_enabled=raw.lower() == "on")
+            await self.send(
+                update,
+                f"Optional derivatives context: {'ON' if self.store.snapshot().settings.enrichment_enabled else 'OFF'}\n"
+                "Ticker1min · OI comparison5min · exact asset identity. При gaps/ошибках Spot продолжает работать.\n"
+                "/enrichment on · /enrichment off · /derivatives spot/BTC\n"
+                + settings_text(self.store.snapshot()),
+                enrichment_keyboard(self.store.snapshot()),
+            )
+        elif command == "derivatives":
+            key = instrument_key(raw or "spot/BTC")
+            now = self.market.server_now() if isinstance(self.market, BybitRadar) else int(time.time() * 1000)
+            await self.send(
+                update,
+                enrichment_text(self.enrichment_context(key, now), now)
+                + "\n/enrichment on · /enrichment off · /derivatives spot/BTC. Текущий snapshot, отдельно от event history.",
+                enrichment_keyboard(self.store.snapshot()),
+            )
+        elif command == "recompare":
+            try:
+                event_id = str(uuid.UUID(raw))
+                now = (
+                    self.market.server_now()
+                    if isinstance(self.market, BybitRadar)
+                    else int(time.time() * 1000)
+                )
+                if now <= 0:
+                    raise ValueError("Clock pending")
+                state = ComparisonWorker(self.store).requeue(event_id, now)
+            except ValueError as exc:
+                raise ConfigError(
+                    "Формат /recompare event_uuid; событие должно быть сохранено и clock доступен"
+                ) from exc
+            await self.send(
+                update,
+                f"Comparator {state}. Frozen event/settings/reference и предыдущие revisions сохранены. Только prior windows; thresholds не меняются.",
+            )
+        elif command in ("analytics", "compare"):
             groups = (
                 tuple(raw.replace(",", " ").split())
                 if raw
-                else ("detector", "version", "settings", "market", "timeframe", "direction")
+                else ("detector", "profile", "version", "settings", "market", "timeframe", "direction")
             )
             try:
                 statistics = cohorts(self.store, groups, limit=20)
             except ValueError as exc:
                 raise ConfigError(
-                    "Groups: detector/version/settings/market/timeframe/instrument/universe/direction/strength"
+                    "Groups: detector/profile/version/settings/market/timeframe/instrument/universe/direction/strength"
                 ) from exc
             lines = [
                 "Статистика detectors · return %, описательная оценка информативности",
@@ -437,6 +499,12 @@ class Controller:
             lines.append(
                 "Малое N/неполная история ограничивают выводы; события могут быть зависимы. Это не доходность стратегии и не рекомендация."
             )
+            if command == "compare":
+                lines += [
+                    "Сравниваются только реально сохранённые profiles/settings. Автоматического изменения thresholds нет.",
+                    "/recompare event_uuid — явный новый расчёт comparators при новых исходных данных. Предыдущие revisions сохраняются.",
+                    "Текущие settings:\n" + settings_text(self.store.snapshot()),
+                ]
             await self.send(update, "\n".join(lines))
         elif command == "digest":
             now = (
@@ -483,8 +551,10 @@ class Controller:
         parts = str(query.data or "").split(":")
         if parts[0] == "deck" and len(parts) == 2 and parts[1] in ("profiles", "detectors"):
             await self.command(update, parts[1])
-        elif parts[0] in ("profile", "event", "outcomes") and len(parts) == 2:
+        elif parts[0] in ("profile", "event", "outcomes", "derivatives", "recompare") and len(parts) == 2:
             await self.command(update, parts[0], parts[1])
+        elif parts[0] == "enrichment" and len(parts) == 2 and parts[1] in ("on", "off", "status"):
+            await self.command(update, "enrichment", "" if parts[1] == "status" else parts[1])
         elif parts[0] == "digest" and len(parts) == 2 and parts[1] in ("on", "off", "status"):
             await self.command(update, "digest", "" if parts[1] == "status" else parts[1])
         elif parts[0] == "detector" and len(parts) == 3:
@@ -695,8 +765,6 @@ class Controller:
             return
         async with self.analytics_lock:
             try:
-                from .analytics import ComparisonWorker
-
                 self.outcomes.work(now)
                 ComparisonWorker(self.store).work(now)
                 self.retention.work(now)
@@ -707,6 +775,15 @@ class Controller:
                     "analytics", {"state": "FAILED", "error_class": type(exc).__name__, "at_ms": now}
                 )
                 logger.error("Analytics worker failure: %s", type(exc).__name__)
+
+    async def enrichment_job(self, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if self.enrichment is None or not isinstance(self.market, BybitRadar):
+            return
+        try:
+            await self.enrichment.work(self.market.server_now())
+        except Exception as exc:
+            self.store.put_runtime("enrichment", {"state": "FAILED", "error_class": type(exc).__name__})
+            logger.error("Optional enrichment failure: %s", type(exc).__name__)
 
     async def heartbeat(self, context: ContextTypes.DEFAULT_TYPE) -> None:
         self.store.put_runtime(
@@ -764,4 +841,5 @@ def application(controller: Controller) -> Application[Any, Any, Any, Any, Any, 
     app.job_queue.run_repeating(controller.heartbeat, interval=20, first=1)
     app.job_queue.run_repeating(controller.deliver, interval=2, first=2)
     app.job_queue.run_repeating(controller.analytics_job, interval=5, first=5)
+    app.job_queue.run_repeating(controller.enrichment_job, interval=2, first=6)
     return app

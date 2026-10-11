@@ -10,6 +10,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMa
 from .config import TIMEFRAMES, OwnerSettings
 from .detector_config import FAMILIES, effective_parameters
 from .detectors import freshness
+from .enrichment import freshness as metric_freshness
 from .market import RadarResult
 from .storage import Snapshot
 
@@ -35,6 +36,7 @@ def settings_text(snapshot: Snapshot) -> str:
         f"Profile: {s.profile}\nTelegram detectors: {', '.join(s.alert_detectors) or 'выключены'}\n"
         f"Watchlist sensitivity multiplier: {s.watchlist_multiplier:g}\n"
         f"Outcome horizons: {','.join(map(str, s.outcome_horizons))} min · digest interval {s.digest_interval_min} min\n"
+        f"Optional derivatives context: {'ON' if s.enrichment_enabled else 'OFF'} · ticker1min/OI5min\n"
         f"Configuration revision: {snapshot.revision}"
         + "\nActual detector parameters:\n"
         + ", ".join(f"{key}={value:g}" for key, value in effective_parameters(s).items())
@@ -53,6 +55,7 @@ def menu() -> ReplyKeyboardMarkup:
             ["Detectors", "Profiles"],
             ["История", "Outcomes"],
             ["Статистика", "Digest"],
+            ["Derivatives", "Сравнение"],
         ],
         resize_keyboard=True,
         is_persistent=True,
@@ -157,9 +160,35 @@ def event_keyboard(event: dict[str, Any]) -> InlineKeyboardMarkup:
         [
             *rows,
             [
+                InlineKeyboardButton(
+                    "Пересчитать prior comparators", callback_data="recompare:" + event["event_id"]
+                )
+            ],
+            [
                 InlineKeyboardButton("Событие", callback_data="event:" + event["event_id"]),
                 InlineKeyboardButton("Outcome", callback_data="outcomes:" + event["event_id"]),
             ],
+        ]
+    )
+
+
+def enrichment_keyboard(snapshot: Snapshot) -> InlineKeyboardMarkup:
+    enabled = snapshot.settings.enrichment_enabled
+    keys = [key for key in snapshot.settings.instruments() if key.startswith("spot/")][:5] or [
+        "spot/BTCUSDT",
+        "spot/ETHUSDT",
+        "spot/SOLUSDT",
+    ]
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "Выключить context" if enabled else "Включить context",
+                    callback_data="enrichment:" + ("off" if enabled else "on"),
+                ),
+                InlineKeyboardButton("Обновить", callback_data="enrichment:status"),
+            ],
+            *[[InlineKeyboardButton(key, callback_data="derivatives:" + key)] for key in keys],
         ]
     )
 
@@ -209,6 +238,12 @@ def event_text(event: dict[str, Any], now_ms: int) -> str:
     market = "Spot USDT" if event["market_type"] == "spot" else "USDT Perpetual"
     observed = datetime.fromtimestamp(event["market_observation_ms"] / 1000, timezone.utc).isoformat()
     metrics = "\n".join(f"{key}: {value:g} {event['units'][key]}" for key, value in event["metrics"].items())
+    context = event.get("enrichment", {"state": "UNAVAILABLE"})
+    optional = (
+        "\n" + enrichment_text(context, now_ms)
+        if context["state"] not in ("DISABLED", "N/A", "UNAVAILABLE")
+        else ""
+    )
     return (
         f"{event['symbol']} · {market}\n{event['detector_id']} v{event['detector_version']} · TF {event['timeframe']} · {event['direction']}\n"
         f"Strength: {event['strength']:.2f} относительно threshold\n{metrics}\n"
@@ -217,8 +252,35 @@ def event_text(event: dict[str, Any], now_ms: int) -> str:
         f"Profile: {event['profile']} · Settings revision: {event['settings_revision']}\n"
         f"Event: {event['event_id']} · revision {event['revision']}\n"
         f"Episode: {event['episode_id']}\n"
-        "Сохранённые metrics/source inputs относятся к исходному наблюдению."
+        "Сохранённые metrics/source inputs относятся к исходному наблюдению." + optional
     )
+
+
+def enrichment_text(value: dict[str, Any], now_ms: int) -> str:
+    lines = [
+        f"Optional derivatives context · {value['state']} · {value.get('reason', value.get('mapping', ''))}"
+    ]
+    if value.get("metrics"):
+        lines.append(
+            f"{value['spot_instrument']} ↔ {value['perpetual_instrument']} · method v{value['methodology_version']}"
+        )
+        for name, metric in value["metrics"].items():
+            state = metric_freshness(metric, now_ms)
+            if (
+                metric.get("unit") == "UTC_MS"
+                and metric.get("value") is not None
+                and metric["value"] <= now_ms
+            ):
+                state = "STALE"
+            amount = f"{metric['value']:g}" if metric.get("value") is not None else "UNSET"
+            lines.append(
+                f"{name}: {amount} {metric['unit']} {metric.get('base_asset', '')} · {state}\n"
+                f"source {metric['source']} · market time {metric.get('market_observation_ms')} · available {metric.get('available_at_ms')}"
+            )
+        lines.append(
+            "Basis — два REST price snapshots, timestamps приведены; это не одновременные trades. Context не участвует в trigger."
+        )
+    return "\n".join(lines)
 
 
 def notification_text(event: dict[str, Any], candidate: dict[str, Any], now_ms: int) -> str:
@@ -347,4 +409,7 @@ TERMS = (
     "Freshness считается от market time: обычно fresh1TF/expire2TF; breakout2TF/4TF. Retry/receipt не освежают event.\n"
     "Положительное/отрицательное движение описывает рынок.\n"
     "Radar не даёт торговых полномочий и не использует trading API credentials."
+    "\nDerivatives context optional: OI linear в BASE (обе стороны), funding в %, next funding UTC ms, basis в % по Spot/Perpetual price snapshots."
+    "\nMissing/stale context не блокирует detectors; события сохраняют context, доступный до observation cutoff."
+    "\nСравнение profiles/versions использует только сохранённые outcomes с N/completeness; ручной recompare сохраняет предыдущие revisions. Thresholds меняет только владелец."
 )

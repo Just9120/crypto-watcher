@@ -25,7 +25,7 @@ CMC и reset-baseline сценарии устарели по согласова�
 
 ## Следующие boundaries
 
-G3 добавляет outcomes/cohorts/export/retention; G4 — независимый signed consumer/outbox. G2A/G2B используют versioned logical records schema1 без physical DDL. Новая stateful несовместимость требует отдельного delivery gate. Полный контракт и численные policy находятся в [spec](product_scope.md), состояние реализации — в [плане](open_issues.md).
+G3 реализует outcomes/cohorts/export/retention; G4 добавит независимый signed consumer/outbox. G2A/G2B используют versioned logical records schema1 без physical DDL. Новая stateful несовместимость требует отдельного delivery gate. Полный контракт и численные policy находятся в [spec](product_scope.md), состояние реализации — в [плане](open_issues.md).
 
 ## Runtime и эксплуатация
 
@@ -60,3 +60,11 @@ Restart восстанавливает episodes, per-direction conditions и pen
 `digest.py` независимо от realtime alerts/mutes агрегирует общую event history обоих рынков, strongest period episodes и ongoing snapshot. Period identity, cursor/skip range, immutable text и attempts persist before send; network вне writer. Один pending latest period предотвращает historical burst после длительного outage. Disabled/reconfigured preference during I/O сохраняет фактический attempt с prior-preference/canceled result. Permanent Telegram target общий, enabled preferences раздельны.
 
 Controller orchestration запускает bounded analytics job5s, episode/consumer delivery2s и heartbeat20s. Source errors, incomplete horizons, reference recovery и delivery target имеют отдельные diagnostics; analytics worker failure влияет на health. Отсутствие выгодной/большой live выборки не является failure расчёта. Physical schema остаётся1, versioned logical namespaces и recovery ограничения перечислены в [state contract](state_contract.md).
+
+## G5 optional enrichment и manual calibration
+
+`enrichment.py` содержит pure exact-asset mapping и per-metric calculations/units/freshness; `enrichment_runtime.py` использует общий BybitRadar client/budget. Owner setting первоначально OFF. При включении ticker refresh обоих рынков coalesced lock/cadence1min, OI latest2 points batch≤4/worker2s, cadence5min. Optional work уступает current recovery; failures остаются локальными, не меняя core heartbeat/Spot formula. Immutable mapping revisions и public OI availability переживают restart; ambiguous aliases не угадываются. Диагностика явно показывает mapping и ошибки OI с ограничением выдачи.
+
+Event callback синхронно выбирает mapping/ticker/OI, доступные до candle observation cutoff, и сохраняет snapshot в общей event transaction. Новые current metrics/outcomes/retries не заменяют прежний context. Funding%/next funding UTCms, OI BASE/asset и5min absolute/percent change, snapshot basis с individual times сохраняются независимо; stale/missing metric не скрывает другие. Perpetual event продолжает самостоятельный detector path. Current owner карточка отдельно показывает latest snapshot, alert не добавляет выключенный/N/A context.
+
+Analytics grouping включает frozen profile, detector/version/settings/market/TF/horizon. Owner `/recompare` requeues только prior comparator, сохраняя исходный event revision/settings/reference и прежнюю analytics revision. Новые inputs/availability дают отдельный late result, строго prior observation; без owner действия completed comparison не меняется. Никакой threshold write не выполняется. NDJSON включает frozen event context и methodology definitions; CSV сохраняет profile grouping. Schema1/NONE и forward recovery остаются обязательными.

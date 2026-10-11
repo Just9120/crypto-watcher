@@ -122,7 +122,7 @@ def ndjson(store: Store, selection: Selection) -> Iterator[str]:
                 )
                 + "\n"
             )
-        for kind in ("outcome-method:", "comparison-method:"):
+        for kind in ("outcome-method:", "comparison-method:", "enrichment-method:"):
             start = PREFIX + kind
             for row in paged(
                 store.db.execute(

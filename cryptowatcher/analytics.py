@@ -28,6 +28,7 @@ GROUPS = (
     "detector",
     "version",
     "settings",
+    "profile",
     "market",
     "timeframe",
     "instrument",
@@ -220,6 +221,42 @@ class ComparisonWorker:
             if previous is None:
                 self.history.put("comparison-method:" + COMPARATOR_VERSION, COMPARATOR_DEFINITION)
 
+    def requeue(self, event_id: str, now_ms: int) -> str:
+        """Explicit owner action; preserve the original revision and prior analytics."""
+        job = self.history.get("comparison-job:" + event_id)
+        if job is None:
+            raise ValueError("No admitted event")
+        if self.history.get(job["pending_key"]) is not None:
+            return "ALREADY_PENDING"
+        event = self.history.get(f"event:{event_id}:{job['event_revision']:010d}")
+        if event is None:
+            raise StateError("Missing frozen comparison event")
+        native = f"{event['market_type']}/{event['symbol']}/{event['timeframe']}"
+        lookback = max(
+            16, int(max(v for k, v in event["effective_parameters"].items() if k.endswith("lookback"))) + 2
+        )
+        with self.store.db:
+            job.update(state="PENDING", next_attempt_ms=now_ms, recalculation_requested_ms=now_ms)
+            job["pending_key"] = pending_key(now_ms, event_id).replace(
+                "outcome-pending:", "comparison-pending:", 1
+            )
+            self.history.put("comparison-job:" + event_id, job)
+            self.history.put(job["pending_key"], {"event_id": event_id})
+            for stream in (native, native.rsplit("/", 1)[0] + "/1m"):
+                self.history.put(
+                    f"hold:{stream}:comparison:{event_id}",
+                    {
+                        "start": max(
+                            0,
+                            event["reference_time_ms"]
+                            - 28 * DAY
+                            - lookback * int(event["timeframe"][:-1]) * MINUTE,
+                        ),
+                        "end": event["reference_time_ms"],
+                    },
+                )
+        return "PENDING"
+
     def work(self, now_ms: int) -> None:
         for _, binding in self.history.items("comparison-pending:", 1):
             job = self.history.get("comparison-job:" + binding["event_id"])
@@ -240,6 +277,8 @@ class ComparisonWorker:
                     "samples": [],
                     "limitations": [type(exc).__name__],
                 }
+            if "recalculation_requested_ms" in job:
+                result["recalculation_requested_ms"] = job["recalculation_requested_ms"]
             head = self.history.get("comparison-head:" + result["comparison_id"])
             changed = head is None or encode(result) != encode(
                 {k: v for k, v in head.items() if k not in ("revision", "available_at_ms")}
@@ -274,6 +313,7 @@ def dimensions(event: dict[str, Any]) -> dict[str, Any]:
         "detector": event["detector_id"],
         "version": event["detector_version"],
         "settings": hashlib.sha256(encode(event["settings_snapshot"]).encode()).hexdigest(),
+        "profile": event["settings_snapshot"].get("profile", "custom"),
         "market": event["market_type"],
         "timeframe": event["timeframe"],
         "instrument": event["symbol"],
@@ -285,7 +325,15 @@ def dimensions(event: dict[str, Any]) -> dict[str, Any]:
 
 def cohort_rows(
     store: Store,
-    groups: tuple[str, ...] = ("detector", "version", "settings", "market", "timeframe", "direction"),
+    groups: tuple[str, ...] = (
+        "detector",
+        "profile",
+        "version",
+        "settings",
+        "market",
+        "timeframe",
+        "direction",
+    ),
     *,
     cutoff_ms: int | None = None,
     start_ms: int = 0,
@@ -320,6 +368,7 @@ def cohort_rows(
         "direction": "direction",
         "strength": "strength",
         "universe": "settings_snapshot.alert_universe_mode",
+        "profile": "settings_snapshot.profile",
     }
     fields = []
     for group in groups:
@@ -392,7 +441,15 @@ def cohort_rows(
 
 def cohorts(
     store: Store,
-    groups: tuple[str, ...] = ("detector", "version", "settings", "market", "timeframe", "direction"),
+    groups: tuple[str, ...] = (
+        "detector",
+        "profile",
+        "version",
+        "settings",
+        "market",
+        "timeframe",
+        "direction",
+    ),
     *,
     cutoff_ms: int | None = None,
     limit: int = 50,
