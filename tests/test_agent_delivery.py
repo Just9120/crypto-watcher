@@ -371,3 +371,41 @@ async def test_owner_toggle_is_independent_and_unknown_sender_cannot_replay(infr
     assert store.db.total_changes == before and controller.agent.enabled()
     await controller.handle(update("/agent off"), None)
     assert not controller.agent.enabled() and store.snapshot() == original
+
+
+async def test_invalid_outcome_is_delivered_incomplete_without_blocking_next_event(store):
+    calls = []
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda r: calls.append(json.loads(r.content)) or ack(r))
+    ) as client:
+        delivery = AgentDelivery(store, client, AgentConfig.from_env(ENV))
+        delivery.enable(True)
+        radar = engine(store, delivery, "price")
+        observe(radar)
+        await delivery.work(NOW + 2000)
+        event = delivery.history.events(1)[0]
+        # Actual OutcomeWorker error branch deliberately omits calculated window/classification.
+        invalid = {
+            "schema": "cryptowatcher.outcome.v1",
+            "outcome_id": "invalid-fixture",
+            "revision": 1,
+            "event_id": event["event_id"],
+            "event_revision": event["revision"],
+            "horizon_min": 5,
+            "methodology_version": "1",
+            "state": "INVALID_SOURCE",
+            "metrics": {},
+            "source_inputs": [],
+            "reason": "StateError",
+            "available_at_ms": NOW + 300000,
+        }
+        with store.db:
+            delivery.outcome(invalid)
+        await delivery.work(NOW + 300000)
+        outcome = calls[-1]["historical_outcomes"][0]
+        assert outcome["completeness"] == "INCOMPLETE" and outcome["metrics"] == {}
+        assert outcome["classification"] == "N/A"
+        assert outcome["target_at"] == outcome["available_at"]
+        observe(radar, now=NOW + 300000, market="linear", close=110)
+        await delivery.work(NOW + 302000)
+        assert calls[-1]["delivery_kind"] == "LIVE_EVENT"

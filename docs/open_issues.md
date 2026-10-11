@@ -111,7 +111,7 @@ disk growth/backlog cadence ещё требуют qualification, без выду
 
 EVG4-PRODUCER: 2026-10-11 Windows Python3.12, branch
 `codex/g4-agent-delivery-20261011`, base afd10770aa3a330e6c5a28e3ea85a676060e6c29:
-26 meaningful producer tests PASS (auth/optional config/atomic rollback/independent preferences,
+27 meaningful producer tests PASS (auth/optional config/atomic rollback/independent preferences,
 HMAC/immutable bytes/ambiguous ACK/crash IN_FLIGHT/restart/escalation/manual replay/TTL/settings race,
 permanent/transient/oversized response, secret and service-header isolation). Existing affected
 controller/CLI/outcome/enrichment regressions PASS; Ruff/format/mypy/canonical docs PASS.
@@ -120,6 +120,12 @@ SQLite/ASGI accepted40 real producer family/market/TF payloads; raw-body signing
 duplicate receipts, episode reconstruction/closure/receipt cutoff, actual complete outcome,
 frozen enrichment и legacy settings projection PASS11Oct2026 01:23UTC. No live DB/vault/LLM/order
 access. Real PostgreSQL concurrency evidence — consumer required CI38100130663, not this local fixture.
+
+Pre-merge self-review выявил сокращённый INVALID_SOURCE outcome: original27-test regression
+теперь подтверждает incomplete/empty-metrics projection и последующий independent live event.
+Сокращённая запись не подставляет нулевые returns; horizon target выводится только из immutable
+event reference и recorded horizon. Исправление включено в этот же PR28; прежний CI38102037503
+не применяется к новой revision, требуется current CI.
 
 По коду текущего producer PR подготовлены9/9 remaining AC: 09-01…06,07-05,10-04,12-03;
 READY в branch по EVG4-PRODUCER/JOINT и ранее delivered restart suites. Общая Goal:

@@ -103,7 +103,7 @@ def enrichment_snapshot(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def outcome_snapshot(raw: dict[str, Any]) -> dict[str, Any]:
+def outcome_snapshot(raw: dict[str, Any], event: dict[str, Any]) -> dict[str, Any]:
     complete = raw["state"] == "COMPLETE"
     metrics = raw["metrics"] if complete else {}
     return {
@@ -111,13 +111,13 @@ def outcome_snapshot(raw: dict[str, Any]) -> dict[str, Any]:
         "revision": raw["revision"],
         "methodology_version": raw["methodology_version"],
         "horizon_minutes": raw["horizon_min"],
-        "target_at": timestamp(raw["window_end_ms"]),
+        "target_at": timestamp(event["reference_time_ms"] + raw["horizon_min"] * 60000),
         "available_at": timestamp(raw["available_at_ms"]),
         "completeness": "COMPLETE" if complete else "INCOMPLETE",
         "metrics": metrics,
         "metric_units": {k: UNITS[raw["units"][k]] for k in metrics},
         "classification": {"NEUTRAL_MOVEMENT": "NEUTRAL", "UNCLASSIFIED": "N/A"}.get(
-            raw["classification"], raw["classification"]
+            raw.get("classification", "UNCLASSIFIED"), raw.get("classification", "N/A")
         ),
         "source_window_sha256": digest(raw["source_inputs"]) if complete else None,
     }
@@ -164,7 +164,7 @@ def envelope(
         "freshness_policy_version": "1",
         "episode": episode_snapshot(history, episode),
         "enrichment": enrichment_snapshot(event.get("enrichment", {})),
-        "historical_outcomes": [outcome_snapshot(x) for x in outcomes or []],
+        "historical_outcomes": [outcome_snapshot(x, event) for x in outcomes or []],
         "trading_instruction": False,
         "trading_authorized": False,
         "model_invoked": False,
