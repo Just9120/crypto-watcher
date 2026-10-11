@@ -109,7 +109,7 @@ class BybitRadar(BybitREST):
         if self._started:
             return
         self._started = True
-        self._tasks = [asyncio.create_task(self._manager())]
+        self._tasks = [asyncio.create_task(self._manager()), asyncio.create_task(self._diagnostic_loop())]
         self._tasks += [asyncio.create_task(self._worker()) for _ in range(4)]
 
     async def close(self) -> None:
@@ -287,6 +287,12 @@ class BybitRadar(BybitREST):
                 self.market_errors["manager"] = str(exc)
             if not self.components_healthy():
                 self.market_errors["manager"] = "ingestion_worker_failed"
+            self.persist_diagnostics()
+            await asyncio.sleep(5)
+
+    async def _diagnostic_loop(self) -> None:
+        # REST discovery/backoff must not freeze the persisted WS/recovery snapshot.
+        while True:
             self.persist_diagnostics()
             await asyncio.sleep(5)
 

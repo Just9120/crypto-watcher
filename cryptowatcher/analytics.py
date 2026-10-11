@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import bisect
 import hashlib
 import json
 import math
 from dataclasses import asdict
-from typing import Any
+from typing import Any, Callable
 
 from .config import OwnerSettings
 from .detectors import VERSIONS, DetectorUnavailable, atr14, evaluate
@@ -263,49 +264,87 @@ class ComparisonWorker:
             if job["next_attempt_ms"] > now_ms:
                 return
             event = self.history.get(f"event:{job['event_id']}:{job['event_revision']:010d}")
-            try:
-                result = comparison_dataset(self.store, event)
-            except (ValueError, TypeError, KeyError, OverflowError, StateError) as exc:
-                result = {
-                    "schema": "cryptowatcher.comparison.v1",
-                    "comparison_id": identity(f"comparison/{event['event_id']}/{COMPARATOR_VERSION}"),
-                    "event_id": event["event_id"],
-                    "event_revision": event["revision"],
-                    "methodology_version": COMPARATOR_VERSION,
-                    "state": "INVALID_SOURCE",
-                    "sample_size": 0,
-                    "samples": [],
-                    "limitations": [type(exc).__name__],
-                }
-            if "recalculation_requested_ms" in job:
-                result["recalculation_requested_ms"] = job["recalculation_requested_ms"]
-            head = self.history.get("comparison-head:" + result["comparison_id"])
-            changed = head is None or encode(result) != encode(
-                {k: v for k, v in head.items() if k not in ("revision", "available_at_ms")}
-            )
-            with self.store.db:
-                if changed:
-                    result.update(
-                        revision=1 if head is None else head["revision"] + 1, available_at_ms=now_ms
-                    )
-                    self.history.version("comparison", result)
-                self.history.delete(job["pending_key"])
-                if result["state"] == "INVALID_SOURCE":
-                    job.update(state="INVALID_SOURCE", next_attempt_ms=now_ms + MINUTE)
-                    job["pending_key"] = pending_key(job["next_attempt_ms"], event["event_id"]).replace(
-                        "outcome-pending:", "comparison-pending:", 1
-                    )
-                    self.history.put(job["pending_key"], binding)
-                else:
-                    native = f"{event['market_type']}/{event['symbol']}/{event['timeframe']}"
-                    stream = native.rsplit("/", 1)[0] + "/1m"
-                    for sample in result["samples"]:
-                        protect(self.history, native, sample["source_inputs"])
-                        protect(self.history, stream, sample["future_inputs"])
-                    for held in (native, stream):
-                        self.history.delete(f"hold:{held}:comparison:{event['event_id']}")
-                    job.update(state=result["state"], completed_ms=now_ms)
-                self.history.put("comparison-job:" + event["event_id"], job)
+            self.apply(job, event, binding, self.calculate(self.store, job, event), now_ms)
+
+    @staticmethod
+    def calculate(store: Store, job: dict[str, Any], event: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return comparison_dataset(store, event)
+        except (ValueError, TypeError, KeyError, OverflowError, StateError) as exc:
+            return {
+                "schema": "cryptowatcher.comparison.v1",
+                "comparison_id": identity(f"comparison/{event['event_id']}/{COMPARATOR_VERSION}"),
+                "event_id": event["event_id"],
+                "event_revision": event["revision"],
+                "methodology_version": COMPARATOR_VERSION,
+                "state": "INVALID_SOURCE",
+                "sample_size": 0,
+                "samples": [],
+                "limitations": [type(exc).__name__],
+            }
+
+    async def async_work(self, clock: Callable[[], int], batch: int = 64, seconds: float = 2) -> int:
+        from .analytics_worker import prepare, read_snapshot
+
+        now_ms = clock()
+        prepared = await asyncio.to_thread(
+            read_snapshot,
+            self.store.path,
+            self.store.owner_id,
+            lambda store: prepare(
+                store,
+                "comparison-pending:",
+                "comparison-job:",
+                "event_id",
+                now_ms,
+                batch,
+                seconds,
+                self.calculate,
+            ),
+        )
+        applied = 0
+        for job, event, binding, result in prepared:
+            if self.history.get("comparison-job:" + event["event_id"]) == job:
+                self.apply(job, event, binding, result, clock())
+                applied += 1
+            await asyncio.sleep(0)
+        return applied
+
+    def apply(
+        self,
+        job: dict[str, Any],
+        event: dict[str, Any],
+        binding: dict[str, Any],
+        result: dict[str, Any],
+        now_ms: int,
+    ) -> None:
+        if "recalculation_requested_ms" in job:
+            result["recalculation_requested_ms"] = job["recalculation_requested_ms"]
+        head = self.history.get("comparison-head:" + result["comparison_id"])
+        changed = head is None or encode(result) != encode(
+            {k: v for k, v in head.items() if k not in ("revision", "available_at_ms")}
+        )
+        with self.store.db:
+            if changed:
+                result.update(revision=1 if head is None else head["revision"] + 1, available_at_ms=now_ms)
+                self.history.version("comparison", result)
+            self.history.delete(job["pending_key"])
+            if result["state"] == "INVALID_SOURCE":
+                job.update(state="INVALID_SOURCE", next_attempt_ms=now_ms + MINUTE)
+                job["pending_key"] = pending_key(job["next_attempt_ms"], event["event_id"]).replace(
+                    "outcome-pending:", "comparison-pending:", 1
+                )
+                self.history.put(job["pending_key"], binding)
+            else:
+                native = f"{event['market_type']}/{event['symbol']}/{event['timeframe']}"
+                stream = native.rsplit("/", 1)[0] + "/1m"
+                for sample in result["samples"]:
+                    protect(self.history, native, sample["source_inputs"])
+                    protect(self.history, stream, sample["future_inputs"])
+                for held in (native, stream):
+                    self.history.delete(f"hold:{held}:comparison:{event['event_id']}")
+                job.update(state=result["state"], completed_ms=now_ms)
+            self.history.put("comparison-job:" + event["event_id"], job)
 
 
 def dimensions(event: dict[str, Any]) -> dict[str, Any]:
