@@ -82,11 +82,15 @@ def test_full_integrity_rejects_constraint_violation_without_disclosing_contents
         database.execute("PRAGMA ignore_check_constraints=ON")
         database.execute("INSERT INTO checked VALUES ('secret-never-print')")
         database.execute("PRAGMA ignore_check_constraints=OFF")
+        cache_before = database.execute("PRAGMA cache_size").fetchone()
+        mmap_before = database.execute("PRAGMA mmap_size").fetchone()
         with pytest.raises(IntegrityError) as error:
             check_integrity(database, deadline=time.monotonic() + 5)
         assert error.value.code == "DATABASE_CORRUPT"
         assert "secret" not in str(error.value)
         assert database.execute("SELECT count(*) FROM checked").fetchone() == (1,)
+        assert database.execute("PRAGMA cache_size").fetchone() == cache_before
+        assert database.execute("PRAGMA mmap_size").fetchone() == mmap_before
 
 
 def test_integrity_timeout_is_not_corruption_and_clears_progress_handler(tmp_path, monkeypatch):
@@ -131,6 +135,22 @@ def test_backup_copy_and_validation_share_budget_without_replacing_destination(t
     store.close()
 
 
+def test_validation_without_mmap_support_still_checks_all_tables_and_preserves_settings(tmp_path):
+    class NoMmap(sqlite3.Connection):
+        def execute(self, sql, *args):
+            if sql == "PRAGMA mmap_size":
+                return super().execute("SELECT 0 WHERE 0")
+            return super().execute(sql, *args)
+
+    with sqlite3.connect(tmp_path / "no-mmap.sqlite", factory=NoMmap) as database:
+        database.execute("CREATE TABLE checked(value INTEGER)")
+        database.execute("INSERT INTO checked VALUES (1)")
+        before = database.execute("PRAGMA cache_size").fetchone()
+        check_integrity(database, deadline=time.monotonic() + 5)
+        assert database.execute("PRAGMA cache_size").fetchone() == before
+        assert database.execute("SELECT value FROM checked").fetchone() == (1,)
+
+
 @pytest.mark.parametrize(
     ("sqlite_code", "expected"),
     [
@@ -143,6 +163,8 @@ def test_backup_copy_and_validation_share_budget_without_replacing_destination(t
 def test_integrity_sqlite_errors_are_classified_without_raw_messages(tmp_path, sqlite_code, expected):
     class FailingConnection(sqlite3.Connection):
         def execute(self, sql, *args):
+            if sql != "PRAGMA integrity_check":
+                return super().execute(sql, *args)
             error = sqlite3.DatabaseError("secret-never-print")
             error.sqlite_errorcode = sqlite_code
             raise error

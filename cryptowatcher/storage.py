@@ -16,6 +16,9 @@ from typing import Any
 from .config import ConfigError, OwnerSettings, instrument_key, normalize_pair, number
 
 SCHEMA_VERSION = 1
+VALIDATION_CACHE_KIB = 131072
+VALIDATION_MMAP_BYTES = 2147483648
+VALIDATION_PROGRESS_STEPS = 10000
 
 
 class StateError(RuntimeError):
@@ -42,16 +45,27 @@ def check_integrity(database: sqlite3.Connection, *, deadline: float) -> None:
     if time.monotonic() >= deadline:
         raise IntegrityError("TIME_BUDGET_EXCEEDED", "Integrity time budget exceeded")
     expired = False
+    previous_cache: int | None = None
+    previous_mmap: int | None = None
+    validation_failed = False
 
     def progress() -> int:
         nonlocal expired
         expired = time.monotonic() >= deadline
         return int(expired)
 
-    database.set_progress_handler(progress, 1000)
+    database.set_progress_handler(progress, VALIDATION_PROGRESS_STEPS)
     try:
+        previous_cache = int(database.execute("PRAGMA cache_size").fetchone()[0])
+        mmap_row = database.execute("PRAGMA mmap_size").fetchone()
+        previous_mmap = int(mmap_row[0]) if mmap_row is not None else None
+        # Dedicated validation connections only; these suggestions never change the file schema.
+        database.execute(f"PRAGMA cache_size=-{VALIDATION_CACHE_KIB}")
+        if previous_mmap is not None:
+            database.execute(f"PRAGMA mmap_size={VALIDATION_MMAP_BYTES}")
         rows = database.execute("PRAGMA integrity_check").fetchall()
     except sqlite3.DatabaseError as exc:
+        validation_failed = True
         code = getattr(exc, "sqlite_errorcode", 0) & 0xFF
         if code == sqlite3.SQLITE_INTERRUPT:
             if expired:
@@ -64,6 +78,15 @@ def check_integrity(database: sqlite3.Connection, *, deadline: float) -> None:
         raise IntegrityError("DATABASE_ERROR", "Integrity validation did not complete") from exc
     finally:
         database.set_progress_handler(None, 0)
+        try:
+            if previous_mmap is not None:
+                database.execute(f"PRAGMA mmap_size={previous_mmap}")
+            if previous_cache is not None:
+                database.execute(f"PRAGMA cache_size={previous_cache}")
+        except sqlite3.DatabaseError as exc:
+            # Preserve the classified primary failure; callers close dedicated connections.
+            if not validation_failed:
+                raise IntegrityError("DATABASE_ERROR", "Validation connection cleanup failed") from exc
     if time.monotonic() >= deadline:
         raise IntegrityError("TIME_BUDGET_EXCEEDED", "Integrity time budget exceeded")
     if len(rows) != 1 or rows[0][0] != "ok":
