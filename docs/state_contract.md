@@ -1,5 +1,18 @@
 # CryptoWatcher — state contract
 
+## Advisory agent state
+
+Logical `radar:v1:agent:*` namespaces сохраняют schema1 preference (default OFF),
+episode/outcome intents и due indexes, monotonic per-event transport sequence,
+immutable canonical serialized bodies/hash, attempts, pending due, target diagnostics
+и successful episode notification baseline. Source event revision отделён от transport
+revision; original settings/reference/source snapshots не переписываются доставкой.
+Secret/HMAC headers/Access credentials в DB не сохраняются. Unknown preference fail-closed.
+Source event/episode/outcome и intent записываются одной транзакцией; frozen body появляется
+до request. Crash IN_FLIGHT повторяет same bytes/identity с диагностируемой ambiguity.
+Existing online all-row backup включает эти namespaces; physical schema остаётся1.
+Compatibility и operational flow — в [agent procedure](runbooks/agent-delivery.md).
+
 ## Владение и precedence
 
 Product requirements задаёт [spec](product_scope.md); текущие задачи/Evidence — [план](open_issues.md). Этот контракт уточняет persistence и compatibility, operational gate — [runbook](runbooks/delivery.md).

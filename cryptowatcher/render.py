@@ -56,6 +56,7 @@ def menu() -> ReplyKeyboardMarkup:
             ["История", "Outcomes"],
             ["Статистика", "Digest"],
             ["Derivatives", "Сравнение"],
+            ["Trading agent"],
         ],
         resize_keyboard=True,
         is_persistent=True,

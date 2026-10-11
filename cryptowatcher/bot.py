@@ -20,6 +20,7 @@ from telegram.ext import (
     filters,
 )
 
+from .agent_delivery import AgentDelivery
 from .analytics import ComparisonWorker, cohorts
 from .analytics_recovery import AnalyticsRecovery
 from .config import (
@@ -82,6 +83,7 @@ COMMANDS = {
     "alerts": "Включить/выключить alerts",
     "set": "Ручная настройка",
     "diagnostics": "Диагностика",
+    "agent": "Доставка рыночного контекста",
     "profiles": "Sensitivity profiles",
     "profile": "Выбрать profile",
     "detectors": "Telegram detectors",
@@ -120,6 +122,7 @@ MENU_ACTIONS = {
     "Digest": "digest",
     "Derivatives": "derivatives",
     "Сравнение": "compare",
+    "Trading agent": "agent",
 }
 MANUAL_FIELDS = {
     "watchlist_multiplier",
@@ -140,14 +143,22 @@ class Controller:
         self.store = store
         self.market = market
         self.history = History(store)
+        self.agent = AgentDelivery(store, getattr(market, "client", None))
         self.recovery = AnalyticsRecovery(store, market) if isinstance(market, BybitRadar) else None
-        self.outcomes = OutcomeWorker(store, self.recovery.request if self.recovery else None)
+        self.outcomes = OutcomeWorker(
+            store, self.recovery.request if self.recovery else None, on_outcome=self.agent.outcome
+        )
         self.retention = Retention(store)
         self.digest = Digest(store, infrastructure.delivery_chat_id)
         self.analytics_lock = asyncio.Lock()
         self.enrichment = Enrichment(store, market) if isinstance(market, BybitRadar) else None
         self.engine = (
-            EventEngine(store, source_revision=infrastructure.source_revision, on_event=self.outcomes.admit)
+            EventEngine(
+                store,
+                source_revision=infrastructure.source_revision,
+                on_event=self.admit_event,
+                on_episode=self.agent.episode_closed,
+            )
             if isinstance(market, BybitRadar)
             else None
         )
@@ -170,6 +181,10 @@ class Controller:
                 source_context=public_context(store, stream.rsplit("/", 1)[0], now),
                 enrichment=self.enrichment_context(stream.rsplit("/", 1)[0], candles[-1].end),
             )
+
+    def admit_event(self, event: dict[str, Any]) -> None:
+        self.outcomes.admit(event)
+        self.agent.admit(event)
 
     def enrichment_context(self, key: str, cutoff: int) -> dict[str, Any]:
         if self.enrichment is None:
@@ -205,6 +220,7 @@ class Controller:
             "analytics": self.store.get_runtime("analytics", {"state": "PENDING"}),
             "analytics_recovery": self.recovery.diagnostics() if self.recovery else {"state": "N/A"},
             "digest": self.digest.diagnostics(),
+            "agent_delivery": self.agent.diagnostics(),
             "enrichment": self.enrichment.diagnostics() if self.enrichment else {"state": "N/A"},
             "capabilities": {
                 "composite": True,
@@ -356,6 +372,19 @@ class Controller:
             )
         elif command == "diagnostics":
             await self.send(update, json.dumps(self.diagnostics(), ensure_ascii=False, indent=2))
+        elif command == "agent":
+            parts = raw.strip().split()
+            action = parts[0].lower() if parts else "status"
+            now = self.market.server_now() if isinstance(self.market, BybitRadar) else 0
+            if action in ("on", "off") and len(parts) == 1:
+                self.agent.enable(action == "on")
+            elif action == "retry" and len(parts) == 1 and now > 0:
+                self.agent.retry(now)
+            elif action == "replay" and len(parts) == 2 and now > 0:
+                self.agent.replay(parts[1], now)
+            elif action != "status" or len(parts) > 1:
+                raise ConfigError("Используйте /agent status|on|off|retry или /agent replay EVENT_ID")
+            await self.send(update, json.dumps(self.agent.diagnostics(), ensure_ascii=False, indent=2))
         elif command in ("profiles", "profile"):
             if command == "profile" and raw:
                 self.store.update(snapshot.revision, snapshot.settings.with_profile(raw.strip().lower()))
@@ -785,6 +814,18 @@ class Controller:
             self.store.put_runtime("enrichment", {"state": "FAILED", "error_class": type(exc).__name__})
             logger.error("Optional enrichment failure: %s", type(exc).__name__)
 
+    async def agent_job(self, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not isinstance(self.market, BybitRadar):
+            return
+        now = self.market.server_now()
+        if now <= 0:
+            return
+        try:
+            await self.agent.work(now)
+        except Exception as exc:
+            self.agent._diagnostic("FAILED_" + type(exc).__name__, now)
+            logger.error("Optional agent delivery failure: %s", type(exc).__name__)
+
     async def heartbeat(self, context: ContextTypes.DEFAULT_TYPE) -> None:
         self.store.put_runtime(
             "heartbeat",
@@ -842,4 +883,5 @@ def application(controller: Controller) -> Application[Any, Any, Any, Any, Any, 
     app.job_queue.run_repeating(controller.deliver, interval=2, first=2)
     app.job_queue.run_repeating(controller.analytics_job, interval=5, first=5)
     app.job_queue.run_repeating(controller.enrichment_job, interval=2, first=6)
+    app.job_queue.run_repeating(controller.agent_job, interval=2, first=3)
     return app

@@ -4,6 +4,13 @@
 
 Один Python 3.11 процесс, один Compose service `crypto_watcher`, persistent SQLite schema1 в WAL mode. Владелец один; settings/domain state не создаются для входящих чужих chats. Trading credentials и LLM отсутствуют.
 
+Advisory consumer boundary: `agent_contract.py` проецирует immutable history в typed v2;
+`agent_delivery.py` владеет отдельными preference/intents/frozen bytes/attempts/ack baseline.
+Event/episode/outcome admission выполняется атомарно с source history; отдельный job
+использует shared HTTPx client вне transactions. Telegram/digest/agent не делят successful
+notification state. Optional config/error не останавливает deterministic radar.
+Binding/activation/recovery — в [agent procedure](runbooks/agent-delivery.md).
+
 | Boundary | Модуль | Ответственность |
 | --- | --- | --- |
 | Infrastructure / domain configuration | `cryptowatcher/config.py` | Fail-closed owner identity, token/bot binding, validated immutable owner settings |

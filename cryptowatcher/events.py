@@ -104,6 +104,7 @@ class EventEngine:
         *,
         source_revision: str = "UNSET",
         on_event: Callable[[dict[str, Any]], None] | None = None,
+        on_episode: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         if not re.fullmatch(r"[0-9a-f]{40}|UNSET", source_revision):
             raise ValueError("Invalid detector source revision")
@@ -112,6 +113,7 @@ class EventEngine:
         self.detector = detector
         self.source_revision = source_revision
         self.on_event = on_event
+        self.on_episode = on_episode
         with store.db:
             for family in FAMILIES:
                 key = f"detector-metadata:{family}:{VERSIONS[family]}"
@@ -150,6 +152,8 @@ class EventEngine:
             episode["revision"] += 1
             episode["available_at_ms"] = now_ms
             self.history.version("episode", episode)
+            if self.on_episode is not None:
+                self.on_episode(episode)
             self.history.delete(key)
             for condition in episode["conditions"]:
                 runtime = self.history.get(condition, {})
@@ -366,8 +370,6 @@ class EventEngine:
                         "model_invoked": False,
                     }
                     self.history.version("event", event)
-                    if self.on_event is not None:
-                        self.on_event(event)  # Admission shares this event/episode/outbox transaction.
                     self.history.put(f"history:{current.end:016d}:{event_id}", {"event_id": event_id})
                     self.history.put(
                         f"episode-event:{episode['episode_id']}:{current.end:016d}:{event_id}",
@@ -394,6 +396,10 @@ class EventEngine:
                             },
                         )
                     self.history.version("episode", episode)
+                    if self.on_event is not None:
+                        self.on_event(
+                            event
+                        )  # Source, episode and all consumer intents share the transaction.
 
     def _notify(self, episode: dict[str, Any], event: dict[str, Any], now_ms: int) -> None:
         previous = episode["last_notified"]

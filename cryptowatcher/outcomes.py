@@ -140,11 +140,16 @@ def pending_key(due: int, outcome_id: str) -> str:
 
 class OutcomeWorker:
     def __init__(
-        self, store: Store, request_gap: Callable[[str, int, int], str | None] | None = None
+        self,
+        store: Store,
+        request_gap: Callable[[str, int, int], str | None] | None = None,
+        *,
+        on_outcome: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.store = store
         self.history = History(store)
         self.request_gap = request_gap
+        self.on_outcome = on_outcome
         with store.db:
             previous = self.history.get("outcome-method:" + METHOD)
             if previous is not None and previous != DEFINITION:
@@ -276,6 +281,8 @@ class OutcomeWorker:
                         revision=1 if previous is None else previous["revision"] + 1, available_at_ms=now_ms
                     )
                     self.history.version("outcome", result)
+                    if self.on_outcome is not None:
+                        self.on_outcome(result)
                 self.history.delete(job["pending_key"])
                 if result["state"] == "COMPLETE":
                     protect(self.history, job["stream"], result["source_inputs"])
