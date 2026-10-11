@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 from dataclasses import asdict
@@ -129,7 +130,13 @@ def calculate(event: dict[str, Any], horizon: int, candles: list[Candle]) -> dic
 
 def protect(history: History, stream: str, candles: list[dict[str, Any]]) -> None:
     for candle in candles:
-        history.put("protected:" + Sources.prefix(stream) + f"{candle['start']:016d}", {"retained": True})
+        history.store.db.execute(
+            "INSERT OR IGNORE INTO runtime VALUES (?,?)",
+            (
+                PREFIX + "protected:" + Sources.prefix(stream) + f"{candle['start']:016d}",
+                encode({"retained": True}),
+            ),
+        )
 
 
 def pending_key(due: int, outcome_id: str) -> str:
@@ -244,55 +251,95 @@ class OutcomeWorker:
             if job["next_attempt_ms"] > now_ms:
                 break
             event = self.history.get(f"event:{job['event_id']}:{job['event_revision']:010d}")
-            start = event["reference_time_ms"]
-            end = start + job["horizon_min"] * MINUTE
-            reason = None
-            try:
-                result = calculate(
-                    event, job["horizon_min"], read_candles(self.store, job["stream"], start, end)
+            self.apply(job, event, binding, self.calculate(self.store, job, event), now_ms)
+
+    @staticmethod
+    def calculate(store: Store, job: dict[str, Any], event: dict[str, Any]) -> dict[str, Any]:
+        start = event["reference_time_ms"]
+        end = start + job["horizon_min"] * MINUTE
+        try:
+            return calculate(event, job["horizon_min"], read_candles(store, job["stream"], start, end))
+        except (ValueError, TypeError, KeyError, OverflowError, StateError) as exc:
+            return {
+                "state": "INVALID_SOURCE",
+                "metrics": {},
+                "source_inputs": [],
+                "reason": type(exc).__name__,
+            }
+
+    async def async_work(self, clock: Callable[[], int], batch: int = 256, seconds: float = 2) -> int:
+        from .analytics_worker import prepare, read_snapshot
+
+        self.bootstrap(20)
+        now_ms = clock()
+        prepared = await asyncio.to_thread(
+            read_snapshot,
+            self.store.path,
+            self.store.owner_id,
+            lambda store: prepare(
+                store,
+                "outcome-pending:",
+                "outcome-job:",
+                "outcome_id",
+                now_ms,
+                batch,
+                seconds,
+                self.calculate,
+            ),
+        )
+        applied = 0
+        for job, event, binding, result in prepared:
+            # Owner operations or a restarted worker cannot be overwritten by an old read.
+            if self.history.get("outcome-job:" + job["outcome_id"]) == job:
+                self.apply(job, event, binding, result, clock())
+                applied += 1
+            await asyncio.sleep(0)
+        return applied
+
+    def apply(
+        self,
+        job: dict[str, Any],
+        event: dict[str, Any],
+        binding: dict[str, Any],
+        result: dict[str, Any],
+        now_ms: int,
+    ) -> None:
+        reason = None
+        if result["state"] == "INCOMPLETE" and self.request_gap is not None:
+            for missing_start, missing_end in result["missing_ranges"]:
+                reason = self.request_gap(job["stream"], missing_start, missing_end)
+        if reason:
+            result["recovery_reason"] = reason
+        result.update(
+            schema="cryptowatcher.outcome.v1",
+            outcome_id=job["outcome_id"],
+            event_id=job["event_id"],
+            event_revision=job["event_revision"],
+            horizon_min=job["horizon_min"],
+            methodology_version=METHOD,
+        )
+        previous = self.history.get("outcome-head:" + job["outcome_id"])
+        changed = previous is None or encode(result) != encode(
+            {k: v for k, v in previous.items() if k not in ("revision", "available_at_ms")}
+        )
+        with self.store.db:
+            if changed:
+                result.update(
+                    revision=1 if previous is None else previous["revision"] + 1, available_at_ms=now_ms
                 )
-            except (ValueError, TypeError, KeyError, OverflowError, StateError) as exc:
-                result = {
-                    "state": "INVALID_SOURCE",
-                    "metrics": {},
-                    "source_inputs": [],
-                    "reason": type(exc).__name__,
-                }
-            if result["state"] == "INCOMPLETE" and self.request_gap is not None:
-                for missing_start, missing_end in result["missing_ranges"]:
-                    reason = self.request_gap(job["stream"], missing_start, missing_end)
-            if reason:
-                result["recovery_reason"] = reason
-            result.update(
-                schema="cryptowatcher.outcome.v1",
-                outcome_id=job["outcome_id"],
-                event_id=job["event_id"],
-                event_revision=job["event_revision"],
-                horizon_min=job["horizon_min"],
-                methodology_version=METHOD,
-            )
-            previous = self.history.get("outcome-head:" + job["outcome_id"])
-            changed = previous is None or encode(result) != encode(
-                {k: v for k, v in previous.items() if k not in ("revision", "available_at_ms")}
-            )
-            with self.store.db:
-                if changed:
-                    result.update(
-                        revision=1 if previous is None else previous["revision"] + 1, available_at_ms=now_ms
-                    )
-                    self.history.version("outcome", result)
-                    if self.on_outcome is not None:
-                        self.on_outcome(result)
-                self.history.delete(job["pending_key"])
-                if result["state"] == "COMPLETE":
-                    protect(self.history, job["stream"], result["source_inputs"])
-                    self.history.delete(job["hold_key"])
-                    job.update(state="COMPLETE", completed_ms=now_ms)
-                else:
-                    job.update(state=result["state"], next_attempt_ms=now_ms + MINUTE)
-                    job["pending_key"] = pending_key(job["next_attempt_ms"], job["outcome_id"])
-                    self.history.put(job["pending_key"], binding)
-                self.history.put("outcome-job:" + job["outcome_id"], job)
+                self.history.version("outcome", result)
+                if self.on_outcome is not None:
+                    self.on_outcome(result)
+            self.history.delete(job["pending_key"])
+            if result["state"] == "COMPLETE":
+                protect(self.history, job["stream"], result["source_inputs"])
+                self.history.delete(job["hold_key"])
+                job.update(state="COMPLETE", completed_ms=now_ms)
+            else:
+                job.update(state=result["state"], next_attempt_ms=now_ms + MINUTE)
+                job["pending_key"] = pending_key(job["next_attempt_ms"], job["outcome_id"])
+                self.history.put(job["pending_key"], binding)
+            self.history.put("outcome-job:" + job["outcome_id"], job)
 
     def diagnostics(self) -> dict[str, Any]:
         return {

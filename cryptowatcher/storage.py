@@ -7,6 +7,8 @@ import json
 import math
 import os
 import sqlite3
+import time
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -227,17 +229,35 @@ class Store:
         with self.db:
             self.db.execute("INSERT OR REPLACE INTO runtime VALUES (?,?)", (key, encode(payload)))
 
-    def backup(self, destination: Path) -> None:
+    def backup(self, destination: Path, *, timeout_seconds: float = 900) -> None:
         if destination.exists() or destination.resolve() == self.path.resolve():
             raise StateError("Backup destination must be new")
         destination.parent.mkdir(parents=True, exist_ok=True)
-        backup = sqlite3.connect(destination)
+        # Exclusive creation also rejects dangling links; an existing backup is never replaced.
+        handle = os.open(destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(handle)
+        deadline = time.monotonic() + timeout_seconds
+
+        def progress(status: int, remaining: int, total: int) -> None:
+            if time.monotonic() >= deadline:
+                raise StateError("Backup time budget exceeded; incomplete destination preserved")
+
         try:
-            self.db.backup(backup)
-            if backup.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
-                raise StateError("Backup integrity check failed")
-        finally:
-            backup.close()
+            with (
+                closing(sqlite3.connect(destination)) as backup,
+                closing(
+                    sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True, timeout=1)
+                ) as source,
+            ):
+                # Pin a WAL read snapshot: a busy live writer cannot endlessly restart copying.
+                source.execute("BEGIN")
+                source.execute("SELECT owner_id FROM owner_settings").fetchone()
+                source.backup(backup, pages=256, progress=progress, sleep=0.01)
+                backup.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+                if backup.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                    raise StateError("Backup integrity check failed")
+        except sqlite3.DatabaseError as exc:
+            raise StateError("Backup validation failed; incomplete destination preserved") from exc
         if os.name != "nt":
             destination.chmod(0o600)
 

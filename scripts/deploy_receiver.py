@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 import urllib.request
 from pathlib import Path
@@ -24,10 +25,56 @@ APP = Path("/opt/crypto_watcher")
 TARGET = Path("/etc/cryptowatcher/deploy-target.json")
 MAX_BUNDLE = 1024 * 1024 * 1024
 MEMBERS = {"manifest.json", "image.tar.gz", "docker-compose.yml"}
+ACTIVE_RECORD: dict[str, Any] | None = None
+ACTIVE_PATH: Path | None = None
 
 
 class DeploymentError(RuntimeError):
     pass
+
+
+def record_phase(phase: str, *, failure: str | None = None) -> None:
+    if ACTIVE_RECORD is None or ACTIVE_PATH is None:
+        return
+    previous_phase = ACTIVE_RECORD.get("phase")
+    ACTIVE_RECORD.update(phase=phase, phase_at=time.time())
+    if failure is not None:
+        ACTIVE_RECORD.update(
+            state="POST_CHECK_FAILED" if ACTIVE_RECORD.get("switch_started") else "FAILED_PRE_SWITCH",
+            error_class=failure,
+            failure_phase=previous_phase,
+        )
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=ACTIVE_PATH.parent, delete=False
+    ) as output:
+        output.write(json.dumps(ACTIVE_RECORD, sort_keys=True))
+        output.flush()
+        os.fsync(output.fileno())
+        temporary = Path(output.name)
+    os.replace(temporary, ACTIVE_PATH)
+
+
+def database_timeout(size: int) -> int:
+    # Full integrity/backup stays mandatory; allow bounded work on the observed multi-GiB DB.
+    return min(900, 180 + ((size + (1 << 30) - 1) // (1 << 30)) * 60)
+
+
+def stop_candidate() -> None:
+    if ACTIVE_RECORD is None or not ACTIVE_RECORD.get("candidate_name"):
+        return
+    name = ACTIVE_RECORD["candidate_name"]
+    require(bool(re.fullmatch(r"cw-verify-[0-9a-f]{12}-[0-9a-f]{16}", name)), "Unknown candidate")
+    result = subprocess.run(["docker", "inspect", name], capture_output=True, text=True, timeout=15)
+    if result.returncode:
+        return
+    container = json.loads(result.stdout)[0]
+    require(container["Image"] == ACTIVE_RECORD.get("image_id"), "Candidate image changed")
+    require(container["Name"] == "/" + name, "Candidate identity changed")
+    require(
+        not (container["Config"].get("Labels") or {}).get("com.docker.compose.project"),
+        "Not an offline candidate",
+    )
+    run(["docker", "stop", "--time", "5", container["Id"]], timeout=15)
 
 
 def require(condition: bool, reason: str) -> None:
@@ -266,6 +313,8 @@ def target_config() -> dict[str, Any]:
 def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
     import fcntl
 
+    global ACTIVE_RECORD, ACTIVE_PATH
+
     require(os.geteuid() == 0, "Receiver needs its approved root account")
     target = target_config()
     releases = APP / "releases"
@@ -279,6 +328,9 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
         release = releases / f"{revision}-{digest[:16]}"
         require(not release.exists(), "Release already attempted; inspect record before retry")
         release.mkdir(mode=0o700)
+        ACTIVE_PATH = release / "deployment.json"
+        ACTIVE_RECORD = {"state": "PRE_SWITCH", "source_sha": revision, "bundle_sha256": digest}
+        record_phase("RECEIVE_ARTIFACT")
         bundle = release / "bundle.tar"
         with bundle.open("xb") as output:
             remaining = size
@@ -289,12 +341,15 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
                 remaining -= len(chunk)
             require(not sys.stdin.buffer.read(1), "Unexpected trailing bundle data")
         require(fingerprint(bundle) == digest, "Bundle hash mismatch")
+        record_phase("VERIFY_ARTIFACT")
         manifest = extract_bundle(bundle, release)
         require(manifest.get("source_sha") == revision, "Source identity mismatch")
         require(manifest.get("architecture") == target["architecture"], "Target architecture mismatch")
         identity = archive_image_identity(release / "image.tar.gz", manifest)
+        record_phase("LOAD_IMAGE")
         run(["docker", "load", "-i", str(release / "image.tar.gz")], timeout=180)
         image = loaded_image_id(identity, manifest)
+        ACTIVE_RECORD.update(image_id=image, build_run=manifest["build_run"])
         environment = {
             **os.environ,
             "CW_IMAGE": image,
@@ -333,6 +388,8 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
             "docker",
             "run",
             "--rm",
+            "--name",
+            f"cw-verify-{revision[:12]}-{digest[:16]}",
             "--network=none",
             "--read-only",
             "--cap-drop=ALL",
@@ -353,15 +410,38 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
             f"{target['data_dir']}:/data",
             image,
         ]
+        ACTIVE_RECORD["candidate_name"] = f"cw-verify-{revision[:12]}-{digest[:16]}"
+        record_phase("CHECK_CONFIG")
         run([*container_args, "python", "-m", "cryptowatcher", "check-config"])
         # CLI command overrides image CMD (which starts with python).
+        record_phase("READ_DIAGNOSTICS")
         before = json.loads(run([*container_args, "python", "-m", "cryptowatcher", "diagnostics"]))
-        state = json.loads(run([*container_args, "python", "-m", "cryptowatcher", "state-check"]))
+        database_size = (APP / "data/sqlite/cryptowatcher.sqlite3").stat().st_size
+        budget = database_timeout(database_size)
+        ACTIVE_RECORD.update(database_bytes=database_size, database_timeout_seconds=budget)
+        record_phase("CHECK_STATE_INTEGRITY")
+        state = json.loads(
+            run(
+                [
+                    *container_args,
+                    "python",
+                    "-m",
+                    "cryptowatcher",
+                    "state-check",
+                    "--timeout-seconds",
+                    str(budget - 15),
+                ],
+                timeout=budget,
+            )
+        )
         receipt = json.loads((APP / "data/sqlite/.g1-migration.json").read_text(encoding="utf-8"))
         require(state["legacy_sha256"] == receipt["legacy_sha256"], "Migration identity mismatch")
         backups = APP / "data/sqlite/backups"
         require(backups.is_dir(), "Reviewed backup directory missing")
         backup_name = f"pre-{revision}-{int(time.time())}.sqlite3"
+        require(shutil.disk_usage(APP).free > database_size + 512 * 1024 * 1024, "Insufficient backup disk")
+        ACTIVE_RECORD.update(backup=backup_name)
+        record_phase("BACKUP_AND_VALIDATE")
         run(
             [
                 *container_args,
@@ -369,9 +449,12 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
                 "-m",
                 "cryptowatcher",
                 "backup",
+                "--timeout-seconds",
+                str(budget - 15),
                 "--destination",
                 f"/data/sqlite/backups/{backup_name}",
-            ]
+            ],
+            timeout=budget,
         )
         # Recheck immediately before switching. New main arriving during this operation queues next deploy.
         require(main_revision() == revision, "Candidate changed during preparation")
@@ -397,8 +480,8 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
             "previous_image": previous["Image"],
             "backup": backup_name,
         }
-        record_path = release / "deployment.json"
-        record_path.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
+        ACTIVE_RECORD.update(record, switch_started=True)
+        record_phase("SWITCH")
         run(
             [*compose, "up", "-d", "--no-build", "--pull", "never", "--no-deps", "crypto_watcher"],
             env=environment,
@@ -406,6 +489,7 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
         )
         deadline = time.monotonic() + 150
         diagnostics = {}
+        record_phase("POST_CHECKS")
         while time.monotonic() < deadline:
             current = json.loads(run(["docker", "inspect", "crypto-watcher"]))[0]
             if current["Image"] == image and current["State"].get("Health", {}).get("Status") == "healthy":
@@ -418,7 +502,8 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
             time.sleep(5)
         else:
             record["state"] = "POST_CHECK_FAILED"
-            record_path.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
+            ACTIVE_RECORD.update(record)
+            record_phase("POST_CHECKS")
             raise DeploymentError("Health post-check failed; forward-fix or reviewed recovery required")
         require(diagnostics["heartbeat"].get("revision") == revision, "Running source mismatch")
         require(
@@ -433,8 +518,9 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
             available=diagnostics["last_poll"].get("available"),
             requested=diagnostics["last_poll"].get("requested"),
         )
-        record_path.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
-        return record
+        ACTIVE_RECORD.update(record)
+        record_phase("COMPLETE")
+        return dict(ACTIVE_RECORD)
 
 
 def main() -> int:
@@ -443,11 +529,21 @@ def main() -> int:
         print(json.dumps(deploy(revision, digest, size), sort_keys=True))
         return 0
     except Exception as exc:
+        record_phase("FAILED", failure=type(exc).__name__)
+        try:
+            stop_candidate()
+        except Exception as cleanup:
+            if ACTIVE_RECORD is not None:
+                ACTIVE_RECORD["candidate_cleanup"] = "UNSET/" + type(cleanup).__name__
+            record_phase("FAILED")
         print(
             json.dumps(
                 {
                     "state": "BLOCKED",
                     "reason": str(exc) if isinstance(exc, DeploymentError) else type(exc).__name__,
+                    "failure_phase": ACTIVE_RECORD.get("failure_phase", "UNSET")
+                    if ACTIVE_RECORD
+                    else "UNSET",
                 }
             ),
             file=sys.stderr,

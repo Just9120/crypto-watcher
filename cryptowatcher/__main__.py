@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -14,7 +15,6 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from . import __version__
-from .agent_delivery import AgentDelivery
 from .config import ConfigError, Infrastructure, OwnerSettings
 from .events import History
 from .lease import RuntimeLease
@@ -45,6 +45,7 @@ def main() -> int:
     parser.add_argument("--database", type=Path)
     parser.add_argument("--legacy", type=Path)
     parser.add_argument("--backup-dir", type=Path)
+    parser.add_argument("--timeout-seconds", type=float, default=900)
     parser.add_argument("--destination", type=Path)
     parser.add_argument("--owner-id", type=int)
     parser.add_argument("--format", choices=("ndjson", "csv"), default="ndjson")
@@ -137,7 +138,18 @@ def main() -> int:
                 snapshot = store.snapshot()
                 heartbeat = store.get_runtime("heartbeat", {})
                 if args.command == "state-check":
-                    integrity = store.db.execute("PRAGMA integrity_check").fetchone()[0]
+                    import sqlite3
+
+                    if not math.isfinite(args.timeout_seconds) or not 0 < args.timeout_seconds <= 900:
+                        raise ConfigError("Invalid integrity time budget")
+                    deadline = time.monotonic() + args.timeout_seconds
+                    store.db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+                    try:
+                        integrity = store.db.execute("PRAGMA integrity_check").fetchone()[0]
+                    except sqlite3.DatabaseError as exc:
+                        raise StateError("Integrity validation did not complete") from exc
+                    finally:
+                        store.db.set_progress_handler(None, 0)
                     if integrity != "ok":
                         raise StateError("Database integrity check failed")
                     imported = store.db.execute("SELECT source_sha256 FROM legacy_import").fetchone()
@@ -167,43 +179,14 @@ def main() -> int:
                 if args.command == "backup":
                     if args.destination is None:
                         raise ConfigError("backup requires destination")
-                    store.backup(args.destination)
+                    if not math.isfinite(args.timeout_seconds) or not 0 < args.timeout_seconds <= 900:
+                        raise ConfigError("Invalid backup time budget")
+                    store.backup(args.destination, timeout_seconds=args.timeout_seconds)
                     print(json.dumps({"status": "backup_integrity_ok"}))
                 else:
-                    print(
-                        json.dumps(
-                            {
-                                "configuration_revision": snapshot.revision,
-                                "heartbeat": heartbeat,
-                                "last_poll": store.get_runtime("last_poll_status", {"state": "PENDING"}),
-                                "telegram_delivery": store.get_runtime(
-                                    "telegram_delivery", {"state": "PENDING"}
-                                ),
-                                "ingestion": store.get_runtime("ingestion", {"state": "PENDING"}),
-                                "radar": History(store).diagnostics(),
-                                "agent_delivery": AgentDelivery(store, None).diagnostics(),
-                                "outcomes": {
-                                    "pending": History(store).count("outcome-pending:"),
-                                    "admission": History(store).get("outcome-admission", {}),
-                                },
-                                "analytics": store.get_runtime("analytics", {"state": "PENDING"}),
-                                "enrichment": {
-                                    "enabled": snapshot.settings.enrichment_enabled,
-                                    "ticker_cadence_ms": 60_000,
-                                    "oi_cadence_ms": 300_000,
-                                    "worker": store.get_runtime("enrichment", {"state": "PENDING"}),
-                                    "mapping_count": History(store).count("mapping-head:"),
-                                    "optional": True,
-                                },
-                                "digest": {
-                                    "preferences": History(store).get(
-                                        "digest-preferences", {"enabled": False}
-                                    ),
-                                    "pending": History(store).count("digest-pending:"),
-                                },
-                            }
-                        )
-                    )
+                    from .diagnostics import snapshot as diagnostic_snapshot
+
+                    print(json.dumps(diagnostic_snapshot(store)))
                 return 0
             finally:
                 store.close()

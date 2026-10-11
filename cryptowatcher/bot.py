@@ -371,7 +371,13 @@ class Controller:
                 "Reset baseline больше не используется. Composite считает движение закрытой свечи; настройки доступны в меню.",
             )
         elif command == "diagnostics":
-            await self.send(update, json.dumps(self.diagnostics(), ensure_ascii=False, indent=2))
+            from .analytics_worker import read_snapshot
+            from .diagnostics import snapshot as diagnostic_snapshot
+
+            result = await asyncio.to_thread(
+                read_snapshot, self.store.path, self.store.owner_id, diagnostic_snapshot
+            )
+            await self.send(update, json.dumps(result, ensure_ascii=False, indent=2))
         elif command == "agent":
             parts = raw.strip().split()
             action = parts[0].lower() if parts else "status"
@@ -384,7 +390,13 @@ class Controller:
                 self.agent.replay(parts[1], now)
             elif action != "status" or len(parts) > 1:
                 raise ConfigError("Используйте /agent status|on|off|retry или /agent replay EVENT_ID")
-            await self.send(update, json.dumps(self.agent.diagnostics(), ensure_ascii=False, indent=2))
+            from .analytics_worker import read_snapshot
+            from .diagnostics import snapshot as diagnostic_snapshot
+
+            result = await asyncio.to_thread(
+                read_snapshot, self.store.path, self.store.owner_id, diagnostic_snapshot
+            )
+            await self.send(update, json.dumps(result["agent_delivery"], ensure_ascii=False, indent=2))
         elif command in ("profiles", "profile"):
             if command == "profile" and raw:
                 self.store.update(snapshot.revision, snapshot.settings.with_profile(raw.strip().lower()))
@@ -510,7 +522,14 @@ class Controller:
                 else ("detector", "profile", "version", "settings", "market", "timeframe", "direction")
             )
             try:
-                statistics = cohorts(self.store, groups, limit=20)
+                from .analytics_worker import read_snapshot
+
+                statistics = await asyncio.to_thread(
+                    read_snapshot,
+                    self.store.path,
+                    self.store.owner_id,
+                    lambda store: cohorts(store, groups, limit=20),
+                )
             except ValueError as exc:
                 raise ConfigError(
                     "Groups: detector/profile/version/settings/market/timeframe/instrument/universe/direction/strength"
@@ -794,11 +813,21 @@ class Controller:
             return
         async with self.analytics_lock:
             try:
-                self.outcomes.work(now)
-                ComparisonWorker(self.store).work(now)
+                started = time.monotonic()
+                processed_outcomes = await self.outcomes.async_work(self.market.server_now)
+                processed_comparisons = await ComparisonWorker(self.store).async_work(self.market.server_now)
                 self.retention.work(now)
                 await self.recovery.work(now)
-                self.store.put_runtime("analytics", {"state": "OK", "at_ms": self.market.server_now()})
+                self.store.put_runtime(
+                    "analytics",
+                    {
+                        "state": "OK",
+                        "at_ms": self.market.server_now(),
+                        "processed_outcomes": processed_outcomes,
+                        "processed_comparisons": processed_comparisons,
+                        "elapsed_seconds": round(time.monotonic() - started, 3),
+                    },
+                )
             except Exception as exc:
                 self.store.put_runtime(
                     "analytics", {"state": "FAILED", "error_class": type(exc).__name__, "at_ms": now}
