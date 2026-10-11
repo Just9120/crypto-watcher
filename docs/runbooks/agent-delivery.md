@@ -34,9 +34,19 @@ URL — HTTPS, точный route выше, port443, без userinfo/query/fragm
 purpose cryptowatcher_context, account_ref producer_ref, environment PRODUCTION.
 Secret — dedicated api_key, минимум32 UTF-8 bytes. Не создавать/заменять неизвестный vault
 master key. Consumer самостоятельно ограничивает freshness своей явно установленной policy.
+Owner decision2026-10-11: `CRYPTOWATCHER_CONTEXT_MAX_AGE_SECONDS=900`. Этот cap действует
+от market observation, одновременно с type/TF producer fresh_until и active episode;
+более короткая freshness сохраняется. Значение публикуется в consumer config только
+по qualified activation procedure; spec decision не подтверждает running setting.
 При необходимости qualified service authentication разрешены paired
 `AGENT_ACCESS_CLIENT_ID`/`AGENT_ACCESS_CLIENT_SECRET`; headers ставятся только на agent
 request, не на public Bybit. Они не обходят Access policy. Secrets не входят в DB/export/logs.
+Zero Trust/Access сейчас не добавляется.403 сам по себе не доказывает Access block:
+diagnostic urllib и actual shared httpx client проверяются раздельно, с verified TLS,
+без redirects и credentials. Safe unsigned POST с пустым object не может создать event;
+ожидается configured-auth rejection или disabled-consumer503. Для qualification нужны
+source host/runtime, request method/client, timestamp, status и при наличии Cloudflare
+error code/Ray ID; нельзя считать GET404 доказательством отсутствия POST route.
 Все значения отсутствуют: integration UNSET, radar работает. Partial/invalid configuration:
 только agent BLOCKED, deterministic core/Telegram/outcomes продолжают работать.
 
