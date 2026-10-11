@@ -77,36 +77,52 @@ Bootstrap берёт existing target lock, сохраняет backup `authorized
 Source и persistent backup остаются обязательными full integrity gates до switch.
 Проверочные контейнеры имеют отдельный private tmpfs `/validation`, UID/GID10001,
 read-only root, network none, cap-drop ALL, CPU1 и memory-swap=memory (без swap).
-Бот и другие service units эти limits не получают. RAM allocation определяется
-по WAL-aware `database.snapshot_bytes` diagnostics: округление до MiB,
-scratch=bytes+64MiB, memory=bytes+512MiB; host MemAvailable должен оставить
-1536MiB reserve сверх memory cap. Недоступный размер, недостаток RAM/space или
-рост сверх allocation блокирует поставку до switch. Увеличение VPS resources,
-очистка данных и ослабление validation не выполняются автоматически.
+Бот и другие service units эти limits не получают. CD использует cap4GiB/no swap;
+3GiB доступны compressed pages/index,1GiB — interpreter/SQLite/cache.
+Private scratch64MiB хранит только disposable sentinel/WAL/SHM, не полную DB.
+Host MemAvailable должен оставить1536MiB reserve сверх cap. WAL-aware
+`database.snapshot_bytes` обязателен для current size/deadline/disk Evidence.
+Unknown metadata, insufficient RAM/space, compressed limit или deadline блокируют
+pre-switch stage; fallback на более слабую проверку отсутствует.
 
-CLI [validation.py](../../cryptowatcher/validation.py) использует explicit
+CLI [validation.py](../../cryptowatcher/validation.py) принимает explicit
 `--validation-directory /validation` только для `state-check` и `backup`.
-Directory должен быть отдельным tmpfs mount текущего UID с mode700, без symlinks.
-Для source state-check SQLite backup API копирует pinned WAL snapshot в RAM;
-live reader освобождается до full writable integrity, а owner/settings/import
-metadata возвращаются из того же проверенного snapshot. Persistent backup
-по-прежнему создаётся online copy в established backup directory. После закрытия
-он копируется byte-for-byte в RAM, проходит full writable integrity и SHA256
-сверку RAM/persistent bytes до и после validation. Temporary workspace удаляется
-при любом результате; persistent incomplete backup сохраняется для диагностики.
-Default CLI без flag сохраняет прежний disk mode, CD использует mandatory TMPFS.
-Все copy/hash/check действия входят в прежний общий stage budget, максимум900s.
+Directory — отдельный tmpfs текущего UID/mode700, без symlinks. CD добавляет
+`--compressed-validation`, mandatory mode `COMPRESSED_RAM`.
+[Compressed validation](../../cryptowatcher/compressed_validation.py) использует
+hash-locked APSW3.53.4.0/SQLite3.53.4 только в isolated validation connections;
+основное приложение продолжает использовать standard SQLite. Compressed VFS
+возвращает исходные байты каждой страницы и проверяет reconstructed SHA256
+до и после full integrity. Source snapshot создаётся pinned SQLite online backup;
+live reader закрывается до полного сканирования, metadata берётся из этого snapshot.
+Persistent backup создаётся прежним pinned online copy на диске; closed file
+сжимается без изменения logical bytes. После full validation сверяются SHA256
+reconstructed bytes и persistent file с inode/size/mtime/readback. Только workspace
+проверки удаляется; incomplete persistent copy сохраняется. DB/schema/settings/history
+не переписываются.
 
-В deployment record сохраняются resource allocations, completed backup hash и
-source/image/health/persistence/market post-checks. CI capture принимает PASS только
-с COMPLETE/TMPFS/full-backup SHA256 proof, source/build/artifact identity и
-успешным transport. Неизвестные fields и secret-bearing errors не экспортируются.
-Existing root-owned receiver9569f32c обновляется один раз до merge hash-bound
-operator installer; SSH key/target и forced-command permissions сохраняются.
-Rehearsal2026-10-11T15:44–15:48UTC: closed5,422,329,856byte copy/hash/full writable
-integrity PASS201.800s, actual integrity31.721s; constraint negative control и
-original/live preservation PASS. Это snapshot qualification, не гарантия capacity
-растущей production DB. Required Linux CI/image checks и actual CD остаются gates.
+Full writable `PRAGMA integrity_check`, включая CHECK constraints, выполняется
+целиком. `immutable=1` или read-only SQLite handle не используются для validator:
+их CHECK behaviour не подходит квалифицированным negative controls. Main VFS
+после copy отвергает writes; metadata connection дополнительно query_only.
+WAL/SHM операции разрешены лишь в private sentinel workspace. Default CLI без flags
+сохраняет disk validation; plain TMPFS flag доступен для отдельной qualification.
+Stage cap900s сохранён. Deployment record содержит allocations,
+COMPLETE/COMPRESSED_RAM/full-backup SHA256 proof/source/build/artifact/post-checks;
+capture отвергает отсутствие доказательства и не публикует unknown fields/secrets.
+Installed receiver9569f32c требует hash-bound operator update до merge;
+SSH key/target/forced-command permissions сохраняются.
+
+Plain RAM closed-copy rehearsal2026-10-11T15:44–15:48UTC PASS201.800s,
+integrity31.721s, но последующий live readback8,982,642,688bytes при available
+7,471,837,184bytes блокировал update до execute. Plain RAM не используется CD.
+REQUIRED pre-merge qualification выполняет [operator helper](../../scripts/qualify_compressed_validation.py)
+на known closed backup и current live WAL snapshot с shared885s/CPU1/cap4GiB,
+reserve1536MiB/constraint negative control/hashes/точным cleanup/all3 live ID readback.
+Оба источника монтируются read-only; production container/config/DB не меняются.
+Helper использует existing image9634558a и hash-pinned Linux APSW wheel,
+не устанавливая wheel на host. PASS не заменяет latest Linux CI/image или
+actual automatic CD/running source/capacity checks.
 
 ### Hotfix receiver update до merge
 

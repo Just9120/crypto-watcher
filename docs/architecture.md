@@ -42,8 +42,11 @@ Image: pinned Python base digest, hash-locked dependencies, UID/GID10001, read-o
 
 Delivery validation использует отдельный resource-bounded offline container с
 private tmpfs; это не ограничение runtime. Source WAL snapshot освобождается после
-copy, full writable integrity проверяет private snapshot. Persistent backup также
-проверяется на byte-identical RAM copy с original/RAM SHA256 до и после проверки.
+copy, full writable integrity проверяет private snapshot. CD хранит bounded lossless
+compressed pages через private VFS; SQLite получает исходные bytes, main writes
+запрещены. Hash-locked APSW применяется только в validation, application writer
+остаётся standard SQLite. Persistent backup проверяется по full integrity и SHA256
+compressed reconstruction/original до и после проверки.
 RAM/space/deadline failure останавливает pre-switch stage; history не удаляется,
 DB restore/downgrade и снижение полноты checks не выполняются. Детали allocation,
 receiver update и обязательных post-checks — в [delivery runbook](runbooks/delivery.md).

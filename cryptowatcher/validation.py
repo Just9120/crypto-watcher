@@ -12,6 +12,8 @@ from collections.abc import Iterator
 from contextlib import closing, contextmanager
 from pathlib import Path
 
+import apsw
+
 from .storage import IntegrityError, check_integrity
 
 HEADROOM = 64 * 1024 * 1024
@@ -91,12 +93,20 @@ def fingerprint(path: Path, deadline: float, *, destination: Path | None = None)
     return digest.hexdigest(), total
 
 
-def validate_backup(path: Path, directory: Path, *, deadline: float) -> dict[str, str | int]:
+def validate_backup(
+    path: Path, directory: Path, *, deadline: float, compressed: bool = False
+) -> dict[str, str | int]:
     """The closed persistent backup and the fully validated copy must have identical bytes."""
     try:
         budget(deadline)
         if any(Path(str(path) + suffix).exists() for suffix in ("-wal", "-shm", "-journal")):
             raise IntegrityError("DATABASE_ERROR", "Backup must be closed before RAM validation")
+        if compressed:
+            from .compressed_validation import classified_errors, validate_closed
+
+            scratch_space(directory, 0)
+            with classified_errors(deadline):
+                return validate_closed(path, directory=directory, deadline=deadline)
         scratch_space(directory, path.stat().st_size)
         with tempfile.TemporaryDirectory(prefix="cw-backup-", dir=directory) as work:
             clone = Path(work) / "database.sqlite3"
@@ -113,11 +123,19 @@ def validate_backup(path: Path, directory: Path, *, deadline: float) -> dict[str
 
 
 @contextmanager
-def validated_snapshot(path: Path, directory: Path, *, deadline: float) -> Iterator[sqlite3.Connection]:
+def validated_snapshot(
+    path: Path, directory: Path, *, deadline: float, compressed: bool = False
+) -> Iterator[sqlite3.Connection | apsw.Connection]:
     """Release the live WAL snapshot before the expensive full integrity check."""
     try:
         budget(deadline)
         scratch_space(directory, 0)
+        if compressed:
+            from .compressed_validation import snapshot as compressed_snapshot
+
+            with compressed_snapshot(path, directory, deadline=deadline) as connection:
+                yield connection
+            return
         with tempfile.TemporaryDirectory(prefix="cw-state-", dir=directory) as work:
             with closing(sqlite3.connect(Path(work) / "database.sqlite3")) as snapshot:
                 with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as source:

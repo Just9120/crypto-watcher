@@ -64,13 +64,14 @@ def validation_resources(size: int, available: int) -> dict[str, int]:
     require(type(size) is int and size > 0, "Validated snapshot size unavailable")
     require(type(available) is int and available > 0, "Host memory evidence unavailable")
     mib = 1024 * 1024
-    rounded = ((size + mib - 1) // mib) * mib
-    limit = rounded + 512 * mib
+    # Compressed pages are capped at 3 GiB; leave 1 GiB for SQLite/interpreter/cache.
+    # Incompressible input fails inside validation; no fallback or weaker check is allowed.
+    limit = 4096 * mib
     reserve = 1536 * mib
     require(available >= limit + reserve, "Insufficient available RAM for full validation")
     return {
         "snapshot_bytes": size,
-        "scratch_bytes": rounded + 64 * mib,
+        "scratch_bytes": 64 * mib,
         "memory_limit_bytes": limit,
         "host_available_bytes": available,
         "host_reserve_bytes": reserve,
@@ -477,13 +478,14 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
                     str(budget - 15),
                     "--validation-directory",
                     "/validation",
+                    "--compressed-validation",
                 ],
                 timeout=budget,
             )
         )
         receipt = json.loads((APP / "data/sqlite/.g1-migration.json").read_text(encoding="utf-8"))
         require(state["legacy_sha256"] == receipt["legacy_sha256"], "Migration identity mismatch")
-        require(state.get("validation_mode") == "TMPFS", "Full RAM state validation missing")
+        require(state.get("validation_mode") == "COMPRESSED_RAM", "Full compressed state validation missing")
         backups = APP / "data/sqlite/backups"
         require(backups.is_dir(), "Reviewed backup directory missing")
         backup_name = f"pre-{revision}-{int(time.time())}.sqlite3"
@@ -510,6 +512,7 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
                     f"/data/sqlite/backups/{backup_name}",
                     "--validation-directory",
                     "/validation",
+                    "--compressed-validation",
                 ],
                 timeout=budget,
             )
@@ -518,7 +521,7 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
         require(
             backup.get("status") == "backup_integrity_ok"
             and proof.get("phase") == "COMPLETE"
-            and proof.get("validation_mode") == "TMPFS"
+            and proof.get("validation_mode") == "COMPRESSED_RAM"
             and bool(re.fullmatch(r"[0-9a-f]{64}", str(proof.get("sha256")))),
             "Full persistent backup validation missing",
         )

@@ -159,6 +159,30 @@ def main() -> None:
         ).strip()
         assert proof["phase"] == "COMPLETE" and proof["validation_mode"] == "TMPFS"
         assert proof["sha256"] == actual_hash
+        for command in ("state-check", "backup"):
+            extra = ["--destination", "/data/compressed-restore.db"] if command == "backup" else []
+            compressed = json.loads(
+                run(
+                    args.image,
+                    directory,
+                    "-m",
+                    "cryptowatcher",
+                    command,
+                    "--database",
+                    "/data/store.db",
+                    "--validation-directory",
+                    "/validation",
+                    "--compressed-validation",
+                    *extra,
+                    validation=True,
+                )
+            )
+            if command == "state-check":
+                assert compressed["validation_mode"] == "COMPRESSED_RAM"
+                assert compressed["configuration_revision"] == state["configuration_revision"]
+            else:
+                assert compressed["backup"]["validation_mode"] == "COMPRESSED_RAM"
+                assert compressed["backup"]["sha256"] == actual_hash
         run(
             args.image,
             directory,
@@ -179,6 +203,23 @@ except IntegrityError as error:
     assert error.code == 'DATABASE_CORRUPT'
 else:
     raise AssertionError('Constraint violation was accepted')
+""",
+            validation=True,
+        )
+        run(
+            args.image,
+            directory,
+            "-c",
+            """import time
+from pathlib import Path
+from cryptowatcher.validation import validate_backup
+from cryptowatcher.storage import IntegrityError
+try:
+    validate_backup(Path('/data/constraint.db'), Path('/validation'), deadline=time.monotonic()+30, compressed=True)
+except IntegrityError as error:
+    assert error.code == 'DATABASE_CORRUPT'
+else:
+    raise AssertionError('Compressed validation accepted a constraint violation')
 """,
             validation=True,
         )
@@ -219,7 +260,7 @@ else:
         run(args.image, directory, *migration, success=False)
         assert source.read_text() == '{"version":99,"chats":{}}'
     print(
-        "Image non-root / offline migration / full tmpfs validation / backup hash / restart / liveness: PASS"
+        "Image non-root / offline migration / full tmpfs and compressed validation / backup hash / restart / liveness: PASS"
     )
 
 

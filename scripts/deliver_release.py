@@ -71,15 +71,21 @@ def delivery_result(result, *, revision: str, digest: str, build_run: int) -> tu
         in (success.get("image_config_digest"), success.get("image_manifest_digest"))
         and re.fullmatch(r"sha256:[0-9a-f]{64}", str(success.get("image_id")))
         and proof.get("phase") == "COMPLETE"
-        and proof.get("validation_mode") == "TMPFS"
+        and proof.get("validation_mode") == "COMPRESSED_RAM"
         and re.fullmatch(r"[0-9a-f]{64}", str(proof.get("sha256")))
     ):
         record = {key: value for key, value in success.items() if key in SUCCESS_FIELDS}
         record["backup_validation"] = {
             "phase": "COMPLETE",
-            "validation_mode": "TMPFS",
+            "validation_mode": "COMPRESSED_RAM",
             "sha256": proof["sha256"],
         }
+        for key in ("bytes", "compressed_bytes"):
+            if type(proof.get(key)) is int and proof[key] > 0:
+                record["backup_validation"][key] = proof[key]
+        for key in ("sqlite_version", "apsw_version"):
+            if re.fullmatch(r"[0-9.]{1,32}", str(proof.get(key))):
+                record["backup_validation"][key] = proof[key]
         for name in ("state_validation_resources", "backup_validation_resources"):
             resource = success.get(name)
             if isinstance(resource, dict):

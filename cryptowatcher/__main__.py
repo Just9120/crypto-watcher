@@ -48,6 +48,7 @@ def main() -> int:
     parser.add_argument("--timeout-seconds", type=float, default=900)
     parser.add_argument("--destination", type=Path)
     parser.add_argument("--validation-directory", type=Path)
+    parser.add_argument("--compressed-validation", action="store_true")
     parser.add_argument("--owner-id", type=int)
     parser.add_argument("--format", choices=("ndjson", "csv"), default="ndjson")
     parser.add_argument("--start-ms", type=int, default=0)
@@ -70,6 +71,8 @@ def main() -> int:
     try:
         if args.validation_directory is not None and args.command not in ("state-check", "backup"):
             raise ConfigError("validation-directory is only supported for state-check and backup")
+        if args.compressed_validation and args.validation_directory is None:
+            raise ConfigError("compressed-validation requires validation-directory")
         if args.command == "migrate":
             if (
                 args.database is None
@@ -153,11 +156,17 @@ def main() -> int:
                         from .validation import validated_snapshot
 
                         with validated_snapshot(
-                            database, args.validation_directory, deadline=deadline
+                            database,
+                            args.validation_directory,
+                            deadline=deadline,
+                            compressed=args.compressed_validation,
                         ) as validated:
-                            owner_id, revision, payload = validated.execute(
+                            owner_row = validated.execute(
                                 "SELECT owner_id,revision,settings_json FROM owner_settings"
                             ).fetchone()
+                            if owner_row is None:
+                                raise StateError("Validated owner settings unavailable")
+                            owner_id, revision, payload = owner_row
                             if owner_id != store.owner_id:
                                 raise StateError("Validated snapshot owner mismatch")
                             snapshot = Snapshot(revision, OwnerSettings.from_payload(json.loads(payload)))
@@ -178,7 +187,9 @@ def main() -> int:
                                 ).hexdigest(),
                                 "legacy_sha256": imported[0] if imported else None,
                                 "alerts_enabled": enabled,
-                                "validation_mode": "TMPFS" if args.validation_directory else "DISK",
+                                "validation_mode": "COMPRESSED_RAM"
+                                if args.compressed_validation
+                                else ("TMPFS" if args.validation_directory else "DISK"),
                             }
                         )
                     )
@@ -199,6 +210,7 @@ def main() -> int:
                         args.destination,
                         timeout_seconds=args.timeout_seconds,
                         validation_directory=args.validation_directory,
+                        compressed_validation=args.compressed_validation,
                     )
                     print(json.dumps({"status": "backup_integrity_ok", "backup": metrics}))
                 else:

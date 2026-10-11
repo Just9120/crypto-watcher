@@ -23,7 +23,7 @@ def success(**changes):
         "image_config_digest": IMAGE,
         "post_checks": "source/image/health/persistence/market PASS",
         "phase": "COMPLETE",
-        "backup_validation": {"phase": "COMPLETE", "validation_mode": "TMPFS", "sha256": "f" * 64},
+        "backup_validation": {"phase": "COMPLETE", "validation_mode": "COMPRESSED_RAM", "sha256": "f" * 64},
         **changes,
     }
 

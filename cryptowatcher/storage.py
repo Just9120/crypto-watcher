@@ -302,8 +302,15 @@ class Store:
             self.db.execute("INSERT OR REPLACE INTO runtime VALUES (?,?)", (key, encode(payload)))
 
     def backup(
-        self, destination: Path, *, timeout_seconds: float = 900, validation_directory: Path | None = None
+        self,
+        destination: Path,
+        *,
+        timeout_seconds: float = 900,
+        validation_directory: Path | None = None,
+        compressed_validation: bool = False,
     ) -> dict[str, float | str]:
+        if compressed_validation and validation_directory is None:
+            raise StateError("Compressed validation requires a private validation directory")
         if destination.exists() or destination.resolve() == self.path.resolve():
             raise StateError("Backup destination must be new")
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -315,6 +322,7 @@ class Store:
         phase = "COPY"
         copied_at: float | None = None
         validated_hash: str | None = None
+        validation_details: dict[str, float | str] = {}
 
         def metrics() -> dict[str, float | str]:
             now = time.monotonic()
@@ -325,9 +333,10 @@ class Store:
                 "elapsed_seconds": round(now - started, 3),
             }
             if validation_directory is not None:
-                result["validation_mode"] = "TMPFS"
+                result["validation_mode"] = "COMPRESSED_RAM" if compressed_validation else "TMPFS"
             if validated_hash is not None:
                 result["sha256"] = validated_hash
+            result.update(validation_details)
             return result
 
         def progress(status: int, remaining: int, total: int) -> None:
@@ -352,8 +361,17 @@ class Store:
             if validation_directory is not None:
                 from .validation import validate_backup
 
-                validation = validate_backup(destination, validation_directory, deadline=deadline)
+                validation = validate_backup(
+                    destination, validation_directory, deadline=deadline, compressed=compressed_validation
+                )
                 validated_hash = str(validation["sha256"])
+                if compressed_validation:
+                    validation_details = {
+                        "bytes": int(validation["bytes"]),
+                        "compressed_bytes": int(validation["compressed_bytes"]),
+                        "sqlite_version": str(validation["sqlite_version"]),
+                        "apsw_version": str(validation["apsw_version"]),
+                    }
         except IntegrityError as exc:
             exc.backup_metrics = metrics()
             raise

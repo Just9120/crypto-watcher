@@ -193,7 +193,9 @@ def test_memory_allocation_is_bounded_and_insufficient_or_unknown_memory_blocks(
     size = 5_422_329_856
     allocation = receiver.validation_resources(size, 7_665_373_184)
     assert allocation["memory_limit_bytes"] + allocation["host_reserve_bytes"] <= 7_665_373_184
-    assert allocation["scratch_bytes"] >= size + validation.HEADROOM
+    assert allocation["scratch_bytes"] == validation.HEADROOM
+    assert allocation["memory_limit_bytes"] == 4 * 1024**3
+    assert receiver.validation_resources(8_982_642_688, 7_471_837_184)["memory_limit_bytes"] == 4 * 1024**3
     args = receiver.validation_args(["docker", "run", "--network=none", "image"], allocation)
     assert args[-1] == "image" and args[args.index("--memory-swap") + 1] == str(
         allocation["memory_limit_bytes"]
