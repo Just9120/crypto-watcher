@@ -51,6 +51,13 @@ def test_backup_pins_snapshot_while_wal_writer_advances(tmp_path, monkeypatch):
         )
 
     monkeypatch.setattr(sqlite3, "connect", connect)
+
+    def validate(backup, **kwargs):
+        # The completed copy owns its snapshot; long validation must not keep live WAL pinned.
+        assert store.db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0
+        check_integrity(backup, **kwargs)
+
+    monkeypatch.setattr("cryptowatcher.storage.check_integrity", validate)
     destination = tmp_path / "backup.sqlite"
     store.backup(destination)
     restored = Store(destination, 233382575, readonly=True)
@@ -184,12 +191,28 @@ def test_failed_stage_is_atomic_identifiable_and_never_contains_exception_body(t
     receiver.record_phase("FAILED", failure="TimeoutExpired")
     value = json.loads(path.read_text())
     assert value["state"] == "FAILED_PRE_SWITCH" and value["failure_phase"] == "CHECK_STATE_INTEGRITY"
-    assert receiver.database_timeout(3_719_077_888) == 420
-    assert receiver.database_timeout(100 * (1 << 30)) == 900
     receiver.ACTIVE_RECORD["switch_started"] = True
     receiver.record_phase("POST_CHECKS")
     receiver.record_phase("FAILED", failure="DeploymentError")
     assert json.loads(path.read_text())["state"] == "POST_CHECK_FAILED"
+
+
+@pytest.mark.parametrize(
+    ("size", "expected"),
+    [
+        (0, 180),
+        (1, 330),
+        (1 << 30, 330),
+        ((1 << 30) + 1, 480),
+        (3_719_077_888, 780),
+        (4_820_512_768, 900),
+        (100 * (1 << 30), 900),
+    ],
+)
+def test_database_stage_budget_covers_measured_integrity_and_remains_bounded(size, expected):
+    assert receiver.database_timeout(size) == expected
+    if size == 4_820_512_768:
+        assert expected - 15 > 614.323 + 180
 
 
 def test_timeout_cleanup_cannot_stop_application_or_other_project(monkeypatch):

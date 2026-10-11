@@ -314,16 +314,14 @@ class Store:
                 raise StateError("Backup time budget exceeded; incomplete destination preserved")
 
         try:
-            with (
-                closing(sqlite3.connect(destination)) as backup,
-                closing(
+            with closing(sqlite3.connect(destination)) as backup:
+                with closing(
                     sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True, timeout=1)
-                ) as source,
-            ):
-                # Pin a WAL read snapshot: a busy live writer cannot endlessly restart copying.
-                source.execute("BEGIN")
-                source.execute("SELECT owner_id FROM owner_settings").fetchone()
-                source.backup(backup, pages=256, progress=progress, sleep=0.01)
+                ) as source:
+                    # Pin a WAL snapshot only while copying, then release it before validation.
+                    source.execute("BEGIN")
+                    source.execute("SELECT owner_id FROM owner_settings").fetchone()
+                    source.backup(backup, pages=256, progress=progress, sleep=0.01)
                 check_integrity(backup, deadline=deadline)
         except sqlite3.DatabaseError as exc:
             raise StateError("Backup validation failed; incomplete destination preserved") from exc
