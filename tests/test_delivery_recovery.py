@@ -1,12 +1,13 @@
 import json
 import sqlite3
 import threading
+import time
 from unittest.mock import Mock
 
 import pytest
 
 from cryptowatcher.config import OwnerSettings
-from cryptowatcher.storage import StateError, Store
+from cryptowatcher.storage import IntegrityError, StateError, Store, check_integrity
 from scripts import deploy_receiver as receiver
 
 
@@ -73,6 +74,84 @@ def test_expired_backup_preserves_source_and_rejects_reuse(tmp_path):
     with pytest.raises(StateError, match="must be new"):
         store.backup(destination)
     store.close()
+
+
+def test_full_integrity_rejects_constraint_violation_without_disclosing_contents(tmp_path):
+    with sqlite3.connect(tmp_path / "invalid.sqlite") as database:
+        database.execute("CREATE TABLE checked(value TEXT CHECK(value = 'valid'))")
+        database.execute("PRAGMA ignore_check_constraints=ON")
+        database.execute("INSERT INTO checked VALUES ('secret-never-print')")
+        database.execute("PRAGMA ignore_check_constraints=OFF")
+        with pytest.raises(IntegrityError) as error:
+            check_integrity(database, deadline=time.monotonic() + 5)
+        assert error.value.code == "DATABASE_CORRUPT"
+        assert "secret" not in str(error.value)
+        assert database.execute("SELECT count(*) FROM checked").fetchone() == (1,)
+
+
+def test_integrity_timeout_is_not_corruption_and_clears_progress_handler(tmp_path, monkeypatch):
+    with sqlite3.connect(tmp_path / "large.sqlite") as database:
+        database.execute("CREATE TABLE sample(value TEXT UNIQUE)")
+        database.executemany("INSERT INTO sample VALUES (?)", ((str(i),) for i in range(2000)))
+        ticks = iter((0.0, 2.0))
+        monkeypatch.setattr("cryptowatcher.storage.time.monotonic", lambda: next(ticks))
+        with pytest.raises(IntegrityError) as error:
+            check_integrity(database, deadline=1.0)
+        assert error.value.code == "TIME_BUDGET_EXCEEDED"
+        assert database.execute("SELECT count(*) FROM sample").fetchone() == (2000,)
+
+
+def test_backup_copy_and_validation_share_budget_without_replacing_destination(tmp_path, monkeypatch):
+    store = Store(tmp_path / "source.sqlite", 233382575)
+    store.initialize(OwnerSettings())
+    connect = sqlite3.connect
+    now = [0.0]
+    monkeypatch.setattr("cryptowatcher.storage.time.monotonic", lambda: now[0])
+
+    class SlowSource(sqlite3.Connection):
+        def backup(self, destination, **kwargs):
+            super().backup(destination, **kwargs)
+            now[0] = 2.0
+
+    def source_connect(path, **kwargs):
+        if "mode=ro" in str(path):
+            kwargs["factory"] = SlowSource
+        return connect(path, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", source_connect)
+    destination = tmp_path / "not-validated.sqlite"
+    with pytest.raises(IntegrityError) as error:
+        store.backup(destination, timeout_seconds=1)
+    assert error.value.code == "TIME_BUDGET_EXCEEDED"
+    assert destination.exists() and store.snapshot().revision == 1
+    preserved = destination.read_bytes()
+    with pytest.raises(StateError, match="must be new"):
+        store.backup(destination)
+    assert destination.read_bytes() == preserved
+    store.close()
+
+
+@pytest.mark.parametrize(
+    ("sqlite_code", "expected"),
+    [
+        (sqlite3.SQLITE_INTERRUPT, "INTERRUPTED"),
+        (sqlite3.SQLITE_IOERR_READ, "IO_ERROR"),
+        (sqlite3.SQLITE_CORRUPT, "DATABASE_CORRUPT"),
+        (sqlite3.SQLITE_BUSY, "DATABASE_ERROR"),
+    ],
+)
+def test_integrity_sqlite_errors_are_classified_without_raw_messages(tmp_path, sqlite_code, expected):
+    class FailingConnection(sqlite3.Connection):
+        def execute(self, sql, *args):
+            error = sqlite3.DatabaseError("secret-never-print")
+            error.sqlite_errorcode = sqlite_code
+            raise error
+
+    with sqlite3.connect(tmp_path / "error.sqlite", factory=FailingConnection) as database:
+        with pytest.raises(IntegrityError) as error:
+            check_integrity(database, deadline=time.monotonic() + 5)
+        assert error.value.code == expected
+        assert "secret" not in str(error.value)
 
 
 def test_failed_stage_is_atomic_identifiable_and_never_contains_exception_body(tmp_path, monkeypatch):

@@ -19,7 +19,7 @@ from .config import ConfigError, Infrastructure, OwnerSettings
 from .events import History
 from .lease import RuntimeLease
 from .logging_utils import configure_logging
-from .storage import StateError, Store, encode, migrate_legacy
+from .storage import IntegrityError, StateError, Store, check_integrity, encode, migrate_legacy
 
 
 def main() -> int:
@@ -138,20 +138,10 @@ def main() -> int:
                 snapshot = store.snapshot()
                 heartbeat = store.get_runtime("heartbeat", {})
                 if args.command == "state-check":
-                    import sqlite3
-
                     if not math.isfinite(args.timeout_seconds) or not 0 < args.timeout_seconds <= 900:
                         raise ConfigError("Invalid integrity time budget")
                     deadline = time.monotonic() + args.timeout_seconds
-                    store.db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
-                    try:
-                        integrity = store.db.execute("PRAGMA integrity_check").fetchone()[0]
-                    except sqlite3.DatabaseError as exc:
-                        raise StateError("Integrity validation did not complete") from exc
-                    finally:
-                        store.db.set_progress_handler(None, 0)
-                    if integrity != "ok":
-                        raise StateError("Database integrity check failed")
+                    check_integrity(store.db, deadline=deadline)
                     imported = store.db.execute("SELECT source_sha256 FROM legacy_import").fetchone()
                     print(
                         json.dumps(
@@ -216,8 +206,11 @@ def main() -> int:
         return 0
     except Exception as exc:
         message = str(exc) if isinstance(exc, (ConfigError, StateError)) else type(exc).__name__
-        print(json.dumps({"status": "blocked", "reason": message}), file=sys.stderr)
-        return 2
+        failure = {"status": "blocked", "reason": message}
+        if isinstance(exc, IntegrityError):
+            failure["failure_code"] = exc.code
+        print(json.dumps(failure), file=sys.stderr)
+        return exc.exit_status if isinstance(exc, IntegrityError) else 2
 
 
 if __name__ == "__main__":
