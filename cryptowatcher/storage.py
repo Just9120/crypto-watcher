@@ -16,10 +16,81 @@ from typing import Any
 from .config import ConfigError, OwnerSettings, instrument_key, normalize_pair, number
 
 SCHEMA_VERSION = 1
+VALIDATION_CACHE_KIB = 131072
+VALIDATION_MMAP_BYTES = 2147483648
+VALIDATION_PROGRESS_STEPS = 10000
 
 
 class StateError(RuntimeError):
     pass
+
+
+class IntegrityError(StateError):
+    """A safe, machine-readable failure without database contents or exception text."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.exit_status = {
+            "TIME_BUDGET_EXCEEDED": 3,
+            "DATABASE_CORRUPT": 4,
+            "INTERRUPTED": 5,
+            "IO_ERROR": 6,
+            "DATABASE_ERROR": 7,
+        }.get(code, 2)
+
+
+def check_integrity(database: sqlite3.Connection, *, deadline: float) -> None:
+    """Validate the whole database within the caller's shared operation budget."""
+    if time.monotonic() >= deadline:
+        raise IntegrityError("TIME_BUDGET_EXCEEDED", "Integrity time budget exceeded")
+    expired = False
+    previous_cache: int | None = None
+    previous_mmap: int | None = None
+    validation_failed = False
+
+    def progress() -> int:
+        nonlocal expired
+        expired = time.monotonic() >= deadline
+        return int(expired)
+
+    database.set_progress_handler(progress, VALIDATION_PROGRESS_STEPS)
+    try:
+        previous_cache = int(database.execute("PRAGMA cache_size").fetchone()[0])
+        mmap_row = database.execute("PRAGMA mmap_size").fetchone()
+        previous_mmap = int(mmap_row[0]) if mmap_row is not None else None
+        # Dedicated validation connections only; these suggestions never change the file schema.
+        database.execute(f"PRAGMA cache_size=-{VALIDATION_CACHE_KIB}")
+        if previous_mmap is not None:
+            database.execute(f"PRAGMA mmap_size={VALIDATION_MMAP_BYTES}")
+        rows = database.execute("PRAGMA integrity_check").fetchall()
+    except sqlite3.DatabaseError as exc:
+        validation_failed = True
+        code = getattr(exc, "sqlite_errorcode", 0) & 0xFF
+        if code == sqlite3.SQLITE_INTERRUPT:
+            if expired:
+                raise IntegrityError("TIME_BUDGET_EXCEEDED", "Integrity time budget exceeded") from exc
+            raise IntegrityError("INTERRUPTED", "Integrity validation interrupted") from exc
+        if code in (sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB):
+            raise IntegrityError("DATABASE_CORRUPT", "Database integrity check failed") from exc
+        if code == sqlite3.SQLITE_IOERR:
+            raise IntegrityError("IO_ERROR", "Integrity validation encountered an I/O error") from exc
+        raise IntegrityError("DATABASE_ERROR", "Integrity validation did not complete") from exc
+    finally:
+        database.set_progress_handler(None, 0)
+        try:
+            if previous_mmap is not None:
+                database.execute(f"PRAGMA mmap_size={previous_mmap}")
+            if previous_cache is not None:
+                database.execute(f"PRAGMA cache_size={previous_cache}")
+        except sqlite3.DatabaseError as exc:
+            # Preserve the classified primary failure; callers close dedicated connections.
+            if not validation_failed:
+                raise IntegrityError("DATABASE_ERROR", "Validation connection cleanup failed") from exc
+    if time.monotonic() >= deadline:
+        raise IntegrityError("TIME_BUDGET_EXCEEDED", "Integrity time budget exceeded")
+    if len(rows) != 1 or rows[0][0] != "ok":
+        raise IntegrityError("DATABASE_CORRUPT", "Database integrity check failed")
 
 
 class RevisionConflict(StateError):
@@ -243,19 +314,15 @@ class Store:
                 raise StateError("Backup time budget exceeded; incomplete destination preserved")
 
         try:
-            with (
-                closing(sqlite3.connect(destination)) as backup,
-                closing(
+            with closing(sqlite3.connect(destination)) as backup:
+                with closing(
                     sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True, timeout=1)
-                ) as source,
-            ):
-                # Pin a WAL read snapshot: a busy live writer cannot endlessly restart copying.
-                source.execute("BEGIN")
-                source.execute("SELECT owner_id FROM owner_settings").fetchone()
-                source.backup(backup, pages=256, progress=progress, sleep=0.01)
-                backup.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
-                if backup.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
-                    raise StateError("Backup integrity check failed")
+                ) as source:
+                    # Pin a WAL snapshot only while copying, then release it before validation.
+                    source.execute("BEGIN")
+                    source.execute("SELECT owner_id FROM owner_settings").fetchone()
+                    source.backup(backup, pages=256, progress=progress, sleep=0.01)
+                check_integrity(backup, deadline=deadline)
         except sqlite3.DatabaseError as exc:
             raise StateError("Backup validation failed; incomplete destination preserved") from exc
         if os.name != "nt":

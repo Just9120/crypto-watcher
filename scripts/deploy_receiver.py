@@ -55,8 +55,9 @@ def record_phase(phase: str, *, failure: str | None = None) -> None:
 
 
 def database_timeout(size: int) -> int:
-    # Full integrity/backup stays mandatory; allow bounded work on the observed multi-GiB DB.
-    return min(900, 180 + ((size + (1 << 30) - 1) // (1 << 30)) * 60)
+    # The 4.82 GB production snapshot took 614s for full integrity with validation I/O tuning.
+    # Include copy/validation margin while retaining the 900s stage cap and every safety check.
+    return min(900, 180 + ((size + (1 << 30) - 1) // (1 << 30)) * 150)
 
 
 def stop_candidate() -> None:

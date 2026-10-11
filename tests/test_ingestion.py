@@ -373,7 +373,11 @@ async def test_reconnect_recovers_known_gap_even_when_latest_boundary_is_current
         await radar.close()
 
 
-async def test_persisted_ws_producer_durable_delivery_no_legacy_double_send(radar, infrastructure):
+async def test_persisted_ws_producer_durable_delivery_no_legacy_double_send(
+    radar, infrastructure, monkeypatch
+):
+    # Keep exchange ticks without wall-time drift across the 2s notification coalescing boundary.
+    monkeypatch.setattr(radar, "server_now", lambda: radar._server_ms)
     controller = Controller(infrastructure, radar.store, radar)
     stream = "spot/BTCUSDT/1m"
     history_store = History(radar.store)

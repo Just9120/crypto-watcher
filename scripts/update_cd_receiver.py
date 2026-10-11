@@ -19,7 +19,7 @@ REPO = "Just9120/crypto-watcher"
 APP = Path("/opt/crypto_watcher")
 RECEIVER = Path("/usr/local/lib/cryptowatcher/deploy_receiver.py")
 TARGET = Path("/etc/cryptowatcher/deploy-target.json")
-OLD_HASH = "413fb1dd2eacd8d2b534a7dfed6a4c841b17026d804072533f33d50d83cd6baf"
+OLD_HASH = "aa2b1a7a51885c520d1541fe4380f2fbfd0d1d7f9d1588a314289b570d897e44"
 TARGET_HASH = "4d69f74f2cd4bbd609b6ac15667d8ff82a12f3cc42db1c2aaf17bf1bda773274"
 
 

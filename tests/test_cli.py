@@ -5,6 +5,7 @@ import time
 import pytest
 
 from cryptowatcher.__main__ import main
+from cryptowatcher.storage import IntegrityError
 
 
 def cli(monkeypatch, infrastructure, *args):
@@ -75,3 +76,28 @@ def test_export_cli_rejects_invalid_period_and_required_causal_cutoff(
     assert capsys.readouterr().out == ""
     assert cli(monkeypatch, infrastructure, "context", "--event-id", "unknown") == 2
     assert "cutoff-ms" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("code", "exit_status"),
+    [
+        ("TIME_BUDGET_EXCEEDED", 3),
+        ("DATABASE_CORRUPT", 4),
+        ("INTERRUPTED", 5),
+        ("IO_ERROR", 6),
+        ("DATABASE_ERROR", 7),
+    ],
+)
+def test_integrity_failure_cli_has_safe_distinct_code(
+    monkeypatch, infrastructure, store, capsys, code, exit_status
+):
+    def fail(*args, **kwargs):
+        raise IntegrityError(code, "Safe integrity failure")
+
+    monkeypatch.setattr("cryptowatcher.__main__.check_integrity", fail)
+    assert cli(monkeypatch, infrastructure, "state-check") == exit_status
+    assert json.loads(capsys.readouterr().err) == {
+        "status": "blocked",
+        "reason": "Safe integrity failure",
+        "failure_code": code,
+    }

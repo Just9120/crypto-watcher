@@ -1,12 +1,13 @@
 import json
 import sqlite3
 import threading
+import time
 from unittest.mock import Mock
 
 import pytest
 
 from cryptowatcher.config import OwnerSettings
-from cryptowatcher.storage import StateError, Store
+from cryptowatcher.storage import IntegrityError, StateError, Store, check_integrity
 from scripts import deploy_receiver as receiver
 
 
@@ -50,6 +51,13 @@ def test_backup_pins_snapshot_while_wal_writer_advances(tmp_path, monkeypatch):
         )
 
     monkeypatch.setattr(sqlite3, "connect", connect)
+
+    def validate(backup, **kwargs):
+        # The completed copy owns its snapshot; long validation must not keep live WAL pinned.
+        assert store.db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0
+        check_integrity(backup, **kwargs)
+
+    monkeypatch.setattr("cryptowatcher.storage.check_integrity", validate)
     destination = tmp_path / "backup.sqlite"
     store.backup(destination)
     restored = Store(destination, 233382575, readonly=True)
@@ -75,6 +83,106 @@ def test_expired_backup_preserves_source_and_rejects_reuse(tmp_path):
     store.close()
 
 
+def test_full_integrity_rejects_constraint_violation_without_disclosing_contents(tmp_path):
+    with sqlite3.connect(tmp_path / "invalid.sqlite") as database:
+        database.execute("CREATE TABLE checked(value TEXT CHECK(value = 'valid'))")
+        database.execute("PRAGMA ignore_check_constraints=ON")
+        database.execute("INSERT INTO checked VALUES ('secret-never-print')")
+        database.execute("PRAGMA ignore_check_constraints=OFF")
+        cache_before = database.execute("PRAGMA cache_size").fetchone()
+        mmap_before = database.execute("PRAGMA mmap_size").fetchone()
+        with pytest.raises(IntegrityError) as error:
+            check_integrity(database, deadline=time.monotonic() + 5)
+        assert error.value.code == "DATABASE_CORRUPT"
+        assert "secret" not in str(error.value)
+        assert database.execute("SELECT count(*) FROM checked").fetchone() == (1,)
+        assert database.execute("PRAGMA cache_size").fetchone() == cache_before
+        assert database.execute("PRAGMA mmap_size").fetchone() == mmap_before
+
+
+def test_integrity_timeout_is_not_corruption_and_clears_progress_handler(tmp_path, monkeypatch):
+    with sqlite3.connect(tmp_path / "large.sqlite") as database:
+        database.execute("CREATE TABLE sample(value TEXT UNIQUE)")
+        database.executemany("INSERT INTO sample VALUES (?)", ((str(i),) for i in range(2000)))
+        ticks = iter((0.0, 2.0))
+        monkeypatch.setattr("cryptowatcher.storage.time.monotonic", lambda: next(ticks))
+        with pytest.raises(IntegrityError) as error:
+            check_integrity(database, deadline=1.0)
+        assert error.value.code == "TIME_BUDGET_EXCEEDED"
+        assert database.execute("SELECT count(*) FROM sample").fetchone() == (2000,)
+
+
+def test_backup_copy_and_validation_share_budget_without_replacing_destination(tmp_path, monkeypatch):
+    store = Store(tmp_path / "source.sqlite", 233382575)
+    store.initialize(OwnerSettings())
+    connect = sqlite3.connect
+    now = [0.0]
+    monkeypatch.setattr("cryptowatcher.storage.time.monotonic", lambda: now[0])
+
+    class SlowSource(sqlite3.Connection):
+        def backup(self, destination, **kwargs):
+            super().backup(destination, **kwargs)
+            now[0] = 2.0
+
+    def source_connect(path, **kwargs):
+        if "mode=ro" in str(path):
+            kwargs["factory"] = SlowSource
+        return connect(path, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", source_connect)
+    destination = tmp_path / "not-validated.sqlite"
+    with pytest.raises(IntegrityError) as error:
+        store.backup(destination, timeout_seconds=1)
+    assert error.value.code == "TIME_BUDGET_EXCEEDED"
+    assert destination.exists() and store.snapshot().revision == 1
+    preserved = destination.read_bytes()
+    with pytest.raises(StateError, match="must be new"):
+        store.backup(destination)
+    assert destination.read_bytes() == preserved
+    store.close()
+
+
+def test_validation_without_mmap_support_still_checks_all_tables_and_preserves_settings(tmp_path):
+    class NoMmap(sqlite3.Connection):
+        def execute(self, sql, *args):
+            if sql == "PRAGMA mmap_size":
+                return super().execute("SELECT 0 WHERE 0")
+            return super().execute(sql, *args)
+
+    with sqlite3.connect(tmp_path / "no-mmap.sqlite", factory=NoMmap) as database:
+        database.execute("CREATE TABLE checked(value INTEGER)")
+        database.execute("INSERT INTO checked VALUES (1)")
+        before = database.execute("PRAGMA cache_size").fetchone()
+        check_integrity(database, deadline=time.monotonic() + 5)
+        assert database.execute("PRAGMA cache_size").fetchone() == before
+        assert database.execute("SELECT value FROM checked").fetchone() == (1,)
+
+
+@pytest.mark.parametrize(
+    ("sqlite_code", "expected"),
+    [
+        (sqlite3.SQLITE_INTERRUPT, "INTERRUPTED"),
+        (sqlite3.SQLITE_IOERR_READ, "IO_ERROR"),
+        (sqlite3.SQLITE_CORRUPT, "DATABASE_CORRUPT"),
+        (sqlite3.SQLITE_BUSY, "DATABASE_ERROR"),
+    ],
+)
+def test_integrity_sqlite_errors_are_classified_without_raw_messages(tmp_path, sqlite_code, expected):
+    class FailingConnection(sqlite3.Connection):
+        def execute(self, sql, *args):
+            if sql != "PRAGMA integrity_check":
+                return super().execute(sql, *args)
+            error = sqlite3.DatabaseError("secret-never-print")
+            error.sqlite_errorcode = sqlite_code
+            raise error
+
+    with sqlite3.connect(tmp_path / "error.sqlite", factory=FailingConnection) as database:
+        with pytest.raises(IntegrityError) as error:
+            check_integrity(database, deadline=time.monotonic() + 5)
+        assert error.value.code == expected
+        assert "secret" not in str(error.value)
+
+
 def test_failed_stage_is_atomic_identifiable_and_never_contains_exception_body(tmp_path, monkeypatch):
     path = tmp_path / "deployment.json"
     monkeypatch.setattr(receiver, "ACTIVE_PATH", path)
@@ -83,12 +191,28 @@ def test_failed_stage_is_atomic_identifiable_and_never_contains_exception_body(t
     receiver.record_phase("FAILED", failure="TimeoutExpired")
     value = json.loads(path.read_text())
     assert value["state"] == "FAILED_PRE_SWITCH" and value["failure_phase"] == "CHECK_STATE_INTEGRITY"
-    assert receiver.database_timeout(3_719_077_888) == 420
-    assert receiver.database_timeout(100 * (1 << 30)) == 900
     receiver.ACTIVE_RECORD["switch_started"] = True
     receiver.record_phase("POST_CHECKS")
     receiver.record_phase("FAILED", failure="DeploymentError")
     assert json.loads(path.read_text())["state"] == "POST_CHECK_FAILED"
+
+
+@pytest.mark.parametrize(
+    ("size", "expected"),
+    [
+        (0, 180),
+        (1, 330),
+        (1 << 30, 330),
+        ((1 << 30) + 1, 480),
+        (3_719_077_888, 780),
+        (4_820_512_768, 900),
+        (100 * (1 << 30), 900),
+    ],
+)
+def test_database_stage_budget_covers_measured_integrity_and_remains_bounded(size, expected):
+    assert receiver.database_timeout(size) == expected
+    if size == 4_820_512_768:
+        assert expected - 15 > 614.323 + 180
 
 
 def test_timeout_cleanup_cannot_stop_application_or_other_project(monkeypatch):
