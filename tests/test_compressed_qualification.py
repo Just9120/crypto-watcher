@@ -1,7 +1,11 @@
 import hashlib
 import json
 import os
+import sys
+import time
+import types
 import zipfile
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +17,104 @@ def test_probe_code_syntax_and_writable_negative_control():
     compile(q.CODE, "qualification", "exec")
     assert "ignore_check_constraints=ON" in q.CODE and "DATABASE_CORRUPT" in q.CODE
     assert "module.snapshot" in q.CODE and "EXPECTED_BACKUP_HASH" in q.CODE
+
+
+@pytest.mark.parametrize("live_seconds", [300, 900])
+def test_independent_stage_deadlines_do_not_refresh_inside_live_copy(tmp_path, monkeypatch, live_seconds):
+    clock = SimpleNamespace(value=0.0)
+    monkeypatch.setattr(time, "monotonic", lambda: clock.value)
+    fixture = types.ModuleType("qualification_fixture")
+    calls = []
+
+    class Refused(Exception):
+        def __init__(self, code):
+            self.code = code
+
+    def budget(deadline):
+        if clock.value >= deadline:
+            raise Refused("TIME_BUDGET_EXCEEDED")
+
+    def closed(path, *, deadline, **kwargs):
+        if path.name == "negative.sqlite3":
+            raise Refused("DATABASE_CORRUPT")
+        assert deadline == 885
+        clock.value += 600
+        budget(deadline)
+        calls.append("closed-full-proof")
+        return {"sha256": "fixture-hash", "bytes": 5422329856}
+
+    def full_check(db, deadline):
+        budget(deadline)
+        calls.append("live-full-proof")
+
+    class Connection:
+        def execute(self, statement):
+            if statement.startswith("SELECT owner_id"):
+                value = (233382575, 1)
+            else:
+                value = (1024,) if "page_count" in statement else (4096,)
+            return SimpleNamespace(fetchone=lambda: value)
+
+    @contextmanager
+    def snapshot(path, directory, *, deadline):
+        assert deadline == 1485  # Only the completed prior stage grants a new deadline.
+        clock.value += live_seconds
+        budget(deadline)
+        db = Connection()
+        sys.modules["cryptowatcher.compressed_validation"].full_check(db, deadline)
+        yield db
+        clock.value += 10
+        budget(deadline)
+        calls.append("live-byte-proof")
+
+    fixture.QualificationError = Refused
+    fixture.budget = budget
+    fixture.validate_closed = closed
+    fixture.full_check = full_check
+    fixture.snapshot = snapshot
+    monkeypatch.setitem(sys.modules, "qualification_fixture", fixture)
+    monkeypatch.setitem(
+        sys.modules,
+        "apsw",
+        SimpleNamespace(apswversion=lambda: "3.53.4.0", sqlitelibversion=lambda: "3.53.4"),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "resource",
+        SimpleNamespace(RUSAGE_SELF=0, getrusage=lambda _: SimpleNamespace(ru_utime=0, ru_stime=0)),
+    )
+    original_read = q.Path.read_text
+
+    def read(path, *args, **kwargs):
+        if path.as_posix() == "/proc/self/io":
+            return "read_bytes: 0\n"
+        if path.as_posix() == "/sys/fs/cgroup/memory.current":
+            return "1024"
+        return original_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(q.Path, "read_text", read)
+    code = q.CODE.replace("'/scratch/negative.sqlite3'", repr(str(tmp_path / "negative.sqlite3")))
+    code = code.replace("'/scratch'", repr(str(tmp_path)))
+    namespace = {
+        "MODULE_SOURCE": "from qualification_fixture import *",
+        "EXPECTED_BACKUP_HASH": "fixture-hash",
+    }
+    original = sys.modules.get("cryptowatcher.compressed_validation")
+    try:
+        if live_seconds == 900:
+            with pytest.raises(Refused) as failure:
+                exec(compile(code, "qualified-stage-flow", "exec"), namespace)
+            assert failure.value.code == "TIME_BUDGET_EXCEEDED"
+            assert calls == ["closed-full-proof"]
+        else:
+            exec(compile(code, "qualified-stage-flow", "exec"), namespace)
+            assert clock.value == 910 > 885
+            assert calls == ["closed-full-proof", "live-full-proof", "live-byte-proof"]
+    finally:
+        if original is None:
+            sys.modules.pop("cryptowatcher.compressed_validation", None)
+        else:
+            sys.modules["cryptowatcher.compressed_validation"] = original
 
 
 @pytest.mark.parametrize("exit_code", [0, 1])
@@ -78,7 +180,7 @@ def test_owned_probe_limits_readonly_mounts_cleanup_and_failed_qualification(
             assert (
                 args[args.index("--memory") + 1] == args[args.index("--memory-swap") + 1] == str(4 * 1024**3)
             )
-            assert kwargs["timeout"] == 930
+            assert kwargs["timeout"] == 1815
             return SimpleNamespace(returncode=exit_code)
         if args[:2] == ["docker", "inspect"]:
             return SimpleNamespace(returncode=0, stdout=json.dumps([probe]))

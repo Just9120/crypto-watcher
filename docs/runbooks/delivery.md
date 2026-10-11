@@ -117,12 +117,22 @@ Plain RAM closed-copy rehearsal2026-10-11T15:44–15:48UTC PASS201.800s,
 integrity31.721s, но последующий live readback8,982,642,688bytes при available
 7,471,837,184bytes блокировал update до execute. Plain RAM не используется CD.
 REQUIRED pre-merge qualification выполняет [operator helper](../../scripts/qualify_compressed_validation.py)
-на known closed backup и current live WAL snapshot с shared885s/CPU1/cap4GiB,
+на known closed backup и current live WAL snapshot с отдельными885s на каждый
+этап/CPU1/cap4GiB (maximum combined1770s плюс45s host cleanup margin),
 reserve1536MiB/constraint negative control/hashes/точным cleanup/all3 live ID readback.
 Оба источника монтируются read-only; production container/config/DB не меняются.
 Helper использует existing image9634558a и hash-pinned Linux APSW wheel,
 не устанавливая wheel на host. PASS не заменяет latest Linux CI/image или
 actual automatic CD/running source/capacity checks.
+
+Первая compressed qualification2026-10-11T20:57–21:12UTC: backup5.42GB
+full integrity/byte hash PASS641.243s, но shared885s истёк во время live copy.
+Receiver/runtime не менялись; оба полных этапа остаются REQUIRED. Отдельные
+необновляемые deadlines соответствуют existing CD source/backup stages,
+production cap900s не меняется. Compression level2 выбран по ограниченной16MiB
+выборке known backup:0.304s/ratio0.2744 против level6:0.628s/ratio0.2549.
+Это Evidence производительности выборки; fit/time всей текущей DB остаются
+обязательной qualification. Byte identity и memory/deadline guards сохраняются.
 
 ### Hotfix receiver update до merge
 

@@ -41,11 +41,11 @@ assert apsw.apswversion() == '3.53.4.0'
 module = types.ModuleType('cryptowatcher.compressed_validation')
 sys.modules[module.__name__] = module
 exec(compile(MODULE_SOURCE, 'qualified_compressed_validation.py', 'exec'), module.__dict__)
-started=time.monotonic();deadline=started+885;last=started;phase='NEGATIVE_CONTROL'
+started=time.monotonic();stage_started=started;deadline=started+885;last=started;phase='NEGATIVE_CONTROL'
 def metrics():
     cpu=resource.getrusage(resource.RUSAGE_SELF)
     io=dict(x.split(':',1) for x in Path('/proc/self/io').read_text().splitlines())
-    return {'elapsed_seconds':round(time.monotonic()-started,3),'user_cpu_seconds':round(cpu.ru_utime,3),
+    return {'elapsed_seconds':round(time.monotonic()-started,3),'stage_elapsed_seconds':round(time.monotonic()-stage_started,3),'user_cpu_seconds':round(cpu.ru_utime,3),
         'system_cpu_seconds':round(cpu.ru_stime,3),'physical_read_bytes':int(io['read_bytes']),
         'memory_current_bytes':int(Path('/sys/fs/cgroup/memory.current').read_text())}
 def emit(kind, **fields):print(json.dumps({'kind':kind,**metrics(),**fields}),flush=True)
@@ -71,7 +71,7 @@ negative.unlink();emit('compressed_constraint_negative_control',state='PASS')
 proof=module.validate_closed(Path('/backup/database.sqlite3'),directory=Path('/scratch'),deadline=deadline,progress=progress)
 assert proof['sha256']==EXPECTED_BACKUP_HASH and proof['bytes']==5422329856
 emit('compressed_closed_backup',state='PASS',**proof)
-gc.collect();phase='LIVE_SNAPSHOT'
+gc.collect();phase='LIVE_SNAPSHOT';stage_started=time.monotonic();deadline=stage_started+885
 original_check=module.full_check
 def full_check(db,d):
     global phase
@@ -125,7 +125,8 @@ def qualify(module_path, module_hash, wheel):
         memory_limit_bytes=LIMIT,
         host_reserve_bytes=RESERVE,
         compressed_limit_bytes=3 * 1024**3,
-        shared_budget_seconds=885,
+        stage_budget_seconds=885,
+        maximum_combined_budget_seconds=1770,
         module_sha256=module_hash,
         source_mount_readonly=True,
         production_files_changed=False,
@@ -204,7 +205,7 @@ def qualify(module_path, module_hash, wheel):
         ]
         passed = False
         try:
-            result = subprocess.run(command, input=code, text=True, timeout=930)
+            result = subprocess.run(command, input=code, text=True, timeout=1815)
             process = inspect(name)
             emit(
                 "compressed_process",
