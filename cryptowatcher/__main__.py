@@ -171,8 +171,8 @@ def main() -> int:
                         raise ConfigError("backup requires destination")
                     if not math.isfinite(args.timeout_seconds) or not 0 < args.timeout_seconds <= 900:
                         raise ConfigError("Invalid backup time budget")
-                    store.backup(args.destination, timeout_seconds=args.timeout_seconds)
-                    print(json.dumps({"status": "backup_integrity_ok"}))
+                    metrics = store.backup(args.destination, timeout_seconds=args.timeout_seconds)
+                    print(json.dumps({"status": "backup_integrity_ok", "backup": metrics}))
                 else:
                     from .diagnostics import snapshot as diagnostic_snapshot
 
@@ -206,9 +206,11 @@ def main() -> int:
         return 0
     except Exception as exc:
         message = str(exc) if isinstance(exc, (ConfigError, StateError)) else type(exc).__name__
-        failure = {"status": "blocked", "reason": message}
+        failure: dict[str, object] = {"status": "blocked", "reason": message}
         if isinstance(exc, IntegrityError):
             failure["failure_code"] = exc.code
+            if exc.backup_metrics is not None:
+                failure["backup"] = exc.backup_metrics
         print(json.dumps(failure), file=sys.stderr)
         return exc.exit_status if isinstance(exc, IntegrityError) else 2
 

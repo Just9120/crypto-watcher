@@ -31,6 +31,7 @@ class IntegrityError(StateError):
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code = code
+        self.backup_metrics: dict[str, float | str] | None = None
         self.exit_status = {
             "TIME_BUDGET_EXCEEDED": 3,
             "DATABASE_CORRUPT": 4,
@@ -300,18 +301,32 @@ class Store:
         with self.db:
             self.db.execute("INSERT OR REPLACE INTO runtime VALUES (?,?)", (key, encode(payload)))
 
-    def backup(self, destination: Path, *, timeout_seconds: float = 900) -> None:
+    def backup(self, destination: Path, *, timeout_seconds: float = 900) -> dict[str, float | str]:
         if destination.exists() or destination.resolve() == self.path.resolve():
             raise StateError("Backup destination must be new")
         destination.parent.mkdir(parents=True, exist_ok=True)
         # Exclusive creation also rejects dangling links; an existing backup is never replaced.
         handle = os.open(destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         os.close(handle)
-        deadline = time.monotonic() + timeout_seconds
+        started = time.monotonic()
+        deadline = started + timeout_seconds
+        phase = "COPY"
+        copied_at: float | None = None
+
+        def metrics() -> dict[str, float | str]:
+            now = time.monotonic()
+            return {
+                "phase": phase,
+                "copy_seconds": round((copied_at if copied_at is not None else now) - started, 3),
+                "integrity_seconds": round(now - copied_at, 3) if copied_at is not None else 0.0,
+                "elapsed_seconds": round(now - started, 3),
+            }
 
         def progress(status: int, remaining: int, total: int) -> None:
             if time.monotonic() >= deadline:
-                raise StateError("Backup time budget exceeded; incomplete destination preserved")
+                raise IntegrityError(
+                    "TIME_BUDGET_EXCEEDED", "Backup time budget exceeded; incomplete destination preserved"
+                )
 
         try:
             with closing(sqlite3.connect(destination)) as backup:
@@ -322,11 +337,18 @@ class Store:
                     source.execute("BEGIN")
                     source.execute("SELECT owner_id FROM owner_settings").fetchone()
                     source.backup(backup, pages=256, progress=progress, sleep=0.01)
+                copied_at = time.monotonic()
+                phase = "INTEGRITY"
                 check_integrity(backup, deadline=deadline)
+        except IntegrityError as exc:
+            exc.backup_metrics = metrics()
+            raise
         except sqlite3.DatabaseError as exc:
             raise StateError("Backup validation failed; incomplete destination preserved") from exc
         if os.name != "nt":
             destination.chmod(0o600)
+        phase = "COMPLETE"
+        return metrics()
 
 
 def migrate_legacy(
