@@ -144,5 +144,12 @@ def test_workflow_trust_boundaries_and_pinned_actions():
     assert "pull_request_target" not in ci and "secrets." not in ci
     assert "if: always()" in ci and 'test "$VALIDATION" = success' in ci
     release = (root / ".github/workflows/release.yml").read_text()
-    assert "cancel-in-progress: false" in release and "StrictHostKeyChecking=yes" in release
+    assert "cancel-in-progress: false" in release
+    assert (
+        'python scripts/deliver_release.py "$REVISION" "$RUN_ID" --ssh-directory "$RUNNER_TEMP/cw-ssh"'
+        in release
+    )
+    client = (root / "scripts/deliver_release.py").read_text()
+    assert "StrictHostKeyChecking=yes" in client and "UserKnownHostsFile=" in client
+    assert "IdentitiesOnly=yes" in client and "BatchMode=yes" in client
     assert "environment: production" in release
