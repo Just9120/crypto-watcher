@@ -171,6 +171,15 @@ Advisory source в отдельном runtime. HTTP API/webhook предпочт
 | AC-09-05 — Delivery diagnostics | Owner видит pending/delivered/error состояние agent delivery независимо от Telegram. Проверка: diagnostics/readback и fault injection. |
 | AC-09-06 — Consumer independence и analytics | Consumer базово работает без radar и не вызывает LLM/trade только из-за получения event; ему доступны history/episodes/outcomes без future leakage. Проверка: совместные consumer-side contract/outage tests. |
 
+Уточнение accepted interface v2: `cryptowatcher.market_event.v2`, backward-compatible приём v1;
+source event revision отделён от transport revision. Полный raw settings hash/snapshot и effective
+profile parameters, source window identity/completeness, explicit fresh_until/expires_at,
+episode revision/confirmations и frozen optional enrichment сохраняют causal provenance.
+Late outcomes — отдельный historical update; receipt/retry не обновляют market observation.
+Raw-body HMAC, immutable bytes, independent durable queues и qualified HTTPS/machine access
+определены в [contract/procedure](runbooks/agent-delivery.md). Consumer freshness policy ограничивает
+producer policy; owner transport preference не меняет detector settings revision.
+
 ### E10 — Persistence, migration и recoverability
 
 Requirement `REQ-E10`; трассировка: S01 / DATA И DIAGNOSTICS / PERSISTENCE; DEPLOYMENT; S03 legacy state.

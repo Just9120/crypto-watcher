@@ -74,7 +74,9 @@ production CD38099917543 PASS11Oct2026 00:56:45UTC: DEPLOY_SHA7456e1bc,
 API_SOURCE_FINGERPRINT matched, readyz/image/source gates и DEPLOY_OK подтверждены
 primary job logs. Прежний failed retirement-scope run не описывает этот runtime.
 Necessary compatibility hotfix PR936 merged67716b3282bf9fefe1a84077dfae7c6c99c6b1f0,
-required CI38100130663 PASS; applicable CD PENDING. Original G2B source86fa38bc
+ required CI38100130663 PASS; applicable CD38100792664 PASS11Oct2026 01:12:26UTC,
+ expected67716b3282bf9fefe1a84077dfae7c6c99c6b1f0/source fingerprint/readyz confirmed.
+ Original G2B source86fa38bc
 не содержит future outcome/digest/enrichment knobs; raw settings snapshot/hash
 сохраняются, absent later fields не подставляются из новых defaults.
 
@@ -98,14 +100,32 @@ pending restore PASS. Это не VPS throughput/capacity доказательс
 disk growth/backlog cadence ещё требуют qualification, без выдуманного SLO/limits.
 
 - [x] Подтвердить G5 delivery/cleanup, current producer/consumer baseline и закрепить whole-stage scope/Validation Plan до кода.
-- [ ] Consumer typed backward-compatible v2/records/cutoff/freshness/episode/history; meaningful contracts и preservation original v1.
-- [ ] Consumer docs/config compatibility/local gates/self-review, required CI/merge/actual CD.
-- [ ] Producer versioned bounded payload/HMAC and durable independent agent admission/outbox/retry/replay/analytics updates.
-- [ ] Owner diagnostics/control/read-only public export/context and meaningful cross-contract/outage/config/restore regressions.
+- [x] Consumer typed backward-compatible v2/records/cutoff/freshness/episode/history; meaningful contracts и preservation original v1.
+- [x] Consumer docs/config compatibility/local gates/self-review, required CI/merge/actual CD.
+- [x] Producer versioned bounded payload/HMAC and durable independent agent admission/outbox/retry/replay/analytics updates по коду и локальным checks; CI/CD ещё PENDING.
+- [x] Owner diagnostics/control, existing read-only public history/export/context и meaningful cross-contract/outage/config/restore regressions; transport secrets/state не экспортируются.
 - [ ] Producer required CI/merge/actual automatic CD и exact-target authenticated readback; operational blockers закрыть единым remaining register после independent scope.
 - [ ] G6 full origin/main audit/capacity/recovery/finding dispositions и один audit docs PR.
 
 ### Validation Plan G4
+
+EVG4-PRODUCER: 2026-10-11 Windows Python3.12, branch
+`codex/g4-agent-delivery-20261011`, base afd10770aa3a330e6c5a28e3ea85a676060e6c29:
+26 meaningful producer tests PASS (auth/optional config/atomic rollback/independent preferences,
+HMAC/immutable bytes/ambiguous ACK/crash IN_FLIGHT/restart/escalation/manual replay/TTL/settings race,
+permanent/transient/oversized response, secret and service-header isolation). Existing affected
+controller/CLI/outcome/enrichment regressions PASS; Ruff/format/mypy/canonical docs PASS.
+EVG4-JOINT: actual consumer code67716b3282bf9fefe1a84077dfae7c6c99c6b1f0 on isolated
+SQLite/ASGI accepted40 real producer family/market/TF payloads; raw-body signing/tampering,
+duplicate receipts, episode reconstruction/closure/receipt cutoff, actual complete outcome,
+frozen enrichment и legacy settings projection PASS11Oct2026 01:23UTC. No live DB/vault/LLM/order
+access. Real PostgreSQL concurrency evidence — consumer required CI38100130663, not this local fixture.
+
+По коду текущего producer PR подготовлены9/9 remaining AC: 09-01…06,07-05,10-04,12-03;
+READY в branch по EVG4-PRODUCER/JOINT и ранее delivered restart suites. Общая Goal:
+49/58 verified merged/delivered +9 branch implementation; required producer Linux CI/merge/CD
+ещё PENDING, actual integration activation/endpoint/binding/max-age и G6 evidence остаются
+операционными обязательствами. Это не новая процентная audit оценка и не DONE проекта.
 
 | AC / риск | Проверка / ожидаемый результат | Canonical команда/tool и cwd | Environment / этап | Gate |
 | --- | --- | --- | --- | --- |

@@ -14,6 +14,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from . import __version__
+from .agent_delivery import AgentDelivery
 from .config import ConfigError, Infrastructure, OwnerSettings
 from .events import History
 from .lease import RuntimeLease
@@ -180,6 +181,7 @@ def main() -> int:
                                 ),
                                 "ingestion": store.get_runtime("ingestion", {"state": "PENDING"}),
                                 "radar": History(store).diagnostics(),
+                                "agent_delivery": AgentDelivery(store, None).diagnostics(),
                                 "outcomes": {
                                     "pending": History(store).count("outcome-pending:"),
                                     "admission": History(store).get("outcome-admission", {}),

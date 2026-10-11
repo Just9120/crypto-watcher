@@ -10,6 +10,7 @@ Radar обрабатывает широкий metadata/liquidity universe обо
 - [Current Goal, Validation Plan, findings и checkpoint](docs/open_issues.md)
 - [State ownership, JSON compatibility и SQLite migration](docs/state_contract.md)
 - [Runtime boundaries](docs/architecture.md)
+- [Advisory agent contract, configuration и recovery](docs/runbooks/agent-delivery.md)
 - [CI/CD, VPS target, первая поставка и recovery](docs/runbooks/delivery.md)
 - [Repository procedures](AGENTS.md) и [CI/CD configuration contract](ci-cd-rules.md)
 
