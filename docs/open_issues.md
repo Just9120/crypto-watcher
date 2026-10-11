@@ -69,6 +69,34 @@ Prerequisite read-only2026-10-11T00:08Z: consumer maincc8c632cf574fdd7af389b54c1
 
 ### Задачи G4
 
+Consumer definition: primary PR935 merged7456e1bc, required CI38099567857 PASS;
+production CD38099917543 PASS11Oct2026 00:56:45UTC: DEPLOY_SHA7456e1bc,
+API_SOURCE_FINGERPRINT matched, readyz/image/source gates и DEPLOY_OK подтверждены
+primary job logs. Прежний failed retirement-scope run не описывает этот runtime.
+Necessary compatibility hotfix PR936 merged67716b3282bf9fefe1a84077dfae7c6c99c6b1f0,
+required CI38100130663 PASS; applicable CD PENDING. Original G2B source86fa38bc
+не содержит future outcome/digest/enrichment knobs; raw settings snapshot/hash
+сохраняются, absent later fields не подставляются из новых defaults.
+
+Producer preparation specifics: optional integration infrastructure допускает
+all-unset/OFF без остановки radar; partial/invalid config диагностируется только
+для agent. URL HTTPS, raw-body HMAC, no redirects, shared async client. Optional
+paired Cloudflare service-token headers поддерживаются только для qualified
+machine authentication, secrets не входят в outbox/export/logs. Реальные endpoint,
+vault/binding/max-age и Access policy ещё UNSET; defaults/permissions не угадывать.
+Agent preference отдельно от owner domain settings/TG/digest; restart сохраняет
+immutable bytes/revisions/attempts. Source event/episode/outcome admission записывает
+intents атомарно, payload freezing/coalescing и network I/O идут отдельно. Closures
+также доставляются с latest known episode snapshot; late outcomes только historical.
+Transport revisions не переписывают source events/metrics/reference/settings.
+
+Independent G6 evidence подготовлено вне repository: Windows controlled1100-stream
+burst (275 instruments,4TF) сохранил5500 events/550 episodes/22000 outcome pending/
+5500 comparator pending/275 Telegram candidates; full queue restore/integrity PASS.
+После50 virtual5s ticks processed1000 complete outcomes/50 limited comparators,
+pending restore PASS. Это не VPS throughput/capacity доказательство; actual arrival,
+disk growth/backlog cadence ещё требуют qualification, без выдуманного SLO/limits.
+
 - [x] Подтвердить G5 delivery/cleanup, current producer/consumer baseline и закрепить whole-stage scope/Validation Plan до кода.
 - [ ] Consumer typed backward-compatible v2/records/cutoff/freshness/episode/history; meaningful contracts и preservation original v1.
 - [ ] Consumer docs/config compatibility/local gates/self-review, required CI/merge/actual CD.
