@@ -71,6 +71,10 @@ python -m ruff format .
 
 `/detectors` выбирает families для Telegram; вычисление и history всех пяти продолжаются. После upgrade по умолчанию уведомляет только composite. `/history` показывает12 последних events; кнопка или `/event EVENT_ID` открывает сохранённые metrics/provenance, freshness и связь с episode. Кнопка Outcome или `/outcomes EVENT_ID` показывает immutable reference, выбранные horizons, return/MFE/MAE либо neutral metrics и completeness. `/horizons 5,15,30,60` меняет horizons новых events; старые settings/results сохраняются. `/analytics` показывает ограниченные20 cohorts с N, distribution/noise и prior no-signal comparisons; список group fields доступен через ошибку/CLI.
 
+`Derivatives` в меню или `/derivatives spot/BTC` показывает optional OI/funding/basis с source/units/timestamps и состояниями каждого показателя. Context первоначально OFF; `/enrichment on` и `/enrichment off` сохраняют owner setting без restart. Exact metadata base identity связывает eligible Spot с единственным USDT Perpetual; отсутствие/неоднозначность не угадывается. Ticker cadence1min, OI change5min из двух точек; shared REST budget и current recovery имеют приоритет. Missing/stale context не меняет trigger и не блокирует Spot. Perpetual detectors самостоятельны. Alert сохраняет только доступный до observation cutoff context; текущая карточка отдельно показывает latest snapshot.
+
+`Сравнение` или `/compare` группирует сохранённые outcomes по profile/version/settings/market/TF/horizon с actual N/distribution/noise/comparator limitations и показывает текущие параметры. `/analytics profile,version,settings` задаёт grouping. `/recompare EVENT_ID` явно ставит prior no-signal сравнение в очередь на новых доступных исходных данных; frozen event/settings/reference, прежние results и availability сохраняются. Автоматической калибровки/изменения thresholds нет; отсутствующий profile в history не симулируется.
+
 `/setlist spot/BTC,linear/ETH`, `/mute linear/BTC 60`, `/unmute linear/BTC`, `/unmute all` сохраняются. Bare symbol выбирает рынок карточки. Неизвестный/запрещённый или недостаточно ликвидный instrument отклоняется без изменения списка. Watchlist multiplier меняется через `/set watchlist_multiplier 0.75`; он применяется к detector trigger thresholds, liquidity eligibility сохраняется. Invalid effective ratio≤1 даёт diagnostic; значения не подменяются. `/alerts on|off` управляет доставкой; `/alerts on` также возобновляет target после постоянной Telegram error. No-op buttons не создают ошибку. `/sample_alert` показывает демонстрационный composite. Старые CMC/reset callbacks возвращают сообщение об изменении.
 
 Composite использует `100 × (close / previous_close − 1)`, оборот закрытой свечи / среднее предыдущих SMA periods и ticker turnover24h. Все три threshold comparisons включают equality. Price, turnover, breakout и volatility имеют отдельные formulas/directions/strength; `/terms` объясняет их, точные policy — в [spec](docs/product_scope.md). REST использует Bybit response clock, WebSocket — confirm=true и candle boundaries. Invalid/gapped windows ограничивают affected detector до восстановления.
@@ -88,7 +92,7 @@ Read-only CLI из root, существующая owner-bound DB и `OWNER_USER_
 ```bash
 python -m cryptowatcher export --format ndjson --market spot --detector price --detector-version 1 --destination events.ndjson
 python -m cryptowatcher export --format csv --destination summary.csv
-python -m cryptowatcher analytics --groups detector,version,settings,market,timeframe,direction
+python -m cryptowatcher analytics --groups detector,profile,version,settings,market,timeframe,direction
 python -m cryptowatcher context --event-id EVENT_ID --cutoff-ms UNIX_MILLISECONDS
 ```
 
@@ -113,4 +117,4 @@ Metadata refresh10min, liquidity refresh5min, REST budget5req/s/concurrency4, he
 
 Native closed candles сохраняются в общей SQLite, memory window≤256 на active stream. Bootstrap получает256 closed bars; gaps приоритетно восстанавливают текущий window, затем older missing history постранично без live alerts. Cursor переживает restart; optional historical work не опережает current recovery. Initial bootstrap progressive: status показывает actual available/requested и причины ограничений. CLI diagnostics включает metadata counts/quarantine/acks/TF/buffers/pending/gaps. Новые subscribers проверяются только по validated metadata/liquidity.
 
-Raw candle retention90days и permanent event/outcome source protection завершаются в G3; автоматического удаления event inputs сейчас нет. Перед длительной эксплуатацией capacity/backup housekeeping проверяется по реальным measurements в G6.
+Ordinary raw candles хранятся90days; event/outcome/comparator inputs и pending recovery ranges защищены от retention. Events/revisions/settings/context автоматически не удаляются. Перед длительной эксплуатацией capacity/backup housekeeping проверяется по реальным measurements в G6.

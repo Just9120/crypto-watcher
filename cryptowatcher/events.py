@@ -171,6 +171,7 @@ class EventEngine:
         *,
         live: bool,
         source_context: dict[str, Any] | None = None,
+        enrichment: dict[str, Any] | None = None,
     ) -> None:
         if not candles:
             return
@@ -351,6 +352,7 @@ class EventEngine:
                         ).hexdigest(),
                         "source_inputs": [asdict(c) for c in inputs],
                         "source_context": source_context or {"ticker": None, "instrument": None},
+                        "enrichment": enrichment or {"state": "UNAVAILABLE", "detector_input": False},
                         "producer_source_revision": self.source_revision,
                         "outcome_context_completeness": "COMPLETE"
                         if noise is not None

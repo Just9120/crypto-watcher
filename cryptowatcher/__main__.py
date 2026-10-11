@@ -185,6 +185,14 @@ def main() -> int:
                                     "admission": History(store).get("outcome-admission", {}),
                                 },
                                 "analytics": store.get_runtime("analytics", {"state": "PENDING"}),
+                                "enrichment": {
+                                    "enabled": snapshot.settings.enrichment_enabled,
+                                    "ticker_cadence_ms": 60_000,
+                                    "oi_cadence_ms": 300_000,
+                                    "worker": store.get_runtime("enrichment", {"state": "PENDING"}),
+                                    "mapping_count": History(store).count("mapping-head:"),
+                                    "optional": True,
+                                },
                                 "digest": {
                                     "preferences": History(store).get(
                                         "digest-preferences", {"enabled": False}

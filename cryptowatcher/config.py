@@ -72,6 +72,7 @@ class OwnerSettings:
     alert_detectors: tuple[str, ...] = ("composite",)
     outcome_horizons: tuple[int, ...] = (5, 15, 30, 60)
     digest_interval_min: int = 60
+    enrichment_enabled: bool = False
 
     def __post_init__(self) -> None:
         if self.bybit_category not in ("spot", "linear"):
@@ -124,6 +125,8 @@ class OwnerSettings:
         ):
             raise ConfigError("Invalid outcome_horizons")
         number(self.digest_interval_min, "digest_interval_min", integer=True)
+        if type(self.enrichment_enabled) is not bool:
+            raise ConfigError("Invalid enrichment_enabled")
 
     def instruments(self) -> tuple[str, ...]:
         return self.watchlist or tuple(instrument_key(x, self.bybit_category) for x in self.custom_pairs)

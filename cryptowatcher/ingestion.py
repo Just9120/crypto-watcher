@@ -56,6 +56,7 @@ class BybitRadar(BybitREST):
         self.tickers: dict[str, dict[str, Any]] = {}
         self.metadata_at: dict[str, float] = {}
         self.tickers_at: dict[str, float] = {}
+        self.ticker_locks = {market: asyncio.Lock() for market in ("spot", "linear")}
         self.ticker_server_ms: dict[str, int] = {}
         self.market_errors: dict[str, str] = {}
         self.streams: set[str] = set()
@@ -180,38 +181,7 @@ class BybitRadar(BybitREST):
                         **quarantine,
                     }
                     self.metadata_at[market] = time.monotonic()
-                if time.monotonic() - self.tickers_at.get(market, float("-inf")) >= 300:
-                    result = await self._get("/v5/market/tickers", {"category": market})
-                    rows = result["result"]["list"]
-                    tickers = {}
-                    for row in rows:
-                        key = f"{market}/{row['symbol']}"
-                        if key in tickers:
-                            raise MarketError("duplicate_ticker")
-                        tickers[key] = row
-                    with self.store.db:
-                        for key, row in tickers.items():
-                            if key not in self.instruments:
-                                continue
-                            save(
-                                self.store,
-                                "ticker",
-                                key,
-                                {
-                                    "schema": "cryptowatcher.public-ticker.v1",
-                                    "values": row,
-                                    "units": {"turnover24h": "USDT"},
-                                    "market_observation_ms": int(result["time"]),
-                                    "available_at_ms": self.server_now(),
-                                    "source": "BYBIT_REST_TICKERS",
-                                },
-                            )
-                    self.tickers = {
-                        **{k: v for k, v in self.tickers.items() if not k.startswith(market + "/")},
-                        **tickers,
-                    }
-                    self.tickers_at[market] = time.monotonic()
-                    self.ticker_server_ms[market] = int(result["time"])
+                await self.refresh_tickers(market)
                 self.market_errors.pop(market, None)
             except (MarketError, KeyError, TypeError, ValueError) as exc:
                 self.market_errors[market] = (
@@ -219,6 +189,42 @@ class BybitRadar(BybitREST):
                 )
         await self.reconcile(settings)
         self.persist_diagnostics()
+
+    async def refresh_tickers(self, market: str, max_age: int = 300) -> None:
+        async with self.ticker_locks[market]:
+            if time.monotonic() - self.tickers_at.get(market, float("-inf")) < max_age:
+                return
+            result = await self._get("/v5/market/tickers", {"category": market})
+            rows = result["result"]["list"]
+            tickers = {}
+            for row in rows:
+                key = f"{market}/{row['symbol']}"
+                if key in tickers:
+                    raise MarketError("duplicate_ticker")
+                tickers[key] = row
+            with self.store.db:
+                for key, row in tickers.items():
+                    if key not in self.instruments:
+                        continue
+                    save(
+                        self.store,
+                        "ticker",
+                        key,
+                        {
+                            "schema": "cryptowatcher.public-ticker.v1",
+                            "values": row,
+                            "units": {"turnover24h": "USDT"},
+                            "market_observation_ms": int(result["time"]),
+                            "available_at_ms": self.server_now(),
+                            "source": "BYBIT_REST_TICKERS",
+                        },
+                    )
+            self.tickers = {
+                **{k: v for k, v in self.tickers.items() if not k.startswith(market + "/")},
+                **tickers,
+            }
+            self.tickers_at[market] = time.monotonic()
+            self.ticker_server_ms[market] = int(result["time"])
 
     async def reconcile(self, settings: OwnerSettings) -> None:
         active, _ = active_instruments(self.instruments, self.tickers, settings)
