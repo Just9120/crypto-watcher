@@ -100,6 +100,14 @@ fixture уменьшилась более30%, source bytes/mutes/settings/origin
 CLI invocation, source full check и all-row/candidate proof; latest CI этого diff
 ещё REQUIRED. Budget≤900s/cap/source-size+1.5GiB reserve не ослабляют delivery gates.
 
+CI38238946968/head0802b06: unit/static/build stages прошли, job FAIL на cleanup
+private reconstruction fixture: directory UID10001/mode0700 внутри host bind
+не удаляется GitHub runner UID1001. Fixture перенесена в container-owned `/tmp`
+tmpfs; tmpfs virtual capacity2GiB позволяет проверить1.5GiB free-space reserve
+на малой fixture, hard memory/swap256MiB и CPU1 остаются прежними. Production
+permissions, application health и source/backup checks не меняются. Canonical
+quality PASS; latest actual Linux image run этого correction ещё REQUIRED.
+
 Checkpoint12Oct2026: PR31 остаётся открытым; main9634558a/running G5afd10770,
 installed receiver9569f32c. Required CI38227994274/head8613839d PASS. Root qualification
 `/tmp/cw-pr31-job-v4fo3g8t` завершилась BLOCKED09:33:59UTC:

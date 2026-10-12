@@ -10,7 +10,14 @@ from pathlib import Path
 OWNER = "233382575"
 
 
-def run(image: str, directory: Path, *command: str, success: bool = True, validation: bool = False) -> str:
+def run(
+    image: str,
+    directory: Path,
+    *command: str,
+    success: bool = True,
+    validation: bool = False,
+    temporary_size: str = "16m",
+) -> str:
     validation_options = (
         [
             "--tmpfs=/validation:rw,noexec,nosuid,nodev,size=128m,mode=0700,uid=10001,gid=10001",
@@ -30,7 +37,7 @@ def run(image: str, directory: Path, *command: str, success: bool = True, valida
             "--read-only",
             "--cap-drop=ALL",
             "--security-opt=no-new-privileges:true",
-            "--tmpfs=/tmp:rw,noexec,nosuid,size=16m",
+            f"--tmpfs=/tmp:rw,noexec,nosuid,size={temporary_size}",
             *validation_options,
             "-v",
             f"{directory.resolve()}:/data",
@@ -274,7 +281,7 @@ from pathlib import Path
 from cryptowatcher.config import OwnerSettings
 from cryptowatcher.events import History
 from cryptowatcher.storage import Store,check_integrity
-work=Path('/data/rebuild-fixture');work.mkdir(mode=0o700)
+work=Path('/tmp/rebuild-fixture');work.mkdir(mode=0o700)
 source=work/'source.sqlite3';target=work/'candidate.sqlite3'
 s=Store(source,233382575);s.initialize(OwnerSettings());h=History(s)
 inputs=[{'start':i,'close':100,'provenance':'fixture_'*30} for i in range(24)]
@@ -304,6 +311,7 @@ assert value['heads_converted']==40 and value['candidate_bytes']<source.stat().s
 print(json.dumps(value))
 """,
                 validation=True,
+                temporary_size="2g",
             )
         )
         assert rebuilt["status"] == "ISOLATED_CANDIDATE_PASS"
