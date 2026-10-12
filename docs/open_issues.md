@@ -81,44 +81,37 @@ SQLite17.1GB/page free0, previous short resource snapshot14:19UTC main17.0GB/WAL
 working set≈270MiB/CPU21–28%one core, rehearsal regular files≈11.25GB depth≤3.
 Это short bounded measurement, не peak/SLO или full payload attribution.
 
-Code checkpoint: shared field/block codec, heads всех четырёх kinds, complete public
-readers/export/cutoff/signed delivery и projected summary counts реализованы.
-117 affected local tests PASS; follow-up compact/typed/manifest risks и quality PASS.
-PR31 head8aba38a / required CI38267112733 PASS Linux/image2026-10-12T15:04UTC.
-Isolated qualified5.42GB reconstruction started15:06UTC, root job
-`shared-qualification-xvatx2nl`; actual terminal proof ещё PENDING, не перезапускать
-по отсутствию observer session. Production G5afd107 и installed receiver не менялись.
-Общий copy core выделен для read-only current WAL snapshot с отдельным доказательством
-captured logical rows/candidate integrity; source full physical integrity этим не
-подтверждается, promotion_eligible=false. Controlled concurrent-writer fixture и
-unsafe target/owner/revision/budget cases PASS33 targeted tests. Latest follow-up CI,
-real current snapshot и qualified stateful promotion остаются REQUIRED/PENDING.
+Code checkpoint: shared field/block codec, heads всех четырёх kinds и совместимые
+readers/export/cutoff/signed delivery реализованы в PR31. Required Linux/image CI
+38275476141 PASS на head6dbd89d; latest follow-up CI после текущего batch REQUIRED.
+Два full-copy qualification runs на сохранённой5.42GB копии завершены
+TIME_BUDGET_EXCEEDED903/901s до commit; candidate36KiB/UNQUALIFIED. Original source
+и все3 runtime units unchanged/running; owned verifier containers removed/no OOM.
+Промежуточный file size не является доказанным уменьшением.
 
-Latest follow-up0533459 / required CI38269283755 PASS Linux/image15:23UTC.
-Qualified-copy job завершился15:22UTC TIME_BUDGET_EXCEEDED903s до copy commit;
-candidate reverted36KiB/UNQUALIFIED, full candidate/readback proof отсутствует.
-Исходная копия и все3 runtime units unchanged/running, owned verifier removed.
-Не выдавать промежуточный размер<1GB за квалифицированное уменьшение.
-Measured issue продолжено bounded shared-encoding cache4MiB, reuse writer codec,
-legacy JSON fast read и copy-only SQLite index cache256MiB внутри прежнего4GiB cap.
-46 cache/rollback/eviction/typed/manifest/snapshot tests PASS; synthetic4000-record
-CPU1.281→0.906s/full readback PASS, это partial codec Evidence, не VPS throughput.
-Следующий fresh CI/real-copy qualification REQUIRED; deadline900s,1CPU,4GiB и
-normal CD40min не менялись. Current production compaction ещё NOT_RUN.
+Owner decision2026-10-12: сохранить предел15min. Обе budget proposals (30/70 и
+разовый60min) не применяются; default/max900s, CPU1, RAM4GiB/no swap и обычный
+CD40min сохранены. Вместо расширения бюджета выполнен bounded real-data profile:
+повторная JSON serialization и повторная декомпрессия общих блоков. Current batch
+сериализует окно один раз, использует typed length-framed logical manifests,
+bounded validated-byte cache с обязательным readback актуальных stored bytes и
+reuse resolved revisions только на frozen exclusive candidate. Cache не скрывает
+corruption/deletion/rollback и не возвращает mutable shared objects.
 
-Checkpoint before owner decision: head8d183ab / required CI38271282321 PASS,
-full Linux/image gate завершён2026-10-12T15:38UTC. Optimized qualified-copy run
-`shared-qualification-5eicmgoj` завершён15:54UTC TIME_BUDGET_EXCEEDED901s до copy
-commit; candidate36KiB/UNQUALIFIED, source preserved, all3 units unchanged/running,
-owned container removed/no OOM. Heavy jobs сейчас terminal; без решения не повторять.
-Предложен отдельный разовый operator budget≤3600s для isolated conversion/current
-read-only snapshot с explicit flag, default900s сохраняется. Это PROPOSED/UNAPPLIED;
-normal state-check/backup/receiver/workflow limits и gates не меняются. Owner decision
-PENDING; production replacement этой квалификацией не разрешается. Remaining:
-qualified real conversion → current dataset proof/recovery/exact-target promotion
-review → required latest CI/merge/applicable delivery → actual disk/growth/alerts
-checks. Useful history и original private transport bytes не удаляются. Общая Goal
-по коду54/58 AC; capacity/storage correction ещё в работе, audit percentage unchanged.
+Read-only real-copy sample6000 rows/8.81MB: copy1.589→1.118s, resolved readback
+1.584→0.884s, exact public values PASS; это sample, не full throughput qualification.
+65 targeted codec/rebuild/snapshot/heads/export tests и canonical quality PASS.
+Full source/candidate hashes, integrity, все logical rows/private bytes остаются
+REQUIRED. Read-only current WAL snapshot tool promotion_eligible=false: он не
+подтверждает full physical source integrity и не заменяет recovery gates.
+
+Remaining: latest CI → один обоснованный qualified real-copy run≤900s → current
+dataset proof/recovery/exact-target promotion review → merge/applicable delivery →
+actual disk/growth/alerts checks. Production G5afd107 и installed receiver не
+менялись; compaction NOT_RUN. Useful history, retention90days и immutable private
+transport bytes сохраняются. Общая Goal по коду54/58 AC, capacity/storage correction
+в работе; audit percentage unchanged.
+
 
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный
@@ -649,7 +642,7 @@ Priority: P1 — блокирует correctness/security/основной scope;
 | F31 HARDENING | Docker runtime использует root default; resource/health policy UNSET; Dockerfile/Compose; AC-12-01 | Нет USER/healthcheck/resource settings; фактические VPS user/resource limits не проверены; G1 update: G1 image UID10001/cap-drop/read-only root/health prepared; EVG8 actual UID10001/SQLite ownership/health/persistence PASS; EVG3 resource snapshot only, future full-universe load unverified. No invented CPU/RAM limits | P3 | DEFER: После runtime inventory выбрать минимальные privileges/health/resources по необходимости; отсутствие инструмента само по себе не defect | B01; не превращать hardening в новый AC автоматически | MEDIUM / PARTIAL |
 | F32 UX CANDIDATE | Legacy polish/preset strategy без конкретного нового дефекта; прежний open_issues #6/#7; E07/E08 | Следить за едиными русскими terms/threshold explanations; visual quality/чувствительность требуют user feedback/statistics, не подтверждены как bug; G2B update: G2B: five-detector explanations, actual profiles/manual parameters and event detail implemented. Statistical calibration/views G3/G5; unsupported polish remains DEFER.; G3: event→outcome/noise/completeness and descriptive cohorts/no-signal N доступны; enrichment/manual version comparison views G5, unsupported polish DEFER. G5 update: G5: recorded profile/version/settings comparison with N/noise/limits and explicit revision-preserving recompare; no auto threshold change. Unsupported visual polish remains DEFER. | P3 | DEFER: Сохранить полезные terms/presets; улучшать объяснения и выбор thresholds по согласованным detector profiles и outcome statistics | G3 calibration; Q01, не откладывает agent integration | MEDIUM / PARTIAL |
 | F33 G1 REGRESSION | `/sample_alert` потерял baseline Bybit/mute/coin controls и не учитывает active TF; cryptowatcher/bot.py/render.py; G1 preservation / AC-07-03 | EVG9 msg656783 на deployed065e49d подтверждает code regression относительно legacy8ace3638; EVG10 исправляет current snapshot rendering/buttons без REST/state writes ; Current update: PR22 code/CI PASS, actual CD38087285142 main40882eb; owner screenshot401ddabd… and “вроде работает” smoke PASS with assertion limits | P2: неверный sample и потеря manual controls | FIX: Восстановить existing demonstration/controls, не менять live formula, auth, settings или schema; meaningful regression tests | Necessary G1 hotfix, required CI/merge/release/CD | HIGH / CLOSED |
-| F34 HISTORY CAPACITY | Полные event/outcome heads дублируют immutable revisions; пересекающиеся source inputs также повторяются между horizons; events.py/outcomes.py; AC-10-02/F15/F22 | Read-only G5afd10770 snapshot12Oct09:54UTC:15.22GB SQLite+0.98GB WAL,1.23M candle rows; estimated candle JSON0.254GB. Covering-index09:59UTC:264,332 events;16 sampled event heads mean7,392.6bytes, exact total byte attribution UNSET. Code History.version пишет две full copies. Current PR31 compact-head diff:85 affected tests/quality PASS, original revision bytes/readers/export/filter/cutoff preserved; latest CI/CD REQUIRED | P1: растущий dataset превышает текущие delivery budgets и capacity ещё не доказана | REFACTOR: references/query projections вместо второй large copy; отдельно квалифицировать source-window reuse и existing-data conversion без потери provenance. Накопленные данные и policy не менять автоматически | Same PR31; full source/archive/CD gates; privileged bulk conversion и policy changes только по конкретной approved procedure | HIGH / PARTIAL_IN_BRANCH |
+| F34 HISTORY CAPACITY | Полные heads дублируют revisions; пересекающиеся inputs/settings/context повторяются. events.py/outcomes.py; AC-10-02/F15/F22 | G5afd107 readonly12Oct14:31UTC: SQLite17.1GB, events≈1.66days, candles≤4.35days including bootstrap. PR31: shared lossless blocks, compact heads четырёх kinds, полные compatible readers и isolated typed manifests.65 targeted tests/quality PASS; real6000-row sample29.6% faster copy/44.2% faster readback, all values PASS. Full5.42GB qualification ранее дважды превысила900s; latest full proof/CI/CD REQUIRED | P1: disk/write amplification, capacity не доказана | REFACTOR: shared references/projections и bounded validated bytes; квалифицированная existing-data conversion без потери provenance. Policy900s/1CPU/4GiB/retention сохраняется по owner decision | Same PR31; source/archive/CD gates; production promotion только по конкретной reviewed procedure | HIGH / PARTIAL_IN_BRANCH |
 
 ### План консолидации документов/кода
 

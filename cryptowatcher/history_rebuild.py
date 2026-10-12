@@ -11,6 +11,7 @@ import re
 import shutil
 import sqlite3
 import time
+from collections import OrderedDict
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
@@ -108,9 +109,15 @@ def head_record(
 
 
 def feed(manifest: Any, values: tuple[Any, ...]) -> None:
-    raw = encode(values).encode()
-    manifest.update(len(raw).to_bytes(8, "big"))
-    manifest.update(raw)
+    # Strings (including canonical public JSON) are length framed directly, rather
+    # than escaped into a second large JSON document. The type tag keeps a numeric
+    # field distinct from the same text; JSON retains int/float distinctions.
+    manifest.update(len(values).to_bytes(8, "big"))
+    for value in values:
+        raw = value.encode() if isinstance(value, str) else encode(value).encode()
+        manifest.update(b"s" if isinstance(value, str) else b"j")
+        manifest.update(len(raw).to_bytes(8, "big"))
+        manifest.update(raw)
 
 
 def copy_snapshot(
@@ -195,7 +202,12 @@ def copy_snapshot(
                 counts[table] = count
         check_integrity(candidate.db, deadline=deadline)
         candidate.snapshot()  # Current owner settings must be readable without resetting defaults.
+        # This exclusive candidate is frozen before evidence is reused during readback.
+        candidate.db.execute("PRAGMA query_only=ON")
         history = History(candidate)
+        readback_codec = history.codec
+        resolved: OrderedDict[str, tuple[str, str]] = OrderedDict()
+        resolved_bytes = 0
         for table in TABLES:
             actual = candidate.db.execute(f"SELECT * FROM {table} ORDER BY rowid")
             verified = 0
@@ -205,15 +217,43 @@ def copy_snapshot(
                 values = tuple(row)
                 if table == "runtime":
                     if values[0].startswith(BLOB_PREFIX):
-                        Codec(candidate.db).load(values[0][len(BLOB_PREFIX) :])
+                        readback_codec.load(values[0][len(BLOB_PREFIX) :])
                         continue
                     kind = values[0].removeprefix(PREFIX).partition(":")[0]
                     head = values[0].removeprefix(PREFIX).partition("-head:")[0]
                     if values[0].startswith(PREFIX) and (kind in HEAD_FIELDS or head in HEAD_FIELDS):
-                        values = (
-                            values[0],
-                            encode(history.resolve(values[0][len(PREFIX) :], json.loads(values[1]))),
+                        relative = values[0][len(PREFIX) :]
+                        stored = json.loads(values[1])
+                        if not isinstance(stored, dict):
+                            raise StateError("Invalid public history record")
+                        reference = stored.get("revision_key")
+                        cached = (
+                            resolved.get(reference)
+                            if head in HEAD_FIELDS and isinstance(reference, str)
+                            else None
                         )
+                        if cached is not None:
+                            if (
+                                relative != f"{head}-head:{stored.get(f'{head}_id')}"
+                                or encode(stored) != cached[1]
+                            ):
+                                raise StateError("Conflicting cached head projection")
+                            public_payload = cached[0]
+                        else:
+                            public = history.resolve(relative, stored)
+                            public_payload = encode(public)
+                            if kind in HEAD_FIELDS:
+                                projection = encode(History._head(kind, public, relative))
+                                charge = len(public_payload.encode()) + len(projection.encode()) + 256
+                                if charge <= 4 * 1024 * 1024:
+                                    while resolved and resolved_bytes + charge > 4 * 1024 * 1024:
+                                        _, (previous, projected) = resolved.popitem(last=False)
+                                        resolved_bytes -= (
+                                            len(previous.encode()) + len(projected.encode()) + 256
+                                        )
+                                    resolved[relative] = (public_payload, projection)
+                                    resolved_bytes += charge
+                        values = (values[0], public_payload)
                 feed(readback, values)
                 verified += 1
             if readback.digest() != manifests[table].digest():
@@ -238,6 +278,7 @@ def copy_snapshot(
         "shared_bodies_added": added,
         "heads_converted": converted,
         "payload_bytes_saved": savings,
+        "logical_manifest_schema": "cryptowatcher.logical-rows.v2",
         "logical_row_manifests": {table: manifest.hexdigest() for table, manifest in manifests.items()},
     }
 

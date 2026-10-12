@@ -169,3 +169,56 @@ def test_snapshot_encoding_cache_is_bounded_without_losing_evicted_bodies(store)
             keys.append(codec.save({"value": str(i) + "x" * 100000}))
     assert codec.cache_bytes <= CACHE_BYTES and len(codec.encoded) < len(keys)
     assert codec.load(keys[0]) == {"value": "0" + "x" * 100000}
+
+
+def test_validated_cache_rechecks_stored_bytes_and_returns_independent_objects(store):
+    codec = Codec(store.db)
+    value = {"candles": [{"close": 1.0, "notes": "цена"}]}
+    with store.db:
+        key = codec.save(value)
+    first = codec.load(key)
+    first["candles"][0]["close"] = 999
+    assert encode(codec.load(key)) == encode(value)
+    assert codec.validated
+    with pytest.raises(StateError), store.db:
+        store.db.execute(
+            "UPDATE runtime SET payload_json=? WHERE key=?",
+            (encode({"schema": "corrupt"}), BLOB_PREFIX + key),
+        )
+        codec.load(key)
+    assert codec.load(key) == value  # Rolled-back corruption does not poison evidence.
+    with store.db:
+        store.db.execute("DELETE FROM runtime WHERE key=?", (BLOB_PREFIX + key,))
+    with pytest.raises(StateError):
+        codec.load(key)
+
+
+def test_validated_cache_is_bounded_and_does_not_admit_rolled_back_rows(store):
+    codec = Codec(store.db)
+    with pytest.raises(RuntimeError), store.db:
+        key = codec.save({"large": "x" * 100000})
+        codec.load(key)
+        raise RuntimeError("abort")
+    with pytest.raises(StateError):
+        codec.load(key)
+    with store.db:
+        for i in range(48):
+            key = codec.save({"large": str(i) + "x" * 100000})
+            assert codec.load(key)["large"].startswith(str(i))
+    assert codec.validated_bytes <= CACHE_BYTES and len(codec.validated) < 48
+
+
+def test_window_hash_concatenation_preserves_types_unicode_and_irregular_blocks(store):
+    codec = Codec(store.db)
+    value = {
+        "source_inputs": [
+            {"start": i * 60000, "step": 60000, "price": i / 3, "label": 'цена"\\'} for i in range(37)
+        ]
+    }
+    with store.db:
+        packed = codec.pack(value)
+    assert encode(codec.unpack(packed)) == encode(value)
+    assert (
+        packed[MARKER]["fields"]["source_inputs"]["sha256"]
+        == __import__("hashlib").sha256(encode(value["source_inputs"]).encode()).hexdigest()
+    )

@@ -9,10 +9,20 @@ import pytest
 
 from cryptowatcher.config import OwnerSettings
 from cryptowatcher.events import PREFIX, History
-from cryptowatcher.history_rebuild import rebuild
+from cryptowatcher.history_rebuild import feed, rebuild
 from cryptowatcher.storage import IntegrityError, StateError, Store, encode
 
 from .test_history_heads import record
+
+
+def test_logical_manifest_preserves_types_and_field_boundaries():
+    values = [(1,), (1.0,), ("1",), (None,), ("null",), ("a", "bc"), ("ab", "c"), ("a",), ("a", "")]
+    hashes = []
+    for row in values:
+        manifest = hashlib.sha256()
+        feed(manifest, row)
+        hashes.append(manifest.digest())
+    assert len(set(hashes)) == len(values)
 
 
 def closed_backup(tmp_path, *, conflict=None):
@@ -211,7 +221,16 @@ def test_source_metadata_change_during_rebuild_invalidates_candidate(tmp_path, m
 
 
 @pytest.mark.parametrize(
-    "fault", ["lost_revision", "extra_record", "private_delivery", "numeric_type", "candle"]
+    "fault",
+    [
+        "lost_revision",
+        "extra_record",
+        "private_delivery",
+        "numeric_type",
+        "candle",
+        "cached_head_type",
+        "cached_head_identity",
+    ],
 )
 def test_complete_logical_manifest_detects_loss_or_changes_after_copy(tmp_path, monkeypatch, fault):
     from cryptowatcher import history_rebuild
@@ -238,6 +257,16 @@ def test_complete_logical_manifest_detects_loss_or_changes_after_copy(tmp_path, 
                     database.execute("SELECT payload_json FROM runtime WHERE key=?", (key,)).fetchone()[0]
                 )
                 value["reference_price"] = 100.0
+                database.execute("UPDATE runtime SET payload_json=? WHERE key=?", (encode(value), key))
+            elif fault in ("cached_head_type", "cached_head_identity"):
+                key = PREFIX + "event-head:record-0"
+                value = json.loads(
+                    database.execute("SELECT payload_json FROM runtime WHERE key=?", (key,)).fetchone()[0]
+                )
+                if fault == "cached_head_type":
+                    value["strength"] = float(value["strength"]) if type(value["strength"]) is int else 2
+                else:
+                    value["event_id"] = "foreign-record"
                 database.execute("UPDATE runtime SET payload_json=? WHERE key=?", (encode(value), key))
             else:
                 database.execute(

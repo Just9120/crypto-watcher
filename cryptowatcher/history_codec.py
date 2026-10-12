@@ -32,6 +32,8 @@ class Codec:
         self.db = database
         self.encoded: OrderedDict[bytes, tuple[str, str]] = OrderedDict()
         self.cache_bytes = 0
+        self.validated: OrderedDict[str, tuple[str, bytes]] = OrderedDict()
+        self.validated_bytes = 0
 
     def read(self, payload: str) -> Any:
         value = json.loads(payload)
@@ -77,6 +79,11 @@ class Codec:
         if not isinstance(key, str) or not re.fullmatch(r"[0-9a-f]{64}", key):
             raise StateError("Invalid shared snapshot identity")
         row = self.db.execute("SELECT payload_json FROM runtime WHERE key=?", (BLOB_PREFIX + key,)).fetchone()
+        cached = self.validated.get(key)
+        if row and cached is not None and row[0] == cached[0]:
+            self.validated.move_to_end(key)
+            # Return a new object: callers must not be able to mutate cached evidence.
+            return json.loads(cached[1])
         try:
             value = json.loads(row[0]) if row else None
         except (ValueError, TypeError) as exc:
@@ -102,6 +109,16 @@ class Codec:
             decoded = json.loads(raw)
             if encode(decoded).encode() != raw:
                 raise StateError("Noncanonical shared snapshot")
+            charge = len(raw) + len(row[0]) + 256
+            if charge <= CACHE_BYTES:
+                if cached is not None:
+                    self.validated_bytes -= len(cached[0]) + len(cached[1]) + 256
+                    del self.validated[key]
+                while self.validated and self.validated_bytes + charge > CACHE_BYTES:
+                    _, (body, previous) = self.validated.popitem(last=False)
+                    self.validated_bytes -= len(body) + len(previous) + 256
+                self.validated[key] = (row[0], raw)
+                self.validated_bytes += charge
             return decoded
         except (KeyError, ValueError, TypeError, zlib.error, UnicodeError) as exc:
             raise StateError("Invalid shared snapshot encoding") from exc
@@ -137,8 +154,8 @@ class Codec:
         result: dict[str, Any] = {}
         references = {}
         for name, item in value.items():
-            if name in SHARED_FIELDS and isinstance(item, dict) and len(encode(item)) > 256:
-                raw = encode(item).encode()
+            raw = encode(item).encode() if name in SHARED_FIELDS and isinstance(item, dict) else None
+            if raw is not None and len(raw) > 256:
                 key = self.save_bytes(raw)
                 references[name] = {
                     "mode": "value",
@@ -162,13 +179,17 @@ class Codec:
                         parts.append([])
                         bucket = current
                     parts[-1].append(candle)
+                encoded_parts = [encode(part).encode() for part in parts]
+                # Canonical list bytes are the concatenation of its canonical blocks.
+                # This avoids serializing every candle again just to hash the window.
+                window = b"[" + b",".join(part[1:-1] for part in encoded_parts) + b"]"
                 references[name] = {
                     "mode": "window",
-                    "ids": [self.save(part) for part in parts],
-                    "sha256": digest(encode(item).encode()),
+                    "ids": [self.save_bytes(part) for part in encoded_parts],
+                    "sha256": digest(window),
                 }
             else:
-                result[name] = self.pack(item)
+                result[name] = self.pack(item) if isinstance(item, (dict, list)) else item
         if references:
             result[MARKER] = {"schema": SCHEMA, "fields": references}
         return result
@@ -178,7 +199,9 @@ class Codec:
             return [self.unpack(item) for item in value]
         if not isinstance(value, dict):
             return value
-        result = {k: self.unpack(v) for k, v in value.items() if k != MARKER}
+        result = {
+            k: self.unpack(v) if isinstance(v, (dict, list)) else v for k, v in value.items() if k != MARKER
+        }
         if MARKER not in value:
             return result
         storage = value[MARKER]
