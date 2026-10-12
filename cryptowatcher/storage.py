@@ -308,12 +308,42 @@ class Store:
         timeout_seconds: float = 900,
         validation_directory: Path | None = None,
         compressed_validation: bool = False,
+        archive: bool = False,
     ) -> dict[str, float | str]:
         if compressed_validation and validation_directory is None:
             raise StateError("Compressed validation requires a private validation directory")
+        if archive and (not compressed_validation or validation_directory is None):
+            raise StateError("Archived backup requires compressed validation")
         if destination.exists() or destination.resolve() == self.path.resolve():
             raise StateError("Backup destination must be new")
         destination.parent.mkdir(parents=True, exist_ok=True)
+        if archive:
+            from .compressed_validation import archive_backup
+            from .validation import scratch_space
+
+            started = time.monotonic()
+            assert validation_directory is not None
+            scratch_space(validation_directory, 0)
+            try:
+                proof = archive_backup(
+                    self.path,
+                    destination,
+                    validation_directory,
+                    deadline=started + timeout_seconds,
+                )
+            except IntegrityError as exc:
+                exc.backup_metrics = {
+                    "phase": "ARCHIVE_AND_VALIDATE",
+                    "elapsed_seconds": round(time.monotonic() - started, 3),
+                    "validation_mode": "COMPRESSED_RAM",
+                }
+                raise
+            return {
+                **proof,
+                "phase": "COMPLETE",
+                "validation_mode": "COMPRESSED_RAM",
+                "elapsed_seconds": round(time.monotonic() - started, 3),
+            }
         # Exclusive creation also rejects dangling links; an existing backup is never replaced.
         handle = os.open(destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         os.close(handle)

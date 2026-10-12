@@ -49,6 +49,7 @@ def main() -> int:
     parser.add_argument("--destination", type=Path)
     parser.add_argument("--validation-directory", type=Path)
     parser.add_argument("--compressed-validation", action="store_true")
+    parser.add_argument("--archive-backup", action="store_true")
     parser.add_argument("--owner-id", type=int)
     parser.add_argument("--format", choices=("ndjson", "csv"), default="ndjson")
     parser.add_argument("--start-ms", type=int, default=0)
@@ -73,6 +74,8 @@ def main() -> int:
             raise ConfigError("validation-directory is only supported for state-check and backup")
         if args.compressed_validation and args.validation_directory is None:
             raise ConfigError("compressed-validation requires validation-directory")
+        if args.archive_backup and (args.command != "backup" or not args.compressed_validation):
+            raise ConfigError("archive-backup requires backup and compressed-validation")
         if args.command == "migrate":
             if (
                 args.database is None
@@ -211,6 +214,7 @@ def main() -> int:
                         timeout_seconds=args.timeout_seconds,
                         validation_directory=args.validation_directory,
                         compressed_validation=args.compressed_validation,
+                        archive=args.archive_backup,
                     )
                     print(json.dumps({"status": "backup_integrity_ok", "backup": metrics}))
                 else:

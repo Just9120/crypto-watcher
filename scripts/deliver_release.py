@@ -72,6 +72,10 @@ def delivery_result(result, *, revision: str, digest: str, build_run: int) -> tu
         and re.fullmatch(r"sha256:[0-9a-f]{64}", str(success.get("image_id")))
         and proof.get("phase") == "COMPLETE"
         and proof.get("validation_mode") == "COMPRESSED_RAM"
+        and proof.get("archive_encoding") == "ZSTD"
+        and type(proof.get("archive_bytes")) is int
+        and proof["archive_bytes"] > 0
+        and re.fullmatch(r"[0-9a-f]{64}", str(proof.get("archive_sha256")))
         and re.fullmatch(r"[0-9a-f]{64}", str(proof.get("sha256")))
     ):
         record = {key: value for key, value in success.items() if key in SUCCESS_FIELDS}
@@ -79,6 +83,9 @@ def delivery_result(result, *, revision: str, digest: str, build_run: int) -> tu
             "phase": "COMPLETE",
             "validation_mode": "COMPRESSED_RAM",
             "sha256": proof["sha256"],
+            "archive_encoding": "ZSTD",
+            "archive_bytes": proof["archive_bytes"],
+            "archive_sha256": proof["archive_sha256"],
         }
         for key in ("bytes", "compressed_bytes"):
             if type(proof.get(key)) is int and proof[key] > 0:

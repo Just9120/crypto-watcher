@@ -47,6 +47,39 @@ Snapshot: 2026-10-10, проверка около 10:00–10:15 Europe/Moscow; `
 
 #### Текущий hotfix — производительность полной backup validation
 
+Checkpoint12Oct2026: PR31 остаётся открытым; main9634558a/running G5afd10770,
+installed receiver9569f32c. Последний проверенный head820b154/required CI38212499360
+PASS, но root qualification `/tmp/cw-pr31-job-208td0jh` завершилась BLOCKED07:07:47UTC:
+known5.42GB closed full integrity/exact hash PASS366.168s, current live snapshot
+TIME_BUDGET_EXCEEDED на full integrity. OOMfalse, все3 live units unchanged/running;
+receiver update/switch NOT_RUN. Этот primary FAIL supersedes прежний running checkpoint.
+
+По явному разрешению владельца и повторной проверке raw61e4f087/archive d0cc5a88
+удалён только exact qualified raw pre-9634558a…-1791716917.sqlite3.
+Receipt `/opt/crypto_watcher/rehearsals/backup-archive-6crp6k3t/raw-removal.json`
+PASS2026-10-12T07:15:52UTC: freed allocated5,422,342,144bytes, gzip780,833,702bytes
+и archive-preparation receipt сохранены; other backups/production DB untouched.
+Readback07:19:08UTC подтвердил raw отсутствует/archive присутствует/free13,625,688,064bytes.
+Growing live history не позволяет рассчитывать на полный raw pre-deploy duplicate.
+
+В этом же PR подготовлен validation-only Zstandard0.25.0/hash locks и bounded
+persistent `.sqlite3.zst` вместо нового raw CD backup. Full snapshot integrity,
+независимый persisted archive full integrity, decoded/encoded SHA256/size,
+private4GiB cap/CPU1/no swap и900s stage gates сохранены. Source snapshot/native
+SQLite bytes не меняются. Incomplete archive сохраняется, existing backups не
+переписываются; recovery сначала распаковывает новый isolated raw файл и сверяет
+native integrity/все5 таблиц по [процедуре](runbooks/delivery.md).
+126 targeted Windows tests и canonical quality PASS: WAL race/reader release,
+native all-table restore/exact hashes, CRC/truncated/corrupt archive, output limit,
+deadline, existing-output preservation, capture/CLI/storage/bootstrap regressions.
+OSV querybatch12Oct07:36:09UTC для new zstandard0.25.0 — active findings0;
+это не assessment OS packages. Self-review подтверждает exclusive destination,
+fsync, released live reader, независимую проверку persisted archive до switch,
+safe hash/size proof в capture и native restore в реальном Linux image check.
+Новый latest Linux CI/image и3-stage VPS qualification ещё REQUIRED;
+после PASS — exact receiver update, merge, automatic CD и bounded application checks.
+Implementation checkpoint54/58 AC сохраняется; delivery/activation/G6 остаются незавершёнными.
+
 Base `9634558a654d5f13279ff0e76710585bf1105d66`, branch `codex/backup-validation-performance-20261011`, root worktree. Fresh main/clean checkout, strict required `ci-required`, production Environment, отсутствие открытых PR/active Actions подтверждены GitHub API2026-10-11T11:36:44UTC. Основание — устранение failed delivery в согласованной whole-project Goal; отдельный implementation scope не добавляется.
 
 PR30 merged2026-10-11T10:52:33UTC, head2495ac037/baseb13081e/squash9634558a, required CI38131846878 PASS370 tests. Operator receiver update10:50:50UTC PASS: installed receiver9569f32c, target/SSH/runtime/database сохранены. Automatic CD38133517275: merged Linux3.11 suite370 tests PASS/build PASS, delivery FAIL11:23:36UTC на BACKUP_AND_VALIDATE с `docker exit 3` — TIME_BUDGET_EXCEEDED. Полная проверка source DB прошла: backup stage следует после неё. Нельзя считать backup пригодной, corruption установленной или CD завершённой. Точные времена copy и destination validation UNSET; CLI885s является общим budget обеих фаз.

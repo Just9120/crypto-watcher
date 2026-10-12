@@ -489,8 +489,10 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
         require(state.get("validation_mode") == "COMPRESSED_RAM", "Full compressed state validation missing")
         backups = APP / "data/sqlite/backups"
         require(backups.is_dir(), "Reviewed backup directory missing")
-        backup_name = f"pre-{revision}-{int(time.time())}.sqlite3"
-        require(shutil.disk_usage(APP).free > database_size + 512 * 1024 * 1024, "Insufficient backup disk")
+        backup_name = f"pre-{revision}-{int(time.time())}.sqlite3.zst"
+        # Archived output has the same hard3GiB bound as the validation image;
+        # incompressible input fails before switch and leaves its incomplete output.
+        require(shutil.disk_usage(APP).free > 3 * 1024**3 + 512 * 1024 * 1024, "Insufficient backup disk")
         ACTIVE_RECORD.update(backup=backup_name)
         record_phase("BACKUP_AND_VALIDATE")
         refreshed = json.loads(run([*container_args, "python", "-m", "cryptowatcher", "diagnostics"]))
@@ -514,6 +516,7 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
                     "--validation-directory",
                     "/validation",
                     "--compressed-validation",
+                    "--archive-backup",
                 ],
                 timeout=budget,
             )
@@ -523,7 +526,14 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
             backup.get("status") == "backup_integrity_ok"
             and proof.get("phase") == "COMPLETE"
             and proof.get("validation_mode") == "COMPRESSED_RAM"
-            and bool(re.fullmatch(r"[0-9a-f]{64}", str(proof.get("sha256")))),
+            and proof.get("archive_encoding") == "ZSTD"
+            and type(proof.get("archive_bytes")) is int
+            and proof["archive_bytes"] > 0
+            and bool(re.fullmatch(r"[0-9a-f]{64}", str(proof.get("archive_sha256")))),
+            "Full persistent archive identity missing",
+        )
+        require(
+            bool(re.fullmatch(r"[0-9a-f]{64}", str(proof.get("sha256")))),
             "Full persistent backup validation missing",
         )
         ACTIVE_RECORD["backup_validation"] = proof

@@ -96,7 +96,8 @@ Directory — отдельный tmpfs текущего UID/mode700, без syml
 [Compressed validation](../../cryptowatcher/compressed_validation.py) использует
 hash-locked APSW3.53.4.0/SQLite3.53.4 только в isolated validation connections;
 основное приложение продолжает использовать standard SQLite. Compressed VFS
-использует64KiB lossless blocks и bounded8-block mutable write cache.
+использует64KiB lossless Zstandard0.25.0 blocks (level1/checksum/single thread)
+и bounded8-block mutable write cache. Codec не меняет SQLite bytes.
 Physical SQLite sector остаётся4096; native page/header bytes не меняются.
 Reconstruction hash декодирует blocks последовательно без удержания LRU.
 Private full-integrity cache512MiB и decoded-block cache32MiB укладываются
@@ -104,11 +105,23 @@ Private full-integrity cache512MiB и decoded-block cache32MiB укладыва�
 VFS возвращает исходные байты каждой страницы и проверяет reconstructed SHA256
 до и после full integrity. Source snapshot создаётся pinned SQLite online backup;
 live reader закрывается до полного сканирования, metadata берётся из этого snapshot.
-Persistent backup создаётся прежним pinned online copy на диске; closed file
-сжимается без изменения logical bytes. После full validation сверяются SHA256
-reconstructed bytes и persistent file с inode/size/mtime/readback. Только workspace
-проверки удаляется; incomplete persistent copy сохраняется. DB/schema/settings/history
-не переписываются.
+CD создаёт новый persistent `pre-<revision>-<time>.sqlite3.zst` explicit flags
+`--compressed-validation --archive-backup`. Native pinned online snapshot полностью
+проверяется в compressed RAM, затем streaming lossless archive fsync сохраняет
+его страницы. После освобождения первой image архив независимо читается заново:
+full writable integrity и decoded SHA256/size должны совпасть с snapshot;
+encoded archive SHA256/size также сверяются с записанными bytes.
+Новый архив ограничен3GiB; disk preflight требует этот предел плюс512MiB.
+Default CLI backup без archive flag по-прежнему создаёт обычную SQLite.
+Только owned workspace проверки удаляется; incomplete persistent archive сохраняется
+и не получает COMPLETE. DB/schema/settings/history и остальные backups не меняются.
+
+Для recovery `.zst` сначала проверяются encoded hash/size по deployment record,
+затем он потоково распаковывается `zstandard.ZstdDecompressor().copy_stream`
+в новый isolated raw файл. Его SHA256/size должны совпасть с decoded proof;
+native SQLite full integrity и readback всех5 таблиц обязательны. Для raw restore
+заранее нужны disk space и установленная compatible image. Restore поверх живой
+DB требует отдельной согласованной процедуры; обычный CD не выполняет downgrade/restore.
 
 Full writable `PRAGMA integrity_check`, включая CHECK constraints, выполняется
 целиком. `immutable=1` или read-only SQLite handle не используются для validator:
@@ -126,11 +139,12 @@ Plain RAM closed-copy rehearsal2026-10-11T15:44–15:48UTC PASS201.800s,
 integrity31.721s, но последующий live readback8,982,642,688bytes при available
 7,471,837,184bytes блокировал update до execute. Plain RAM не используется CD.
 REQUIRED pre-merge qualification выполняет [operator helper](../../scripts/qualify_compressed_validation.py)
-на known closed backup и current live WAL snapshot с отдельными885s на каждый
-этап/CPU1/cap4GiB (maximum combined1770s плюс45s host cleanup margin),
+на preserved known gzip archive, current live WAL snapshot и новом isolated
+persistent `.zst` backup с отдельными885s на каждый этап/CPU1/cap4GiB
+(maximum combined2655s плюс45s host cleanup margin),
 reserve1536MiB/constraint negative control/hashes/точным cleanup/all3 live ID readback.
 Оба источника монтируются read-only; production container/config/DB не меняются.
-Helper использует existing image9634558a и hash-pinned Linux APSW wheel,
+Helper использует existing image9634558a и hash-pinned Linux APSW/Zstandard wheels,
 не устанавливая wheel на host. PASS не заменяет latest Linux CI/image или
 actual automatic CD/running source/capacity checks.
 
@@ -138,10 +152,12 @@ actual automatic CD/running source/capacity checks.
 full integrity/byte hash PASS641.243s, но shared885s истёк во время live copy.
 Receiver/runtime не менялись; оба полных этапа остаются REQUIRED. Отдельные
 необновляемые deadlines соответствуют existing CD source/backup stages,
-production cap900s не меняется. Compression level2 выбран по ограниченной16MiB
-выборке known backup:0.304s/ratio0.2744 против level6:0.628s/ratio0.2549.
-Это Evidence производительности выборки; fit/time всей текущей DB остаются
-обязательной qualification. Byte identity и memory/deadline guards сохраняются.
+production cap900s не меняется. Zlib level2 closed proof прошёл366.168s12Oct,
+но current live stage превысил885s во время full integrity. Новый Zstandard codec
+выбран после bounded synthetic24.7MiB fixture: compression0.026s/decode0.010s
+против zlib0.106s/0.030s с exact decoded bytes. Это локальное Evidence выбора;
+fit/time всей текущей DB и actual durable archive остаются REQUIRED qualification.
+Byte identity и memory/deadline guards сохраняются.
 
 ### Hotfix receiver update до merge
 

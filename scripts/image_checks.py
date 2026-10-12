@@ -183,6 +183,46 @@ def main() -> None:
             else:
                 assert compressed["backup"]["validation_mode"] == "COMPRESSED_RAM"
                 assert compressed["backup"]["sha256"] == actual_hash
+        archive = json.loads(
+            run(
+                args.image,
+                directory,
+                "-m",
+                "cryptowatcher",
+                "backup",
+                "--database",
+                "/data/store.db",
+                "--destination",
+                "/data/archived.sqlite3.zst",
+                "--validation-directory",
+                "/validation",
+                "--compressed-validation",
+                "--archive-backup",
+                validation=True,
+            )
+        )["backup"]
+        assert archive["phase"] == "COMPLETE" and archive["archive_encoding"] == "ZSTD"
+        assert archive["sha256"] == actual_hash
+        restored_hash = run(
+            args.image,
+            directory,
+            "-c",
+            """import hashlib,sqlite3,zstandard
+from pathlib import Path
+p=Path('/data/archived.sqlite3.zst')
+assert hashlib.sha256(p.read_bytes()).hexdigest() == """
+            + repr(archive["archive_sha256"])
+            + """
+with p.open('rb') as source,Path('/data/archive-restored.sqlite3').open('xb') as target:
+    zstandard.ZstdDecompressor().copy_stream(source,target)
+with sqlite3.connect('/data/archive-restored.sqlite3') as db:
+    assert db.execute('PRAGMA integrity_check').fetchall()==[('ok',)]
+    for name in ('owner_settings','delivery_preferences','mutes','runtime','legacy_import'):
+        db.execute('SELECT count(*) FROM '+name).fetchone()
+print(hashlib.sha256(Path('/data/archive-restored.sqlite3').read_bytes()).hexdigest())
+""",
+        ).strip()
+        assert restored_hash == actual_hash
         run(
             args.image,
             directory,

@@ -1,17 +1,19 @@
+import gzip
 import hashlib
 import os
 import random
 import sqlite3
 import time
-import zlib
 from contextlib import closing
 from pathlib import Path
 
 import apsw
 import pytest
+import zstandard
 
 from cryptowatcher.compressed_validation import (
     BLOCK,
+    ArchiveWriter,
     Image,
     QualificationError,
     classified_errors,
@@ -175,7 +177,39 @@ def test_compacted_cache_does_not_hide_modified_pages(database):
     image = Image(database, limit=10 * 1024 * 1024, deadline=time.monotonic() + 30)
     image.cache.clear()
     image.blocks[3] = b"broken"
-    with pytest.raises(zlib.error):
+    with pytest.raises(zstandard.ZstdError):
+        image.reconstructed_hash()
+
+
+def test_gzip_archive_full_check_and_exact_restored_identity(database):
+    original = database.read_bytes()
+    archive = database.with_suffix(".sqlite3.gz")
+    archive.write_bytes(gzip.compress(original))
+    before = archive.read_bytes()
+    proof = validate_closed(
+        archive, directory=database.parent, deadline=time.monotonic() + 30, archive_encoding="GZIP"
+    )
+    assert proof["bytes"] == len(original) and proof["sha256"] == hashlib.sha256(original).hexdigest()
+    assert archive.read_bytes() == before and database.read_bytes() == original
+
+
+@pytest.mark.parametrize("damage", ["truncated", "crc"])
+def test_invalid_gzip_archive_refuses_qualification(database, damage):
+    archive = database.with_suffix(".sqlite3.gz")
+    content = gzip.compress(database.read_bytes())
+    broken = content[:-7] if damage == "truncated" else content[:-8] + bytes(8)
+    archive.write_bytes(broken)
+    deadline = time.monotonic() + 30
+    with pytest.raises(QualificationError, match="VALIDATION_IO_ERROR"), classified_errors(deadline):
+        validate_closed(archive, directory=database.parent, deadline=deadline, archive_encoding="GZIP")
+    assert archive.read_bytes() == broken
+
+
+def test_zstd_frame_checksum_rejects_changed_content(database):
+    image = Image(database, limit=10 * 1024 * 1024, deadline=time.monotonic() + 30)
+    blob = image.blocks[0]
+    image.blocks[0] = blob[:-1] + bytes([blob[-1] ^ 1])
+    with pytest.raises(zstandard.ZstdError):
         image.reconstructed_hash()
 
 
@@ -283,3 +317,90 @@ def test_compressed_backup_metrics_hash_and_native_sqlite_restore(store, tmp_pat
     finally:
         restored.close()
     assert list(scratch.iterdir()) == []
+
+
+def test_archived_online_backup_exact_identity_native_restore_and_wal_race(store, tmp_path, monkeypatch):
+    from cryptowatcher import compressed_validation as cv
+    from cryptowatcher import validation
+    from cryptowatcher.storage import Store
+
+    monkeypatch.setattr(validation, "scratch_space", lambda *args: None)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    destination = tmp_path / "backup.sqlite3.zst"
+    store.put_runtime("evidence", {"state": "before"})
+    original_check = cv.full_check
+
+    def checked(db, deadline):
+        # The production reader must be released; its later state is excluded.
+        store.put_runtime("evidence", {"state": "after"})
+        assert store.db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0
+        original_check(db, deadline)
+
+    monkeypatch.setattr(cv, "full_check", checked)
+    proof = store.backup(destination, validation_directory=scratch, compressed_validation=True, archive=True)
+    assert proof["phase"] == "COMPLETE" and proof["archive_encoding"] == "ZSTD"
+    assert proof["archive_sha256"] == hashlib.sha256(destination.read_bytes()).hexdigest()
+    assert proof["archive_bytes"] == destination.stat().st_size
+    restored = tmp_path / "restored.sqlite3"
+    with destination.open("rb") as source, restored.open("xb") as target:
+        zstandard.ZstdDecompressor().copy_stream(source, target)
+    assert restored.stat().st_size == proof["bytes"]
+    assert hashlib.sha256(restored.read_bytes()).hexdigest() == proof["sha256"]
+    with closing(sqlite3.connect(restored)) as db:
+        assert db.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
+        for name in ("owner_settings", "delivery_preferences", "mutes", "runtime", "legacy_import"):
+            assert db.execute("SELECT count(*) FROM " + name).fetchone()[0] >= 0
+    readback = Store(restored, store.owner_id, readonly=True)
+    try:
+        assert readback.snapshot() == store.snapshot()
+        assert readback.get_runtime("evidence", {}) == {"state": "before"}
+    finally:
+        readback.close()
+    assert store.get_runtime("evidence", {}) == {"state": "after"}
+    original = destination.read_bytes()
+    from cryptowatcher.storage import StateError
+
+    with pytest.raises(StateError, match="destination must be new"):
+        store.backup(destination, validation_directory=scratch, compressed_validation=True, archive=True)
+    assert destination.read_bytes() == original and not list(scratch.iterdir())
+
+
+def test_archive_write_limit_and_expired_deadline_preserve_outputs(tmp_path, monkeypatch):
+    from cryptowatcher import compressed_validation as cv
+
+    monkeypatch.setattr(cv, "MAX_COMPRESSED_BYTES", 16)
+    destination = tmp_path / "partial"
+    with destination.open("wb") as output:
+        sink = ArchiveWriter(output, time.monotonic() + 30)
+        assert sink.write(b"preserved") == 9
+        with pytest.raises(QualificationError, match="COMPRESSED_MEMORY_LIMIT"):
+            sink.write(b"x" * 16)
+        sink.deadline = 0
+        with pytest.raises(QualificationError, match="TIME_BUDGET_EXCEEDED"):
+            sink.write(b"late")
+    assert destination.read_bytes() == b"preserved"
+
+
+def test_archive_persisted_corruption_never_passes(store, tmp_path, monkeypatch):
+    from cryptowatcher import compressed_validation as cv
+    from cryptowatcher import validation
+    from cryptowatcher.storage import IntegrityError
+
+    monkeypatch.setattr(validation, "scratch_space", lambda *args: None)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    destination = tmp_path / "bad.sqlite3.zst"
+    original = cv.validate_closed
+
+    def damaged(path, **kwargs):
+        with path.open("r+b") as stream:
+            stream.seek(-1, 2)
+            stream.write(b"\x00")
+        return original(path, **kwargs)
+
+    monkeypatch.setattr(cv, "validate_closed", damaged)
+    with pytest.raises(IntegrityError):
+        store.backup(destination, validation_directory=scratch, compressed_validation=True, archive=True)
+    assert destination.is_file() and store.snapshot().revision == 1
+    assert not list(scratch.iterdir())

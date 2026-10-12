@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import os
 import stat
@@ -9,20 +10,20 @@ import sys
 import tempfile
 import time
 import uuid
-import zlib
 from collections import OrderedDict
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import IO, Any, BinaryIO, Literal, cast
 
 import apsw
+import zstandard
 
 from .storage import IntegrityError
 
 BLOCK = 65536
 CACHE_PAGES = 512
-COMPRESSION_LEVEL = 2
+COMPRESSION_LEVEL = 1
 WRITE_CACHE_BLOCKS = 8
 
 
@@ -42,7 +43,13 @@ def budget(deadline: float) -> None:
 
 class Image:
     def __init__(
-        self, path: Path | None, *, limit: int, deadline: float, progress: Any = lambda **kw: None
+        self,
+        path: Path | None,
+        *,
+        limit: int,
+        deadline: float,
+        progress: Any = lambda **kw: None,
+        archive_encoding: Literal["GZIP", "ZSTD"] | None = None,
     ) -> None:
         self.blocks: list[bytes] = []
         self.size = 0
@@ -52,6 +59,9 @@ class Image:
         self.mutable = False
         self.cache: OrderedDict[int, bytes] = OrderedDict()
         self.write_cache: OrderedDict[int, bytearray] = OrderedDict()
+        self.compressor = zstandard.ZstdCompressor(level=COMPRESSION_LEVEL, write_checksum=True, threads=0)
+        self.decompressor = zstandard.ZstdDecompressor()
+        self.archive_encoding = archive_encoding
         if path is None:
             self.mutable = True
             return
@@ -62,18 +72,13 @@ class Image:
         if any(Path(str(path) + s).exists() for s in ("-wal", "-shm", "-journal")):
             raise QualificationError("CLOSED_FILE_REQUIRED")
         self.hash = hashlib.sha256()
-        with os.fdopen(
-            os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)), "rb", buffering=1024 * 1024
-        ) as source:
-            opened = os.fstat(source.fileno())
-            if (opened.st_dev, opened.st_ino) != (self.before.st_dev, self.before.st_ino):
-                raise QualificationError("SOURCE_CHANGED")
+        with self.source_reader() as source:
             while True:
                 budget(deadline)
                 data = source.read(BLOCK)
                 if not data:
                     break
-                blob = zlib.compress(data, COMPRESSION_LEVEL)
+                blob = self.compressor.compress(data)
                 self.retained += sys.getsizeof(blob)
                 if self.retained + sys.getsizeof(self.blocks) + BLOCK + 128 > limit:
                     raise QualificationError("COMPRESSED_MEMORY_LIMIT")
@@ -82,17 +87,34 @@ class Image:
                 self.hash.update(data)
                 progress(phase="COMPRESS", bytes=self.size, compressed_bytes=self.retained)
         self.assert_source_unchanged()
-        if self.size != self.before.st_size:
+        if archive_encoding is None and self.size != self.before.st_size:
             raise QualificationError("SOURCE_CHANGED")
         self.sha256 = self.hash.hexdigest()
         if self.reconstructed_hash() != self.sha256:
             raise QualificationError("BYTE_IDENTITY_MISMATCH")
 
+    @contextmanager
+    def source_reader(self) -> Iterator[BinaryIO | gzip.GzipFile | zstandard.ZstdDecompressionReader]:
+        with os.fdopen(
+            os.open(self.path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)), "rb", buffering=1024 * 1024
+        ) as source:
+            opened = os.fstat(source.fileno())
+            if (opened.st_dev, opened.st_ino) != (self.before.st_dev, self.before.st_ino):
+                raise QualificationError("SOURCE_CHANGED")
+            if self.archive_encoding == "GZIP":
+                with gzip.GzipFile(fileobj=source, mode="rb") as decoded:
+                    yield decoded
+            elif self.archive_encoding == "ZSTD":
+                with self.decompressor.stream_reader(source, closefd=False) as reader:
+                    yield reader
+            else:
+                yield source
+
     def set_block(self, index: int, value: bytes) -> None:
         budget(self.deadline)
         if len(value) > BLOCK:
             raise QualificationError("INVALID_PAGE_SIZE")
-        blob = zlib.compress(value, COMPRESSION_LEVEL)
+        blob = self.compressor.compress(value)
         previous = self.blocks[index] if index < len(self.blocks) else None
         new = self.retained + sys.getsizeof(blob) - (sys.getsizeof(previous) if previous is not None else 0)
         if new + sys.getsizeof(self.blocks) + BLOCK + 128 > self.limit:
@@ -125,7 +147,7 @@ class Image:
                     self.retained += sys.getsizeof(b"")
                     value = bytearray(BLOCK)
                 else:
-                    value = bytearray(zlib.decompress(self.blocks[index]))
+                    value = bytearray(self.decompressor.decompress(self.blocks[index], max_output_size=BLOCK))
             if len(value) < BLOCK:
                 value.extend(bytes(BLOCK - len(value)))
             value[start : start + n] = data[pos - offset : pos - offset + n]
@@ -179,7 +201,7 @@ class Image:
             return bytes(self.write_cache[index])[: min(BLOCK, self.size - index * BLOCK)]
         value = self.cache.pop(index, None)
         if value is None:
-            value = zlib.decompress(self.blocks[index])
+            value = self.decompressor.decompress(self.blocks[index], max_output_size=BLOCK)
             expected = min(BLOCK, self.size - index * BLOCK)
             if len(value) not in (expected, BLOCK):
                 raise QualificationError("BYTE_IDENTITY_MISMATCH")
@@ -204,18 +226,22 @@ class Image:
         return b"".join(pieces)
 
     def reconstructed_hash(self) -> str:
+        result = hashlib.sha256()
+        for value in self.iter_bytes():
+            result.update(value)
+        return result.hexdigest()
+
+    def iter_bytes(self) -> Iterator[bytes]:
         if self.mutable:
             raise QualificationError("FROZEN_IMAGE_REQUIRED")
         self.cache.clear()
-        result = hashlib.sha256()
         for index, blob in enumerate(self.blocks):
             budget(self.deadline)
-            value = zlib.decompress(blob)
+            value = self.decompressor.decompress(blob, max_output_size=BLOCK)
             expected = min(BLOCK, self.size - index * BLOCK)
             if len(value) not in (expected, BLOCK):
                 raise QualificationError("BYTE_IDENTITY_MISMATCH")
-            result.update(value[:expected])
-        return result.hexdigest()
+            yield value[:expected]
 
 
 class File(apsw.VFSFile):
@@ -276,8 +302,9 @@ def validate_closed(
     deadline: float,
     limit: int = MAX_COMPRESSED_BYTES,
     progress: Any = lambda **kw: None,
+    archive_encoding: Literal["GZIP", "ZSTD"] | None = None,
 ) -> dict[str, Any]:
-    image = Image(path, limit=limit, deadline=deadline, progress=progress)
+    image = Image(path, limit=limit, deadline=deadline, progress=progress, archive_encoding=archive_encoding)
     progress(phase="FULL_INTEGRITY", bytes=image.size, compressed_bytes=image.retained)
     with tempfile.TemporaryDirectory(prefix="cw-cvfs-", dir=directory or Path(path).parent) as work:
         path = Path(work) / "sentinel.sqlite3"
@@ -296,10 +323,7 @@ def validate_closed(
         raise QualificationError("BYTE_IDENTITY_MISMATCH")
     actual = hashlib.sha256()
     image.assert_source_unchanged()
-    with os.fdopen(os.open(image.path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)), "rb") as source:
-        opened = os.fstat(source.fileno())
-        if (opened.st_dev, opened.st_ino) != (image.before.st_dev, image.before.st_ino):
-            raise QualificationError("SOURCE_CHANGED")
+    with image.source_reader() as source:
         while True:
             budget(deadline)
             data = source.read(1024 * 1024)
@@ -349,12 +373,14 @@ def classified_errors(deadline: float) -> Iterator[None]:
         if isinstance(error, (apsw.CorruptError, apsw.NotADBError)):
             raise QualificationError("DATABASE_CORRUPT") from error
         raise QualificationError("SQLITE_VALIDATION_ERROR") from error
-    except (OSError, zlib.error) as error:
+    except (OSError, EOFError, zstandard.ZstdError) as error:
         raise QualificationError("VALIDATION_IO_ERROR") from error
 
 
 @contextmanager
-def snapshot(path: Path, directory: Path, *, deadline: float) -> Iterator[apsw.Connection]:
+def snapshot_image(
+    path: Path, directory: Path, *, deadline: float
+) -> Iterator[tuple[apsw.Connection, Image]]:
     """Pinned online backup, full writable validation, then metadata from that same image."""
     image = Image(None, limit=MAX_COMPRESSED_BYTES, deadline=deadline)
     with (
@@ -392,7 +418,7 @@ def snapshot(path: Path, directory: Path, *, deadline: float) -> Iterator[apsw.C
             )
             full_check(destination, deadline)
             destination.execute("PRAGMA query_only=ON")
-            yield destination
+            yield destination, image
             destination.close()
             destination = None
             if image.reconstructed_hash() != original:
@@ -403,3 +429,79 @@ def snapshot(path: Path, directory: Path, *, deadline: float) -> Iterator[apsw.C
             if destination is not None:
                 destination.close()
             vfs.unregister()
+
+
+@contextmanager
+def snapshot(path: Path, directory: Path, *, deadline: float) -> Iterator[apsw.Connection]:
+    with snapshot_image(path, directory, deadline=deadline) as (connection, image):
+        yield connection
+
+
+class ArchiveWriter:
+    """A bounded durable sink; an incomplete archive is never promoted or silently removed."""
+
+    def __init__(self, output: BinaryIO, deadline: float) -> None:
+        self.output = output
+        self.deadline = deadline
+        self.size = 0
+        self.digest = hashlib.sha256()
+
+    def write(self, data: bytes) -> int:
+        budget(self.deadline)
+        if self.size + len(data) > MAX_COMPRESSED_BYTES:
+            raise QualificationError("COMPRESSED_MEMORY_LIMIT")
+        count = self.output.write(data)
+        if count != len(data):
+            raise QualificationError("ARCHIVE_WRITE_INCOMPLETE")
+        self.size += count
+        self.digest.update(data)
+        return count
+
+    def flush(self) -> None:
+        self.output.flush()
+
+
+def archive_backup(path: Path, destination: Path, directory: Path, *, deadline: float) -> dict[str, Any]:
+    """Native online snapshot → lossless archive → full persisted readback, within one deadline."""
+    with classified_errors(deadline):
+        handle = os.open(destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(handle, "wb") as output:
+            sink = ArchiveWriter(output, deadline)
+            with snapshot_image(path, directory, deadline=deadline) as (connection, image):
+                expected_size = image.size
+                expected_hash = image.reconstructed_hash()
+                compressor = zstandard.ZstdCompressor(level=COMPRESSION_LEVEL, write_checksum=True, threads=0)
+                # Zstandard uses only write()/flush() from this bounded sink.
+                with compressor.stream_writer(
+                    cast(IO[bytes], sink), size=expected_size, closefd=False
+                ) as writer:
+                    for block in image.iter_bytes():
+                        writer.write(block)
+            del image
+            del connection
+            output.flush()
+            os.fsync(output.fileno())
+        if os.name != "nt":
+            fd = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        result = validate_closed(destination, directory=directory, deadline=deadline, archive_encoding="ZSTD")
+        if result["sha256"] != expected_hash or result["bytes"] != expected_size:
+            raise QualificationError("BYTE_IDENTITY_MISMATCH")
+        # The archive receipt also identifies the actual durable representation.
+        actual = hashlib.sha256()
+        with destination.open("rb") as encoded:
+            for block in iter(lambda: encoded.read(1024 * 1024), b""):
+                budget(deadline)
+                actual.update(block)
+        if destination.stat().st_size != sink.size or actual.hexdigest() != sink.digest.hexdigest():
+            raise QualificationError("BYTE_IDENTITY_MISMATCH")
+        budget(deadline)
+        return {
+            **result,
+            "archive_encoding": "ZSTD",
+            "archive_bytes": sink.size,
+            "archive_sha256": actual.hexdigest(),
+        }

@@ -23,7 +23,14 @@ def success(**changes):
         "image_config_digest": IMAGE,
         "post_checks": "source/image/health/persistence/market PASS",
         "phase": "COMPLETE",
-        "backup_validation": {"phase": "COMPLETE", "validation_mode": "COMPRESSED_RAM", "sha256": "f" * 64},
+        "backup_validation": {
+            "phase": "COMPLETE",
+            "validation_mode": "COMPRESSED_RAM",
+            "sha256": "f" * 64,
+            "archive_encoding": "ZSTD",
+            "archive_bytes": 4096,
+            "archive_sha256": "e" * 64,
+        },
         **changes,
     }
 
@@ -111,6 +118,18 @@ def test_backup_and_memory_proof_reject_unknown_secret_fields():
     value, status = delivery_result(raw, revision=REVISION, digest=DIGEST, build_run=RUN)
     assert status == 0 and value["state_validation_resources"] == {"snapshot_bytes": 4096}
     assert "fixture-secret" not in json.dumps(value)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("archive_encoding", None), ("archive_bytes", True), ("archive_bytes", 0), ("archive_sha256", "bad")],
+)
+def test_archive_delivery_requires_durable_representation_proof(field, value):
+    payload = success()
+    payload["backup_validation"][field] = value
+    raw = CompletedProcess([], 0, stdout=json.dumps(payload).encode(), stderr=b"")
+    result, status = delivery_result(raw, revision=REVISION, digest=DIGEST, build_run=RUN)
+    assert status == 1 and result["state"] != "PASS"
 
 
 @pytest.mark.parametrize(
