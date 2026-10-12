@@ -219,6 +219,15 @@ Operation общий budget≤900s. Его изменение не соглас�
 поручение compact storage расширяет conversion на shared settings/context/windows,
 heads всех четырёх kinds и legacy/new mixed revisions; retention/alerts не меняет.
 
+Legacy public records принимаются в canonical JSON representation текущего
+producer (`storage.encode`). JSON1 извлекает projection/shared fields; большие
+integers используют exact Python fallback. Полный восстановленный canonical JSON
+сравнивается с исходным для каждой public row. Non-canonical или конфликтующая
+запись блокирует qualification с сохранением source, без скрытого исправления.
+Private-copy admission reuse разрешён только в exclusive transaction нового
+candidate; отдельный frozen readback проверяет каждый body/ref. Это не отменяет
+runtime admission checks и не продлевает900s budget.
+
 ```bash
 python -m cryptowatcher.history_rebuild --source "$CW_CLOSED_BACKUP" --destination "$CW_NEW_CANDIDATE" --owner-id 233382575 --qualified-source-sha256 "$CW_QUALIFIED_SOURCE_SHA256"
 ```

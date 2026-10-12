@@ -4,6 +4,7 @@ import os
 import sqlite3
 import sys
 import time
+from contextlib import closing
 
 import pytest
 
@@ -23,6 +24,23 @@ def test_logical_manifest_preserves_types_and_field_boundaries():
         feed(manifest, row)
         hashes.append(manifest.digest())
     assert len(set(hashes)) == len(values)
+
+
+def test_rebuild_keeps_large_integer_projections_without_json1_rounding(tmp_path):
+    source, _ = closed_backup(tmp_path)
+    database = Store(source, 233382575)
+    with database.db:
+        history = History(database)
+        value = {**record("event", "record-0"), "strength": 2**100 + 123}
+        history.put("event:record-0:0000000001", value)
+        history.put("event-head:record-0", value)
+    database.db.execute("PRAGMA journal_mode=DELETE")
+    database.close()
+    expected = hashlib.sha256(source.read_bytes()).hexdigest()
+    candidate = tmp_path / "large-int.sqlite3"
+    rebuild(source, candidate, 233382575, expected, time.monotonic() + 10)
+    with closing(Store(candidate, 233382575, readonly=True)) as restored:
+        assert History(restored).get("event-head:record-0")["strength"] == 2**100 + 123
 
 
 def closed_backup(tmp_path, *, conflict=None):
@@ -230,6 +248,7 @@ def test_source_metadata_change_during_rebuild_invalidates_candidate(tmp_path, m
         "candle",
         "cached_head_type",
         "cached_head_identity",
+        "shared_body_after_copy",
     ],
 )
 def test_complete_logical_manifest_detects_loss_or_changes_after_copy(tmp_path, monkeypatch, fault):
@@ -268,6 +287,13 @@ def test_complete_logical_manifest_detects_loss_or_changes_after_copy(tmp_path, 
                 else:
                     value["event_id"] = "foreign-record"
                 database.execute("UPDATE runtime SET payload_json=? WHERE key=?", (encode(value), key))
+            elif fault == "shared_body_after_copy":
+                key = database.execute(
+                    "SELECT key FROM runtime WHERE key LIKE 'historyblob:%' LIMIT 1"
+                ).fetchone()[0]
+                database.execute(
+                    "UPDATE runtime SET payload_json=? WHERE key=?", ('{"schema":"corrupt"}', key)
+                )
             else:
                 database.execute(
                     "INSERT INTO runtime VALUES (?,?)", ("source:v1:candle:unexpected", '{"close":1}')

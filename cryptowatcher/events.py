@@ -97,7 +97,7 @@ class History:
             or record.get("schema") == HEAD_SCHEMA
             or record.get(f"{kind}_id") != record_id
             or record.get("revision") != revision
-            or self._head(kind, record, value["revision_key"]) != value
+            or encode(self._head(kind, record, value["revision_key"])) != encode(value)
         ):
             raise StateError("Missing or conflicting history head revision")
         return record

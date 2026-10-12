@@ -112,6 +112,23 @@ actual disk/growth/alerts checks. Production G5afd107 и installed receiver не
 transport bytes сохраняются. Общая Goal по коду54/58 AC, capacity/storage correction
 в работе; audit percentage unchanged.
 
+Follow-up к пределу15min: a31d360 / CI38280461643 PASS, но полная копия снова
+остановлена901.454s на COPY:1,461,510 runtime rows и49,700 из95,759 event revisions.
+Candidate36KiB/UNQUALIFIED, source и3 live units preserved; verifier removed.
+Current batch использует JSON1 extraction для canonical legacy records, raw shared
+blocks и complete canonical reconstruction вместо повторной materialization больших
+windows. Large integers вне signed64 переходят к exact Python parser; typed head
+projections проверяются строго. Private-copy admission cache bounded4096 identities
+действует только в exclusive copy transaction; полный readback каждого body/ref
+обязателен и использует отдельный обычный Codec. Runtime admission checks сохраняются.
+Legacy public JSON должен совпадать с producer-canonical representation: неизвестный
+format не исправляется молча, original сохраняется при mismatch. Миграционный
+Validation Plan сохраняет все hashes/rows/integrity и900s/1CPU/4GiB.
+Local codec/rebuild и related regression checks PASS, включая damaged body после
+copy, exact large integers и temporary-token collision. Sample6000 rows: latest
+paired baseline copy1.792/readback1.510s → JSON1 copy1.284/readback0.719s, values PASS;
+это partial sample Evidence. Latest batch CI и full qualification ещё REQUIRED.
+
 
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный

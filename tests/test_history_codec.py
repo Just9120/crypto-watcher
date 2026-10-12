@@ -222,3 +222,74 @@ def test_window_hash_concatenation_preserves_types_unicode_and_irregular_blocks(
         packed[MARKER]["fields"]["source_inputs"]["sha256"]
         == __import__("hashlib").sha256(encode(value["source_inputs"]).encode()).hexdigest()
     )
+
+
+@pytest.mark.parametrize("kind", ["event", "outcome", "episode", "comparison"])
+def test_json1_packing_and_raw_restore_preserve_full_canonical_values(store, kind):
+    codec = Codec(store.db)
+    value = large_record(kind)
+    value.update(flag=True, no=False, empty=None, escaped='цена\n"\\', signed_zero=-0.0)
+    value["samples"] = [{"source_inputs": value["source_inputs"], "future_inputs": value["source_inputs"]}]
+    with store.db:
+        packed = codec.pack_canonical(encode(value))
+    assert codec.canonical_json(packed) == encode(value).encode()
+    assert encode(codec.unpack(packed)) == encode(value)
+    with store.db:
+        again = codec.pack_canonical(encode(packed))
+    assert codec.canonical_json(again) == encode(value).encode()
+
+
+@pytest.mark.parametrize("placement", ["scalar", "window", "nested"])
+def test_json1_large_integer_fallback_does_not_round_history(store, placement):
+    codec = Codec(store.db)
+    number = 2**100 + 123
+    value = (
+        {"number": number}
+        if placement == "scalar"
+        else {"source_inputs": [number]}
+        if placement == "window"
+        else {"source_inputs": [{"start": number, "step": 60000, "value": number}]}
+    )
+    with store.db:
+        packed = codec.pack_canonical(encode(value))
+    assert codec.canonical_json(packed) == encode(value).encode()
+
+
+@pytest.mark.parametrize(
+    "fault", ["projection", "unknown_schema", "wrong_hash", "missing_body", "reordered_parts"]
+)
+def test_raw_restore_keeps_complete_validation_gates(store, fault):
+    codec = Codec(store.db)
+    with store.db:
+        packed = codec.pack_canonical(encode(large_record("event")))
+    assert codec.canonical_json(packed)
+    fields = packed[MARKER]["fields"]
+    if fault == "projection":
+        packed["settings_snapshot"]["profile"] = "foreign"
+    elif fault == "unknown_schema":
+        packed[MARKER]["schema"] = "future"
+    elif fault == "wrong_hash":
+        fields["source_inputs"]["sha256"] = "0" * 64
+    elif fault == "reordered_parts":
+        fields["source_inputs"]["ids"].reverse()
+    else:
+        with store.db:
+            store.db.execute(
+                "DELETE FROM runtime WHERE key=?", (BLOB_PREFIX + fields["source_inputs"]["ids"][0],)
+            )
+    with pytest.raises(StateError):
+        codec.canonical_json(packed)
+
+
+def test_raw_restore_does_not_substitute_tokens_in_unrelated_data(store, monkeypatch):
+    from cryptowatcher import history_codec
+
+    monkeypatch.setattr(history_codec.os, "urandom", lambda size: b"\0" * size)
+    value = large_record("event")
+    value["ordinary"] = "\0CWJSON:" + "0" * 24 + ":0\0"
+    codec = Codec(store.db)
+    with store.db:
+        packed = codec.pack_canonical(encode(value))
+    with pytest.raises(StateError, match="Ambiguous"):
+        codec.canonical_json(packed)
+    assert encode(codec.unpack(packed)) == encode(value)

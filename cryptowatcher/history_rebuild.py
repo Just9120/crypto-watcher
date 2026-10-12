@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from .events import HEAD_FIELDS, HEAD_SCHEMA, PREFIX, History
-from .history_codec import BLOB_PREFIX, Codec
+from .history_codec import BLOB_PREFIX, MARKER, Codec, sql_value
 from .storage import IntegrityError, StateError, Store, check_integrity, create_schema, encode
 
 TABLES = {
@@ -29,6 +29,28 @@ TABLES = {
     "legacy_import": ("source_sha256", "original_json", "backup_name"),
 }
 DISK_RESERVE = 1536 * 1024 * 1024
+
+
+class _CopyCodec(Codec):
+    """One exclusive copy transaction; every body/reference is checked after copy."""
+
+    def __init__(self, database: sqlite3.Connection):
+        super().__init__(database)
+        self.admitted: OrderedDict[str, None] = OrderedDict()
+
+    def save_bytes(self, raw: bytes) -> str:
+        cached = self.encoded.get(raw)
+        if not self.db.in_transaction:
+            self.admitted.clear()
+        if cached is not None and cached[0] in self.admitted:
+            self.encoded.move_to_end(raw)
+            self.admitted.move_to_end(cached[0])
+            return cached[0]
+        key = super().save_bytes(raw)
+        self.admitted[key] = None
+        if len(self.admitted) > 4096:
+            self.admitted.popitem(last=False)
+        return key
 
 
 def guard(deadline: float) -> None:
@@ -120,6 +142,27 @@ def feed(manifest: Any, values: tuple[Any, ...]) -> None:
         manifest.update(raw)
 
 
+def canonical_head(source: sqlite3.Connection, key: str, payload: str) -> tuple[str, str] | None:
+    """Extract a legacy projection in JSON1, retaining full canonical source evidence."""
+    kind, separator, record_id = key.removeprefix(PREFIX).partition("-head:")
+    if not key.startswith(PREFIX) or not separator or kind not in HEAD_FIELDS or MARKER in payload:
+        return None
+    fields = (*HEAD_FIELDS[kind], "schema")
+    rows = source.execute(
+        "SELECT key,value,type FROM json_each(?) WHERE key IN (" + ",".join("?" for _ in fields) + ")",
+        (payload, *fields),
+    ).fetchall()
+    if any(type_ == "integer" and type(value) is not int for _, value, type_ in rows):
+        return None
+    values = {name: sql_value(value, type_) for name, value, type_ in rows}
+    if values.get("schema") == HEAD_SCHEMA:
+        return None
+    revision = values.get("revision")
+    if type(revision) is not int or revision < 1 or values.get(f"{kind}_id") != record_id:
+        raise StateError("Invalid legacy head identity")
+    return encode(History._head(kind, values, f"{kind}:{record_id}:{revision:010d}")), payload
+
+
 def copy_snapshot(
     original: sqlite3.Connection, destination: Path, owner: int, maximum: int, deadline: float
 ) -> dict[str, Any]:
@@ -157,7 +200,7 @@ def copy_snapshot(
         candidate.db.execute("PRAGMA journal_mode=DELETE")
         candidate.db.execute("PRAGMA cache_size=-262144")
         source_codec = Codec(original)
-        candidate_codec = Codec(candidate.db)
+        candidate_codec = _CopyCodec(candidate.db)
         page_size = candidate.db.execute("PRAGMA page_size").fetchone()[0]
         allowed_pages = candidate.db.execute(f"PRAGMA max_page_count={maximum // page_size}").fetchone()[0]
         if allowed_pages * page_size > maximum:
@@ -171,16 +214,28 @@ def copy_snapshot(
                         raise StateError("Disk reserve exhausted; source preserved")
                     values = tuple(row)
                     if table == "runtime":
-                        payload, public = head_record(original, values[0], values[1], verify_revision=False)
-                        if public is not None and payload != values[1]:
+                        fast = canonical_head(original, values[0], values[1])
+                        source_public: str | None
+                        if fast is not None:
+                            payload, source_public = fast
+                        else:
+                            payload, public = head_record(
+                                original, values[0], values[1], verify_revision=False
+                            )
+                            source_public = encode(public) if public is not None else None
+                        if source_public is not None and payload != values[1]:
                             converted += 1
                             savings += len(values[1].encode()) - len(payload.encode())
                         kind, _, _ = values[0].removeprefix(PREFIX).partition(":")
-                        logical = (values[0], encode(public)) if public is not None else values
+                        logical = (values[0], source_public) if source_public is not None else values
                         if values[0].startswith(PREFIX) and kind in HEAD_FIELDS:
-                            restored = source_codec.read(payload)
-                            logical = (values[0], encode(restored))
-                            payload = encode(candidate_codec.pack(restored))
+                            normalized = (
+                                source_codec.canonical_json(json.loads(payload)).decode()
+                                if MARKER in payload
+                                else payload
+                            )
+                            logical = (values[0], normalized)
+                            payload = encode(candidate_codec.pack_canonical(normalized))
                         if not values[0].startswith(BLOB_PREFIX):
                             feed(manifests[table], logical)
                         values = (values[0], payload)
@@ -240,19 +295,31 @@ def copy_snapshot(
                                 raise StateError("Conflicting cached head projection")
                             public_payload = cached[0]
                         else:
-                            public = history.resolve(relative, stored)
-                            public_payload = encode(public)
                             if kind in HEAD_FIELDS:
-                                projection = encode(History._head(kind, public, relative))
+                                if stored.get("schema") == HEAD_SCHEMA:
+                                    raise StateError("Immutable revision contains head reference")
+                                public_payload = readback_codec.canonical_json(stored).decode()
+                                projected = History._head(kind, stored, relative)
+                                shared_fields = stored.get(MARKER, {}).get("fields", {})
+                                if set(shared_fields).intersection(HEAD_FIELDS[kind]):
+                                    projected = History._head(kind, readback_codec.unpack(stored), relative)
+                                projection = encode(readback_codec.unpack(projected))
                                 charge = len(public_payload.encode()) + len(projection.encode()) + 256
                                 if charge <= 4 * 1024 * 1024:
                                     while resolved and resolved_bytes + charge > 4 * 1024 * 1024:
-                                        _, (previous, projected) = resolved.popitem(last=False)
+                                        _, (previous, cached_projection) = resolved.popitem(last=False)
                                         resolved_bytes -= (
-                                            len(previous.encode()) + len(projected.encode()) + 256
+                                            len(previous.encode()) + len(cached_projection.encode()) + 256
                                         )
                                     resolved[relative] = (public_payload, projection)
                                     resolved_bytes += charge
+                            else:
+                                history.resolve(relative, stored)  # Validate head identity/projection.
+                                row = candidate.db.execute(
+                                    "SELECT payload_json FROM runtime WHERE key=?",
+                                    (PREFIX + stored["revision_key"],),
+                                ).fetchone()
+                                public_payload = readback_codec.canonical_json(json.loads(row[0])).decode()
                         values = (values[0], public_payload)
                 feed(readback, values)
                 verified += 1
