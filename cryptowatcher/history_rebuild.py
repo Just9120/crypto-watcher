@@ -12,6 +12,7 @@ import shutil
 import sqlite3
 import time
 from contextlib import closing
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -228,9 +229,15 @@ def rebuild(
     ) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
         raise StateError("Source metadata changed; candidate not qualified")
     candidate_hash = fingerprint(destination, deadline)
+    revision = os.environ.get("SOURCE_REVISION", "UNSET")
+    if not re.fullmatch(r"[0-9a-f]{40}", revision):
+        revision = "UNSET"
     return {
         "status": "ISOLATED_CANDIDATE_PASS",
+        "at_utc": datetime.now(timezone.utc).isoformat(),
+        "tool_source_revision": revision,
         "source_sha256": expected,
+        "source_bytes": source_identity.st_size,
         "candidate_sha256": candidate_hash,
         "candidate_bytes": destination.stat().st_size,
         "max_candidate_bytes": maximum,
