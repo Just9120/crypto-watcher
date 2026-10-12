@@ -126,6 +126,20 @@ promotion_eligible=false не подтверждает full physical source inte
 open/unmerged, F34 PARTIAL_IN_BRANCH; общая Goal по коду54/58, audit percentage
 не пересчитывается. Полный scope сохраняется, Goal не завершена.
 
+Independent requalification12Oct2026: current CryptoWatcherG5afd107 healthy,
+SQLite19,466,387,456bytes/WAL980,131,552, disk free9,228,931,072bytes на20:35UTC.
+Full-record archival prototype на4000 revisions отклонён: representation16.85MB
+против12.83MB и отсутствие устойчивого выигрыша verification; code не изменён,
+full rerun не запускался. Consumer2bfeda8: current keyring crypto20:46UTC PASS,
+active master соответствует verified recovery material/package20:52UTC PASS.
+Это master-key recovery qualification, не current PostgreSQL restore. Все runtime
+units unchanged/running. Actual producer httpx0.26/TLS unsigned POST503 подтверждает
+доступ к disabled receiver. Radar credential/binding0, ingest OFF, max age UNSET;
+consumer production/dry_run, exact API/image/Compose/config-owner target установлен.
+Следующий независимый шаг — qualified exact-target HMAC/config bootstrap с сохранением
+other credentials/Strategies и private bytes; end-to-end delivery ждёт producer CD.
+Historical/current conversion≤900s и F34 остаются незавершёнными,54/58 unchanged.
+
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный
 dataset. Read-only snapshot09:54UTC/G5afd10770: SQLite15,220,908,032bytes,
@@ -672,7 +686,7 @@ Priority: P1 — блокирует correctness/security/основной scope;
 | ID | Что неизвестно / блокирует | Что нужно для снятия |
 | --- | --- | --- |
 | B01 | RESOLVED G1: first migration/restore/runtime and automatic CD38087285142 PASS; owner smoke accepted | Preserve existing restricted SSH/host verification/backup gates. No repeated first migration or manual image transfers |
-| B02 | v1/v2 consumer67716b32/CD38100792664 PASS; recovered key rehearsal14:47UTC PASS. Producer latest9634558a CD failed pre-switch; actual keyring/binding/900s config activation и authenticated runtime delivery PENDING | Qualified producer hotfix/CD → reviewed first credential bootstrap с сохранением existing recovered master/config/trading flags → exact encrypted binding/recovery/historical signed smoke. Повтор consumer v2 delivery не нужен; unrelated counterpart R2 scope сохраняется |
+| B02 | Consumer actual2bfeda8: current-keyring crypto и active-master/recovery-material match12Oct20:46/20:52UTC PASS. Dedicated radar credential/binding0, ingest OFF,900s setting UNSET; actual producer HTTPx/TLS reaches receiver503. Producer9634558a CD failed pre-switch, hotfix PR31 unmerged | Prepare/qualify exact-target bootstrap preserving existing master/other credentials/config/trading flags; configure encrypted radar binding and900s policy. Actual signed historical delivery requires qualified producer hotfix/CD. Master-key proof does not confirm current PostgreSQL restore; unrelated counterpart R2 scope preserved |
 | B03 | Numeric SPEC gaps RESOLVED approved D09–D20; owner mapping EVG6 и actual migration/restore EVG8 PASS | Сохранять accepted policies и migrated settings/custom empty/delivery/mutes; новые unknown/conflicting states сохраняют diagnostic gate |
 | B04 | RESOLVED: Just9120 admin; strict main protection/production Environment and DEPLOY_ENABLED=true readback PASS | Reread current protections/revision before each merge; runtime delivery via dedicated CD |
 

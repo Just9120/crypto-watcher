@@ -5,9 +5,15 @@
 Producer передаёт `cryptowatcher.market_event.v2` в `POST /integrations/cryptowatcher/events`.
 Consumer сохраняет приём v1; v2 поставлен в main67716b3282bf9fefe1a84077dfae7c6c99c6b1f0,
 production CD38100792664 подтвердил source/image/readiness 2026-10-11 01:12UTC.
-Это подтверждение binary, не активации binding или HTTPS ingress. Runtime endpoint,
-vault/keyring readiness, exact binding, consumer max age и machine Access policy
-пока UNSET до фактической qualification по существующим процедурам consumer.
+Это подтверждение binary, не активации binding или HTTPS ingress. Read-only
+qualification12Oct2026: actual consumer2bfeda8, existing keyring crypto roundtrip
+и wrong-key/binding/tamper controls PASS; active master совпал с material ранее
+verified encrypted recovery package. Это recovery master key, не текущей DB.
+Actual producer httpx/TLS unsigned POST достигает приложения и получает503:
+consumer ingest OFF, binding отсутствует, context max age UNSET. Отдельных radar
+credential versions/active bindings0. Zero Trust/Access не добавляется. До activation
+нужны dedicated encrypted binding, owner-approved900s config и actual signed smoke
+после qualified producer delivery; прочие credentials/config сохраняются.
 Базовая работа agent сохраняется при выключенном/недоступном radar; receipt не запускает
 LLM или order execution. `trading_instruction`, `trading_authorized`, `model_invoked` — false.
 
