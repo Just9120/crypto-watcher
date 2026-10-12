@@ -249,6 +249,28 @@ compatible binary, switch и обязательные post-checks. Такая п
 
 ## Recovery и stop criteria
 
+### Read-only измерение compact current dataset
+
+`python -m cryptowatcher.history_snapshot` создаёт новый изолированный candidate
+из единой read-only WAL transaction действующей базы. Writer может продолжать
+работу; все пять таблиц, logical rows и public history snapshot сравниваются
+полностью общим conversion core. Owner ID/revision, schema, new/private destination,
+byte/disk/deadline bounds, full candidate integrity и hash обязательны. Не запускать
+параллельно другой тяжёлый verifier; использовать reviewed offline resource bounds.
+
+```bash
+python -m cryptowatcher.history_snapshot --source "$CW_CURRENT_DB" --destination "$CW_MEASURE_CANDIDATE" --owner-id 233382575 --expected-owner-revision "$CW_CAPTURE_OWNER_REVISION" --max-candidate-bytes "$CW_MAX_CANDIDATE_BYTES"
+```
+
+Variables задаются по actual inventory. Общий budget≤900s остаётся прежним.
+`ISOLATED_WAL_SNAPSHOT_PASS` подтверждает только consistent captured snapshot,
+полную logical equivalence и candidate integrity. Output явно сохраняет
+`promotion_eligible=false`, `source_full_physical_integrity=NOT_CONFIRMED`,
+`source_byte_hash=UNSET_FOR_MUTABLE_INPUT` и `production_migration=NOT_RUN`.
+Snapshot может отстать от продолжающегося writer. Он не подменяет qualified
+recovery source, current delivery gates или exact-target promotion procedure.
+Input открывается только mode=ro/query_only; source DB и runtime не заменяются.
+
 До first switch при import/rehearsal failure: legacy JSON не изменён, new bot не запущен; после проверки единственного writer можно по согласованной procedure запустить прежний unit/image с исходным JSON. Частичный новый DB не подменяет legacy. Не удалять его для скрытого retry.
 
 После первого new-runtime write: legacy rollback читает устаревший JSON и несовместим с SQLite runtime. Automatic downgrade/restore запрещён. Forward-fix предпочтителен; app-only rollback разрешается только к verified schema1-compatible image по отдельному review. Restore поверх live DB требует отдельного scoped authorization/quiescence и проверенного backup; наличие старого `.bak` недостаточно.

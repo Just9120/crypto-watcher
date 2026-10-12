@@ -81,6 +81,19 @@ SQLite17.1GB/page free0, previous short resource snapshot14:19UTC main17.0GB/WAL
 working set≈270MiB/CPU21–28%one core, rehearsal regular files≈11.25GB depth≤3.
 Это short bounded measurement, не peak/SLO или full payload attribution.
 
+Code checkpoint: shared field/block codec, heads всех четырёх kinds, complete public
+readers/export/cutoff/signed delivery и projected summary counts реализованы.
+117 affected local tests PASS; follow-up compact/typed/manifest risks и quality PASS.
+PR31 head8aba38a / required CI38267112733 PASS Linux/image2026-10-12T15:04UTC.
+Isolated qualified5.42GB reconstruction started15:06UTC, root job
+`shared-qualification-xvatx2nl`; actual terminal proof ещё PENDING, не перезапускать
+по отсутствию observer session. Production G5afd107 и installed receiver не менялись.
+Общий copy core выделен для read-only current WAL snapshot с отдельным доказательством
+captured logical rows/candidate integrity; source full physical integrity этим не
+подтверждается, promotion_eligible=false. Controlled concurrent-writer fixture и
+unsafe target/owner/revision/budget cases PASS33 targeted tests. Latest follow-up CI,
+real current snapshot и qualified stateful promotion остаются REQUIRED/PENDING.
+
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный
 dataset. Read-only snapshot09:54UTC/G5afd10770: SQLite15,220,908,032bytes,

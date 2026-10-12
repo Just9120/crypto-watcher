@@ -113,6 +113,133 @@ def feed(manifest: Any, values: tuple[Any, ...]) -> None:
     manifest.update(raw)
 
 
+def copy_snapshot(
+    original: sqlite3.Connection, destination: Path, owner: int, maximum: int, deadline: float
+) -> dict[str, Any]:
+    """Copy every row from an already pinned source into an exclusive candidate."""
+    counts: dict[str, int] = {}
+    savings = converted = 0
+    manifests = {table: hashlib.sha256() for table in TABLES}
+    original.execute("PRAGMA query_only=ON")
+    original.execute("PRAGMA cache_size=-131072")
+    if original.execute("PRAGMA user_version").fetchone()[0] != 1:
+        raise StateError("Unsupported source schema")
+    objects = original.execute(
+        "SELECT type,name FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'"
+    ).fetchall()
+    if set(objects) != {("table", table) for table in TABLES}:
+        raise StateError("Unsupported source objects; source preserved")
+    with closing(sqlite3.connect(":memory:")) as reference_schema:
+        create_schema(reference_schema)
+        canonical = dict(reference_schema.execute("SELECT name,sql FROM sqlite_master WHERE type='table'"))
+    actual_schema = dict(original.execute("SELECT name,sql FROM sqlite_master WHERE type='table'"))
+    for table, columns in TABLES.items():
+        if tuple(row[1] for row in original.execute(f"PRAGMA table_info({table})")) != columns:
+            raise StateError("Unsupported source columns")
+        if " ".join(actual_schema[table].lower().split()) != " ".join(canonical[table].lower().split()):
+            raise StateError("Source constraints or collation differ from canonical schema")
+    owners = original.execute("SELECT owner_id FROM owner_settings").fetchall()
+    if owners != [(owner,)]:
+        raise StateError("Source owner mismatch")
+    # Only the exclusive new candidate is writable. Source is never opened by Store.
+    # Its schema is created separately so malformed source constraints cannot carry over.
+    with closing(sqlite3.connect(destination)) as schema:
+        create_schema(schema)
+    candidate = Store(destination, owner)
+    try:
+        candidate.db.execute("PRAGMA journal_mode=DELETE")
+        candidate.db.execute("PRAGMA cache_size=-65536")
+        page_size = candidate.db.execute("PRAGMA page_size").fetchone()[0]
+        allowed_pages = candidate.db.execute(f"PRAGMA max_page_count={maximum // page_size}").fetchone()[0]
+        if allowed_pages * page_size > maximum:
+            raise StateError("Candidate schema exceeds byte limit")
+        with candidate.db:
+            for table, columns in TABLES.items():
+                count = 0
+                for row in original.execute(f"SELECT * FROM {table} ORDER BY rowid"):
+                    guard(deadline)
+                    if count % 1000 == 0 and shutil.disk_usage(destination.parent).free < DISK_RESERVE:
+                        raise StateError("Disk reserve exhausted; source preserved")
+                    values = tuple(row)
+                    if table == "runtime":
+                        payload, public = head_record(original, values[0], values[1], verify_revision=False)
+                        if public is not None and payload != values[1]:
+                            converted += 1
+                            savings += len(values[1].encode()) - len(payload.encode())
+                        kind, _, _ = values[0].removeprefix(PREFIX).partition(":")
+                        logical = (values[0], encode(public)) if public is not None else values
+                        if values[0].startswith(PREFIX) and kind in HEAD_FIELDS:
+                            restored = Codec(original).unpack(json.loads(payload))
+                            logical = (values[0], encode(restored))
+                            payload = encode(Codec(candidate.db).pack(restored))
+                        if not values[0].startswith(BLOB_PREFIX):
+                            feed(manifests[table], logical)
+                        values = (values[0], payload)
+                    else:
+                        feed(manifests[table], values)
+                    if table == "runtime" and values[0].startswith(BLOB_PREFIX):
+                        # Existing shared bodies may have been admitted by an earlier revision.
+                        expected_body = Codec(original).load(values[0][len(BLOB_PREFIX) :])
+                        if candidate.get_runtime(values[0]) is not None and encode(
+                            Codec(candidate.db).load(values[0][len(BLOB_PREFIX) :])
+                        ) != encode(expected_body):
+                            raise StateError("Conflicting preserved shared body")
+                        candidate.db.execute("INSERT OR REPLACE INTO runtime VALUES (?,?)", values)
+                    else:
+                        candidate.db.execute(
+                            f"INSERT INTO {table} VALUES ({','.join('?' for _ in columns)})", values
+                        )
+                    count += 1
+                counts[table] = count
+        check_integrity(candidate.db, deadline=deadline)
+        candidate.snapshot()  # Current owner settings must be readable without resetting defaults.
+        history = History(candidate)
+        for table in TABLES:
+            actual = candidate.db.execute(f"SELECT * FROM {table} ORDER BY rowid")
+            verified = 0
+            readback = hashlib.sha256()
+            for row in actual:
+                guard(deadline)
+                values = tuple(row)
+                if table == "runtime":
+                    if values[0].startswith(BLOB_PREFIX):
+                        Codec(candidate.db).load(values[0][len(BLOB_PREFIX) :])
+                        continue
+                    kind = values[0].removeprefix(PREFIX).partition(":")[0]
+                    head = values[0].removeprefix(PREFIX).partition("-head:")[0]
+                    if values[0].startswith(PREFIX) and (kind in HEAD_FIELDS or head in HEAD_FIELDS):
+                        values = (
+                            values[0],
+                            encode(history.resolve(values[0][len(PREFIX) :], json.loads(values[1]))),
+                        )
+                feed(readback, values)
+                verified += 1
+            if readback.digest() != manifests[table].digest():
+                raise StateError("Candidate history conflicts with source rows")
+            if table != "runtime" and verified != counts[table]:
+                raise StateError("Candidate row count mismatch")
+        added = candidate.db.execute("SELECT COUNT(*) FROM runtime").fetchone()[0] - counts["runtime"]
+        if added < 0:
+            raise StateError("Candidate lost runtime records")
+        source_shared = original.execute(
+            "SELECT COUNT(*) FROM runtime WHERE key>=? AND key<?", (BLOB_PREFIX, BLOB_PREFIX + "~")
+        ).fetchone()[0]
+        candidate_shared = candidate.db.execute(
+            "SELECT COUNT(*) FROM runtime WHERE key>=? AND key<?", (BLOB_PREFIX, BLOB_PREFIX + "~")
+        ).fetchone()[0]
+        if added != candidate_shared - source_shared:
+            raise StateError("Unexpected candidate runtime additions")
+    finally:
+        candidate.close()
+    return {
+        "table_rows": counts,
+        "shared_bodies_added": added,
+        "heads_converted": converted,
+        "payload_bytes_saved": savings,
+        "logical_row_manifests": {table: manifest.hexdigest() for table, manifest in manifests.items()},
+    }
+
+
 def rebuild(
     source: Path,
     destination: Path,
@@ -146,127 +273,8 @@ def rebuild(
     if fingerprint(source, deadline) != expected:
         raise StateError("Source fingerprint mismatch")
     destination.touch(mode=0o600, exist_ok=False)
-    counts: dict[str, int] = {}
-    savings = converted = 0
-    manifests = {table: hashlib.sha256() for table in TABLES}
     with closing(sqlite3.connect(source.resolve().as_uri() + "?mode=ro&immutable=1", uri=True)) as original:
-        original.execute("PRAGMA query_only=ON")
-        original.execute("PRAGMA cache_size=-131072")
-        if original.execute("PRAGMA user_version").fetchone()[0] != 1:
-            raise StateError("Unsupported source schema")
-        objects = original.execute(
-            "SELECT type,name FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'"
-        ).fetchall()
-        if set(objects) != {("table", table) for table in TABLES}:
-            raise StateError("Unsupported source objects; source preserved")
-        with closing(sqlite3.connect(":memory:")) as reference_schema:
-            create_schema(reference_schema)
-            canonical = dict(
-                reference_schema.execute("SELECT name,sql FROM sqlite_master WHERE type='table'")
-            )
-        actual_schema = dict(original.execute("SELECT name,sql FROM sqlite_master WHERE type='table'"))
-        for table, columns in TABLES.items():
-            if tuple(row[1] for row in original.execute(f"PRAGMA table_info({table})")) != columns:
-                raise StateError("Unsupported source columns")
-            if " ".join(actual_schema[table].lower().split()) != " ".join(canonical[table].lower().split()):
-                raise StateError("Source constraints or collation differ from canonical schema")
-        owners = original.execute("SELECT owner_id FROM owner_settings").fetchall()
-        if owners != [(owner,)]:
-            raise StateError("Source owner mismatch")
-        # Only the exclusive new candidate is writable. Source is never opened by Store.
-        # Its schema is created separately so malformed source constraints cannot carry over.
-        with closing(sqlite3.connect(destination)) as schema:
-            create_schema(schema)
-        candidate = Store(destination, owner)
-        try:
-            candidate.db.execute("PRAGMA journal_mode=DELETE")
-            candidate.db.execute("PRAGMA cache_size=-65536")
-            page_size = candidate.db.execute("PRAGMA page_size").fetchone()[0]
-            allowed_pages = candidate.db.execute(f"PRAGMA max_page_count={maximum // page_size}").fetchone()[
-                0
-            ]
-            if allowed_pages * page_size > maximum:
-                raise StateError("Candidate schema exceeds byte limit")
-            with candidate.db:
-                for table, columns in TABLES.items():
-                    count = 0
-                    for row in original.execute(f"SELECT * FROM {table} ORDER BY rowid"):
-                        guard(deadline)
-                        if count % 1000 == 0 and shutil.disk_usage(destination.parent).free < DISK_RESERVE:
-                            raise StateError("Disk reserve exhausted; source preserved")
-                        values = tuple(row)
-                        if table == "runtime":
-                            payload, public = head_record(
-                                original, values[0], values[1], verify_revision=False
-                            )
-                            if public is not None and payload != values[1]:
-                                converted += 1
-                                savings += len(values[1].encode()) - len(payload.encode())
-                            kind, _, _ = values[0].removeprefix(PREFIX).partition(":")
-                            logical = (values[0], encode(public)) if public is not None else values
-                            if values[0].startswith(PREFIX) and kind in HEAD_FIELDS:
-                                restored = Codec(original).unpack(json.loads(payload))
-                                logical = (values[0], encode(restored))
-                                payload = encode(Codec(candidate.db).pack(restored))
-                            if not values[0].startswith(BLOB_PREFIX):
-                                feed(manifests[table], logical)
-                            values = (values[0], payload)
-                        else:
-                            feed(manifests[table], values)
-                        if table == "runtime" and values[0].startswith(BLOB_PREFIX):
-                            # Existing shared bodies may have been admitted by an earlier revision.
-                            expected_body = Codec(original).load(values[0][len(BLOB_PREFIX) :])
-                            if candidate.get_runtime(values[0]) is not None and encode(
-                                Codec(candidate.db).load(values[0][len(BLOB_PREFIX) :])
-                            ) != encode(expected_body):
-                                raise StateError("Conflicting preserved shared body")
-                            candidate.db.execute("INSERT OR REPLACE INTO runtime VALUES (?,?)", values)
-                        else:
-                            candidate.db.execute(
-                                f"INSERT INTO {table} VALUES ({','.join('?' for _ in columns)})", values
-                            )
-                        count += 1
-                    counts[table] = count
-            check_integrity(candidate.db, deadline=deadline)
-            candidate.snapshot()  # Current owner settings must be readable without resetting defaults.
-            history = History(candidate)
-            for table in TABLES:
-                actual = candidate.db.execute(f"SELECT * FROM {table} ORDER BY rowid")
-                verified = 0
-                readback = hashlib.sha256()
-                for row in actual:
-                    guard(deadline)
-                    values = tuple(row)
-                    if table == "runtime":
-                        if values[0].startswith(BLOB_PREFIX):
-                            Codec(candidate.db).load(values[0][len(BLOB_PREFIX) :])
-                            continue
-                        kind = values[0].removeprefix(PREFIX).partition(":")[0]
-                        head = values[0].removeprefix(PREFIX).partition("-head:")[0]
-                        if values[0].startswith(PREFIX) and (kind in HEAD_FIELDS or head in HEAD_FIELDS):
-                            values = (
-                                values[0],
-                                encode(history.resolve(values[0][len(PREFIX) :], json.loads(values[1]))),
-                            )
-                    feed(readback, values)
-                    verified += 1
-                if readback.digest() != manifests[table].digest():
-                    raise StateError("Candidate history conflicts with source rows")
-                if table != "runtime" and verified != counts[table]:
-                    raise StateError("Candidate row count mismatch")
-            added = candidate.db.execute("SELECT COUNT(*) FROM runtime").fetchone()[0] - counts["runtime"]
-            if added < 0:
-                raise StateError("Candidate lost runtime records")
-            source_shared = original.execute(
-                "SELECT COUNT(*) FROM runtime WHERE key>=? AND key<?", (BLOB_PREFIX, BLOB_PREFIX + "~")
-            ).fetchone()[0]
-            candidate_shared = candidate.db.execute(
-                "SELECT COUNT(*) FROM runtime WHERE key>=? AND key<?", (BLOB_PREFIX, BLOB_PREFIX + "~")
-            ).fetchone()[0]
-            if added != candidate_shared - source_shared:
-                raise StateError("Unexpected candidate runtime additions")
-        finally:
-            candidate.close()
+        copied = copy_snapshot(original, destination, owner, maximum, deadline)
     if fingerprint(source, deadline) != expected:
         raise StateError("Source changed; candidate not qualified")
     after = source.stat()
@@ -290,13 +298,9 @@ def rebuild(
         "candidate_sha256": candidate_hash,
         "candidate_bytes": destination.stat().st_size,
         "max_candidate_bytes": maximum,
-        "table_rows": counts,
-        "shared_bodies_added": added,
-        "heads_converted": converted,
-        "payload_bytes_saved": savings,
+        **copied,
         "candidate_full_integrity": "PASS",
         "immutable_rows_and_resolved_heads": "PASS",
-        "logical_row_manifests": {table: manifest.hexdigest() for table, manifest in manifests.items()},
         "source_full_qualification": "REQUIRED_SEPARATELY_FOR_EXPECTED_HASH",
         "production_migration": "NOT_RUN",
         "incomplete_output": "PRESERVED_ON_FAILURE",
