@@ -179,11 +179,14 @@ def qualify(module_path, module_hash, wheel, zstd_wheel):
             library.write_bytes(archive.read(names[0]))
             library.chmod(0o644)
         with zipfile.ZipFile(zstd_wheel) as archive:
-            for name in ("zstandard/__init__.py", "zstandard/backend_c.cpython-311-x86_64-linux-gnu.so"):
-                target = native / name
+            for member_name in (
+                "zstandard/__init__.py",
+                "zstandard/backend_c.cpython-311-x86_64-linux-gnu.so",
+            ):
+                target = native / member_name
                 target.parent.mkdir(exist_ok=True)
                 target.parent.chmod(0o755)
-                target.write_bytes(archive.read(name))
+                target.write_bytes(archive.read(member_name))
                 target.chmod(0o644)
         code = (
             "MODULE_SOURCE="

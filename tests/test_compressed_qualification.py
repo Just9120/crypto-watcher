@@ -201,6 +201,7 @@ def test_owned_probe_limits_readonly_mounts_cleanup_and_failed_qualification(
         calls.append(args)
         if args[:2] == ["docker", "run"]:
             name = args[args.index("--name") + 1]
+            assert name.startswith("cw-compressed-") and "/" not in name
             probe.update(
                 Id="owned-probe",
                 Name="/" + name,
