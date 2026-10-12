@@ -147,6 +147,17 @@ Owner decision900s остаётся действующим;30/70/60min proposals
 проверенного улучшения. Short sample speedup не заменяет qualification.
 Merge/CD/production shrinking и завершение Goal остаются PENDING;54/58 unchanged.
 
+Дополнительная диагностика после checkpoint: paired50000-row candidates дали
+одинаковые57939 сохранённых rows. Native JSON1 window grouping в обратном порядке
+оказалась медленнее по CPU10.576s против9.214s; diff полностью отменён, не публикуется.
+Compressed read-only source сохранил exact5.42GB/61e4f087 byte identity, но build
+123.65s и CPU copy11.888s против native9.674s не подтвердили пользу; full rerun не
+выполнялся. Все diagnostic containers removed/source preserved; это partial
+Evidence, не qualification. Runtime code остаётся132967a. Общий900s limit сохраняется;
+owner clarification PENDING: относится ли15min к целой одноразовой конвертации или
+к каждому самостоятельному запуску. До ответа checkpointed multi-run procedure
+и сбросы budget не запускаются. Remaining gates и54/58 не изменены.
+
 
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный
