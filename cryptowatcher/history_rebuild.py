@@ -277,6 +277,18 @@ def main() -> int:
             )
         )
         return 0
+    except IntegrityError as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "BLOCKED",
+                    "failure_code": exc.code,
+                    "production_migration": "NOT_RUN",
+                    "candidate": "UNQUALIFIED",
+                }
+            )
+        )
+        return exc.exit_status
     except (StateError, sqlite3.DatabaseError, ValueError, OSError):
         print('{"status":"BLOCKED","production_migration":"NOT_RUN","candidate":"UNQUALIFIED"}')
         return 2

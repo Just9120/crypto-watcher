@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import sys
 import time
 
 import pytest
@@ -9,7 +10,7 @@ import pytest
 from cryptowatcher.config import OwnerSettings
 from cryptowatcher.events import PREFIX, History
 from cryptowatcher.history_rebuild import rebuild
-from cryptowatcher.storage import StateError, Store, encode
+from cryptowatcher.storage import IntegrityError, StateError, Store, encode
 
 from .test_history_heads import record
 
@@ -198,3 +199,38 @@ def test_source_metadata_change_during_rebuild_invalidates_candidate(tmp_path, m
     with pytest.raises(StateError, match="metadata changed"):
         rebuild(source, tmp_path / "candidate.sqlite3", 233382575, expected, time.monotonic() + 10)
     assert source.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    "code,expected_exit", [("TIME_BUDGET_EXCEEDED", 3), ("DATABASE_CORRUPT", 4), ("IO_ERROR", 6)]
+)
+def test_cli_distinguishes_failure_class_without_exposing_exception_data(
+    monkeypatch, capsys, code, expected_exit
+):
+    from cryptowatcher import history_rebuild
+
+    def failed(*args, **kwargs):
+        raise IntegrityError(code, "SENTINEL_PRIVATE_CONTENT")
+
+    monkeypatch.setattr(history_rebuild, "rebuild", failed)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "history_rebuild",
+            "--source",
+            "source.db",
+            "--destination",
+            "new.db",
+            "--owner-id",
+            "233382575",
+            "--qualified-source-sha256",
+            "a" * 64,
+        ],
+    )
+    assert history_rebuild.main() == expected_exit
+    output = capsys.readouterr().out
+    assert "SENTINEL_PRIVATE_CONTENT" not in output
+    value = json.loads(output)
+    assert value["failure_code"] == code and value["candidate"] == "UNQUALIFIED"
+    assert value["production_migration"] == "NOT_RUN"

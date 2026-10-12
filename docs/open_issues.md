@@ -108,6 +108,25 @@ tmpfs; tmpfs virtual capacity2GiB позволяет проверить1.5GiB fr
 permissions, application health и source/backup checks не меняются. Canonical
 quality PASS; latest actual Linux image run этого correction ещё REQUIRED.
 
+CI38241572841/head3db9149 PASS, включая real non-root reconstruction fixture.
+Изолированная qualification сохранённого old5.42GB archive:
+rebuild-known-isdw3myk завершилась BLOCKED2026-10-12T11:50:27UTC.
+Decoded exact61e4f087/5,422,329,856bytes PASS; candidate3,339,722,752bytes создан,
+но complete all-row/integrity/hash proof отсутствует. Exception class IntegrityError
+на911.826s, failure_code UNSET в старом wrapper; не выдавать это за corruption
+либо за verified shrink. OOMfalse, actual runner terminal, owned container removed,
+G5 live unchanged/running и original archive preserved. Это source-code overlay
+на qualified base953 image, не released artifact и не current15.65GB dataset.
+Source/candidate сохранены как isolated diagnostic material; production NOT_RUN.
+Дополнительный bounded readonly row-count probe не завершён за25s/host40s,
+complete counts UNSET; повтор полного scan без устранения причины не выполняется.
+
+CLI reconstruction теперь сохраняет safe failure_code/exit status для
+TIME_BUDGET_EXCEEDED/DATABASE_CORRUPT/IO_ERROR, без exception body или sensitive
+contents.21 targeted reconstruction cases/canonical quality PASS; latest CI
+classifier diff REQUIRED.900s source/backup/reconstruction bounds и40min CD job
+не изменены; предложенное увеличение требует owner policy decision.
+
 Checkpoint12Oct2026: PR31 остаётся открытым; main9634558a/running G5afd10770,
 installed receiver9569f32c. Required CI38227994274/head8613839d PASS. Root qualification
 `/tmp/cw-pr31-job-v4fo3g8t` завершилась BLOCKED09:33:59UTC:
