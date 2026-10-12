@@ -87,6 +87,13 @@ fixed deadlines, отказ при timeout live либо archive, hash-pinned se
 unit identity assertions сохранены.8 targeted qualification tests и canonical
 quality PASS; полный required Linux прогон актуальной revision остаётся gate.
 
+CI38219144588/heada61b5a4:434 tests PASS, одна existing analytics recovery fixture
+FAIL до image build. Причина: request использует advanced exchange clock, а fixture
+запускает work в constant NOW; при задержке CPU job ещё не due. Test exchange clock
+зафиксирован в обеих affected fixtures, production scheduling/retry/conflict guards
+не изменены.2 targeted recovery scenarios и canonical quality PASS; current CI
+и actual source/backup qualification остаются REQUIRED.
+
 Base `9634558a654d5f13279ff0e76710585bf1105d66`, branch `codex/backup-validation-performance-20261011`, root worktree. Fresh main/clean checkout, strict required `ci-required`, production Environment, отсутствие открытых PR/active Actions подтверждены GitHub API2026-10-11T11:36:44UTC. Основание — устранение failed delivery в согласованной whole-project Goal; отдельный implementation scope не добавляется.
 
 PR30 merged2026-10-11T10:52:33UTC, head2495ac037/baseb13081e/squash9634558a, required CI38131846878 PASS370 tests. Operator receiver update10:50:50UTC PASS: installed receiver9569f32c, target/SSH/runtime/database сохранены. Automatic CD38133517275: merged Linux3.11 suite370 tests PASS/build PASS, delivery FAIL11:23:36UTC на BACKUP_AND_VALIDATE с `docker exit 3` — TIME_BUDGET_EXCEEDED. Полная проверка source DB прошла: backup stage следует после неё. Нельзя считать backup пригодной, corruption установленной или CD завершённой. Точные времена copy и destination validation UNSET; CLI885s является общим budget обеих фаз.

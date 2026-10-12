@@ -11,9 +11,10 @@ from cryptowatcher.storage import encode
 NOW = 1_800_000_000_000
 
 
-async def test_inactive_referenced_window_over90days_priority_and_restart(store):
+async def test_inactive_referenced_window_over90days_priority_and_restart(store, monkeypatch):
     radar = BybitRadar(store)
     radar.observe_clock(NOW)
+    monkeypatch.setattr(radar, "server_now", lambda: NOW)
     start = NOW - 95 * DAY
     stream = "linear/BTCUSDT/1m"
     recovery = AnalyticsRecovery(store, radar)
@@ -46,9 +47,10 @@ async def test_inactive_referenced_window_over90days_priority_and_restart(store)
     await radar.close()
 
 
-async def test_conflicting_source_never_overwrites_used_candle_and_bad_page_retries(store):
+async def test_conflicting_source_never_overwrites_used_candle_and_bad_page_retries(store, monkeypatch):
     radar = BybitRadar(store)
     radar.observe_clock(NOW)
+    monkeypatch.setattr(radar, "server_now", lambda: NOW)
     start = NOW - 5 * MINUTE
     stream = "spot/BTCUSDT/1m"
     original = Candle.parse([start, 100, 101, 99, 100, 1, 10], "1m", "websocket", NOW, NOW)
