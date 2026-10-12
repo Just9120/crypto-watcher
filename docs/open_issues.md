@@ -94,6 +94,18 @@ captured logical rows/candidate integrity; source full physical integrity эти
 unsafe target/owner/revision/budget cases PASS33 targeted tests. Latest follow-up CI,
 real current snapshot и qualified stateful promotion остаются REQUIRED/PENDING.
 
+Latest follow-up0533459 / required CI38269283755 PASS Linux/image15:23UTC.
+Qualified-copy job завершился15:22UTC TIME_BUDGET_EXCEEDED903s до copy commit;
+candidate reverted36KiB/UNQUALIFIED, full candidate/readback proof отсутствует.
+Исходная копия и все3 runtime units unchanged/running, owned verifier removed.
+Не выдавать промежуточный размер<1GB за квалифицированное уменьшение.
+Measured issue продолжено bounded shared-encoding cache4MiB, reuse writer codec,
+legacy JSON fast read и copy-only SQLite index cache256MiB внутри прежнего4GiB cap.
+46 cache/rollback/eviction/typed/manifest/snapshot tests PASS; synthetic4000-record
+CPU1.281→0.906s/full readback PASS, это partial codec Evidence, не VPS throughput.
+Следующий fresh CI/real-copy qualification REQUIRED; deadline900s,1CPU,4GiB и
+normal CD40min не менялись. Current production compaction ещё NOT_RUN.
+
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный
 dataset. Read-only snapshot09:54UTC/G5afd10770: SQLite15,220,908,032bytes,

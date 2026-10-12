@@ -76,7 +76,7 @@ def head_record(
     if not key.startswith(PREFIX) or not separator or kind not in HEAD_FIELDS:
         return payload, None
     codec = Codec(source)
-    value = codec.unpack(json.loads(payload))
+    value = codec.read(payload)
     revision = value.get("revision") if isinstance(value, dict) else None
     if type(revision) is not int or revision < 1 or value.get(f"{kind}_id") != record_id:
         raise StateError("Invalid legacy head identity")
@@ -89,7 +89,7 @@ def head_record(
     row = source.execute("SELECT payload_json FROM runtime WHERE key=?", (PREFIX + reference,)).fetchone()
     if row is None:
         raise StateError("Legacy head revision missing")
-    record = codec.unpack(json.loads(row[0]))
+    record = codec.read(row[0])
     if (
         not isinstance(record, dict)
         or record.get(f"{kind}_id") != record_id
@@ -148,7 +148,9 @@ def copy_snapshot(
     candidate = Store(destination, owner)
     try:
         candidate.db.execute("PRAGMA journal_mode=DELETE")
-        candidate.db.execute("PRAGMA cache_size=-65536")
+        candidate.db.execute("PRAGMA cache_size=-262144")
+        source_codec = Codec(original)
+        candidate_codec = Codec(candidate.db)
         page_size = candidate.db.execute("PRAGMA page_size").fetchone()[0]
         allowed_pages = candidate.db.execute(f"PRAGMA max_page_count={maximum // page_size}").fetchone()[0]
         if allowed_pages * page_size > maximum:
@@ -169,9 +171,9 @@ def copy_snapshot(
                         kind, _, _ = values[0].removeprefix(PREFIX).partition(":")
                         logical = (values[0], encode(public)) if public is not None else values
                         if values[0].startswith(PREFIX) and kind in HEAD_FIELDS:
-                            restored = Codec(original).unpack(json.loads(payload))
+                            restored = source_codec.read(payload)
                             logical = (values[0], encode(restored))
-                            payload = encode(Codec(candidate.db).pack(restored))
+                            payload = encode(candidate_codec.pack(restored))
                         if not values[0].startswith(BLOB_PREFIX):
                             feed(manifests[table], logical)
                         values = (values[0], payload)

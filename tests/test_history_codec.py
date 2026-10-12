@@ -4,7 +4,7 @@ import pytest
 
 from cryptowatcher.analytics import as_of
 from cryptowatcher.events import HEAD_SCHEMA, PREFIX, History
-from cryptowatcher.history_codec import BLOB_PREFIX, MARKER, Codec
+from cryptowatcher.history_codec import BLOB_PREFIX, CACHE_BYTES, MARKER, Codec
 from cryptowatcher.storage import StateError, encode
 
 from .test_history_heads import record
@@ -146,3 +146,26 @@ def test_immutable_revision_keeps_json_numeric_types(store):
     with pytest.raises(StateError, match="Conflicting immutable"), store.db:
         history.version("event", {**original, "reference_price": 100.0})
     assert type(history.get("event:one:0000000001")["reference_price"]) is int
+
+
+def test_cached_encoding_does_not_leave_dangling_references_after_rollback(store):
+    history = History(store)
+    value = large_record("event")
+    with pytest.raises(RuntimeError), store.db:
+        history.version("event", value)
+        raise RuntimeError("abort")
+    assert history.codec.encoded
+    with store.db:
+        history.version("event", value)
+    assert history.get("event-head:one") == value
+    assert history.codec.cache_bytes <= CACHE_BYTES
+
+
+def test_snapshot_encoding_cache_is_bounded_without_losing_evicted_bodies(store):
+    codec = Codec(store.db)
+    keys = []
+    with store.db:
+        for i in range(48):
+            keys.append(codec.save({"value": str(i) + "x" * 100000}))
+    assert codec.cache_bytes <= CACHE_BYTES and len(codec.encoded) < len(keys)
+    assert codec.load(keys[0]) == {"value": "0" + "x" * 100000}

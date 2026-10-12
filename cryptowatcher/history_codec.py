@@ -8,6 +8,7 @@ import json
 import re
 import sqlite3
 import zlib
+from collections import OrderedDict
 from typing import Any
 
 from .storage import StateError, encode
@@ -17,6 +18,7 @@ SCHEMA = "cryptowatcher.shared-fields.v1"
 BLOB_SCHEMA = "cryptowatcher.shared-json.v1"
 BLOB_PREFIX = "historyblob:v1:"
 MAX_BYTES = 32 * 1024 * 1024
+CACHE_BYTES = 4 * 1024 * 1024
 SHARED_FIELDS = {"settings_snapshot", "effective_parameters", "source_context", "enrichment"}
 WINDOW_FIELDS = {"source_inputs", "future_inputs"}
 
@@ -28,19 +30,40 @@ def digest(raw: bytes) -> str:
 class Codec:
     def __init__(self, database: sqlite3.Connection):
         self.db = database
+        self.encoded: OrderedDict[bytes, tuple[str, str]] = OrderedDict()
+        self.cache_bytes = 0
+
+    def read(self, payload: str) -> Any:
+        value = json.loads(payload)
+        return self.unpack(value) if MARKER in payload else value
 
     def save(self, value: Any) -> str:
-        raw = encode(value).encode()
+        return self.save_bytes(encode(value).encode())
+
+    def save_bytes(self, raw: bytes) -> str:
         if len(raw) > MAX_BYTES:
             raise StateError("Shared snapshot exceeds decoder bound")
-        key = digest(raw)
-        payload = encode(
-            {
-                "schema": BLOB_SCHEMA,
-                "bytes": len(raw),
-                "zlib": base64.b64encode(zlib.compress(raw, 3)).decode(),
-            }
-        )
+        cached = self.encoded.get(raw)
+        if cached is not None:
+            self.encoded.move_to_end(raw)
+            key, payload = cached
+        else:
+            key = digest(raw)
+            payload = encode(
+                {
+                    "schema": BLOB_SCHEMA,
+                    "bytes": len(raw),
+                    "zlib": base64.b64encode(zlib.compress(raw, 3)).decode(),
+                }
+            )
+            charge = len(raw) + len(payload) + 256
+            if charge <= CACHE_BYTES:
+                while self.encoded and self.cache_bytes + charge > CACHE_BYTES:
+                    old, (_, body) = self.encoded.popitem(last=False)
+                    self.cache_bytes -= len(old) + len(body) + 256
+                self.encoded[raw] = (key, payload)
+                self.cache_bytes += charge
+        # Cached bytes do not replace admission or corruption checks after rollback.
         result = self.db.execute("INSERT OR IGNORE INTO runtime VALUES (?,?)", (BLOB_PREFIX + key, payload))
         if not result.rowcount:
             existing = self.db.execute(
@@ -115,10 +138,12 @@ class Codec:
         references = {}
         for name, item in value.items():
             if name in SHARED_FIELDS and isinstance(item, dict) and len(encode(item)) > 256:
+                raw = encode(item).encode()
+                key = self.save_bytes(raw)
                 references[name] = {
                     "mode": "value",
-                    "ids": [self.save(item)],
-                    "sha256": digest(encode(item).encode()),
+                    "ids": [key],
+                    "sha256": key,
                 }
                 if name == "settings_snapshot":
                     result[name] = {k: item[k] for k in ("profile", "alert_universe_mode") if k in item}
