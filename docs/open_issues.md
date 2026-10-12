@@ -129,6 +129,24 @@ copy, exact large integers и temporary-token collision. Sample6000 rows: latest
 paired baseline copy1.792/readback1.510s → JSON1 copy1.284/readback0.719s, values PASS;
 это partial sample Evidence. Latest batch CI и full qualification ещё REQUIRED.
 
+Checkpoint2026-10-12T18:06UTC: runtime code132967a, required CI38285955534 PASS
+(Linux/image; ci-required114934772768). Full qualification
+`shared-qualification-ononwha4` остановлена оператором17:58UTC до900s: measured
+copy throughput не оставлял времени на complete copy/integrity/readback. Итог
+UNQUALIFIED/exit137, OOMfalse; это STOP_REQUESTED, не successful compaction и не
+timeout новой версии. Diagnostic candidate≈0.83GB с возможными sidecars сохраняется,
+не использовать для promotion. Verifier removed, active owned probes отсутствуют.
+CryptoWatcher same container7039151 / G5afd107, running; production migration
+NOT_RUN. Trading-agent API параллельно сменился на0b239fa8 / container964109af,
+running; изменения выполнены вне этой операции, не восстанавливать прежний unit.
+Postgres unchanged/running. Ветка/base остаются прежними; PR31 open/unmerged.
+Owner decision900s остаётся действующим;30/70/60min proposals не применены.
+Оставшийся blocker: отсутствует complete qualified conversion сохранённого и
+текущего dataset в бюджете. Следующий шаг — переработать способ преобразования
+по этому measured limit; новый полный запуск допустим после существенного,
+проверенного улучшения. Short sample speedup не заменяет qualification.
+Merge/CD/production shrinking и завершение Goal остаются PENDING;54/58 unchanged.
+
 
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный
