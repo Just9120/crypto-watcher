@@ -19,8 +19,10 @@ def test_probe_code_syntax_and_writable_negative_control():
     assert "module.snapshot" in q.CODE and "EXPECTED_BACKUP_HASH" in q.CODE
 
 
-@pytest.mark.parametrize("live_seconds", [300, 900])
-def test_independent_stage_deadlines_do_not_refresh_inside_live_copy(tmp_path, monkeypatch, live_seconds):
+@pytest.mark.parametrize("live_seconds,archive_seconds", [(300, 300), (900, 300), (300, 900)])
+def test_independent_stage_deadlines_do_not_refresh_inside_live_copy(
+    tmp_path, monkeypatch, live_seconds, archive_seconds
+):
     clock = SimpleNamespace(value=0.0)
     monkeypatch.setattr(time, "monotonic", lambda: clock.value)
     fixture = types.ModuleType("qualification_fixture")
@@ -67,11 +69,24 @@ def test_independent_stage_deadlines_do_not_refresh_inside_live_copy(tmp_path, m
         budget(deadline)
         calls.append("live-byte-proof")
 
+    def archived(path, destination, directory, *, deadline):
+        assert deadline == 1795  # A fresh fixed deadline only after live proof completes.
+        clock.value += archive_seconds
+        budget(deadline)
+        calls.append("archive-full-and-byte-proof")
+        return {
+            "archive_encoding": "ZSTD",
+            "bytes": 4194304,
+            "sha256": "fixture-raw",
+            "archive_sha256": "fixture-archive",
+        }
+
     fixture.QualificationError = Refused
     fixture.budget = budget
     fixture.validate_closed = closed
     fixture.full_check = full_check
     fixture.snapshot = snapshot
+    fixture.archive_backup = archived
     monkeypatch.setitem(sys.modules, "qualification_fixture", fixture)
     monkeypatch.setitem(
         sys.modules,
@@ -101,15 +116,23 @@ def test_independent_stage_deadlines_do_not_refresh_inside_live_copy(tmp_path, m
     }
     original = sys.modules.get("cryptowatcher.compressed_validation")
     try:
-        if live_seconds == 900:
+        if live_seconds == 900 or archive_seconds == 900:
             with pytest.raises(Refused) as failure:
                 exec(compile(code, "qualified-stage-flow", "exec"), namespace)
             assert failure.value.code == "TIME_BUDGET_EXCEEDED"
-            assert calls == ["closed-full-proof"]
+            expected = ["closed-full-proof"]
+            if live_seconds != 900:
+                expected += ["live-full-proof", "live-byte-proof"]
+            assert calls == expected
         else:
             exec(compile(code, "qualified-stage-flow", "exec"), namespace)
-            assert clock.value == 910 > 885
-            assert calls == ["closed-full-proof", "live-full-proof", "live-byte-proof"]
+            assert clock.value == 1210 > 885
+            assert calls == [
+                "closed-full-proof",
+                "live-full-proof",
+                "live-byte-proof",
+                "archive-full-and-byte-proof",
+            ]
     finally:
         if original is None:
             sys.modules.pop("cryptowatcher.compressed_validation", None)
@@ -130,10 +153,18 @@ def test_owned_probe_limits_readonly_mounts_cleanup_and_failed_qualification(
     with zipfile.ZipFile(wheel, "w") as archive:
         archive.writestr("apsw/__init__.cpython-311-x86_64-linux-gnu.so", b"fixture native")
     monkeypatch.setattr(q, "WHEEL_HASH", hashlib.sha256(wheel.read_bytes()).hexdigest())
+    zstd = tmp_path / "zstd.whl"
+    with zipfile.ZipFile(zstd, "w") as archive:
+        archive.writestr("zstandard/__init__.py", b"#fixture")
+        archive.writestr("zstandard/backend_c.cpython-311-x86_64-linux-gnu.so", b"fixture native")
+    monkeypatch.setattr(q, "ZSTD_WHEEL_HASH", hashlib.sha256(zstd.read_bytes()).hexdigest())
     backup = tmp_path / "closed.db"
     backup.write_bytes(b"preserved")
     monkeypatch.setattr(q, "BACKUP", backup)
-    monkeypatch.setattr(q, "BACKUP_BYTES", backup.stat().st_size)
+    monkeypatch.setattr(q, "ARCHIVE_BYTES", backup.stat().st_size)
+    monkeypatch.setattr(q, "ARCHIVE_HASH", hashlib.sha256(backup.read_bytes()).hexdigest())
+    monkeypatch.setattr(os, "chown", lambda *args: None, raising=False)
+    monkeypatch.setattr(q.shutil, "disk_usage", lambda *args: SimpleNamespace(free=20 * 1024**3))
     original_read = q.Path.read_text
 
     def read(path, *args, **kwargs):
@@ -178,14 +209,19 @@ def test_owned_probe_limits_readonly_mounts_cleanup_and_failed_qualification(
                 Config={"Labels": {q.MARKER: name}},
             )
             mounts = [args[i + 1] for i, x in enumerate(args) if x == "--mount"]
-            assert len(mounts) == 3 and all(x.endswith(",readonly") for x in mounts)
+            assert len(mounts) == 4
+            readonly = [m for m in mounts if m.endswith(",readonly")]
+            assert len(readonly) == 3 and any("dst=/live,readonly" in m for m in readonly)
+            writable = [m for m in mounts if not m.endswith(",readonly")]
+            assert len(writable) == 1 and writable[0].endswith(",dst=/backup-output")
+            assert str(tmp_path) in writable[0]  # Only the owned temporary output can be written.
             assert "--env-file" not in args and args[args.index("--network") + 1] == "none"
             assert "--no-healthcheck" in args
             assert args[args.index("--user") + 1] == "10001:10001"
             assert (
                 args[args.index("--memory") + 1] == args[args.index("--memory-swap") + 1] == str(4 * 1024**3)
             )
-            assert kwargs["timeout"] == 1815
+            assert kwargs["timeout"] == 2700
             return SimpleNamespace(returncode=exit_code)
         if args[:2] == ["docker", "inspect"]:
             return SimpleNamespace(returncode=0, stdout=json.dumps([probe]))
@@ -195,12 +231,12 @@ def test_owned_probe_limits_readonly_mounts_cleanup_and_failed_qualification(
     monkeypatch.setattr(q.subprocess, "run", run)
     if exit_code:
         with pytest.raises(AssertionError, match="did not pass"):
-            q.qualify(module, hashlib.sha256(module.read_bytes()).hexdigest(), wheel)
+            q.qualify(module, hashlib.sha256(module.read_bytes()).hexdigest(), wheel, zstd)
     elif changed:
         with pytest.raises(AssertionError, match="Concurrent live change"):
-            q.qualify(module, hashlib.sha256(module.read_bytes()).hexdigest(), wheel)
+            q.qualify(module, hashlib.sha256(module.read_bytes()).hexdigest(), wheel, zstd)
     else:
-        q.qualify(module, hashlib.sha256(module.read_bytes()).hexdigest(), wheel)
+        q.qualify(module, hashlib.sha256(module.read_bytes()).hexdigest(), wheel, zstd)
     assert calls[-1] == ["docker", "rm", "-f", "owned-probe"]
     assert backup.read_bytes() == b"preserved" and not list(tmp_path.glob("tmp*"))
     records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]

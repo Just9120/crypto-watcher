@@ -80,6 +80,13 @@ safe hash/size proof в capture и native restore в реальном Linux imag
 после PASS — exact receiver update, merge, automatic CD и bounded application checks.
 Implementation checkpoint54/58 AC сохраняется; delivery/activation/G6 остаются незавершёнными.
 
+CI38218817527/head05388ec:429 tests PASS,5 operator fixture failures до image build.
+Fixtures ещё ожидали2-stage/one-wheel interface. Исправлены в том же PR:3-stage
+fixed deadlines, отказ при timeout live либо archive, hash-pinned second wheel,
+3 readonly inputs и единственный owned temporary writable output, cap/cleanup/all3
+unit identity assertions сохранены.8 targeted qualification tests и canonical
+quality PASS; полный required Linux прогон актуальной revision остаётся gate.
+
 Base `9634558a654d5f13279ff0e76710585bf1105d66`, branch `codex/backup-validation-performance-20261011`, root worktree. Fresh main/clean checkout, strict required `ci-required`, production Environment, отсутствие открытых PR/active Actions подтверждены GitHub API2026-10-11T11:36:44UTC. Основание — устранение failed delivery в согласованной whole-project Goal; отдельный implementation scope не добавляется.
 
 PR30 merged2026-10-11T10:52:33UTC, head2495ac037/baseb13081e/squash9634558a, required CI38131846878 PASS370 tests. Operator receiver update10:50:50UTC PASS: installed receiver9569f32c, target/SSH/runtime/database сохранены. Automatic CD38133517275: merged Linux3.11 suite370 tests PASS/build PASS, delivery FAIL11:23:36UTC на BACKUP_AND_VALIDATE с `docker exit 3` — TIME_BUDGET_EXCEEDED. Полная проверка source DB прошла: backup stage следует после неё. Нельзя считать backup пригодной, corruption установленной или CD завершённой. Точные времена copy и destination validation UNSET; CLI885s является общим budget обеих фаз.
