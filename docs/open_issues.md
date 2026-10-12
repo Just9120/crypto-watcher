@@ -106,6 +106,20 @@ CPU1.281→0.906s/full readback PASS, это partial codec Evidence, не VPS th
 Следующий fresh CI/real-copy qualification REQUIRED; deadline900s,1CPU,4GiB и
 normal CD40min не менялись. Current production compaction ещё NOT_RUN.
 
+Checkpoint before owner decision: head8d183ab / required CI38271282321 PASS,
+full Linux/image gate завершён2026-10-12T15:38UTC. Optimized qualified-copy run
+`shared-qualification-5eicmgoj` завершён15:54UTC TIME_BUDGET_EXCEEDED901s до copy
+commit; candidate36KiB/UNQUALIFIED, source preserved, all3 units unchanged/running,
+owned container removed/no OOM. Heavy jobs сейчас terminal; без решения не повторять.
+Предложен отдельный разовый operator budget≤3600s для isolated conversion/current
+read-only snapshot с explicit flag, default900s сохраняется. Это PROPOSED/UNAPPLIED;
+normal state-check/backup/receiver/workflow limits и gates не меняются. Owner decision
+PENDING; production replacement этой квалификацией не разрешается. Remaining:
+qualified real conversion → current dataset proof/recovery/exact-target promotion
+review → required latest CI/merge/applicable delivery → actual disk/growth/alerts
+checks. Useful history и original private transport bytes не удаляются. Общая Goal
+по коду54/58 AC; capacity/storage correction ещё в работе, audit percentage unchanged.
+
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный
 dataset. Read-only snapshot09:54UTC/G5afd10770: SQLite15,220,908,032bytes,
