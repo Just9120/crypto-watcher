@@ -47,6 +47,40 @@ Snapshot: 2026-10-10, проверка около 10:00–10:15 Europe/Moscow; `
 
 #### Текущий hotfix — производительность полной backup validation
 
+##### Приоритетное продолжение: компактное хранение и уменьшение накопленной базы
+
+Основание: explicit owner request2026-10-12 — исправить дублирование, уменьшить
+накопленную базу и остановить чрезмерный рост, сохранив полезную историю и alerts.
+Текущий PR31/branch `codex/backup-validation-performance-20261011`, base9634558a;
+до изменения fresh main/PR/checks подтверждены, head8300614, clean worktree.
+Scope: shared content-addressed lossless snapshots для settings/context/source
+windows; compact revision/head representation; совместимые history/export/analytics
+readers; isolated conversion всех накопленных записей с семантическим readback,
+full integrity и source/candidate hashes; конкретная production promotion/recovery
+procedure после квалификации. Затрагивает F34/F22/F15 и AC-06-01/02/05/06,
+AC-10-02/03/04, AC-12-02/03. Thresholds, detector formulas, alerts preferences,
+event identity/reference/cutoff, immutable signed transport bytes и retention90days
+не меняются. Budget proposal30/70 не согласован и не применяется.
+
+Результат/DoD: new writes перестают дублировать большие snapshots; public records
+и every revision восстанавливаются без потери типов/значений; накопленная база
+уменьшена по квалифицированной exact-target procedure; latest required CI, merge,
+delivery и runtime source/health/persistence/alerts checks подтверждены. До этого
+storage finding остаётся PARTIAL, progress54/58 не пересчитывается как audit.
+
+| Риск / AC | Проверка | Команда / environment | Этап / обязательность |
+| --- | --- | --- | --- |
+| Shared snapshot corruption, loss of history | Mixed legacy/compact records, identity/hash checks, revisions, settings race | Targeted pytest; repository root, locked dev Python | Local REQUIRED |
+| Public contracts / AC-06/07/09 | Export completeness, cohorts/cutoff, signed replay, event/episode alerts regression | Existing affected tests плюс compact fixtures; locked Python | Local targeted / full Linux PR CI REQUIRED |
+| Existing state / AC-10-03 | Isolated source→candidate semantic equality всех записей, owner/mutes/queues, full integrity, source unchanged and hashes | Canonical history_rebuild CLI; exact qualified copy, bounded offline resources | Isolated qualification REQUIRED |
+| Actual capacity / AC-12-03 | Before/after file size и short CPU/RAM/I/O snapshot, no historical alert flood | Read-only VPS inventory и reviewed delivery post-checks | Before promotion / runtime REQUIRED |
+
+Evidence before fix: readonly VPS2026-10-12T14:31UTC G5afd107: source history
+1124 streams8Oct06:00→12Oct14:30UTC; events10Oct22:45→12Oct14:31UTC (1.6569days).
+SQLite17.1GB/page free0, previous short resource snapshot14:19UTC main17.0GB/WAL0.98GB,
+working set≈270MiB/CPU21–28%one core, rehearsal regular files≈11.25GB depth≤3.
+Это short bounded measurement, не peak/SLO или full payload attribution.
+
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный
 dataset. Read-only snapshot09:54UTC/G5afd10770: SQLite15,220,908,032bytes,

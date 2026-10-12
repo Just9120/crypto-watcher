@@ -16,7 +16,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .events import HEAD_SCHEMA, PREFIX, History
+from .events import HEAD_FIELDS, HEAD_SCHEMA, PREFIX, History
+from .history_codec import BLOB_PREFIX, Codec
 from .storage import IntegrityError, StateError, Store, check_integrity, create_schema, encode
 
 TABLES = {
@@ -65,22 +66,30 @@ def fingerprint(path: Path, deadline: float) -> str:
     return digest.hexdigest()
 
 
-def head_record(source: sqlite3.Connection, key: str, payload: str) -> tuple[str, dict[str, Any] | None]:
+def head_record(
+    source: sqlite3.Connection, key: str, payload: str, *, verify_revision: bool = True
+) -> tuple[str, dict[str, Any] | None]:
     if not isinstance(key, str) or not isinstance(payload, str):
         raise StateError("Invalid runtime record")
     relative = key.removeprefix(PREFIX)
     kind, separator, record_id = relative.partition("-head:")
-    if not key.startswith(PREFIX) or not separator or kind not in ("event", "outcome"):
+    if not key.startswith(PREFIX) or not separator or kind not in HEAD_FIELDS:
         return payload, None
-    value = json.loads(payload)
+    codec = Codec(source)
+    value = codec.unpack(json.loads(payload))
     revision = value.get("revision") if isinstance(value, dict) else None
     if type(revision) is not int or revision < 1 or value.get(f"{kind}_id") != record_id:
         raise StateError("Invalid legacy head identity")
     reference = f"{kind}:{record_id}:{revision:010d}"
+    if not verify_revision and value.get("schema") != HEAD_SCHEMA:
+        # The complete source value enters the logical manifest. Candidate head
+        # dereferencing must reproduce it, so conflicting/missing revisions fail
+        # the mandatory full readback without random source lookups per old head.
+        return encode(History._head(kind, value, reference)), value
     row = source.execute("SELECT payload_json FROM runtime WHERE key=?", (PREFIX + reference,)).fetchone()
     if row is None:
         raise StateError("Legacy head revision missing")
-    record = json.loads(row[0])
+    record = codec.unpack(json.loads(row[0]))
     if (
         not isinstance(record, dict)
         or record.get(f"{kind}_id") != record_id
@@ -96,6 +105,12 @@ def head_record(source: sqlite3.Connection, key: str, payload: str) -> tuple[str
     if encode(value) != encode(record):
         raise StateError("Legacy head conflicts with immutable revision")
     return encode(compact), record
+
+
+def feed(manifest: Any, values: tuple[Any, ...]) -> None:
+    raw = encode(values).encode()
+    manifest.update(len(raw).to_bytes(8, "big"))
+    manifest.update(raw)
 
 
 def rebuild(
@@ -133,6 +148,7 @@ def rebuild(
     destination.touch(mode=0o600, exist_ok=False)
     counts: dict[str, int] = {}
     savings = converted = 0
+    manifests = {table: hashlib.sha256() for table in TABLES}
     with closing(sqlite3.connect(source.resolve().as_uri() + "?mode=ro&immutable=1", uri=True)) as original:
         original.execute("PRAGMA query_only=ON")
         original.execute("PRAGMA cache_size=-131072")
@@ -180,14 +196,35 @@ def rebuild(
                             raise StateError("Disk reserve exhausted; source preserved")
                         values = tuple(row)
                         if table == "runtime":
-                            payload, public = head_record(original, values[0], values[1])
+                            payload, public = head_record(
+                                original, values[0], values[1], verify_revision=False
+                            )
                             if public is not None and payload != values[1]:
                                 converted += 1
                                 savings += len(values[1].encode()) - len(payload.encode())
+                            kind, _, _ = values[0].removeprefix(PREFIX).partition(":")
+                            logical = (values[0], encode(public)) if public is not None else values
+                            if values[0].startswith(PREFIX) and kind in HEAD_FIELDS:
+                                restored = Codec(original).unpack(json.loads(payload))
+                                logical = (values[0], encode(restored))
+                                payload = encode(Codec(candidate.db).pack(restored))
+                            if not values[0].startswith(BLOB_PREFIX):
+                                feed(manifests[table], logical)
                             values = (values[0], payload)
-                        candidate.db.execute(
-                            f"INSERT INTO {table} VALUES ({','.join('?' for _ in columns)})", values
-                        )
+                        else:
+                            feed(manifests[table], values)
+                        if table == "runtime" and values[0].startswith(BLOB_PREFIX):
+                            # Existing shared bodies may have been admitted by an earlier revision.
+                            expected_body = Codec(original).load(values[0][len(BLOB_PREFIX) :])
+                            if candidate.get_runtime(values[0]) is not None and encode(
+                                Codec(candidate.db).load(values[0][len(BLOB_PREFIX) :])
+                            ) != encode(expected_body):
+                                raise StateError("Conflicting preserved shared body")
+                            candidate.db.execute("INSERT OR REPLACE INTO runtime VALUES (?,?)", values)
+                        else:
+                            candidate.db.execute(
+                                f"INSERT INTO {table} VALUES ({','.join('?' for _ in columns)})", values
+                            )
                         count += 1
                     counts[table] = count
             check_integrity(candidate.db, deadline=deadline)
@@ -196,26 +233,38 @@ def rebuild(
             for table in TABLES:
                 actual = candidate.db.execute(f"SELECT * FROM {table} ORDER BY rowid")
                 verified = 0
-                for row in original.execute(f"SELECT * FROM {table} ORDER BY rowid"):
+                readback = hashlib.sha256()
+                for row in actual:
                     guard(deadline)
                     values = tuple(row)
                     if table == "runtime":
-                        payload, public = head_record(original, values[0], values[1])
-                        if public is not None and encode(history.get(values[0][len(PREFIX) :])) != encode(
-                            public
-                        ):
-                            raise StateError("Resolved head readback mismatch")
-                        values = (values[0], payload)
-                    found = actual.fetchone()
-                    if (
-                        found is None
-                        or len(found) != len(values)
-                        or any(type(a) is not type(b) or a != b for a, b in zip(found, values))
-                    ):
-                        raise StateError("Candidate row equivalence failed")
+                        if values[0].startswith(BLOB_PREFIX):
+                            Codec(candidate.db).load(values[0][len(BLOB_PREFIX) :])
+                            continue
+                        kind = values[0].removeprefix(PREFIX).partition(":")[0]
+                        head = values[0].removeprefix(PREFIX).partition("-head:")[0]
+                        if values[0].startswith(PREFIX) and (kind in HEAD_FIELDS or head in HEAD_FIELDS):
+                            values = (
+                                values[0],
+                                encode(history.resolve(values[0][len(PREFIX) :], json.loads(values[1]))),
+                            )
+                    feed(readback, values)
                     verified += 1
-                if actual.fetchone() is not None or verified != counts[table]:
+                if readback.digest() != manifests[table].digest():
+                    raise StateError("Candidate history conflicts with source rows")
+                if table != "runtime" and verified != counts[table]:
                     raise StateError("Candidate row count mismatch")
+            added = candidate.db.execute("SELECT COUNT(*) FROM runtime").fetchone()[0] - counts["runtime"]
+            if added < 0:
+                raise StateError("Candidate lost runtime records")
+            source_shared = original.execute(
+                "SELECT COUNT(*) FROM runtime WHERE key>=? AND key<?", (BLOB_PREFIX, BLOB_PREFIX + "~")
+            ).fetchone()[0]
+            candidate_shared = candidate.db.execute(
+                "SELECT COUNT(*) FROM runtime WHERE key>=? AND key<?", (BLOB_PREFIX, BLOB_PREFIX + "~")
+            ).fetchone()[0]
+            if added != candidate_shared - source_shared:
+                raise StateError("Unexpected candidate runtime additions")
         finally:
             candidate.close()
     if fingerprint(source, deadline) != expected:
@@ -242,10 +291,12 @@ def rebuild(
         "candidate_bytes": destination.stat().st_size,
         "max_candidate_bytes": maximum,
         "table_rows": counts,
+        "shared_bodies_added": added,
         "heads_converted": converted,
         "payload_bytes_saved": savings,
         "candidate_full_integrity": "PASS",
         "immutable_rows_and_resolved_heads": "PASS",
+        "logical_row_manifests": {table: manifest.hexdigest() for table, manifest in manifests.items()},
         "source_full_qualification": "REQUIRED_SEPARATELY_FOR_EXPECTED_HASH",
         "production_migration": "NOT_RUN",
         "incomplete_output": "PRESERVED_ON_FAILURE",

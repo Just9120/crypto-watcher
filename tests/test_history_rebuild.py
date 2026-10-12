@@ -46,7 +46,7 @@ def closed_backup(tmp_path, *, conflict=None):
     return path, hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def test_rebuild_compacts_only_heads_and_preserves_all_original_revisions_and_owner_state(tmp_path):
+def test_rebuild_compacts_history_without_losing_any_revision_or_owner_state(tmp_path):
     source, expected = closed_backup(tmp_path)
     destination = tmp_path / "candidate.sqlite3"
     before = source.read_bytes()
@@ -64,8 +64,13 @@ def test_rebuild_compacts_only_heads_and_preserves_all_original_revisions_and_ow
         assert new.db.execute("SELECT original_json FROM legacy_import").fetchone()[0] == '{"original":true}'
         for row in old.db.execute("SELECT key,payload_json FROM runtime"):
             relative = row[0][len(PREFIX) :]
-            if "-head:" in relative:
-                assert History(new).get(relative) == History(old).get(relative)
+            if "-head:" in relative or relative.split(":", 1)[0] in (
+                "event",
+                "outcome",
+                "episode",
+                "comparison",
+            ):
+                assert encode(History(new).get(relative)) == encode(History(old).get(relative))
             else:
                 assert (
                     new.db.execute("SELECT payload_json FROM runtime WHERE key=?", (row[0],)).fetchone()[0]
@@ -77,7 +82,11 @@ def test_rebuild_compacts_only_heads_and_preserves_all_original_revisions_and_ow
     # A repeated reconstruction accepts mixed/new heads but performs no additional conversion.
     second = tmp_path / "second.sqlite3"
     again = rebuild(destination, second, 233382575, result["candidate_sha256"], time.monotonic() + 10)
-    assert again["heads_converted"] == 0 and again["table_rows"] == result["table_rows"]
+    assert again["heads_converted"] == 0 and again["shared_bodies_added"] == 0
+    assert again["table_rows"]["runtime"] == result["table_rows"]["runtime"] + result["shared_bodies_added"]
+    assert {k: v for k, v in again["table_rows"].items() if k != "runtime"} == {
+        k: v for k, v in result["table_rows"].items() if k != "runtime"
+    }
 
 
 @pytest.mark.parametrize("failure", ["missing", "different", "unknown_table", "reserved_lookalike"])
@@ -198,6 +207,46 @@ def test_source_metadata_change_during_rebuild_invalidates_candidate(tmp_path, m
     monkeypatch.setattr(history_rebuild, "fingerprint", fingerprint)
     with pytest.raises(StateError, match="metadata changed"):
         rebuild(source, tmp_path / "candidate.sqlite3", 233382575, expected, time.monotonic() + 10)
+    assert source.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    "fault", ["lost_revision", "extra_record", "private_delivery", "numeric_type", "candle"]
+)
+def test_complete_logical_manifest_detects_loss_or_changes_after_copy(tmp_path, monkeypatch, fault):
+    from cryptowatcher import history_rebuild
+
+    source, expected = closed_backup(tmp_path)
+    original = source.read_bytes()
+    real_check = history_rebuild.check_integrity
+
+    def changed(database, **kwargs):
+        real_check(database, **kwargs)
+        with database:
+            if fault == "lost_revision":
+                database.execute("DELETE FROM runtime WHERE key=?", (PREFIX + "event:record-0:0000000001",))
+            elif fault == "extra_record":
+                database.execute("INSERT INTO runtime VALUES (?,?)", ("unexpected-row", "{}"))
+            elif fault == "private_delivery":
+                database.execute(
+                    "UPDATE runtime SET payload_json=? WHERE key=?",
+                    ('{"fixture":"CHANGED"}', PREFIX + "private-outbox"),
+                )
+            elif fault == "numeric_type":
+                key = PREFIX + "event:record-0:0000000001"
+                value = json.loads(
+                    database.execute("SELECT payload_json FROM runtime WHERE key=?", (key,)).fetchone()[0]
+                )
+                value["reference_price"] = 100.0
+                database.execute("UPDATE runtime SET payload_json=? WHERE key=?", (encode(value), key))
+            else:
+                database.execute(
+                    "INSERT INTO runtime VALUES (?,?)", ("source:v1:candle:unexpected", '{"close":1}')
+                )
+
+    monkeypatch.setattr(history_rebuild, "check_integrity", changed)
+    with pytest.raises(StateError):
+        rebuild(source, tmp_path / "unqualified.sqlite3", 233382575, expected, time.monotonic() + 10)
     assert source.read_bytes() == original
 
 

@@ -1,0 +1,180 @@
+"""Lossless shared snapshots; SQL projections stay small and public records stay complete."""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import re
+import sqlite3
+import zlib
+from typing import Any
+
+from .storage import StateError, encode
+
+MARKER = "_history_storage"
+SCHEMA = "cryptowatcher.shared-fields.v1"
+BLOB_SCHEMA = "cryptowatcher.shared-json.v1"
+BLOB_PREFIX = "historyblob:v1:"
+MAX_BYTES = 32 * 1024 * 1024
+SHARED_FIELDS = {"settings_snapshot", "effective_parameters", "source_context", "enrichment"}
+WINDOW_FIELDS = {"source_inputs", "future_inputs"}
+
+
+def digest(raw: bytes) -> str:
+    return hashlib.sha256(raw).hexdigest()
+
+
+class Codec:
+    def __init__(self, database: sqlite3.Connection):
+        self.db = database
+
+    def save(self, value: Any) -> str:
+        raw = encode(value).encode()
+        if len(raw) > MAX_BYTES:
+            raise StateError("Shared snapshot exceeds decoder bound")
+        key = digest(raw)
+        payload = encode(
+            {
+                "schema": BLOB_SCHEMA,
+                "bytes": len(raw),
+                "zlib": base64.b64encode(zlib.compress(raw, 3)).decode(),
+            }
+        )
+        result = self.db.execute("INSERT OR IGNORE INTO runtime VALUES (?,?)", (BLOB_PREFIX + key, payload))
+        if not result.rowcount:
+            existing = self.db.execute(
+                "SELECT payload_json FROM runtime WHERE key=?", (BLOB_PREFIX + key,)
+            ).fetchone()
+            if existing is None or existing[0] != payload and encode(self.load(key)) != raw.decode():
+                raise StateError("Conflicting shared snapshot")
+        return key
+
+    def load(self, key: str) -> Any:
+        if not isinstance(key, str) or not re.fullmatch(r"[0-9a-f]{64}", key):
+            raise StateError("Invalid shared snapshot identity")
+        row = self.db.execute("SELECT payload_json FROM runtime WHERE key=?", (BLOB_PREFIX + key,)).fetchone()
+        try:
+            value = json.loads(row[0]) if row else None
+        except (ValueError, TypeError) as exc:
+            raise StateError("Invalid shared snapshot encoding") from exc
+        if not isinstance(value, dict) or value.get("schema") != BLOB_SCHEMA:
+            raise StateError("Missing shared snapshot")
+        size = value.get("bytes")
+        if type(size) is not int or not 0 <= size <= MAX_BYTES:
+            raise StateError("Invalid shared snapshot size")
+        try:
+            if (
+                not isinstance(value.get("zlib"), str)
+                or len(value["zlib"]) > (MAX_BYTES + 65536) * 4 // 3 + 4
+            ):
+                raise StateError("Invalid shared snapshot encoding")
+            encoded = base64.b64decode(value["zlib"], validate=True)
+            reader = zlib.decompressobj()
+            raw = reader.decompress(encoded, size + 1)
+            if len(raw) != size or not reader.eof or reader.unused_data or reader.unconsumed_tail:
+                raise StateError("Invalid shared snapshot encoding")
+            if digest(raw) != key:
+                raise StateError("Shared snapshot hash mismatch")
+            decoded = json.loads(raw)
+            if encode(decoded).encode() != raw:
+                raise StateError("Noncanonical shared snapshot")
+            return decoded
+        except (KeyError, ValueError, TypeError, zlib.error, UnicodeError) as exc:
+            raise StateError("Invalid shared snapshot encoding") from exc
+
+    def field(self, reference: Any) -> Any:
+        if not isinstance(reference, dict) or set(reference) != {"mode", "ids", "sha256"}:
+            raise StateError("Invalid shared field reference")
+        keys = reference["ids"]
+        if not isinstance(keys, list) or not 0 < len(keys) <= 4096:
+            raise StateError("Invalid shared field parts")
+        if reference["mode"] == "value" and len(keys) == 1:
+            value = self.load(keys[0])
+        elif reference["mode"] == "window":
+            value = []
+            for key in keys:
+                part = self.load(key)
+                if not isinstance(part, list) or not 0 < len(part) <= 16:
+                    raise StateError("Invalid source window block")
+                value.extend(part)
+        else:
+            raise StateError("Unknown shared field mode")
+        if digest(encode(value).encode()) != reference["sha256"]:
+            raise StateError("Shared field hash mismatch")
+        return value
+
+    def pack(self, value: Any) -> Any:
+        if isinstance(value, list):
+            return [self.pack(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        if MARKER in value:
+            raise StateError("Reserved history storage marker")
+        result: dict[str, Any] = {}
+        references = {}
+        for name, item in value.items():
+            if name in SHARED_FIELDS and isinstance(item, dict) and len(encode(item)) > 256:
+                references[name] = {
+                    "mode": "value",
+                    "ids": [self.save(item)],
+                    "sha256": digest(encode(item).encode()),
+                }
+                if name == "settings_snapshot":
+                    result[name] = {k: item[k] for k in ("profile", "alert_universe_mode") if k in item}
+            elif name in WINDOW_FIELDS and isinstance(item, list) and item:
+                parts: list[list[Any]] = []
+                bucket: Any = None
+                for index, candle in enumerate(item):
+                    start = candle.get("start") if isinstance(candle, dict) else None
+                    step = candle.get("step") if isinstance(candle, dict) else None
+                    current = (
+                        (step, start // (step * 16))
+                        if type(start) is int and type(step) is int and step > 0
+                        else (None, index // 16)
+                    )
+                    if not parts or current != bucket or len(parts[-1]) == 16:
+                        parts.append([])
+                        bucket = current
+                    parts[-1].append(candle)
+                references[name] = {
+                    "mode": "window",
+                    "ids": [self.save(part) for part in parts],
+                    "sha256": digest(encode(item).encode()),
+                }
+            else:
+                result[name] = self.pack(item)
+        if references:
+            result[MARKER] = {"schema": SCHEMA, "fields": references}
+        return result
+
+    def unpack(self, value: Any) -> Any:
+        if isinstance(value, list):
+            return [self.unpack(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        result = {k: self.unpack(v) for k, v in value.items() if k != MARKER}
+        if MARKER not in value:
+            return result
+        storage = value[MARKER]
+        if (
+            not isinstance(storage, dict)
+            or set(storage) != {"schema", "fields"}
+            or storage["schema"] != SCHEMA
+            or not isinstance(storage["fields"], dict)
+        ):
+            raise StateError("Invalid history storage schema")
+        for name, reference in storage["fields"].items():
+            if name not in SHARED_FIELDS | WINDOW_FIELDS:
+                raise StateError("Unknown shared history field")
+            restored = self.field(reference)
+            if name in result:
+                projection = (
+                    {k: restored[k] for k in ("profile", "alert_universe_mode") if k in restored}
+                    if name == "settings_snapshot" and isinstance(restored, dict)
+                    else None
+                )
+                if result[name] != projection:
+                    raise StateError("Conflicting shared field projection")
+            result[name] = restored
+        return result

@@ -38,6 +38,24 @@ G3 реализует outcomes/cohorts/export/retention; G4 добавит не�
 
 ## Runtime и эксплуатация
 
+History storage: immutable event/outcome/episode/comparison revisions сохраняют
+публичную семантику; их heads — identity-checked ссылки с малыми SQL projections.
+Большие settings/effective parameters/source context/enrichment snapshots хранятся
+один раз по SHA256 canonical JSON. Исходные event/outcome/comparator windows
+ссылаются на lossless zlib JSON blocks до16 candles, выровненные по UTC buckets
+при доступных start/step. Пересекающиеся полные blocks повторно не записываются.
+Каждый block и восстановленное поле проверяются по hash; повреждение/missing body
+не возвращает частичный public record. Compression и ссылки являются внутренним
+форматом: Telegram/export/analytics/agent contract получают прежние полные values.
+Legacy records читаются одновременно с compact records. Summary counts/grouping
+используют projections и не декодируют все candle windows.
+
+Physical SQLite schema1 остаётся прежней. Старые binaries не считаются compatible
+rollback readers после compact writes. Изолированная conversion уменьшает existing
+history, сохраняет каждую public revision и exact private transport state; текущий
+runtime не конвертируется автоматически. До promotion требуется квалифицированная
+копия и reviewed stateful procedure из [delivery](runbooks/delivery.md).
+
 Image: pinned Python base digest, hash-locked dependencies, UID/GID10001, read-only root, no capabilities. `/data/sqlite` и его backups принадлежат приложению; исходный `/data/state_crypto_watcher.json` сохраняется. Health проверяет recent application heartbeat, а не внешний Bybit uptime. Market/data availability и Telegram delivery отображаются отдельно. Resource limits не назначены без измерений actual workload.
 
 Delivery validation использует отдельный resource-bounded offline container с

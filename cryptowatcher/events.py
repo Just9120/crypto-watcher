@@ -12,6 +12,7 @@ from typing import Any, Callable, Iterator
 
 from .detector_config import FAMILIES, effective_parameters
 from .detectors import FORMULAS, UNITS, VERSIONS, Detection, DetectorUnavailable, atr14, evaluate, freshness
+from .history_codec import Codec
 from .sources import Candle
 from .storage import StateError, Store, encode
 
@@ -46,6 +47,19 @@ HEAD_FIELDS = {
         "noise_threshold_pct",
         "metrics",
     ),
+    "episode": (
+        "episode_id",
+        "revision",
+        "instrument",
+        "direction",
+        "state",
+        "started_ms",
+        "last_observation_ms",
+        "longest_tf_ms",
+        "strength",
+        "available_at_ms",
+    ),
+    "comparison": ("comparison_id", "revision", "event_id", "available_at_ms", "state"),
 }
 
 
@@ -56,12 +70,14 @@ def identity(value: str) -> str:
 class History:
     def __init__(self, store: Store) -> None:
         self.store = store
+        self.codec = Codec(store.db)
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.resolve(key, self.store.get_runtime(PREFIX + key, default))
 
     def resolve(self, key: str, value: Any) -> Any:
         """Read both legacy full heads and identity-checked compact heads."""
+        value = self.codec.unpack(value)
         if not isinstance(value, dict) or value.get("schema") != HEAD_SCHEMA:
             return value
         kind, separator, record_id = key.partition("-head:")
@@ -75,7 +91,7 @@ class History:
             or value.get("revision_key") != f"{kind}:{record_id}:{revision:010d}"
         ):
             raise StateError("Invalid history head reference")
-        record = self.store.get_runtime(PREFIX + value["revision_key"])
+        record = self.codec.unpack(self.store.get_runtime(PREFIX + value["revision_key"]))
         if (
             not isinstance(record, dict)
             or record.get("schema") == HEAD_SCHEMA
@@ -136,7 +152,7 @@ class History:
         key = value[f"{kind}_id"]
         version_key = f"{kind}:{key}:{value['revision']:010d}"
         existing = self.get(version_key)
-        if existing is not None and existing != value:
+        if existing is not None and encode(existing) != encode(value):
             raise StateError("Conflicting immutable history revision")
         head = self.get(f"{kind}-head:{key}")
         if (
@@ -146,7 +162,7 @@ class History:
         ):
             raise StateError("Event outcome reference is immutable")
         if existing is None:
-            self.put(version_key, value)
+            self.put(version_key, self.codec.pack(value))
         if head is None or value["revision"] > head["revision"]:
             self.put(f"{kind}-head:{key}", self._head(kind, value, version_key))
 

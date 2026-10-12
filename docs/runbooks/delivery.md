@@ -206,7 +206,7 @@ Records: Actions tested SHA/check/run/attempt, build artifact/manifest, target r
 
 Canonical command из root repository в locked Python environment либо внутри
 проверенного immutable image — `python -m cryptowatcher.history_rebuild`.
-Назначение: создать новый isolated candidate с compact event/outcome heads из
+Назначение: создать новый isolated candidate с compact history/shared snapshots из
 закрытого qualified SQLite backup. Production DB, Compose, config и исходный
 backup не изменяются; automatic CD не запускает этот tool.
 
@@ -215,19 +215,28 @@ qualification этого exact закрытого backup. Source без WAL/SHM/
 symlinks, другой owner/schema, unknown objects и existing destination блокируются.
 Destination directory private/owned, новый file exclusive0600. Default byte cap
 равен source size; нужен cap плюс1.5GiB free reserve, reserve проверяется в copy.
-Operation общий budget≤900s. Его изменение не согласовано.
+Operation общий budget≤900s. Его изменение не согласовано. Текущее explicit
+поручение compact storage расширяет conversion на shared settings/context/windows,
+heads всех четырёх kinds и legacy/new mixed revisions; retention/alerts не меняет.
 
 ```bash
 python -m cryptowatcher.history_rebuild --source "$CW_CLOSED_BACKUP" --destination "$CW_NEW_CANDIDATE" --owner-id 233382575 --qualified-source-sha256 "$CW_QUALIFIED_SOURCE_SHA256"
 ```
 
 Это command template: три CW variables задаются по actual operator inventory,
-а не предполагаемым paths. Head заменяется только после exact canonical equality
-с revision того же kind/ID/version; numeric provenance не нормализуется. Все пять
-таблиц копируются с сохранением остальных column values/types, original JSON,
-settings/mutes/queues и всех immutable revisions. Новый файл строится плотно;
-полная integrity, constraints, all-row/count equivalence, full resolved-head
-readback, source unchanged hash и candidate SHA256 обязательны.
+а не предполагаемым paths. Heads становятся ссылками на revision того же
+kind/ID/version; полное восстановленное значение включено в сравнение с source.
+Numeric provenance не нормализуется. Все пять таблиц копируются; original JSON,
+settings/mutes/queues и private serialized transport bytes сохраняются. Public
+immutable revisions компактно представлены shared compressed snapshots и
+восстанавливаются полностью. Для каждой таблицы сравниваются полные length-framed
+SHA256 manifests всех logical rows в исходном порядке: каждый ключ, тип/значение
+columns, decoded revision/head и exact payload bytes остальных namespaces.
+Дополнительные rows допускаются только для проверенных shared bodies. Это full
+readback, не sample. Новый файл строится плотно; full integrity/CHECK,
+counts/manifests, source unchanged hash и candidate SHA256 обязательны. Повторное
+чтение legacy heads по random source lookup не требуется: candidate dereferencing
+должно совпасть с исходным полным значением каждого head.
 
 `ISOLATED_CANDIDATE_PASS` доказывает только этот candidate и lineage к expected
 source hash. Output явно сохраняет `source_full_qualification=REQUIRED_SEPARATELY_FOR_EXPECTED_HASH`
