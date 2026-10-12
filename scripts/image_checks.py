@@ -202,7 +202,6 @@ def main() -> None:
             )
         )["backup"]
         assert archive["phase"] == "COMPLETE" and archive["archive_encoding"] == "ZSTD"
-        assert archive["sha256"] == actual_hash
         restored_hash = run(
             args.image,
             directory,
@@ -217,12 +216,13 @@ with p.open('rb') as source,Path('/data/archive-restored.sqlite3').open('xb') as
     zstandard.ZstdDecompressor().copy_stream(source,target)
 with sqlite3.connect('/data/archive-restored.sqlite3') as db:
     assert db.execute('PRAGMA integrity_check').fetchall()==[('ok',)]
-    for name in ('owner_settings','delivery_preferences','mutes','runtime','legacy_import'):
-        db.execute('SELECT count(*) FROM '+name).fetchone()
+    with sqlite3.connect('/data/ram-restore.db') as reference:
+        for name in ('owner_settings','delivery_preferences','mutes','runtime','legacy_import'):
+            assert db.execute('SELECT * FROM '+name+' ORDER BY 1').fetchall() == reference.execute('SELECT * FROM '+name+' ORDER BY 1').fetchall()
 print(hashlib.sha256(Path('/data/archive-restored.sqlite3').read_bytes()).hexdigest())
 """,
         ).strip()
-        assert restored_hash == actual_hash
+        assert restored_hash == archive["sha256"]
         run(
             args.image,
             directory,

@@ -94,6 +94,14 @@ FAIL до image build. Причина: request использует advanced exc
 не изменены.2 targeted recovery scenarios и canonical quality PASS; current CI
 и actual source/backup qualification остаются REQUIRED.
 
+CI38219504549/head4e2dd4f:435 tests/static/dependency/build PASS; real image check
+обнаружил некорректное сравнение physical hash независимых stdlib/APSW backups.
+Image check теперь требует archive encoded hash, decoded hash собственного pinned
+snapshot и native restore/full integrity плюс точное совпадение всех rows5 таблиц
+со stdlib backup. Cross-API header normalization не является потерей данных;
+обязательная exact-byte identity archive↔snapshot и source row equivalence сохранены.
+Full Linux image qualification актуальной revision остаётся REQUIRED.
+
 Base `9634558a654d5f13279ff0e76710585bf1105d66`, branch `codex/backup-validation-performance-20261011`, root worktree. Fresh main/clean checkout, strict required `ci-required`, production Environment, отсутствие открытых PR/active Actions подтверждены GitHub API2026-10-11T11:36:44UTC. Основание — устранение failed delivery в согласованной whole-project Goal; отдельный implementation scope не добавляется.
 
 PR30 merged2026-10-11T10:52:33UTC, head2495ac037/baseb13081e/squash9634558a, required CI38131846878 PASS370 tests. Operator receiver update10:50:50UTC PASS: installed receiver9569f32c, target/SSH/runtime/database сохранены. Automatic CD38133517275: merged Linux3.11 suite370 tests PASS/build PASS, delivery FAIL11:23:36UTC на BACKUP_AND_VALIDATE с `docker exit 3` — TIME_BUDGET_EXCEEDED. Полная проверка source DB прошла: backup stage следует после неё. Нельзя считать backup пригодной, corruption установленной или CD завершённой. Точные времена copy и destination validation UNSET; CLI885s является общим budget обеих фаз.

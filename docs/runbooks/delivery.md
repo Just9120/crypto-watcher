@@ -98,7 +98,10 @@ hash-locked APSW3.53.4.0/SQLite3.53.4 только в isolated validation connec
 основное приложение продолжает использовать standard SQLite. Compressed VFS
 использует64KiB lossless Zstandard0.25.0 blocks (level1/checksum/single thread)
 и bounded8-block mutable write cache. Codec не меняет SQLite bytes.
-Physical SQLite sector остаётся4096; native page/header bytes не меняются.
+Physical SQLite sector остаётся4096; compressed VFS сохраняет page/header bytes
+native online backup. Отдельные backup API могут нормализовать header по-разному;
+encoded/decoded identity проверяется относительно собственного pinned snapshot,
+а совместимость — native restore и совпадением всех rows исходных5 таблиц.
 Reconstruction hash декодирует blocks последовательно без удержания LRU.
 Private full-integrity cache512MiB и decoded-block cache32MiB укладываются
 в общий4GiB cap/1GiB overhead margin; основной app cache не меняется.
