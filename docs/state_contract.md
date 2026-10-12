@@ -118,6 +118,21 @@ Physical schema1/NONE, один writer. `outcome-method:1` / `comparison-method:
 
 `outcome:UUID:revision` / `outcome-head:UUID` и `comparison:UUID:revision` / head сохраняют прежние versions/results и availability timestamps. Неполные outcomes могут получить новую COMPLETE revision после recovery; завершённые results не пересчитываются автоматически. Complete result, full used inputs и `protected:source:v1:candle:` записываются атомарно. `hold:stream:job` удерживает весь pending диапазон, включая данные старше90days; bounded `retention` удаляет только unreferenced ordinary candles. Legacy JSON/backups/events/episode/outcome/comparison/settings records автоматически не удаляются.
 
+Новые event/outcome heads имеют internal schema `cryptowatcher.history-head.v1`:
+`revision_key` указывает на неизменную revision того же kind/ID, рядом сохранены
+небольшие поля для indexed selection, digest и cohort SQL. Полные settings,
+provenance и source inputs остаются в revision. `History.get/items/scan` и agent
+replay разрешают reference и возвращают прежний полный record без internal head
+fields. Missing/cross-kind/cross-ID revision либо несовпадение query projection
+вызывает диагностируемую ошибку вместо частичного record. Immutable revisions,
+causal cutoff и public event/outcome/export schema не меняются.
+
+Legacy full heads читаются в той же базе; upgrade не запускает bulk rewrite.
+Только новая revision получает compact head в той же transaction. Existing raw
+source/outcome snapshots и history автоматически не удаляются. Physical schema
+остаётся1, но старый binary после compact head writes не является совместимым
+reader: recovery требует forward-fix либо проверенную версию с этим reader.
+
 `source-context:v1:ticker|instrument:market/symbol:availableTime` содержит public values/metadata, units/source и actual observation/availability timestamps. Event и выбранные comparator windows включают полный использованный context snapshot. Historical composite без prior ticker≤5min не считается no-signal; future liquidity/noise исходного event не используются. `analytics-gap:` / due index персистентно восстанавливает referenced closed ranges без изменения live subscriptions/notification state. Conflicting existing source сохраняется и диагностируется; recovery не перезаписывает его и не создаёт historical live alerts.
 
 Owner horizons/digest interval — validated owner settings; enabled preference/cursor `digest-preferences` отдельно от realtime delivery preference и mutes. `digest-outbox:UUID` содержит stable UTC interval identity, frozen aggregate/text и durable attempts; один `digest-pending` на последний interval, `digest-skipped` обозначает диапазон пропущенных после restart. Enabled change во время network не воскрешает canceled pending; acknowledged prior-preference attempt явно помечается. Shared Telegram target permanent failure виден независимо от каждой queue; explicit alerts/digest enable возобновляет target, не меняя другой toggle.

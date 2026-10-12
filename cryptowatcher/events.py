@@ -16,6 +16,37 @@ from .sources import Candle
 from .storage import StateError, Store, encode
 
 PREFIX = "radar:v1:"
+HEAD_SCHEMA = "cryptowatcher.history-head.v1"
+# SQL summaries use these small fields; public readers dereference the immutable record.
+HEAD_FIELDS = {
+    "event": (
+        "event_id",
+        "revision",
+        "episode_id",
+        "market_observation_ms",
+        "available_at_ms",
+        "market_type",
+        "detector_id",
+        "detector_version",
+        "symbol",
+        "timeframe",
+        "direction",
+        "strength",
+    ),
+    "outcome": (
+        "outcome_id",
+        "revision",
+        "event_id",
+        "event_revision",
+        "available_at_ms",
+        "state",
+        "horizon_min",
+        "methodology_version",
+        "classification",
+        "noise_threshold_pct",
+        "metrics",
+    ),
+}
 
 
 def identity(value: str) -> str:
@@ -27,7 +58,43 @@ class History:
         self.store = store
 
     def get(self, key: str, default: Any = None) -> Any:
-        return self.store.get_runtime(PREFIX + key, default)
+        return self.resolve(key, self.store.get_runtime(PREFIX + key, default))
+
+    def resolve(self, key: str, value: Any) -> Any:
+        """Read both legacy full heads and identity-checked compact heads."""
+        if not isinstance(value, dict) or value.get("schema") != HEAD_SCHEMA:
+            return value
+        kind, separator, record_id = key.partition("-head:")
+        revision = value.get("revision")
+        if (
+            not separator
+            or kind not in HEAD_FIELDS
+            or type(revision) is not int
+            or revision < 1
+            or value.get(f"{kind}_id") != record_id
+            or value.get("revision_key") != f"{kind}:{record_id}:{revision:010d}"
+        ):
+            raise StateError("Invalid history head reference")
+        record = self.store.get_runtime(PREFIX + value["revision_key"])
+        if (
+            not isinstance(record, dict)
+            or record.get("schema") == HEAD_SCHEMA
+            or record.get(f"{kind}_id") != record_id
+            or record.get("revision") != revision
+            or self._head(kind, record, value["revision_key"]) != value
+        ):
+            raise StateError("Missing or conflicting history head revision")
+        return record
+
+    @staticmethod
+    def _head(kind: str, value: dict[str, Any], revision_key: str) -> dict[str, Any]:
+        if kind not in HEAD_FIELDS:
+            return value
+        return {
+            "schema": HEAD_SCHEMA,
+            "revision_key": revision_key,
+            **{field: value[field] for field in HEAD_FIELDS[kind] if field in value},
+        }
 
     def put(self, key: str, value: Any) -> None:
         # Transaction is owned by the engine/delivery operation, never commit nested writes.
@@ -45,14 +112,17 @@ class History:
         if limit is not None:
             sql += " LIMIT ?"
             values += (limit,)
-        return [(row[0][len(PREFIX) :], json.loads(row[1])) for row in self.store.db.execute(sql, values)]
+        return [
+            (row[0][len(PREFIX) :], self.resolve(row[0][len(PREFIX) :], json.loads(row[1])))
+            for row in self.store.db.execute(sql, values)
+        ]
 
     def scan(self, prefix: str) -> Iterator[tuple[str, Any]]:
         start = PREFIX + prefix
         for row in self.store.db.execute(
             "SELECT key,payload_json FROM runtime WHERE key>=? AND key<? ORDER BY key", (start, start + "~")
         ):
-            yield row[0][len(PREFIX) :], json.loads(row[1])
+            yield row[0][len(PREFIX) :], self.resolve(row[0][len(PREFIX) :], json.loads(row[1]))
 
     def count(self, prefix: str) -> int:
         start = PREFIX + prefix
@@ -78,7 +148,7 @@ class History:
         if existing is None:
             self.put(version_key, value)
         if head is None or value["revision"] > head["revision"]:
-            self.put(f"{kind}-head:{key}", value)
+            self.put(f"{kind}-head:{key}", self._head(kind, value, version_key))
 
     def events(self, limit: int = 20) -> list[dict[str, Any]]:
         return [

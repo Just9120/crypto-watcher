@@ -47,12 +47,52 @@ Snapshot: 2026-10-10, проверка около 10:00–10:15 Europe/Moscow; `
 
 #### Текущий hotfix — производительность полной backup validation
 
+Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
+подтверждённую избыточность history representation, сохранив весь согласованный
+dataset. Read-only snapshot09:54UTC/G5afd10770: SQLite15,220,908,032bytes,
+WAL980,131,552bytes;1100 streams. Earlier same-revision sample:1,230,965 candles,
+estimated JSON253,867,297bytes;16-record event sample mean7392.6bytes. Bounded
+covering-index read09:59UTC:264,332 event heads. Это не полный byte attribution;
+indices/page overhead и outcome volume требуют отдельного измерения.
+
+Локальный scope в этом же PR: event/outcome head хранит reference на неизменную
+revision и малую query projection, все публичные history readers возвращают
+полный прежний record. Legacy full heads читаются рядом с новым форматом;
+существующие revisions/inputs не переписываются. Bulk conversion/удаление live
+данных и изменение delivery gates в этот блок не входят. Старые binaries не
+считаются совместимыми после первых новых head writes; recovery — forward-fix
+либо verified reader новой representation, без DB downgrade.
+
+Validation Plan для representation: REQUIRED local mixed legacy/new readback,
+reordered revisions/conflict/reference identity, missing/cross-record reference
+fail-closed, source preservation и no duplicate large payload. Existing
+event/outcome/export/analytics/digest/agent suites проверяют прежние observable
+records, cutoff/filter/completeness и signed provenance. Canonical local quality,
+latest Linux PR CI/image и actual full source/archive/CD gates остаются REQUIRED.
+Owner ещё не разрешил предложенную корректировку900→1800s; budgets неизменны.
+Implementation checkpoint54/58 AC не пересчитывается; новый findingF34 связан
+сAC-10-02/F15/F22, не создаёт нового продуктового требования.
+
+Дополнительная read-only выборка64 heads каждого kind10:10UTC: event query
+projection меньше full head JSON на94.32%, outcome на90.95%. Полный covering-index
+count непересекающихся ranges в одном WAL snapshot:468,080 outcome heads.
+При этих sample means и earlier264,332 event count устранение second-copy payload
+оценивается примерно4.7GB; это estimate JSON, не измеренный размер SQLite после
+конвертации. Перезапись heads не обязана уменьшать file bytes: потребуется отдельно
+квалифицированное освобождение/reuse страниц. Existing-data conversion/compaction
+не выполнялись и не входят в автоматический startup.
+
 Checkpoint12Oct2026: PR31 остаётся открытым; main9634558a/running G5afd10770,
-installed receiver9569f32c. Последний проверенный head820b154/required CI38212499360
-PASS, но root qualification `/tmp/cw-pr31-job-208td0jh` завершилась BLOCKED07:07:47UTC:
-known5.42GB closed full integrity/exact hash PASS366.168s, current live snapshot
-TIME_BUDGET_EXCEEDED на full integrity. OOMfalse, все3 live units unchanged/running;
-receiver update/switch NOT_RUN. Этот primary FAIL supersedes прежний running checkpoint.
+installed receiver9569f32c. Required CI38227994274/head8613839d PASS. Root qualification
+`/tmp/cw-pr31-job-v4fo3g8t` завершилась BLOCKED09:33:59UTC:
+known5.42GB closed full integrity/exact hash PASS252.627s; LIVE source
+TIME_BUDGET_EXCEEDED886.087s в full integrity, OOMfalse. Actual runner отсутствует,
+owned containers удалены, все3 live units unchanged/running; ARCHIVE/receiver/switch
+NOT_RUN. После этого локальный compact-head diff проверен85 affected tests и
+canonical quality, затем дополнительный signed complete-outcome replay PASS;
+latest Linux CI этого diff ещё REQUIRED. Новый full validation
+не запускается ради повторения результата без устранения причины или решения
+о policy. Этот primary FAIL supersedes прежние running checkpoints.
 
 По явному разрешению владельца и повторной проверке raw61e4f087/archive d0cc5a88
 удалён только exact qualified raw pre-9634558a…-1791716917.sqlite3.
@@ -491,6 +531,7 @@ Priority: P1 — блокирует correctness/security/основной scope;
 | F31 HARDENING | Docker runtime использует root default; resource/health policy UNSET; Dockerfile/Compose; AC-12-01 | Нет USER/healthcheck/resource settings; фактические VPS user/resource limits не проверены; G1 update: G1 image UID10001/cap-drop/read-only root/health prepared; EVG8 actual UID10001/SQLite ownership/health/persistence PASS; EVG3 resource snapshot only, future full-universe load unverified. No invented CPU/RAM limits | P3 | DEFER: После runtime inventory выбрать минимальные privileges/health/resources по необходимости; отсутствие инструмента само по себе не defect | B01; не превращать hardening в новый AC автоматически | MEDIUM / PARTIAL |
 | F32 UX CANDIDATE | Legacy polish/preset strategy без конкретного нового дефекта; прежний open_issues #6/#7; E07/E08 | Следить за едиными русскими terms/threshold explanations; visual quality/чувствительность требуют user feedback/statistics, не подтверждены как bug; G2B update: G2B: five-detector explanations, actual profiles/manual parameters and event detail implemented. Statistical calibration/views G3/G5; unsupported polish remains DEFER.; G3: event→outcome/noise/completeness and descriptive cohorts/no-signal N доступны; enrichment/manual version comparison views G5, unsupported polish DEFER. G5 update: G5: recorded profile/version/settings comparison with N/noise/limits and explicit revision-preserving recompare; no auto threshold change. Unsupported visual polish remains DEFER. | P3 | DEFER: Сохранить полезные terms/presets; улучшать объяснения и выбор thresholds по согласованным detector profiles и outcome statistics | G3 calibration; Q01, не откладывает agent integration | MEDIUM / PARTIAL |
 | F33 G1 REGRESSION | `/sample_alert` потерял baseline Bybit/mute/coin controls и не учитывает active TF; cryptowatcher/bot.py/render.py; G1 preservation / AC-07-03 | EVG9 msg656783 на deployed065e49d подтверждает code regression относительно legacy8ace3638; EVG10 исправляет current snapshot rendering/buttons без REST/state writes ; Current update: PR22 code/CI PASS, actual CD38087285142 main40882eb; owner screenshot401ddabd… and “вроде работает” smoke PASS with assertion limits | P2: неверный sample и потеря manual controls | FIX: Восстановить existing demonstration/controls, не менять live formula, auth, settings или schema; meaningful regression tests | Necessary G1 hotfix, required CI/merge/release/CD | HIGH / CLOSED |
+| F34 HISTORY CAPACITY | Полные event/outcome heads дублируют immutable revisions; пересекающиеся source inputs также повторяются между horizons; events.py/outcomes.py; AC-10-02/F15/F22 | Read-only G5afd10770 snapshot12Oct09:54UTC:15.22GB SQLite+0.98GB WAL,1.23M candle rows; estimated candle JSON0.254GB. Covering-index09:59UTC:264,332 events;16 sampled event heads mean7,392.6bytes, exact total byte attribution UNSET. Code History.version пишет две full copies. Current PR31 compact-head diff:85 affected tests/quality PASS, original revision bytes/readers/export/filter/cutoff preserved; latest CI/CD REQUIRED | P1: растущий dataset превышает текущие delivery budgets и capacity ещё не доказана | REFACTOR: references/query projections вместо второй large copy; отдельно квалифицировать source-window reuse и existing-data conversion без потери provenance. Накопленные данные и policy не менять автоматически | Same PR31; full source/archive/CD gates; privileged bulk conversion и policy changes только по конкретной approved procedure | HIGH / PARTIAL_IN_BRANCH |
 
 ### План консолидации документов/кода
 
