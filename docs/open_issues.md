@@ -110,6 +110,21 @@ Loop member имеет отдельное имя; fixture дополнитель
 container prefix/name. Latest CI и новая qualification исправленного helper REQUIRED;
 предыдущий setup failure не считается результатом integrity/performance measurement.
 
+Root qualification `/tmp/cw-pr31-job-nms9x9rt`/head41f5f67 завершилась BLOCKED
+2026-10-12T08:14:26UTC: closed5.42GB full integrity/exact61e4f087 PASS186.444s,
+retained673,056,291bytes. Live TIME_BUDGET_EXCEEDED в final reconstructed hash;
+trace показывает возврат full_check и metadata read до истечения общего stage
+budget, но complete source proof отсутствует. Durable archive stage NOT_RUN,
+receiver unchanged, OOMfalse, own container removed/all3 live units unchanged.
+
+В том же PR prepared validation-only adaptive SQLite cache:512–1024MiB по
+фактическому frozen compressed image/index, с512MiB reserve для interpreter/native/
+decoded caches, суммарно≤4GiB. Source/backup checks, hashes, CPU1/no swap и885/900s
+deadlines сохранены. Добавлены diagnostic native cache hits/misses/used bytes
+при завершении/отказе integrity; ускорение пока не объявлено доказанным.
+46 targeted archive/cache/qualification/RAM regressions и canonical quality PASS;
+latest CI/image и новая complete source+durable archive qualification REQUIRED.
+
 Base `9634558a654d5f13279ff0e76710585bf1105d66`, branch `codex/backup-validation-performance-20261011`, root worktree. Fresh main/clean checkout, strict required `ci-required`, production Environment, отсутствие открытых PR/active Actions подтверждены GitHub API2026-10-11T11:36:44UTC. Основание — устранение failed delivery в согласованной whole-project Goal; отдельный implementation scope не добавляется.
 
 PR30 merged2026-10-11T10:52:33UTC, head2495ac037/baseb13081e/squash9634558a, required CI38131846878 PASS370 tests. Operator receiver update10:50:50UTC PASS: installed receiver9569f32c, target/SSH/runtime/database сохранены. Automatic CD38133517275: merged Linux3.11 suite370 tests PASS/build PASS, delivery FAIL11:23:36UTC на BACKUP_AND_VALIDATE с `docker exit 3` — TIME_BUDGET_EXCEEDED. Полная проверка source DB прошла: backup stage следует после неё. Нельзя считать backup пригодной, corruption установленной или CD завершённой. Точные времена copy и destination validation UNSET; CLI885s является общим budget обеих фаз.

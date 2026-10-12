@@ -103,8 +103,11 @@ native online backup. Отдельные backup API могут нормализ�
 encoded/decoded identity проверяется относительно собственного pinned snapshot,
 а совместимость — native restore и совпадением всех rows исходных5 таблиц.
 Reconstruction hash декодирует blocks последовательно без удержания LRU.
-Private full-integrity cache512MiB и decoded-block cache32MiB укладываются
-в общий4GiB cap/1GiB overhead margin; основной app cache не меняется.
+Private full-integrity cache использует512–1024MiB, вычисленные после freeze из
+фактических compressed bytes/index: image+SQLite cache+512MiB overhead reserve
+не превышают4GiB. Reserve включает decoded-block cache32MiB, interpreter/native
+contexts и temporary buffers. При image near3GiB сохраняется cache512MiB;
+accounting overflow блокирует stage. Основной app cache не меняется.
 VFS возвращает исходные байты каждой страницы и проверяет reconstructed SHA256
 до и после full integrity. Source snapshot создаётся pinned SQLite online backup;
 live reader закрывается до полного сканирования, metadata берётся из этого snapshot.
@@ -161,6 +164,14 @@ production cap900s не меняется. Zlib level2 closed proof прошёл3
 против zlib0.106s/0.030s с exact decoded bytes. Это локальное Evidence выбора;
 fit/time всей текущей DB и actual durable archive остаются REQUIRED qualification.
 Byte identity и memory/deadline guards сохраняются.
+
+Zstandard qualification12Oct07:56–08:14UTC: known closed5.42GB PASS186.444s,
+retained673,056,291bytes. Live stage превысил885s на final reconstructed hash
+после возврата full integrity; complete live proof отсутствует. OOMfalse,
+all3 units unchanged; receiver NOT_RUN. CPU увеличивался во время integrity,
+physical reads оставались14,081,437,696bytes. Следующий candidate использует
+bounded remaining-memory cache и записывает native cache hit/miss/used metrics;
+выбор hint не является доказанным ускорением до actual qualification.
 
 ### Hotfix receiver update до merge
 

@@ -53,9 +53,14 @@ def test_independent_stage_deadlines_do_not_refresh_inside_live_copy(
         def execute(self, statement):
             if statement.startswith("SELECT owner_id"):
                 value = (233382575, 1)
+            elif statement == "PRAGMA cache_size":
+                value = (-524288,)
             else:
                 value = (1024,) if "page_count" in statement else (4096,)
             return SimpleNamespace(fetchone=lambda: value)
+
+        def status(self, op):
+            return (0, 0)
 
     @contextmanager
     def snapshot(path, directory, *, deadline):
@@ -91,7 +96,13 @@ def test_independent_stage_deadlines_do_not_refresh_inside_live_copy(
     monkeypatch.setitem(
         sys.modules,
         "apsw",
-        SimpleNamespace(apswversion=lambda: "3.53.4.0", sqlitelibversion=lambda: "3.53.4"),
+        SimpleNamespace(
+            apswversion=lambda: "3.53.4.0",
+            sqlitelibversion=lambda: "3.53.4",
+            SQLITE_DBSTATUS_CACHE_USED=1,
+            SQLITE_DBSTATUS_CACHE_HIT=2,
+            SQLITE_DBSTATUS_CACHE_MISS=3,
+        ),
     )
     monkeypatch.setitem(
         sys.modules,

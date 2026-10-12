@@ -81,7 +81,14 @@ original_check=module.full_check
 context='LIVE'
 def full_check(db,d):
     global phase
-    phase=context+'_FULL_INTEGRITY';original_check(db,d);phase=context+'_BYTE_IDENTITY'
+    phase=context+'_FULL_INTEGRITY'
+    try:original_check(db,d)
+    finally:
+        emit('native_integrity_cache',phase=phase,cache_kib=-db.execute('PRAGMA cache_size').fetchone()[0],
+            cache_used_bytes=db.status(apsw.SQLITE_DBSTATUS_CACHE_USED)[0],
+            cache_hits=db.status(apsw.SQLITE_DBSTATUS_CACHE_HIT)[0],
+            cache_misses=db.status(apsw.SQLITE_DBSTATUS_CACHE_MISS)[0])
+    phase=context+'_BYTE_IDENTITY'
 module.full_check=full_check
 with module.snapshot(Path('/live/cryptowatcher.sqlite3'),Path('/scratch'),deadline=deadline) as snapshot:
     owner,revision=snapshot.execute('SELECT owner_id,revision FROM owner_settings').fetchone()

@@ -3,6 +3,7 @@ import hashlib
 import os
 import random
 import sqlite3
+import sys
 import time
 from contextlib import closing
 from pathlib import Path
@@ -17,6 +18,7 @@ from cryptowatcher.compressed_validation import (
     Image,
     QualificationError,
     classified_errors,
+    configure_cache,
     snapshot,
     validate_closed,
 )
@@ -211,6 +213,32 @@ def test_zstd_frame_checksum_rejects_changed_content(database):
     image.blocks[0] = blob[:-1] + bytes([blob[-1] ^ 1])
     with pytest.raises(zstandard.ZstdError):
         image.reconstructed_hash()
+
+
+def test_native_cache_uses_only_remaining_cap_and_never_disables_integrity(database):
+    from types import SimpleNamespace
+
+    from cryptowatcher import compressed_validation as cv
+
+    blocks = []
+    with apsw.Connection(":memory:") as db:
+        for retained in (0, 2 * 1024**3, cv.MAX_COMPRESSED_BYTES - sys.getsizeof(blocks)):
+            image = SimpleNamespace(
+                mutable=False, retained=retained, blocks=blocks, deadline=time.monotonic() + 30
+            )
+            kib = configure_cache(db, image)
+            assert 512 * 1024 <= kib <= 1024 * 1024
+            assert db.execute("PRAGMA cache_size").fetchone()[0] == -kib
+            assert (
+                retained + sys.getsizeof(blocks) + kib * 1024 + cv.VALIDATION_OVERHEAD_BYTES
+                <= cv.VALIDATION_MEMORY_BYTES
+            )
+        # An accounting overflow must reject, rather than allocating above the cap.
+        image.retained += 1024
+        with pytest.raises(QualificationError, match="COMPRESSED_MEMORY_LIMIT"):
+            configure_cache(db, image)
+    proof = validate(database, limit=10 * 1024 * 1024, deadline=time.monotonic() + 30)
+    assert proof["sqlite_cache_kib"] == 1024 * 1024
 
 
 def test_live_wal_snapshot_frozen_and_reader_released(database, monkeypatch):

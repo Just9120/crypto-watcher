@@ -28,6 +28,9 @@ WRITE_CACHE_BLOCKS = 8
 
 
 MAX_COMPRESSED_BYTES = 3 * 1024**3
+VALIDATION_MEMORY_BYTES = 4 * 1024**3
+VALIDATION_OVERHEAD_BYTES = 512 * 1024**2
+MAX_SQLITE_CACHE_BYTES = 1024**3
 
 
 class QualificationError(IntegrityError):
@@ -295,6 +298,22 @@ class VFS(apsw.VFS):
         return super().xDelete(name, syncdir)
 
 
+def configure_cache(db: apsw.Connection, image: Image) -> int:
+    """Use only capacity left by the actual frozen image, preserving the container cap."""
+    budget(image.deadline)
+    if image.mutable:
+        raise QualificationError("FROZEN_IMAGE_REQUIRED")
+    image_bytes = image.retained + sys.getsizeof(image.blocks)
+    cache_bytes = min(
+        MAX_SQLITE_CACHE_BYTES, VALIDATION_MEMORY_BYTES - image_bytes - VALIDATION_OVERHEAD_BYTES
+    )
+    if cache_bytes < 512 * 1024**2:
+        raise QualificationError("COMPRESSED_MEMORY_LIMIT")
+    cache_kib = cache_bytes // 1024
+    db.execute(f"PRAGMA cache_size=-{cache_kib}")
+    return cache_kib
+
+
 def validate_closed(
     path: Path,
     *,
@@ -313,6 +332,7 @@ def validate_closed(
         db = None
         try:
             db = apsw.Connection(str(path.resolve()), flags=apsw.SQLITE_OPEN_READWRITE, vfs=vfs.name)
+            cache_kib = configure_cache(db, image)
             full_check(db, deadline)
         finally:
             if db is not None:
@@ -341,6 +361,7 @@ def validate_closed(
         "compressed_bytes": image.retained + sys.getsizeof(image.blocks),
         "sqlite_version": apsw.sqlitelibversion(),
         "apsw_version": apsw.apswversion(),
+        "sqlite_cache_kib": cache_kib,
     }
 
 
@@ -353,7 +374,6 @@ def full_check(db: apsw.Connection, deadline: float) -> None:
 
     db.set_progress_handler(progress, 10000)
     try:
-        db.execute("PRAGMA cache_size=-524288")
         db.execute("PRAGMA mmap_size=0")
         db.execute("PRAGMA ignore_check_constraints=OFF")
         if list(db.execute("PRAGMA integrity_check")) != [("ok",)]:
@@ -416,6 +436,7 @@ def snapshot_image(
             destination = apsw.Connection(
                 str(sentinel.resolve()), flags=apsw.SQLITE_OPEN_READWRITE, vfs=vfs.name
             )
+            configure_cache(destination, image)
             full_check(destination, deadline)
             destination.execute("PRAGMA query_only=ON")
             yield destination, image
