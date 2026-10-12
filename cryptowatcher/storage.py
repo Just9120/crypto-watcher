@@ -171,6 +171,25 @@ class Snapshot:
     settings: OwnerSettings
 
 
+def create_schema(database: sqlite3.Connection) -> None:
+    """Canonical schema for a new store or an exclusive isolated recovery candidate."""
+    database.executescript("""
+        CREATE TABLE IF NOT EXISTS owner_settings (
+            owner_id INTEGER PRIMARY KEY, revision INTEGER NOT NULL CHECK(revision>0),
+            settings_json TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS delivery_preferences (
+            chat_id INTEGER PRIMARY KEY, enabled INTEGER NOT NULL CHECK(enabled IN (0,1)));
+        CREATE TABLE IF NOT EXISTS mutes (
+            symbol TEXT PRIMARY KEY, mute_until REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS runtime (
+            key TEXT PRIMARY KEY, payload_json TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS legacy_import (
+            source_sha256 TEXT PRIMARY KEY, original_json TEXT NOT NULL,
+            backup_name TEXT NOT NULL);
+        PRAGMA user_version=1;
+    """)
+
+
 class Store:
     def __init__(self, path: Path, owner_id: int, *, readonly: bool = False) -> None:
         number(owner_id, "owner_id", integer=True)
@@ -205,21 +224,7 @@ class Store:
         if not readonly:
             self.db.execute("PRAGMA journal_mode=WAL")
             self.db.execute("PRAGMA synchronous=FULL")
-            self.db.executescript("""
-                CREATE TABLE IF NOT EXISTS owner_settings (
-                    owner_id INTEGER PRIMARY KEY, revision INTEGER NOT NULL CHECK(revision>0),
-                    settings_json TEXT NOT NULL);
-                CREATE TABLE IF NOT EXISTS delivery_preferences (
-                    chat_id INTEGER PRIMARY KEY, enabled INTEGER NOT NULL CHECK(enabled IN (0,1)));
-                CREATE TABLE IF NOT EXISTS mutes (
-                    symbol TEXT PRIMARY KEY, mute_until REAL NOT NULL);
-                CREATE TABLE IF NOT EXISTS runtime (
-                    key TEXT PRIMARY KEY, payload_json TEXT NOT NULL);
-                CREATE TABLE IF NOT EXISTS legacy_import (
-                    source_sha256 TEXT PRIMARY KEY, original_json TEXT NOT NULL,
-                    backup_name TEXT NOT NULL);
-                PRAGMA user_version=1;
-            """)
+            create_schema(self.db)
             if os.name != "nt":
                 path.chmod(0o600)
 

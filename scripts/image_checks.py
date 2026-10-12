@@ -263,6 +263,53 @@ else:
 """,
             validation=True,
         )
+        rebuilt = json.loads(
+            run(
+                args.image,
+                directory,
+                "-c",
+                r"""
+import hashlib,json,subprocess,sys,time
+from pathlib import Path
+from cryptowatcher.config import OwnerSettings
+from cryptowatcher.events import History
+from cryptowatcher.storage import Store,check_integrity
+work=Path('/data/rebuild-fixture');work.mkdir(mode=0o700)
+source=work/'source.sqlite3';target=work/'candidate.sqlite3'
+s=Store(source,233382575);s.initialize(OwnerSettings());h=History(s)
+inputs=[{'start':i,'close':100,'provenance':'fixture_'*30} for i in range(24)]
+with s.db:
+    for i in range(20):
+        for kind in ('event','outcome'):
+            key=f'fixture-{i}'
+            value={'schema':f'cryptowatcher.{kind}.v1',kind+'_id':key,
+                'revision':1,'event_id':key,'event_revision':1,'episode_id':'episode',
+                'market_observation_ms':1800000000000,'available_at_ms':1800000000001,
+                'market_type':'spot','symbol':'BTCUSDT','detector_id':'price',
+                'timeframe':'1m','direction':'UP','strength':2,'state':'COMPLETE',
+                'horizon_min':60,'methodology_version':'1','classification':'CONTINUATION',
+                'metrics':{'price_return_pct':2},'source_inputs':inputs,
+                'settings_snapshot':s.snapshot().settings.payload()}
+            h.put(f'{kind}:{key}:0000000001',value);h.put(f'{kind}-head:{key}',value)
+s.db.execute('PRAGMA journal_mode=DELETE')
+check_integrity(s.db,deadline=time.monotonic()+30);s.close()
+expected=hashlib.sha256(source.read_bytes()).hexdigest()
+r=subprocess.run([sys.executable,'-m','cryptowatcher.history_rebuild',
+    '--source',str(source),'--destination',str(target),'--owner-id','233382575',
+    '--qualified-source-sha256',expected,'--timeout-seconds','30'],
+    capture_output=True,text=True,check=True)
+value=json.loads(r.stdout)
+assert hashlib.sha256(source.read_bytes()).hexdigest()==expected
+assert value['heads_converted']==40 and value['candidate_bytes']<source.stat().st_size
+print(json.dumps(value))
+""",
+                validation=True,
+            )
+        )
+        assert rebuilt["status"] == "ISOLATED_CANDIDATE_PASS"
+        assert rebuilt["candidate_full_integrity"] == "PASS"
+        assert rebuilt["immutable_rows_and_resolved_heads"] == "PASS"
+        assert rebuilt["production_migration"] == "NOT_RUN"
         run(
             args.image,
             directory,
@@ -300,7 +347,7 @@ else:
         run(args.image, directory, *migration, success=False)
         assert source.read_text() == '{"version":99,"chats":{}}'
     print(
-        "Image non-root / offline migration / full tmpfs and compressed validation / backup hash / restart / liveness: PASS"
+        "Image non-root / offline migration / full tmpfs and compressed validation / backup hash / isolated history rebuild / restart / liveness: PASS"
     )
 
 

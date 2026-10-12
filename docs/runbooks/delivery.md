@@ -202,6 +202,42 @@ Canonical receiver — [deploy_receiver.py](../../scripts/deploy_receiver.py). �
 
 Records: Actions tested SHA/check/run/attempt, build artifact/manifest, target release `deployment.json` (previous image, backup, switch and post-check state), uploaded deployment artifact. Секреты и resolved config не логируются. Failed operation сохраняет attempted release; повтор с тем же bundle отвергается до разбора state. После transient failure новая artifact attempt допустима только после known state inspection. Advanced cleanup/backups retention пока manual, без system prune или удаления живых данных.
 
+## Изолированная конвертация legacy history backup
+
+Canonical command из root repository в locked Python environment либо внутри
+проверенного immutable image — `python -m cryptowatcher.history_rebuild`.
+Назначение: создать новый isolated candidate с compact event/outcome heads из
+закрытого qualified SQLite backup. Production DB, Compose, config и исходный
+backup не изменяются; automatic CD не запускает этот tool.
+
+Перед запуском установить actual source path и SHA256, связанный с успешной full
+qualification этого exact закрытого backup. Source без WAL/SHM/journal sidecars;
+symlinks, другой owner/schema, unknown objects и existing destination блокируются.
+Destination directory private/owned, новый file exclusive0600. Default byte cap
+равен source size; нужен cap плюс1.5GiB free reserve, reserve проверяется в copy.
+Operation общий budget≤900s. Его изменение не согласовано.
+
+```bash
+python -m cryptowatcher.history_rebuild --source "$CW_CLOSED_BACKUP" --destination "$CW_NEW_CANDIDATE" --owner-id 233382575 --qualified-source-sha256 "$CW_QUALIFIED_SOURCE_SHA256"
+```
+
+Это command template: три CW variables задаются по actual operator inventory,
+а не предполагаемым paths. Head заменяется только после exact canonical equality
+с revision того же kind/ID/version; numeric provenance не нормализуется. Все пять
+таблиц копируются с сохранением остальных column values/types, original JSON,
+settings/mutes/queues и всех immutable revisions. Новый файл строится плотно;
+полная integrity, constraints, all-row/count equivalence, full resolved-head
+readback, source unchanged hash и candidate SHA256 обязательны.
+
+`ISOLATED_CANDIDATE_PASS` доказывает только этот candidate и lineage к expected
+source hash. Output явно сохраняет `source_full_qualification=REQUIRED_SEPARATELY_FOR_EXPECTED_HASH`
+и `production_migration=NOT_RUN`; он не заменяет source qualification, current
+runtime evidence либо CD. При failure новый partial output сохраняется UNQUALIFIED;
+не повторять запись в тот же destination. Promotion/replacement live DB требует
+отдельной exact-target approved procedure: current recovery copy, one writer,
+compatible binary, switch и обязательные post-checks. Такая процедура ещё не
+выполнена; архив5.42GB не выдаётся за current15GB dataset.
+
 ## Recovery и stop criteria
 
 До first switch при import/rehearsal failure: legacy JSON не изменён, new bot не запущен; после проверки единственного writer можно по согласованной procedure запустить прежний unit/image с исходным JSON. Частичный новый DB не подменяет legacy. Не удалять его для скрытого retry.

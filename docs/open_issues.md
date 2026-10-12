@@ -82,6 +82,24 @@ count непересекающихся ranges в одном WAL snapshot:468,080
 квалифицированное освобождение/reuse страниц. Existing-data conversion/compaction
 не выполнялись и не входят в автоматический startup.
 
+Подготовлена отдельная copy-only команда
+`python -m cryptowatcher.history_rebuild` по [процедуре](runbooks/delivery.md#изолированная-конвертация-legacy-history-backup).
+Она читает только закрытый backup с expected qualified SHA256 и создаёт новый
+exclusive candidate; original/не-head column values/types и revisions сохраняются.
+Full candidate integrity, все5 table rows/counts, resolved-head readback и
+source unchanged hash/metadata обязательны. Unknown tables/schema/collation,
+конфликт reference или numeric provenance, source sidecars, destination collision,
+byte cap/disk reserve/deadline блокируют result. Source full qualification —
+отдельный precondition exact hash; tool не утверждает PASS current live source.
+Startup/CD этот tool не вызывают; privileged production promotion не разрешена.
+
+Local:38 storage/CLI/rebuild tests PASS до последних дополнительных guards;
+итоговые18 rebuild risk tests и canonical quality31 sources PASS. Контролируемая
+fixture уменьшилась более30%, source bytes/mutes/settings/original JSON сохранены;
+это не measured production shrink/capacity. Linux image check включает non-root
+CLI invocation, source full check и all-row/candidate proof; latest CI этого diff
+ещё REQUIRED. Budget≤900s/cap/source-size+1.5GiB reserve не ослабляют delivery gates.
+
 Checkpoint12Oct2026: PR31 остаётся открытым; main9634558a/running G5afd10770,
 installed receiver9569f32c. Required CI38227994274/head8613839d PASS. Root qualification
 `/tmp/cw-pr31-job-v4fo3g8t` завершилась BLOCKED09:33:59UTC:

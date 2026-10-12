@@ -1,0 +1,200 @@
+import hashlib
+import json
+import os
+import sqlite3
+import time
+
+import pytest
+
+from cryptowatcher.config import OwnerSettings
+from cryptowatcher.events import PREFIX, History
+from cryptowatcher.history_rebuild import rebuild
+from cryptowatcher.storage import StateError, Store, encode
+
+from .test_history_heads import record
+
+
+def closed_backup(tmp_path, *, conflict=None):
+    path = tmp_path / "closed.sqlite3"
+    source = Store(path, 233382575)
+    source.initialize(OwnerSettings())
+    history = History(source)
+    with source.db:
+        for kind in ("event", "outcome"):
+            for i in range(30):
+                value = record(kind, f"record-{i}")
+                # Model the real legacy writer's full mutable copies.
+                history.put(f"{kind}:record-{i}:0000000001", value)
+                history.put(f"{kind}-head:record-{i}", value)
+        history.version("event", record("event", "already-compact"))
+        history.put("private-outbox", {"fixture": "PRESERVE_WITHOUT_EXPORT"})
+        source.db.execute(
+            "INSERT INTO legacy_import VALUES (?,?,?)", ("a" * 64, '{"original":true}', "legacy.bak")
+        )
+        source.db.execute("INSERT INTO mutes VALUES (?,?)", ("spot/BTCUSDT", 1800000000))
+        if conflict == "missing":
+            history.delete("event:record-0:0000000001")
+        elif conflict == "different":
+            history.put("event-head:record-0", {**record("event", "record-0"), "source_inputs": []})
+        elif conflict == "unknown_table":
+            source.db.execute("CREATE TABLE additional_data (x TEXT)")
+        elif conflict == "reserved_lookalike":
+            source.db.execute("CREATE TABLE sqlitex_data (x TEXT)")
+    source.db.execute("PRAGMA journal_mode=DELETE")
+    source.close()
+    return path, hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_rebuild_compacts_only_heads_and_preserves_all_original_revisions_and_owner_state(tmp_path):
+    source, expected = closed_backup(tmp_path)
+    destination = tmp_path / "candidate.sqlite3"
+    before = source.read_bytes()
+    result = rebuild(source, destination, 233382575, expected, time.monotonic() + 10)
+    assert result["status"] == "ISOLATED_CANDIDATE_PASS"
+    assert result["heads_converted"] == 60 and result["payload_bytes_saved"] > 700000
+    assert result["candidate_bytes"] < source.stat().st_size * 0.7
+    assert source.read_bytes() == before
+    assert result["source_full_qualification"] == "REQUIRED_SEPARATELY_FOR_EXPECTED_HASH"
+    old = Store(source, 233382575, readonly=True)
+    new = Store(destination, 233382575, readonly=True)
+    try:
+        assert new.snapshot() == old.snapshot()
+        assert new.db.execute("SELECT * FROM mutes").fetchall()[0][0] == "spot/BTCUSDT"
+        assert new.db.execute("SELECT original_json FROM legacy_import").fetchone()[0] == '{"original":true}'
+        for row in old.db.execute("SELECT key,payload_json FROM runtime"):
+            relative = row[0][len(PREFIX) :]
+            if "-head:" in relative:
+                assert History(new).get(relative) == History(old).get(relative)
+            else:
+                assert (
+                    new.db.execute("SELECT payload_json FROM runtime WHERE key=?", (row[0],)).fetchone()[0]
+                    == row[1]
+                )
+    finally:
+        old.close()
+        new.close()
+    # A repeated reconstruction accepts mixed/new heads but performs no additional conversion.
+    second = tmp_path / "second.sqlite3"
+    again = rebuild(destination, second, 233382575, result["candidate_sha256"], time.monotonic() + 10)
+    assert again["heads_converted"] == 0 and again["table_rows"] == result["table_rows"]
+
+
+@pytest.mark.parametrize("failure", ["missing", "different", "unknown_table", "reserved_lookalike"])
+def test_rebuild_rejects_unknown_or_conflicting_history_without_changing_source(tmp_path, failure):
+    source, expected = closed_backup(tmp_path, conflict=failure)
+    original = source.read_bytes()
+    destination = tmp_path / "rejected.sqlite3"
+    with pytest.raises(StateError):
+        rebuild(source, destination, 233382575, expected, time.monotonic() + 10)
+    assert source.read_bytes() == original and destination.exists()
+
+
+@pytest.mark.parametrize("failure", ["hash", "owner", "existing", "live_sidecars", "byte_limit", "deadline"])
+def test_rebuild_preconditions_never_replace_source_or_existing_destination(tmp_path, failure):
+    source, expected = closed_backup(tmp_path)
+    original = source.read_bytes()
+    destination = tmp_path / "candidate.sqlite3"
+    owner, deadline, maximum = 233382575, time.monotonic() + 10, None
+    if failure == "hash":
+        expected = "f" * 64
+    elif failure == "owner":
+        owner = 999
+    elif failure == "existing":
+        destination.write_bytes(b"UNKNOWN_USER_FILE")
+    elif failure == "live_sidecars":
+        source.with_name(source.name + "-wal").write_bytes(b"UNTOUCHED")
+    elif failure == "byte_limit":
+        maximum = 32768
+    else:
+        deadline = time.monotonic() - 1
+    with pytest.raises((StateError, sqlite3.DatabaseError)):
+        rebuild(source, destination, owner, expected, deadline, max_candidate_bytes=maximum)
+    assert source.read_bytes() == original
+    if failure == "existing":
+        assert destination.read_bytes() == b"UNKNOWN_USER_FILE"
+
+
+def test_candidate_insert_enforces_constraints_and_preserves_invalid_source(tmp_path):
+    source, _ = closed_backup(tmp_path)
+    with sqlite3.connect(source) as connection:
+        connection.execute("PRAGMA ignore_check_constraints=ON")
+        connection.execute("UPDATE delivery_preferences SET enabled=2")
+    original = source.read_bytes()
+    expected = hashlib.sha256(original).hexdigest()
+    with pytest.raises(sqlite3.IntegrityError):
+        rebuild(source, tmp_path / "rejected.sqlite3", 233382575, expected, time.monotonic() + 10)
+    assert source.read_bytes() == original
+
+
+def test_numeric_provenance_mismatch_does_not_get_silently_normalized(tmp_path):
+    source, _ = closed_backup(tmp_path)
+    with sqlite3.connect(source) as connection:
+        key = PREFIX + "event-head:record-0"
+        value = json.loads(
+            connection.execute("SELECT payload_json FROM runtime WHERE key=?", (key,)).fetchone()[0]
+        )
+        value["source_inputs"][0]["close"] = 100.0
+        connection.execute("UPDATE runtime SET payload_json=? WHERE key=?", (encode(value), key))
+    original = source.read_bytes()
+    with pytest.raises(StateError, match="conflicts"):
+        rebuild(
+            source,
+            tmp_path / "rejected.sqlite3",
+            233382575,
+            hashlib.sha256(original).hexdigest(),
+            time.monotonic() + 10,
+        )
+    assert source.read_bytes() == original
+
+
+def test_same_columns_with_unknown_collation_are_not_silently_reinterpreted(tmp_path):
+    source, _ = closed_backup(tmp_path)
+    with sqlite3.connect(source) as connection:
+        connection.execute("PRAGMA writable_schema=ON")
+        connection.execute(
+            "UPDATE sqlite_master SET sql=replace(sql,'key TEXT PRIMARY KEY','key TEXT PRIMARY KEY COLLATE NOCASE') WHERE name='runtime'"
+        )
+    original = source.read_bytes()
+    with pytest.raises(StateError, match="collation"):
+        rebuild(
+            source,
+            tmp_path / "rejected.sqlite3",
+            233382575,
+            hashlib.sha256(original).hexdigest(),
+            time.monotonic() + 10,
+        )
+    assert source.read_bytes() == original
+
+
+@pytest.mark.parametrize("deadline", [float("nan"), float("inf"), 1000])
+def test_unbounded_or_extended_budget_is_not_accepted(tmp_path, deadline):
+    source, expected = closed_backup(tmp_path)
+    destination = tmp_path / "candidate.sqlite3"
+    if deadline == 1000:
+        deadline += time.monotonic()
+    with pytest.raises(StateError, match="deadline"):
+        rebuild(source, destination, 233382575, expected, deadline)
+    assert not destination.exists()
+
+
+def test_source_metadata_change_during_rebuild_invalidates_candidate(tmp_path, monkeypatch):
+    from cryptowatcher import history_rebuild
+
+    source, expected = closed_backup(tmp_path)
+    original = source.read_bytes()
+    real = history_rebuild.fingerprint
+    calls = 0
+
+    def fingerprint(path, deadline):
+        nonlocal calls
+        if path == source:
+            calls += 1
+            if calls == 2:
+                meta = source.stat()
+                os.utime(source, ns=(meta.st_atime_ns, meta.st_mtime_ns + 10000000))
+        return real(path, deadline)
+
+    monkeypatch.setattr(history_rebuild, "fingerprint", fingerprint)
+    with pytest.raises(StateError, match="metadata changed"):
+        rebuild(source, tmp_path / "candidate.sqlite3", 233382575, expected, time.monotonic() + 10)
+    assert source.read_bytes() == original

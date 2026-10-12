@@ -12,6 +12,7 @@ Radar обрабатывает широкий metadata/liquidity universe обо
 - [Runtime boundaries](docs/architecture.md)
 - [Advisory agent contract, configuration и recovery](docs/runbooks/agent-delivery.md)
 - [CI/CD, VPS target, первая поставка и recovery](docs/runbooks/delivery.md)
+- [Изолированная конвертация qualified history backup](docs/runbooks/delivery.md#изолированная-конвертация-legacy-history-backup)
 - [Repository procedures](AGENTS.md) и [CI/CD configuration contract](ci-cd-rules.md)
 
 ## Stack и установка
