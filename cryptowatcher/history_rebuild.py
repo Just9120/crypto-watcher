@@ -149,8 +149,9 @@ def canonical_head(source: sqlite3.Connection, key: str, payload: str) -> tuple[
         return None
     fields = (*HEAD_FIELDS[kind], "schema")
     rows = source.execute(
-        "SELECT key,value,type FROM json_each(?) WHERE key IN (" + ",".join("?" for _ in fields) + ")",
-        (payload, *fields),
+        "SELECT key,CASE WHEN type='real' THEN ? -> fullkey ELSE value END,type "
+        "FROM json_each(?) WHERE key IN (" + ",".join("?" for _ in fields) + ")",
+        (payload, payload, *fields),
     ).fetchall()
     if any(type_ == "integer" and type(value) is not int for _, value, type_ in rows):
         return None

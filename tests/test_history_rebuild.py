@@ -26,6 +26,24 @@ def test_logical_manifest_preserves_types_and_field_boundaries():
     assert len(set(hashes)) == len(values)
 
 
+def test_rebuild_preserves_real_production_strength_in_revision_and_head(tmp_path):
+    source, _ = closed_backup(tmp_path)
+    with sqlite3.connect(source) as database:
+        for key in (PREFIX + "event:record-0:0000000001", PREFIX + "event-head:record-0"):
+            value = json.loads(
+                database.execute("SELECT payload_json FROM runtime WHERE key=?", (key,)).fetchone()[0]
+            )
+            value["strength"] = 2.095370825591371
+            database.execute("UPDATE runtime SET payload_json=? WHERE key=?", (encode(value), key))
+    expected = hashlib.sha256(source.read_bytes()).hexdigest()
+    destination = tmp_path / "real-strength.sqlite3"
+    rebuild(source, destination, 233382575, expected, time.monotonic() + 10)
+    with closing(Store(destination, 233382575, readonly=True)) as store:
+        history = History(store)
+        for key in ("event:record-0:0000000001", "event-head:record-0"):
+            assert history.get(key)["strength"].hex() == (2.095370825591371).hex()
+
+
 def test_rebuild_keeps_large_integer_projections_without_json1_rounding(tmp_path):
     source, _ = closed_backup(tmp_path)
     database = Store(source, 233382575)

@@ -153,10 +153,24 @@ Merge/CD/production shrinking и завершение Goal остаются PEND
 Compressed read-only source сохранил exact5.42GB/61e4f087 byte identity, но build
 123.65s и CPU copy11.888s против native9.674s не подтвердили пользу; full rerun не
 выполнялся. Все diagnostic containers removed/source preserved; это partial
-Evidence, не qualification. Runtime code остаётся132967a. Общий900s limit сохраняется;
-owner clarification PENDING: относится ли15min к целой одноразовой конвертации или
-к каждому самостоятельному запуску. До ответа checkpointed multi-run procedure
-и сбросы budget не запускаются. Remaining gates и54/58 не изменены.
+Evidence, не qualification. Runtime code остаётся132967a. Owner clarification:
+15 минут относятся ко всей конвертации, включая копирование и полную проверку;
+суммарный deadline900s не продлевается и не сбрасывается последовательностью
+запусков. Checkpointed multi-run conversion исключена. CPU1/RAM4GiB/no swap,
+full integrity, logical rows и hashes сохраняются. Remaining gates и54/58 не изменены.
+
+Follow-up: source-preserved real-copy diagnostics выявили rounding scalar real
+в SQLite3.46.1 JSON1: strength2.095370825591371 становился2.0953708255913712.
+Полный logical readback отвергал такую копию. Parser revision/head projections
+теперь получает исходный JSON numeric token и декодирует его в Python; source
+values, типы и strict manifests сохраняются. Scalar/window extremes, signed zero
+и real production revision/head fixture покрыты regression tests. Local73 tests
+и canonical quality PASS; sample4000 event/outcome revisions28.58MB дал exact
+canonical public equality PASS. Это проверка выборки, не full qualification.
+Native private copy100k и temporary128MiB codec cache не дали устойчивого общего
+ускорения; их изменения не включаются. Кэш runtime остаётся4MiB. Latest PR CI
+для batch REQUIRED; complete historical/current conversion≤900s, promotion,
+merge/CD и фактическое уменьшение production по-прежнему PENDING.
 
 
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить

@@ -29,8 +29,8 @@ def digest(raw: bytes) -> str:
 
 
 def sql_value(value: Any, kind: str) -> Any:
-    """JSON1 returns object/array text and integer representations of booleans."""
-    if kind in ("object", "array"):
+    """Decode real lexemes in Python; older JSON1 parsers can round by one ULP."""
+    if kind in ("object", "array", "real"):
         return json.loads(value)
     if kind in ("true", "false"):
         return kind == "true"
@@ -167,7 +167,10 @@ class Codec:
             return self.pack(self.read(payload))
         result: dict[str, Any] = {}
         references = {}
-        for name, item, kind in self.db.execute("SELECT key,value,type FROM json_each(?)", (payload,)):
+        for name, item, kind in self.db.execute(
+            "SELECT key,CASE WHEN type='real' THEN ? -> fullkey ELSE value END,type FROM json_each(?)",
+            (payload, payload),
+        ):
             if not isinstance(name, str):
                 raise StateError("Public history must be an object")
             if kind == "integer" and type(item) is not int:
@@ -186,9 +189,10 @@ class Codec:
                 parts: list[list[bytes]] = []
                 bucket: Any = None
                 candles = self.db.execute(
-                    "SELECT value,type,CASE WHEN type='object' THEN json_extract(value,'$.start') END,"
+                    "SELECT CASE WHEN type='real' THEN ? -> fullkey ELSE value END,type,"
+                    "CASE WHEN type='object' THEN json_extract(value,'$.start') END,"
                     "CASE WHEN type='object' THEN json_extract(value,'$.step') END FROM json_each(?)",
-                    (item,),
+                    (item, item),
                 )
                 for index, (candle, candle_kind, start, step) in enumerate(candles):
                     if candle_kind == "integer" and type(candle) is not int:

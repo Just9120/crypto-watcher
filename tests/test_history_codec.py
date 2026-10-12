@@ -255,6 +255,18 @@ def test_json1_large_integer_fallback_does_not_round_history(store, placement):
     assert codec.canonical_json(packed) == encode(value).encode()
 
 
+@pytest.mark.parametrize("number", [2.095370825591371, 1.0000000000000002, 5e-324, 1e308, -0.0])
+def test_json1_real_lexemes_keep_exact_float_values_in_scalar_and_window(store, number):
+    # SQLite 3.46.1 json_each.value rounds the first real production strength
+    # to 2.0953708255913712. Decode the original JSON token instead.
+    value = {"strength": number, "future_inputs": [number, {"close": number}]}
+    codec = Codec(store.db)
+    with store.db:
+        packed = codec.pack_canonical(encode(value))
+    assert codec.canonical_json(packed) == encode(value).encode()
+    assert encode(codec.unpack(packed)) == encode(value)
+
+
 @pytest.mark.parametrize(
     "fault", ["projection", "unknown_schema", "wrong_hash", "missing_body", "reordered_parts"]
 )
