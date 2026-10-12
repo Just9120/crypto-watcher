@@ -168,6 +168,7 @@ def qualify(module_path, module_hash, wheel):
             "--network",
             "none",
             "--read-only",
+            "--no-healthcheck",
             "--cap-drop",
             "ALL",
             "--security-opt",

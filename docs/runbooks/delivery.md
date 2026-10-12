@@ -78,6 +78,10 @@ Source и persistent backup остаются обязательными full int
 Проверочные контейнеры имеют отдельный private tmpfs `/validation`, UID/GID10001,
 read-only root, network none, cap-drop ALL, CPU1 и memory-swap=memory (без swap).
 Бот и другие service units эти limits не получают. CD использует cap4GiB/no swap;
+Offline CLI containers отключают inherited app healthcheck через `--no-healthcheck`:
+они не запускают бот, а health imports тратят тот же CPU budget и дают
+неприменимый `Invalid owner_id` без app env. Полные integrity/backup проверки
+и health/readiness реального production container остаются обязательными.
 3GiB доступны compressed pages/index,1GiB — interpreter/SQLite/cache.
 Private scratch64MiB хранит только disposable sentinel/WAL/SHM, не полную DB.
 Host MemAvailable должен оставить1536MiB reserve сверх cap. WAL-aware

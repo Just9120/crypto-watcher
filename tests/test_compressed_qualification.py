@@ -180,6 +180,7 @@ def test_owned_probe_limits_readonly_mounts_cleanup_and_failed_qualification(
             mounts = [args[i + 1] for i, x in enumerate(args) if x == "--mount"]
             assert len(mounts) == 3 and all(x.endswith(",readonly") for x in mounts)
             assert "--env-file" not in args and args[args.index("--network") + 1] == "none"
+            assert "--no-healthcheck" in args
             assert args[args.index("--user") + 1] == "10001:10001"
             assert (
                 args[args.index("--memory") + 1] == args[args.index("--memory-swap") + 1] == str(4 * 1024**3)

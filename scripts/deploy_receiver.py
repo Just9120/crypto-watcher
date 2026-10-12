@@ -432,6 +432,7 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
             f"cw-verify-{revision[:12]}-{digest[:16]}",
             "--network=none",
             "--read-only",
+            "--no-healthcheck",
             "--cap-drop=ALL",
             "--security-opt=no-new-privileges:true",
             "--env-file",
