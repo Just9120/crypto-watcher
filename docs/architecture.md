@@ -41,7 +41,7 @@ G3 реализует outcomes/cohorts/export/retention; G4 добавит не�
 History storage: immutable event/outcome/episode/comparison revisions сохраняют
 публичную семантику; их heads — identity-checked ссылки с малыми SQL projections.
 Большие settings/effective parameters/source context/enrichment snapshots хранятся
-один раз по SHA256 canonical JSON. Исходные event/outcome/comparator windows
+один раз по SHA256 canonical JSON. Исходные event/outcome/comparator windows новых записей
 ссылаются на lossless zlib JSON blocks до16 candles, выровненные по UTC buckets
 при доступных start/step. Пересекающиеся полные blocks повторно не записываются.
 Каждый block и восстановленное поле проверяются по hash; повреждение/missing body
@@ -49,6 +49,13 @@ History storage: immutable event/outcome/episode/comparison revisions сохра
 форматом: Telegram/export/analytics/agent contract получают прежние полные values.
 Legacy records читаются одновременно с compact records. Summary counts/grouping
 используют projections и не декодируют все candle windows.
+
+Изолированная историческая conversion сохраняет frozen window целиком как один
+content-addressed compressed value, без повторного разбора каждой candle.
+Одинаковые целые windows разделяют body; пересекающиеся, но разные исторические
+windows сохраняются независимо и lossless. Это внутренний вариант того же schema;
+readers поддерживают whole values и blocks вместе. Window больше decoder bound
+32MiB остаётся в bounded blocks. Live writes продолжают использовать shared blocks.
 
 Physical SQLite schema1 остаётся прежней. Старые binaries не считаются compatible
 rollback readers после compact writes. Изолированная conversion уменьшает existing

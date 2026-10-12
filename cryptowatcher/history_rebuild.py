@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from .events import HEAD_FIELDS, HEAD_SCHEMA, PREFIX, History
-from .history_codec import BLOB_PREFIX, MARKER, Codec, sql_value
+from .history_codec import BLOB_PREFIX, MARKER, MAX_BYTES, Codec, sql_value
 from .storage import IntegrityError, StateError, Store, check_integrity, create_schema, encode
 
 TABLES = {
@@ -37,6 +37,15 @@ class _CopyCodec(Codec):
     def __init__(self, database: sqlite3.Connection):
         super().__init__(database)
         self.admitted: OrderedDict[str, None] = OrderedDict()
+
+    def pack_window(self, item: str) -> dict[str, Any] | None:
+        # Historical conversion preserves a complete frozen window without
+        # repeatedly parsing every candle. Live writes still use shared blocks.
+        raw = item.encode()
+        if len(raw) > MAX_BYTES:
+            return super().pack_window(item)
+        key = self.save_bytes(raw)
+        return {"mode": "value", "ids": [key], "sha256": key}
 
     def save_bytes(self, raw: bytes) -> str:
         cached = self.encoded.get(raw)

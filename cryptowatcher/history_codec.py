@@ -161,6 +161,41 @@ class Codec:
             raise StateError("Shared field hash mismatch")
         return raw
 
+    def pack_window(self, item: str) -> dict[str, Any] | None:
+        """Split a canonical window while retaining exact object numeric tokens."""
+        parts: list[list[bytes]] = []
+        bucket: Any = None
+        candles = self.db.execute(
+            "SELECT CASE WHEN type='real' THEN ? -> fullkey ELSE value END,type,"
+            "CASE WHEN type='object' THEN json_extract(value,'$.start') END,"
+            "CASE WHEN type='object' THEN json_extract(value,'$.step') END FROM json_each(?)",
+            (item, item),
+        )
+        for index, (candle, candle_kind, start, step) in enumerate(candles):
+            if candle_kind == "integer" and type(candle) is not int:
+                return None
+            current = (
+                (step, start // (step * 16))
+                if type(start) is int and type(step) is int and step > 0
+                else (None, index // 16)
+            )
+            if not parts or current != bucket or len(parts[-1]) == 16:
+                parts.append([])
+                bucket = current
+            raw = (
+                candle.encode()
+                if candle_kind in ("object", "array")
+                else encode(sql_value(candle, candle_kind)).encode()
+            )
+            parts[-1].append(raw)
+        blocks = [b"[" + b",".join(part) + b"]" for part in parts]
+        raw = b"[" + b",".join(block[1:-1] for block in blocks) + b"]"
+        return {
+            "mode": "window",
+            "ids": [self.save_bytes(block) for block in blocks],
+            "sha256": digest(raw),
+        }
+
     def pack_canonical(self, payload: str) -> Any:
         """Pack producer-canonical legacy JSON without materializing large windows."""
         if MARKER in payload:
@@ -186,38 +221,10 @@ class Codec:
                         k: settings[k] for k in ("profile", "alert_universe_mode") if k in settings
                     }
             elif name in WINDOW_FIELDS and kind == "array" and item != "[]":
-                parts: list[list[bytes]] = []
-                bucket: Any = None
-                candles = self.db.execute(
-                    "SELECT CASE WHEN type='real' THEN ? -> fullkey ELSE value END,type,"
-                    "CASE WHEN type='object' THEN json_extract(value,'$.start') END,"
-                    "CASE WHEN type='object' THEN json_extract(value,'$.step') END FROM json_each(?)",
-                    (item, item),
-                )
-                for index, (candle, candle_kind, start, step) in enumerate(candles):
-                    if candle_kind == "integer" and type(candle) is not int:
-                        return self.pack(json.loads(payload))
-                    current = (
-                        (step, start // (step * 16))
-                        if type(start) is int and type(step) is int and step > 0
-                        else (None, index // 16)
-                    )
-                    if not parts or current != bucket or len(parts[-1]) == 16:
-                        parts.append([])
-                        bucket = current
-                    raw = (
-                        candle.encode()
-                        if candle_kind in ("object", "array")
-                        else encode(sql_value(candle, candle_kind)).encode()
-                    )
-                    parts[-1].append(raw)
-                blocks = [b"[" + b",".join(part) + b"]" for part in parts]
-                raw = b"[" + b",".join(block[1:-1] for block in blocks) + b"]"
-                references[name] = {
-                    "mode": "window",
-                    "ids": [self.save_bytes(block) for block in blocks],
-                    "sha256": digest(raw),
-                }
+                reference = self.pack_window(item)
+                if reference is None:
+                    return self.pack(json.loads(payload))
+                references[name] = reference
             else:
                 value = sql_value(item, kind)
                 result[name] = self.pack(value) if isinstance(value, (dict, list)) else value

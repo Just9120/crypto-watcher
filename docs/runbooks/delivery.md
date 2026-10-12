@@ -228,6 +228,14 @@ Private-copy admission reuse разрешён только в exclusive transact
 candidate; отдельный frozen readback проверяет каждый body/ref. Это не отменяет
 runtime admission checks и не продлевает900s budget.
 
+Исторические windows до32MiB переводятся в shared whole-value snapshot. Это
+снижает стоимость преобразования; разные пересекающиеся frozen windows остаются
+независимыми сжатыми values, без потери timestamps/provenance. Более крупные windows
+используют bounded blocks. Новые live records используют16-candle blocks; readers
+обязаны поддерживать mixed whole-value/block history. Deadline900s включает
+копирование, full integrity, все manifests и hashes; последовательность запусков
+не сбрасывает общий budget одной конвертации.
+
 ```bash
 python -m cryptowatcher.history_rebuild --source "$CW_CLOSED_BACKUP" --destination "$CW_NEW_CANDIDATE" --owner-id 233382575 --qualified-source-sha256 "$CW_QUALIFIED_SOURCE_SHA256"
 ```

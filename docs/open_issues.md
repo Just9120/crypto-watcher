@@ -172,6 +172,17 @@ Native private copy100k и temporary128MiB codec cache не дали устой�
 для batch REQUIRED; complete historical/current conversion≤900s, promotion,
 merge/CD и фактическое уменьшение production по-прежнему PENDING.
 
+Historical conversion использует lossless whole-window values вместо повторного
+разбора каждой candle на blocks. Совпадающие frozen windows разделяют body;
+пересекающиеся разные windows сохраняются независимо. Live writes остаются на
+shared16-candle blocks, mixed readers и decoder bound32MiB сохранены. Это не
+удаление исторических inputs/provenance. Paired4000-revision sample: copy CPU
+baseline4.143/4.446s →2.101/2.666s; public equality PASS, compressed bodies6.83→5.97MB.
+Данные относятся только к sample; full historical/current proof и уменьшение
+production ещё REQUIRED. Window-cache и boundary-regex experiments отменены:
+существенного устойчивого ускорения не подтвердили. Latest local/CI и полный
+historical qualification≤900s — следующий gate этого batch, без продления лимитов.
+
 
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный

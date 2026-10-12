@@ -10,7 +10,7 @@ import pytest
 
 from cryptowatcher.config import OwnerSettings
 from cryptowatcher.events import PREFIX, History
-from cryptowatcher.history_rebuild import feed, rebuild
+from cryptowatcher.history_rebuild import _CopyCodec, feed, rebuild
 from cryptowatcher.storage import IntegrityError, StateError, Store, encode
 
 from .test_history_heads import record
@@ -24,6 +24,41 @@ def test_logical_manifest_preserves_types_and_field_boundaries():
         feed(manifest, row)
         hashes.append(manifest.digest())
     assert len(set(hashes)) == len(values)
+
+
+def test_historical_frozen_windows_share_one_lossless_value_while_live_uses_blocks(tmp_path):
+    from cryptowatcher.history_codec import MARKER, Codec
+
+    window = [{"start": i * 60000, "step": 60000, "close": 2.095370825591371} for i in range(40)]
+    value = {"source_inputs": window, "future_inputs": window, "strength": 2.095370825591371}
+    with closing(Store(tmp_path / "candidate.sqlite3", 233382575)) as store:
+        copier = _CopyCodec(store.db)
+        live = Codec(store.db)
+        with store.db:
+            old = copier.pack_canonical(encode(value))
+            current = live.pack(value)
+        fields = old[MARKER]["fields"]
+        assert fields["source_inputs"]["mode"] == "value"
+        assert fields["source_inputs"] == fields["future_inputs"]
+        assert len(fields["source_inputs"]["ids"]) == 1
+        assert current[MARKER]["fields"]["source_inputs"]["mode"] == "window"
+        assert len(current[MARKER]["fields"]["source_inputs"]["ids"]) == 3
+        assert live.canonical_json(old) == live.canonical_json(current) == encode(value).encode()
+        store.db.execute("PRAGMA query_only=ON")
+        assert Codec(store.db).canonical_json(old) == encode(value).encode()
+
+
+def test_historical_window_above_single_snapshot_bound_uses_bounded_blocks(tmp_path, monkeypatch):
+    from cryptowatcher import history_rebuild
+    from cryptowatcher.history_codec import MARKER, Codec
+
+    monkeypatch.setattr(history_rebuild, "MAX_BYTES", 256)
+    value = {"source_inputs": [{"start": i * 60000, "step": 60000, "close": 100} for i in range(40)]}
+    with closing(Store(tmp_path / "candidate.sqlite3", 233382575)) as store:
+        with store.db:
+            packed = _CopyCodec(store.db).pack_canonical(encode(value))
+        assert packed[MARKER]["fields"]["source_inputs"]["mode"] == "window"
+        assert Codec(store.db).canonical_json(packed) == encode(value).encode()
 
 
 def test_rebuild_preserves_real_production_strength_in_revision_and_head(tmp_path):
