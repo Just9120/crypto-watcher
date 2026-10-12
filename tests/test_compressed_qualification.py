@@ -118,8 +118,9 @@ def test_independent_stage_deadlines_do_not_refresh_inside_live_copy(tmp_path, m
 
 
 @pytest.mark.parametrize("exit_code", [0, 1])
+@pytest.mark.parametrize("changed", [False, True])
 def test_owned_probe_limits_readonly_mounts_cleanup_and_failed_qualification(
-    tmp_path, monkeypatch, exit_code
+    tmp_path, monkeypatch, exit_code, changed, capsys
 ):
     monkeypatch.setattr(os, "geteuid", lambda: 0, raising=False)
     monkeypatch.setattr(q.socket, "gethostname", lambda: "vmi3224957")
@@ -145,14 +146,17 @@ def test_owned_probe_limits_readonly_mounts_cleanup_and_failed_qualification(
     monkeypatch.setattr(q.tempfile, "TemporaryDirectory", lambda **kwargs: original_temp(dir=tmp_path))
     calls = []
     probe = {}
+    read_counts = {}
 
     def inspect(name):
         if name == q.IMAGE:
             return {"Config": {"Labels": {"org.opencontainers.image.revision": q.BASE}}}
         if name.startswith("cw-compressed-"):
             return probe
+        read_counts[name] = read_counts.get(name, 0) + 1
+        updated = changed and name == "trading-agent-api" and read_counts[name] > 1
         return {
-            "Id": name + "-old",
+            "Id": name + ("-new" if updated else "-old"),
             "State": {"Running": True},
             "Config": {
                 "Labels": {"org.opencontainers.image.revision": "afd10770aa3a330e6c5a28e3ea85a676060e6c29"}
@@ -191,7 +195,16 @@ def test_owned_probe_limits_readonly_mounts_cleanup_and_failed_qualification(
     if exit_code:
         with pytest.raises(AssertionError, match="did not pass"):
             q.qualify(module, hashlib.sha256(module.read_bytes()).hexdigest(), wheel)
+    elif changed:
+        with pytest.raises(AssertionError, match="Concurrent live change"):
+            q.qualify(module, hashlib.sha256(module.read_bytes()).hexdigest(), wheel)
     else:
         q.qualify(module, hashlib.sha256(module.read_bytes()).hexdigest(), wheel)
     assert calls[-1] == ["docker", "rm", "-f", "owned-probe"]
     assert backup.read_bytes() == b"preserved" and not list(tmp_path.glob("tmp*"))
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    readbacks = [r for r in records if r["kind"] == "live_readback"]
+    assert len(readbacks) == 3
+    assert next(r for r in readbacks if r["unit"] == "trading-agent-api")["container_unchanged"] == (
+        not changed
+    )

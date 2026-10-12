@@ -11,12 +11,47 @@ import apsw
 import pytest
 
 from cryptowatcher.compressed_validation import (
+    BLOCK,
     Image,
     QualificationError,
     classified_errors,
     snapshot,
     validate_closed,
 )
+
+
+def test_coalesced_partial_writes_sparse_holes_truncate_and_freeze():
+    image = Image(None, limit=2**20, deadline=time.monotonic() + 10)
+    reference = bytearray()
+    writes = [(17, b"first"), (BLOCK - 3, b"boundary-value"), (BLOCK * 12 + 29, b"far")]
+    for offset, value in writes:
+        reference.extend(bytes(max(0, offset + len(value) - len(reference))))
+        reference[offset : offset + len(value)] = value
+        image.write(value, offset)
+        assert image.read(len(reference), 0) == bytes(reference)
+    image.truncate(BLOCK + 7)
+    reference = reference[: BLOCK + 7]
+    image.write(b"new", BLOCK + 19)
+    reference.extend(bytes(BLOCK + 22 - len(reference)))
+    reference[BLOCK + 19 : BLOCK + 22] = b"new"
+    image.freeze()
+    assert image.read(len(reference), 0) == bytes(reference)
+    assert image.reconstructed_hash() == hashlib.sha256(reference).hexdigest()
+    with pytest.raises(apsw.ReadOnlyError):
+        image.write(b"modified", 0)
+
+
+def test_coalesced_truncate_before_buffer_flush_discards_removed_bytes():
+    image = Image(None, limit=2**20, deadline=time.monotonic() + 10)
+    image.write(b"original", 0)
+    with pytest.raises(QualificationError):
+        image.reconstructed_hash()
+    image.truncate(0)
+    image.write(b"new", BLOCK + 5)
+    image.freeze()
+    expected = bytes(BLOCK + 5) + b"new"
+    assert image.read(len(expected), 0) == expected
+    assert image.reconstructed_hash() == hashlib.sha256(expected).hexdigest()
 
 
 def validate(path, *, limit, deadline, progress=lambda **kw: None):

@@ -204,6 +204,7 @@ def qualify(module_path, module_hash, wheel):
             "-",
         ]
         passed = False
+        changed_units = []
         try:
             result = subprocess.run(command, input=code, text=True, timeout=1815)
             process = inspect(name)
@@ -228,10 +229,11 @@ def qualify(module_path, module_hash, wheel):
                 emit("compressed_cleanup", state="REMOVED")
             for unit, original in baseline.items():
                 current = inspect(unit)
-                assert current["Id"] == original["Id"] and current["State"]["Running"], (
-                    "Concurrent live change"
-                )
-                emit("live_readback", unit=unit, container_unchanged=True, running=True)
+                unchanged = current["Id"] == original["Id"]
+                running = current["State"]["Running"]
+                if not unchanged or not running:
+                    changed_units.append(unit)
+                emit("live_readback", unit=unit, container_unchanged=unchanged, running=running)
             after = BACKUP.stat()
             assert (after.st_ino, after.st_size, after.st_mtime_ns) == (
                 before.st_ino,
@@ -239,6 +241,7 @@ def qualify(module_path, module_hash, wheel):
                 before.st_mtime_ns,
             ), "Closed backup changed"
     assert passed, "Compressed qualification did not pass; receiver unchanged"
+    assert not changed_units, "Concurrent live change; receiver unchanged"
     emit(
         "compressed_qualification",
         state="PASS",

@@ -20,9 +20,10 @@ import apsw
 
 from .storage import IntegrityError
 
-BLOCK = 4096
+BLOCK = 65536
 CACHE_PAGES = 512
 COMPRESSION_LEVEL = 2
+WRITE_CACHE_BLOCKS = 8
 
 
 MAX_COMPRESSED_BYTES = 3 * 1024**3
@@ -50,6 +51,7 @@ class Image:
         self.limit = limit
         self.mutable = False
         self.cache: OrderedDict[int, bytes] = OrderedDict()
+        self.write_cache: OrderedDict[int, bytearray] = OrderedDict()
         if path is None:
             self.mutable = True
             return
@@ -116,24 +118,52 @@ class Image:
         while pos < end:
             index, start = divmod(pos, BLOCK)
             n = min(end - pos, BLOCK - start)
-            value = (
-                bytearray(zlib.decompress(self.blocks[index]))
-                if index < len(self.blocks)
-                else bytearray(BLOCK)
-            )
+            value = self.write_cache.pop(index, None)
+            if value is None:
+                if index == len(self.blocks):
+                    self.blocks.append(b"")
+                    self.retained += sys.getsizeof(b"")
+                    value = bytearray(BLOCK)
+                else:
+                    value = bytearray(zlib.decompress(self.blocks[index]))
             if len(value) < BLOCK:
                 value.extend(bytes(BLOCK - len(value)))
             value[start : start + n] = data[pos - offset : pos - offset + n]
-            self.set_block(index, bytes(value))
+            self.write_cache[index] = value
+            self.cache.pop(index, None)
+            while len(self.write_cache) > WRITE_CACHE_BLOCKS:
+                old_index, old_value = self.write_cache.popitem(last=False)
+                self.set_block(old_index, bytes(old_value))
             pos += n
 
+    def freeze(self) -> None:
+        for index, value in self.write_cache.items():
+            self.set_block(index, bytes(value))
+        self.write_cache.clear()
+        self.mutable = False
+
     def truncate(self, size: int) -> None:
+        budget(self.deadline)
+        if size < 0:
+            raise QualificationError("INVALID_TRUNCATE")
         if not self.mutable:
             raise apsw.ReadOnlyError("IMMUTABLE_VALIDATION_IMAGE")
         if size > self.size:
             self.write(bytes(1), size - 1)
         while len(self.blocks) > (size + BLOCK - 1) // BLOCK:
+            self.write_cache.pop(len(self.blocks) - 1, None)
             self.retained -= sys.getsizeof(self.blocks.pop())
+        if size and size % BLOCK:
+            index, boundary = divmod(size, BLOCK)
+            value = self.write_cache.pop(index, None)
+            if value is None:
+                value = bytearray(self.block(index))
+            value.extend(bytes(BLOCK - len(value)))
+            value[boundary:] = bytes(BLOCK - boundary)
+            self.write_cache[index] = value
+            while len(self.write_cache) > WRITE_CACHE_BLOCKS:
+                old_index, old_value = self.write_cache.popitem(last=False)
+                self.set_block(old_index, bytes(old_value))
         self.size = size
         self.cache.clear()
 
@@ -145,6 +175,8 @@ class Image:
 
     def block(self, index: int) -> bytes:
         budget(self.deadline)
+        if index in self.write_cache:
+            return bytes(self.write_cache[index])[: min(BLOCK, self.size - index * BLOCK)]
         value = self.cache.pop(index, None)
         if value is None:
             value = zlib.decompress(self.blocks[index])
@@ -172,10 +204,17 @@ class Image:
         return b"".join(pieces)
 
     def reconstructed_hash(self) -> str:
+        if self.mutable:
+            raise QualificationError("FROZEN_IMAGE_REQUIRED")
         self.cache.clear()
         result = hashlib.sha256()
-        for index in range(len(self.blocks)):
-            result.update(self.block(index))
+        for index, blob in enumerate(self.blocks):
+            budget(self.deadline)
+            value = zlib.decompress(blob)
+            expected = min(BLOCK, self.size - index * BLOCK)
+            if len(value) not in (expected, BLOCK):
+                raise QualificationError("BYTE_IDENTITY_MISMATCH")
+            result.update(value[:expected])
         return result.hexdigest()
 
 
@@ -194,7 +233,7 @@ class File(apsw.VFSFile):
         return False
 
     def xSectorSize(self) -> int:
-        return BLOCK
+        return 4096
 
     def xDeviceCharacteristics(self) -> int:
         return 0
@@ -290,7 +329,7 @@ def full_check(db: apsw.Connection, deadline: float) -> None:
 
     db.set_progress_handler(progress, 10000)
     try:
-        db.execute("PRAGMA cache_size=-131072")
+        db.execute("PRAGMA cache_size=-524288")
         db.execute("PRAGMA mmap_size=0")
         db.execute("PRAGMA ignore_check_constraints=OFF")
         if list(db.execute("PRAGMA integrity_check")) != [("ok",)]:
@@ -346,7 +385,7 @@ def snapshot(path: Path, directory: Path, *, deadline: float) -> Iterator[apsw.C
             source = None
             destination.close()
             destination = None
-            image.mutable = False
+            image.freeze()
             original = image.reconstructed_hash()
             destination = apsw.Connection(
                 str(sentinel.resolve()), flags=apsw.SQLITE_OPEN_READWRITE, vfs=vfs.name

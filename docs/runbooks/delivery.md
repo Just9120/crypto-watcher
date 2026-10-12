@@ -92,7 +92,12 @@ Directory — отдельный tmpfs текущего UID/mode700, без syml
 [Compressed validation](../../cryptowatcher/compressed_validation.py) использует
 hash-locked APSW3.53.4.0/SQLite3.53.4 только в isolated validation connections;
 основное приложение продолжает использовать standard SQLite. Compressed VFS
-возвращает исходные байты каждой страницы и проверяет reconstructed SHA256
+использует64KiB lossless blocks и bounded8-block mutable write cache.
+Physical SQLite sector остаётся4096; native page/header bytes не меняются.
+Reconstruction hash декодирует blocks последовательно без удержания LRU.
+Private full-integrity cache512MiB и decoded-block cache32MiB укладываются
+в общий4GiB cap/1GiB overhead margin; основной app cache не меняется.
+VFS возвращает исходные байты каждой страницы и проверяет reconstructed SHA256
 до и после full integrity. Source snapshot создаётся pinned SQLite online backup;
 live reader закрывается до полного сканирования, metadata берётся из этого snapshot.
 Persistent backup создаётся прежним pinned online copy на диске; closed file
