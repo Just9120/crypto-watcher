@@ -149,6 +149,10 @@ REQUIRED pre-merge qualification выполняет [operator helper](../../scri
 persistent `.zst` backup с отдельными885s на каждый этап/CPU1/cap4GiB
 (maximum combined2655s плюс45s host cleanup margin),
 reserve1536MiB/constraint negative control/hashes/точным cleanup/all3 live ID readback.
+Каждый этап выполняется в новом container/process с900s outer deadline,
+с повторным host reserve check и завершённым cleanup предыдущего. Это соответствует
+отдельным offline CLI containers CD и исключает перенос native allocator/cache
+предыдущего этапа. Все3 этапа REQUIRED; failure прекращает дальнейшие этапы.
 Оба источника монтируются read-only; production container/config/DB не меняются.
 Helper использует existing image9634558a и hash-pinned Linux APSW/Zstandard wheels,
 не устанавливая wheel на host. PASS не заменяет latest Linux CI/image или
@@ -172,6 +176,13 @@ all3 units unchanged; receiver NOT_RUN. CPU увеличивался во вре
 physical reads оставались14,081,437,696bytes. Следующий candidate использует
 bounded remaining-memory cache и записывает native cache hit/miss/used metrics;
 выбор hint не является доказанным ускорением до actual qualification.
+
+Combined-process adaptive run12Oct08:37–08:48UTC: closed archive PASS208.270s,
+но live copy завершилась isolated OOM137 до integrity/cache application. Все3
+units unchanged, probe removed. Предыдущие allocations могут сохраняться после
+gc/close; это limitation combined verifier, а не доказанная production CLI OOM.
+Новая per-stage isolation сохраняет dataset, checks и limits; её пригодность
+для current live/source и durable archive остаётся обязательной qualification.
 
 ### Hotfix receiver update до merge
 

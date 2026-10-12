@@ -126,17 +126,22 @@ def test_independent_stage_deadlines_do_not_refresh_inside_live_copy(
         "EXPECTED_BACKUP_HASH": "fixture-hash",
     }
     original = sys.modules.get("cryptowatcher.compressed_validation")
+
+    def execute_stages():
+        for stage in ("CLOSED", "LIVE", "ARCHIVE"):
+            exec(compile(code, "qualified-stage-flow", "exec"), {**namespace, "STAGE": stage})
+
     try:
         if live_seconds == 900 or archive_seconds == 900:
             with pytest.raises(Refused) as failure:
-                exec(compile(code, "qualified-stage-flow", "exec"), namespace)
+                execute_stages()
             assert failure.value.code == "TIME_BUDGET_EXCEEDED"
             expected = ["closed-full-proof"]
             if live_seconds != 900:
                 expected += ["live-full-proof", "live-byte-proof"]
             assert calls == expected
         else:
-            exec(compile(code, "qualified-stage-flow", "exec"), namespace)
+            execute_stages()
             assert clock.value == 1210 > 885
             assert calls == [
                 "closed-full-proof",
@@ -151,7 +156,7 @@ def test_independent_stage_deadlines_do_not_refresh_inside_live_copy(
             sys.modules["cryptowatcher.compressed_validation"] = original
 
 
-@pytest.mark.parametrize("exit_code", [0, 1])
+@pytest.mark.parametrize("exit_code", [0, 1, 2, 3])
 @pytest.mark.parametrize("changed", [False, True])
 def test_owned_probe_limits_readonly_mounts_cleanup_and_failed_qualification(
     tmp_path, monkeypatch, exit_code, changed, capsys
@@ -233,8 +238,10 @@ def test_owned_probe_limits_readonly_mounts_cleanup_and_failed_qualification(
             assert (
                 args[args.index("--memory") + 1] == args[args.index("--memory-swap") + 1] == str(4 * 1024**3)
             )
-            assert kwargs["timeout"] == 2700
-            return SimpleNamespace(returncode=exit_code)
+            assert kwargs["timeout"] == 900
+            assert kwargs["input"].startswith("STAGE='")
+            index = sum(c[:2] == ["docker", "run"] for c in calls)
+            return SimpleNamespace(returncode=1 if exit_code == index else 0)
         if args[:2] == ["docker", "inspect"]:
             return SimpleNamespace(returncode=0, stdout=json.dumps([probe]))
         assert args == ["docker", "rm", "-f", "owned-probe"]
@@ -250,6 +257,9 @@ def test_owned_probe_limits_readonly_mounts_cleanup_and_failed_qualification(
     else:
         q.qualify(module, hashlib.sha256(module.read_bytes()).hexdigest(), wheel, zstd)
     assert calls[-1] == ["docker", "rm", "-f", "owned-probe"]
+    executions = [c for c in calls if c[:2] == ["docker", "run"]]
+    assert len(executions) == (exit_code if exit_code else 3)
+    assert len({c[c.index("--name") + 1] for c in executions}) == len(executions)
     assert backup.read_bytes() == b"preserved" and not list(tmp_path.glob("tmp*"))
     records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     readbacks = [r for r in records if r["kind"] == "live_readback"]

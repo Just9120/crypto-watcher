@@ -125,6 +125,20 @@ deadlines сохранены. Добавлены diagnostic native cache hits/mi
 46 targeted archive/cache/qualification/RAM regressions и canonical quality PASS;
 latest CI/image и новая complete source+durable archive qualification REQUIRED.
 
+CI38224172390/head291fa8d PASS. Root `/tmp/cw-pr31-job-q_rqvjnm`08:37–08:48UTC:
+closed archive PASS208.270s/cache1024MiB, затем LIVE_SNAPSHOT isolated OOM137 до
+full integrity/adaptive cache. Процесс terminal, own container removed, all3
+units unchanged/running, receiver NOT_RUN. Возможное удержание native allocator
+предыдущего closed stage — ограничение combined-process verifier; это не PASS
+или proof failure production CLI, где stages уже отдельные containers.
+
+Оператор теперь изолирует каждый из3 REQUIRED этапов новым container/process,
+каждый с885/900s fixed budgets/4GiB/CPU1/no swap, новым reserve check и exact
+cleanup перед следующим. Failure любого этапа прекращает flow и блокирует
+receiver/merge; all3 runtime IDs и preserved source archive проверяются в конце.
+37 targeted cache/archive/qualification regressions и canonical quality PASS;
+actual isolated live/durable archive qualification и latest CI/image REQUIRED.
+
 Base `9634558a654d5f13279ff0e76710585bf1105d66`, branch `codex/backup-validation-performance-20261011`, root worktree. Fresh main/clean checkout, strict required `ci-required`, production Environment, отсутствие открытых PR/active Actions подтверждены GitHub API2026-10-11T11:36:44UTC. Основание — устранение failed delivery в согласованной whole-project Goal; отдельный implementation scope не добавляется.
 
 PR30 merged2026-10-11T10:52:33UTC, head2495ac037/baseb13081e/squash9634558a, required CI38131846878 PASS370 tests. Operator receiver update10:50:50UTC PASS: installed receiver9569f32c, target/SSH/runtime/database сохранены. Automatic CD38133517275: merged Linux3.11 suite370 tests PASS/build PASS, delivery FAIL11:23:36UTC на BACKUP_AND_VALIDATE с `docker exit 3` — TIME_BUDGET_EXCEEDED. Полная проверка source DB прошла: backup stage следует после неё. Нельзя считать backup пригодной, corruption установленной или CD завершённой. Точные времена copy и destination validation UNSET; CLI885s является общим budget обеих фаз.

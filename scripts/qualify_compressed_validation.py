@@ -43,6 +43,7 @@ from pathlib import Path
 import apsw,zstandard
 assert apsw.apswversion() == '3.53.4.0'
 assert zstandard.__version__ == '0.25.0'
+assert STAGE in ('CLOSED','LIVE','ARCHIVE')
 module = types.ModuleType('cryptowatcher.compressed_validation')
 sys.modules[module.__name__] = module
 exec(compile(MODULE_SOURCE, 'qualified_compressed_validation.py', 'exec'), module.__dict__)
@@ -73,12 +74,12 @@ try:module.validate_closed(negative,directory=Path('/scratch'),deadline=deadline
 except module.QualificationError as error:assert error.code=='DATABASE_CORRUPT'
 else:raise RuntimeError('Constraint negative control failed')
 negative.unlink();emit('compressed_constraint_negative_control',state='PASS')
-proof=module.validate_closed(Path('/backup/database.sqlite3.gz'),directory=Path('/scratch'),deadline=deadline,progress=progress,archive_encoding='GZIP')
-assert proof['sha256']==EXPECTED_BACKUP_HASH and proof['bytes']==5422329856
-emit('compressed_closed_backup',state='PASS',**proof)
-gc.collect();phase='LIVE_SNAPSHOT';stage_started=time.monotonic();deadline=stage_started+885
+if STAGE=='CLOSED':
+    proof=module.validate_closed(Path('/backup/database.sqlite3.gz'),directory=Path('/scratch'),deadline=deadline,progress=progress,archive_encoding='GZIP')
+    assert proof['sha256']==EXPECTED_BACKUP_HASH and proof['bytes']==5422329856
+    emit('compressed_closed_backup',state='PASS',**proof)
 original_check=module.full_check
-context='LIVE'
+context=STAGE;phase=context+'_SNAPSHOT'
 def full_check(db,d):
     global phase
     phase=context+'_FULL_INTEGRITY'
@@ -90,18 +91,19 @@ def full_check(db,d):
             cache_misses=db.status(apsw.SQLITE_DBSTATUS_CACHE_MISS)[0])
     phase=context+'_BYTE_IDENTITY'
 module.full_check=full_check
-with module.snapshot(Path('/live/cryptowatcher.sqlite3'),Path('/scratch'),deadline=deadline) as snapshot:
-    owner,revision=snapshot.execute('SELECT owner_id,revision FROM owner_settings').fetchone()
-    assert owner==233382575 and type(revision) is int and revision>0
-    size=snapshot.execute('PRAGMA page_count').fetchone()[0]*snapshot.execute('PRAGMA page_size').fetchone()[0]
-emit('compressed_live_snapshot',state='PASS',snapshot_bytes=size,configuration_revision=revision,
-    sqlite_version=apsw.sqlitelibversion(),source_mount_readonly=True)
-gc.collect();context='ARCHIVE';phase='ARCHIVE_SNAPSHOT';stage_started=time.monotonic();deadline=stage_started+885
-archive=Path('/backup-output/qualified.sqlite3.zst')
-proof=module.archive_backup(Path('/live/cryptowatcher.sqlite3'),archive,Path('/scratch'),deadline=deadline)
-assert proof['archive_encoding']=='ZSTD' and proof['bytes']>=size
-emit('compressed_durable_backup',state='PASS',**proof)
-gc.collect();monitored(deadline);emit('qualification_complete',state='PASS',production_files_changed=False)
+if STAGE=='LIVE':
+    with module.snapshot(Path('/live/cryptowatcher.sqlite3'),Path('/scratch'),deadline=deadline) as snapshot:
+        owner,revision=snapshot.execute('SELECT owner_id,revision FROM owner_settings').fetchone()
+        assert owner==233382575 and type(revision) is int and revision>0
+        size=snapshot.execute('PRAGMA page_count').fetchone()[0]*snapshot.execute('PRAGMA page_size').fetchone()[0]
+    emit('compressed_live_snapshot',state='PASS',snapshot_bytes=size,configuration_revision=revision,
+        sqlite_version=apsw.sqlitelibversion(),source_mount_readonly=True)
+if STAGE=='ARCHIVE':
+    archive=Path('/backup-output/qualified.sqlite3.zst')
+    proof=module.archive_backup(Path('/live/cryptowatcher.sqlite3'),archive,Path('/scratch'),deadline=deadline)
+    assert proof['archive_encoding']=='ZSTD' and type(proof['bytes']) is int and proof['bytes']>0
+    emit('compressed_durable_backup',state='PASS',**proof)
+gc.collect();monitored(deadline);emit('qualification_stage_complete',stage=STAGE,state='PASS',production_files_changed=False)
 """
 
 
@@ -253,30 +255,53 @@ def qualify(module_path, module_hash, wheel, zstd_wheel):
             "-B",
             "-",
         ]
-        passed = False
+        passed = True
         changed_units = []
         try:
-            result = subprocess.run(command, input=code, text=True, timeout=2700)
-            process = inspect(name)
-            emit(
-                "compressed_process",
-                exit_code=result.returncode,
-                oom_killed=process["State"].get("OOMKilled", False),
-            )
-            passed = result.returncode == 0 and not process["State"].get("OOMKilled", False)
-        finally:
-            found = subprocess.run(["docker", "inspect", name], capture_output=True, text=True, timeout=20)
-            if found.returncode == 0:
-                own = json.loads(found.stdout)[0]
-                assert (
-                    own["Name"] == "/" + name
-                    and own["Image"] == IMAGE
-                    and own["Config"]["Labels"].get(MARKER) == name
-                ), "Probe identity changed"
-                subprocess.run(
-                    ["docker", "rm", "-f", own["Id"]], stdout=subprocess.DEVNULL, check=True, timeout=20
+            for stage in ("CLOSED", "LIVE", "ARCHIVE"):
+                # Match CD's fresh offline CLI process for each independent stage.
+                mem = dict(line.split(":", 1) for line in Path("/proc/meminfo").read_text().splitlines())
+                assert int(mem["MemAvailable"].split()[0]) * 1024 >= LIMIT + RESERVE, (
+                    "Insufficient stage memory"
                 )
-                emit("compressed_cleanup", state="REMOVED")
+                name = "cw-compressed-" + stage.lower() + "-" + uuid.uuid4().hex
+                stage_command = command.copy()
+                stage_command[stage_command.index("--name") + 1] = name
+                stage_command[stage_command.index("--label") + 1] = MARKER + "=" + name
+                emit("qualification_stage_start", stage=stage, name=name)
+                try:
+                    result = subprocess.run(
+                        stage_command, input="STAGE=" + repr(stage) + "\n" + code, text=True, timeout=900
+                    )
+                    process = inspect(name)
+                    emit(
+                        "compressed_process",
+                        stage=stage,
+                        exit_code=result.returncode,
+                        oom_killed=process["State"].get("OOMKilled", False),
+                    )
+                    passed = result.returncode == 0 and not process["State"].get("OOMKilled", False)
+                finally:
+                    found = subprocess.run(
+                        ["docker", "inspect", name], capture_output=True, text=True, timeout=20
+                    )
+                    if found.returncode == 0:
+                        own = json.loads(found.stdout)[0]
+                        assert (
+                            own["Name"] == "/" + name
+                            and own["Image"] == IMAGE
+                            and own["Config"]["Labels"].get(MARKER) == name
+                        ), "Probe identity changed"
+                        subprocess.run(
+                            ["docker", "rm", "-f", own["Id"]],
+                            stdout=subprocess.DEVNULL,
+                            check=True,
+                            timeout=20,
+                        )
+                        emit("compressed_cleanup", stage=stage, state="REMOVED")
+                if not passed:
+                    break
+        finally:
             for unit, original in baseline.items():
                 current = inspect(unit)
                 unchanged = current["Id"] == original["Id"]
