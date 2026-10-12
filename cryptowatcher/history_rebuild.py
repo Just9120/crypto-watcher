@@ -282,7 +282,9 @@ def copy_snapshot(
                 values = tuple(row)
                 if table == "runtime":
                     if values[0].startswith(BLOB_PREFIX):
-                        readback_codec.load(values[0][len(BLOB_PREFIX) :])
+                        # load_raw already verifies encoding, bounds, SHA and
+                        # canonical JSON. No decoded object is consumed here.
+                        readback_codec.load_raw(values[0][len(BLOB_PREFIX) :])
                         continue
                     kind = values[0].removeprefix(PREFIX).partition(":")[0]
                     head = values[0].removeprefix(PREFIX).partition("-head:")[0]

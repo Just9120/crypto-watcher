@@ -140,6 +140,28 @@ consumer production/dry_run, exact API/image/Compose/config-owner target уст�
 other credentials/Strategies и private bytes; end-to-end delivery ждёт producer CD.
 Historical/current conversion≤900s и F34 остаются незавершёнными,54/58 unchanged.
 
+Read-only revalidation12Oct22:53UTC: producerG5afd107 healthy/тот же7039151,
+SQLite20,520,615,936bytes/WAL980,131,552, free disk7,304,253,440bytes; consumer2bfeda8
+и PostgreSQL unchanged/running. Fresh main9634558a/PR31 head1cfe64a и required
+CI38300184149 SUCCESS подтверждены без workflow rerun. Bounded complete-path profile
+на disposable fixture32,296 runtime rows, derived из старой qualified копии,
+дал full fixture integrity/readback PASS9.502s; это не current/full qualification.
+Убран неиспользуемый повторный JSON decode при final shared-body scan: `load_raw`
+сохраняет encoding/size/SHA/canonical проверки.41 targeted rebuild/snapshot tests
+и canonical quality PASS; изменённый converter ещё не qualified на full dataset.
+Однократный JSONB parse на4k revisions сохранил exact bytes, но не дал устойчивого
+выигрыша всего copy/proof пути и отклонён; buffered manifest framing оказался
+медленнее и также отклонён. Полный повторный запуск не выполнялся.
+
+Consumer activation preparation на actual API2bfeda8 и PostgreSQL16.14: isolated
+SAVE/SELECT/decrypt, transaction rollback, UUID replay, stale CAS и preservation
+unrelated credential PASS12Oct22:14UTC. Initial cleanup assertion ошибочно считала
+inherited Compose label признаком чужого контейнера; exact owned fixtures удалены
+с отдельным cleanup/live-readback PASS22:20UTC. Production config/credentials не
+менялись; это qualification operator procedure, не activation или signed smoke.
+Primary records: `consumer-vault-pg-fixture-fixed.jsonl`, `vault-fixture-cleanup.jsonl`,
+`profile-complete-rebuild.jsonl`, `bench-parsed-json-once.jsonl` вне repository.
+
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный
 dataset. Read-only snapshot09:54UTC/G5afd10770: SQLite15,220,908,032bytes,
