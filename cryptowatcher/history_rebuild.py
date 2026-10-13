@@ -23,7 +23,7 @@ from typing import Any, Callable, Iterator, Literal
 from .events import HEAD_FIELDS, HEAD_SCHEMA, PREFIX, History
 from .history_codec import BLOB_PREFIX, MARKER, MAX_BYTES, Codec, sql_value
 from .native_history import Accelerator, load
-from .storage import IntegrityError, StateError, Store, check_integrity, create_schema, encode
+from .storage import IntegrityError, Snapshot, StateError, Store, check_integrity, create_schema, encode
 
 TABLES = {
     "owner_settings": ("owner_id", "revision", "settings_json"),
@@ -339,6 +339,194 @@ def canonical_head(
     return encode(History._head(kind, values, f"{kind}:{record_id}:{revision:010d}")), payload
 
 
+def verified_head_revision(history: History, key: str, stored: dict[str, Any]) -> dict[str, Any]:
+    """Validate the small head projection; full payload validation follows once."""
+    value = history.codec.unpack(stored)
+    kind, separator, record_id = key.partition("-head:")
+    revision = value.get("revision")
+    reference = value.get("revision_key")
+    if (
+        value.get("schema") != HEAD_SCHEMA
+        or not separator
+        or kind not in HEAD_FIELDS
+        or type(revision) is not int
+        or revision < 1
+        or value.get(f"{kind}_id") != record_id
+        or reference != f"{kind}:{record_id}:{revision:010d}"
+    ):
+        raise StateError("Invalid history head reference")
+    record = history.store.get_runtime(PREFIX + reference)
+    if (
+        not isinstance(record, dict)
+        or record.get("schema") == HEAD_SCHEMA
+        or record.get(f"{kind}_id") != record_id
+        or type(record.get("revision")) is not int
+        or record.get("revision") != revision
+        or encode(history.codec.unpack(History._head(kind, record, reference))) != encode(value)
+    ):
+        raise StateError("Missing or conflicting history head revision")
+    return record
+
+
+class _FrozenCandidate(Store):
+    """Read-only consumer methods over the exact frozen candidate image."""
+
+    def __init__(self, database: Any, snapshot: Snapshot):
+        self.db = database
+        self.owner_snapshot = snapshot
+
+    def snapshot(self) -> Snapshot:
+        return self.owner_snapshot
+
+
+@contextmanager
+def compressed_candidate(
+    candidate: Store, path: Path, deadline: float, *, directory: Path | None = None
+) -> Iterator[Store]:
+    """Freeze an exclusive closed candidate without another multi-GB disk copy."""
+    import apsw
+
+    from .compressed_validation import (
+        MAX_COMPRESSED_BYTES,
+        Image,
+        classified_errors,
+        configure_cache,
+        frozen_vfs,
+        full_check,
+    )
+
+    owner_snapshot = candidate.snapshot()
+    candidate.close()
+    closed(path)
+    trim_unused_memory()
+    with classified_errors(deadline):
+        image = Image(path, limit=MAX_COMPRESSED_BYTES, deadline=deadline)
+        with tempfile.TemporaryDirectory(
+            prefix="cw-candidate-readback-", dir=directory or path.parent
+        ) as work:
+            sentinel = Path(work) / "candidate.sqlite3"
+            sentinel.touch(mode=0o600)
+            vfs = frozen_vfs(image, sentinel)
+            database = None
+            try:
+                database = apsw.Connection(
+                    str(sentinel.resolve()), flags=apsw.SQLITE_OPEN_READWRITE, vfs=vfs.name
+                )
+                database.execute("PRAGMA query_only=ON")
+                configure_cache(database, image)
+                full_check(database, deadline)
+                yield _FrozenCandidate(database, owner_snapshot)
+            finally:
+                if database is not None:
+                    database.close()
+                vfs.unregister()
+        if image.reconstructed_hash() != image.sha256 or fingerprint(path, deadline) != image.sha256:
+            raise StateError("Candidate changed during full readback")
+        image.assert_source_unchanged()
+
+
+def verify_candidate(
+    candidate: Store,
+    counts: dict[str, int],
+    expected_manifests: dict[str, bytes],
+    source_shared: int,
+    deadline: float,
+    accelerator: Accelerator | None = None,
+) -> int:
+    """Verify the whole frozen candidate against captured source evidence."""
+    check_integrity(candidate.db, deadline=deadline)
+    return _verify_candidate_rows(candidate, counts, expected_manifests, source_shared, deadline, accelerator)
+
+
+def _verify_candidate_rows(
+    candidate: Store,
+    counts: dict[str, int],
+    expected_manifests: dict[str, bytes],
+    source_shared: int,
+    deadline: float,
+    accelerator: Accelerator | None,
+) -> int:
+    candidate.snapshot()  # Current owner settings must be readable without resetting defaults.
+    # This exclusive candidate is frozen before evidence is reused during readback.
+    candidate.db.execute("PRAGMA query_only=ON")
+    history = History(candidate)
+    history.codec = _CopyCodec(candidate.db, accelerator)
+    readback_codec = history.codec
+    resolved: OrderedDict[str, tuple[str, str]] = OrderedDict()
+    resolved_bytes = 0
+    for table in TABLES:
+        actual = candidate.db.execute(f"SELECT * FROM {table} ORDER BY rowid")
+        verified = 0
+        readback = hashlib.sha256()
+        for row in actual:
+            guard(deadline)
+            values = tuple(row)
+            if table == "runtime":
+                if values[0].startswith(BLOB_PREFIX):
+                    # load_raw already verifies encoding, bounds, SHA and
+                    # canonical JSON. No decoded object is consumed here.
+                    readback_codec.load_raw(values[0][len(BLOB_PREFIX) :])
+                    continue
+                kind = values[0].removeprefix(PREFIX).partition(":")[0]
+                head = values[0].removeprefix(PREFIX).partition("-head:")[0]
+                if values[0].startswith(PREFIX) and (kind in HEAD_FIELDS or head in HEAD_FIELDS):
+                    relative = values[0][len(PREFIX) :]
+                    stored = json.loads(values[1])
+                    if not isinstance(stored, dict):
+                        raise StateError("Invalid public history record")
+                    reference = stored.get("revision_key")
+                    cached = (
+                        resolved.get(reference)
+                        if head in HEAD_FIELDS and isinstance(reference, str)
+                        else None
+                    )
+                    if cached is not None:
+                        if (
+                            relative != f"{head}-head:{stored.get(f'{head}_id')}"
+                            or encode(stored) != cached[1]
+                        ):
+                            raise StateError("Conflicting cached head projection")
+                        public_payload = cached[0]
+                    else:
+                        if kind in HEAD_FIELDS:
+                            if stored.get("schema") == HEAD_SCHEMA:
+                                raise StateError("Immutable revision contains head reference")
+                            public_payload = readback_codec.canonical_json(stored).decode()
+                            projected = History._head(kind, stored, relative)
+                            shared_fields = stored.get(MARKER, {}).get("fields", {})
+                            if set(shared_fields).intersection(HEAD_FIELDS[kind]):
+                                projected = History._head(kind, readback_codec.unpack(stored), relative)
+                            projection = encode(readback_codec.unpack(projected))
+                            charge = len(public_payload.encode()) + len(projection.encode()) + 256
+                            if charge <= 4 * 1024 * 1024:
+                                while resolved and resolved_bytes + charge > 4 * 1024 * 1024:
+                                    _, (previous, cached_projection) = resolved.popitem(last=False)
+                                    resolved_bytes -= (
+                                        len(previous.encode()) + len(cached_projection.encode()) + 256
+                                    )
+                                resolved[relative] = (public_payload, projection)
+                                resolved_bytes += charge
+                        else:
+                            revision = verified_head_revision(history, relative, stored)
+                            public_payload = readback_codec.canonical_json(revision).decode()
+                    values = (values[0], public_payload)
+            feed(readback, values)
+            verified += 1
+        if readback.digest() != expected_manifests[table]:
+            raise StateError("Candidate history conflicts with source rows")
+        if table != "runtime" and verified != counts[table]:
+            raise StateError("Candidate row count mismatch")
+    added = candidate.db.execute("SELECT COUNT(*) FROM runtime").fetchone()[0] - counts["runtime"]
+    if added < 0:
+        raise StateError("Candidate lost runtime records")
+    candidate_shared = candidate.db.execute(
+        "SELECT COUNT(*) FROM runtime WHERE key>=? AND key<?", (BLOB_PREFIX, BLOB_PREFIX + "~")
+    ).fetchone()[0]
+    if added != candidate_shared - source_shared:
+        raise StateError("Unexpected candidate runtime additions")
+    return added
+
+
 def copy_snapshot(
     original: sqlite3.Connection,
     destination: Path,
@@ -348,6 +536,7 @@ def copy_snapshot(
     *,
     backend: str = "auto",
     source_copied: Callable[[], None] | None = None,
+    compressed_candidate_validation: bool = False,
 ) -> dict[str, Any]:
     """Copy every row from an already pinned source into an exclusive candidate."""
     counts: dict[str, int] = {}
@@ -457,93 +646,26 @@ def copy_snapshot(
             source_copied()
             trim_unused_memory()
             configure_candidate_cache(candidate.db, deadline)
-        check_integrity(candidate.db, deadline=deadline)
-        candidate.snapshot()  # Current owner settings must be readable without resetting defaults.
-        # This exclusive candidate is frozen before evidence is reused during readback.
-        candidate.db.execute("PRAGMA query_only=ON")
-        history = History(candidate)
-        history.codec = _CopyCodec(candidate.db, accelerator)
-        readback_codec = history.codec
-        resolved: OrderedDict[str, tuple[str, str]] = OrderedDict()
-        resolved_bytes = 0
-        for table in TABLES:
-            actual = candidate.db.execute(f"SELECT * FROM {table} ORDER BY rowid")
-            verified = 0
-            readback = hashlib.sha256()
-            for row in actual:
-                guard(deadline)
-                values = tuple(row)
-                if table == "runtime":
-                    if values[0].startswith(BLOB_PREFIX):
-                        # load_raw already verifies encoding, bounds, SHA and
-                        # canonical JSON. No decoded object is consumed here.
-                        readback_codec.load_raw(values[0][len(BLOB_PREFIX) :])
-                        continue
-                    kind = values[0].removeprefix(PREFIX).partition(":")[0]
-                    head = values[0].removeprefix(PREFIX).partition("-head:")[0]
-                    if values[0].startswith(PREFIX) and (kind in HEAD_FIELDS or head in HEAD_FIELDS):
-                        relative = values[0][len(PREFIX) :]
-                        stored = json.loads(values[1])
-                        if not isinstance(stored, dict):
-                            raise StateError("Invalid public history record")
-                        reference = stored.get("revision_key")
-                        cached = (
-                            resolved.get(reference)
-                            if head in HEAD_FIELDS and isinstance(reference, str)
-                            else None
-                        )
-                        if cached is not None:
-                            if (
-                                relative != f"{head}-head:{stored.get(f'{head}_id')}"
-                                or encode(stored) != cached[1]
-                            ):
-                                raise StateError("Conflicting cached head projection")
-                            public_payload = cached[0]
-                        else:
-                            if kind in HEAD_FIELDS:
-                                if stored.get("schema") == HEAD_SCHEMA:
-                                    raise StateError("Immutable revision contains head reference")
-                                public_payload = readback_codec.canonical_json(stored).decode()
-                                projected = History._head(kind, stored, relative)
-                                shared_fields = stored.get(MARKER, {}).get("fields", {})
-                                if set(shared_fields).intersection(HEAD_FIELDS[kind]):
-                                    projected = History._head(kind, readback_codec.unpack(stored), relative)
-                                projection = encode(readback_codec.unpack(projected))
-                                charge = len(public_payload.encode()) + len(projection.encode()) + 256
-                                if charge <= 4 * 1024 * 1024:
-                                    while resolved and resolved_bytes + charge > 4 * 1024 * 1024:
-                                        _, (previous, cached_projection) = resolved.popitem(last=False)
-                                        resolved_bytes -= (
-                                            len(previous.encode()) + len(cached_projection.encode()) + 256
-                                        )
-                                    resolved[relative] = (public_payload, projection)
-                                    resolved_bytes += charge
-                            else:
-                                history.resolve(relative, stored)  # Validate head identity/projection.
-                                row = candidate.db.execute(
-                                    "SELECT payload_json FROM runtime WHERE key=?",
-                                    (PREFIX + stored["revision_key"],),
-                                ).fetchone()
-                                public_payload = readback_codec.canonical_json(json.loads(row[0])).decode()
-                        values = (values[0], public_payload)
-                feed(readback, values)
-                verified += 1
-            if readback.digest() != manifests[table].digest():
-                raise StateError("Candidate history conflicts with source rows")
-            if table != "runtime" and verified != counts[table]:
-                raise StateError("Candidate row count mismatch")
-        added = candidate.db.execute("SELECT COUNT(*) FROM runtime").fetchone()[0] - counts["runtime"]
-        if added < 0:
-            raise StateError("Candidate lost runtime records")
-        candidate_shared = candidate.db.execute(
-            "SELECT COUNT(*) FROM runtime WHERE key>=? AND key<?", (BLOB_PREFIX, BLOB_PREFIX + "~")
-        ).fetchone()[0]
-        if added != candidate_shared - source_shared:
-            raise StateError("Unexpected candidate runtime additions")
+        expected_manifests = {table: manifest.digest() for table, manifest in manifests.items()}
+        if compressed_candidate_validation:
+            with compressed_candidate(candidate, destination, deadline) as frozen:
+                added = _verify_candidate_rows(
+                    frozen,
+                    counts,
+                    expected_manifests,
+                    source_shared,
+                    deadline,
+                    accelerator,
+                )
+        else:
+            added = verify_candidate(
+                candidate, counts, expected_manifests, source_shared, deadline, accelerator
+            )
     finally:
         candidate.close()
     return {
         "conversion_backend": "native-v1" if accelerator is not None else "python",
+        "candidate_validation": "COMPRESSED_RAM" if compressed_candidate_validation else "SQLITE_FILE",
         "table_rows": counts,
         "shared_bodies_added": added,
         "heads_converted": converted,
@@ -563,6 +685,7 @@ def rebuild(
     max_candidate_bytes: int | None = None,
     backend: str = "auto",
     source_encoding: str = "sqlite",
+    compressed_candidate_validation: bool = False,
 ) -> dict[str, Any]:
     if not math.isfinite(deadline) or deadline > time.monotonic() + 900:
         raise StateError("Invalid rebuild deadline")
@@ -607,6 +730,7 @@ def rebuild(
                 deadline,
                 backend=backend,
                 source_copied=source_scope.close,
+                compressed_candidate_validation=compressed_candidate_validation,
             )
     else:
         with ExitStack() as source_scope:
@@ -621,6 +745,7 @@ def rebuild(
                 deadline,
                 backend=backend,
                 source_copied=source_scope.close,
+                compressed_candidate_validation=compressed_candidate_validation,
             )
     if fingerprint(source, deadline) != source_hash:
         raise StateError("Source changed; candidate not qualified")
@@ -674,6 +799,7 @@ def main() -> int:
     parser.add_argument("--max-candidate-bytes", type=int)
     parser.add_argument("--backend", choices=("auto", "python", "native"), default="auto")
     parser.add_argument("--source-encoding", choices=("sqlite", "gzip", "zstd"), default="sqlite")
+    parser.add_argument("--compressed-candidate-validation", action="store_true")
     args = parser.parse_args()
     try:
         if not math.isfinite(args.timeout_seconds) or not 0 < args.timeout_seconds <= 900:
@@ -689,6 +815,7 @@ def main() -> int:
                     max_candidate_bytes=args.max_candidate_bytes,
                     backend=args.backend,
                     source_encoding=args.source_encoding,
+                    compressed_candidate_validation=args.compressed_candidate_validation,
                 )
             )
         )

@@ -488,7 +488,41 @@ byte check16.772s подтвердил candidate SHA1810335b… и полное 
 qualified2.17GB историческим artifact. Это доказательство того же результата
 копирования; новый whole pipeline900s остался FAIL и current26GB не квалифицирован.
 
-Native historical-window experiment13Oct: complete public/private equality и144 Linux tests PASS. На одинаковой derived14MB fixture whole-window candidate9,912,320bytes против hybrid9,932,800bytes; ABBA не показал устойчивого ускорения. All-blocks вариант также не дал выигрыша. Последовательный cohort не получен: bounded selection остановлена host timeout180s; owned container удалён, production unchanged. Эксперимент отклонён, собственный uncommitted diff сохранён вне repository и reverted. Whole-window conversion остаётся текущей реализацией; новый full/current900s trial не запускался. Следующий отдельный диагностический этап — cost source/candidate verification, без изменения gates или limits.
+Native historical-window и compressed-record-cache experiments отклонены:
+complete fixture equality PASS, устойчивого whole-path ускорения нет; собственные
+experimental diffs сохранены вне repository и reverted. Whole-value conversion
+сохраняется. Они не подтверждают fit текущего dataset в900s.
+
+Candidate readback correction13Oct: большой revision больше не распаковывается
+сначала для проверки compact head, затем повторно для manifest. Identity/revision
+и exact typed projection проверяются отдельно; полный canonical payload со всеми
+shared references восстанавливается один раз. Synthetic256-candle/1000-head ABBA:
+old0.3136/0.3047s, new0.1194/0.1080s, exact bytes PASS; bounded14MB whole-path ABBA
+не доказала устойчивого ускорения. Это component Evidence, не whole900s proof.
+
+Добавлен explicit opt-in `--compressed-candidate-validation`: frozen candidate
+full writable integrity/CHECK через existing VFS, затем unchanged all-row manifests
+и independent reconstructed/file hashes. Default/routine CD не изменён.98 Windows
+storage/head/codec regressions и146 Linux native regressions PASS, включая CHECK,
+ref corruption, file mutation и query-only rejection. Required CI38405497548/gate
+115324970264 повторно подтверждены13Oct18:16UTC только для publishedb5fe042;
+эти local corrections ещё не опубликованы. Full historical/current conversion,
+receiver installation, merge и applicable delivery остаются REQUIRED/PENDING.
+
+Полная readback диагностика сохранённого2.17GB artifact1810335b с новым opt-in
+завершила writable physical integrity62.212s, но all-row logical/byte proof не
+завершилась в выбранном diagnostic budget300s: TIME_BUDGET_EXCEEDED304.916s.
+Это не corruption и не qualified whole conversion. Probe removed, preserved
+artifact и production unchanged. Диагностика не повышает owner limit900s и не
+разрешает новый production pause; unchanged большой trial не повторяется.
+
+Runtime inventory13Oct17:50UTC: прежний7039151/G5afd107 running/healthy,
+DB26,972,188,672bytes/WAL7,510,792bytes, free disk4,388,839,424bytes. Четыре
+owned derived candidate/archive files из двух последних trials занимают ещё
+5,333,725,246bytes; exact SHA/decode review готовится, удаления этих файлов пока
+не разрешены и не выполнены. Original recovery archive и qualified candidate
+сохраняются. Отсутствие promotion остаётся delivery blocker; Goal active54/58.
+
 
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный

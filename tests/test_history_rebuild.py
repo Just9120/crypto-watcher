@@ -16,6 +16,30 @@ from cryptowatcher.storage import IntegrityError, StateError, Store, encode
 from .test_history_heads import record
 
 
+@pytest.mark.parametrize("kind", ["event", "outcome", "episode", "comparison"])
+def test_head_verification_keeps_large_body_validation_in_full_readback(store, kind):
+    from cryptowatcher.history_codec import BLOB_PREFIX, MARKER
+    from cryptowatcher.history_rebuild import verified_head_revision
+
+    history = History(store)
+    value = record(kind)
+    value[f"{kind}_id"] = "one"
+    with store.db:
+        history.version(kind, value)
+    head = store.get_runtime(PREFIX + f"{kind}-head:one")
+    stored_revision = verified_head_revision(history, f"{kind}-head:one", head)
+    # Identity/projection checks retain the packed body for one full restoration.
+    assert MARKER in stored_revision and "source_inputs" not in stored_revision
+    assert history.codec.canonical_json(stored_revision) == encode(value).encode()
+    body = stored_revision[MARKER]["fields"]["source_inputs"]["ids"][0]
+    with store.db:
+        store.db.execute("DELETE FROM runtime WHERE key=?", (BLOB_PREFIX + body,))
+    verified_head_revision(history, f"{kind}-head:one", head)
+    # The subsequent mandatory full readback still rejects missing source data.
+    with pytest.raises(StateError, match="Missing shared snapshot"):
+        history.codec.canonical_json(stored_revision)
+
+
 def test_logical_manifest_preserves_types_and_field_boundaries():
     values = [(1,), (1.0,), ("1",), (None,), ("null",), ("a", "bc"), ("ab", "c"), ("a",), ("a", "")]
     hashes = []
@@ -376,16 +400,25 @@ def test_candidate_verification_cache_uses_only_remaining_memory(monkeypatch):
         assert db.execute("PRAGMA cache_size").fetchone()[0] == before
 
 
-def test_rebuild_compacts_history_without_losing_any_revision_or_owner_state(tmp_path):
+@pytest.mark.parametrize("compressed_validation", [False, True])
+def test_rebuild_compacts_history_without_losing_any_revision_or_owner_state(tmp_path, compressed_validation):
     source, expected = closed_backup(tmp_path)
     destination = tmp_path / "candidate.sqlite3"
     before = source.read_bytes()
-    result = rebuild(source, destination, 233382575, expected, time.monotonic() + 10)
+    result = rebuild(
+        source,
+        destination,
+        233382575,
+        expected,
+        time.monotonic() + 10,
+        compressed_candidate_validation=compressed_validation,
+    )
     assert result["status"] == "ISOLATED_CANDIDATE_PASS"
     assert result["heads_converted"] == 60 and result["payload_bytes_saved"] > 700000
     assert result["candidate_bytes"] < source.stat().st_size * 0.7
     assert source.read_bytes() == before
     assert result["source_full_qualification"] == "REQUIRED_SEPARATELY_FOR_EXPECTED_HASH"
+    assert result["candidate_validation"] == ("COMPRESSED_RAM" if compressed_validation else "SQLITE_FILE")
     old = Store(source, 233382575, readonly=True)
     new = Store(destination, 233382575, readonly=True)
     try:
@@ -417,6 +450,43 @@ def test_rebuild_compacts_history_without_losing_any_revision_or_owner_state(tmp
     assert {k: v for k, v in again["table_rows"].items() if k != "runtime"} == {
         k: v for k, v in result["table_rows"].items() if k != "runtime"
     }
+
+
+def test_compressed_candidate_checks_constraints_and_refuses_writes(store):
+    import apsw
+
+    from cryptowatcher.history_rebuild import compressed_candidate
+
+    path = store.path
+    snapshot = store.snapshot()
+    with compressed_candidate(store, path, time.monotonic() + 10) as frozen:
+        assert frozen.snapshot() == snapshot
+        assert frozen.db.execute("PRAGMA query_only").fetchone() == (1,)
+        with pytest.raises(apsw.ReadOnlyError):
+            frozen.db.execute("UPDATE delivery_preferences SET enabled=0")
+    with closing(Store(path, 233382575)) as invalid:
+        invalid.db.execute("PRAGMA ignore_check_constraints=ON")
+        with invalid.db:
+            invalid.db.execute("UPDATE delivery_preferences SET enabled=2")
+        with pytest.raises(IntegrityError, match="DATABASE_CORRUPT"):
+            with compressed_candidate(invalid, path, time.monotonic() + 10):
+                pytest.fail("Candidate with a violated CHECK constraint was admitted")
+
+
+def test_compressed_candidate_rejects_changed_file_and_preserves_original_bytes(store):
+    from cryptowatcher.history_rebuild import compressed_candidate
+
+    path = store.path
+    with store.db:
+        store.put_runtime("sentinel", {"state": "original"})
+    with pytest.raises((StateError, IntegrityError), match="Candidate changed|SOURCE_CHANGED"):
+        with compressed_candidate(store, path, time.monotonic() + 10) as frozen:
+            with closing(sqlite3.connect(path)) as changed, changed:
+                changed.execute(
+                    "UPDATE runtime SET payload_json=? WHERE key='sentinel'", (encode({"state": "changed"}),)
+                )
+            assert frozen.get_runtime("sentinel") == {"state": "original"}
+    assert not list(path.parent.glob("cw-candidate-readback-*"))
 
 
 @pytest.mark.parametrize("failure", ["missing", "different", "unknown_table", "reserved_lookalike"])

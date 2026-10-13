@@ -245,6 +245,20 @@ runtime admission checks и не продлевает900s budget.
 manifests и финальные source/candidate/archive hashes остаются обязательными в
 том же900s deadline. Это изменение lifetime ресурсов, не разрешение на promotion.
 
+Explicit flag `--compressed-candidate-validation` переносит полную candidate
+проверку в frozen compressed RAM после закрытия writer. Перед freeze читается
+owner snapshot; full writable integrity/CHECK выполняется через query-only VFS.
+Затем тот же verifier сверяет все пять typed manifests, каждый shared body,
+head identity/projection и число строк. Reference revision восстанавливается
+один раз; проверка малой projection не заменяет проверку полного public payload.
+Reconstructed bytes и повторный file SHA256 должны совпасть с frozen image;
+изменение file/metadata, отсутствие памяти или общий deadline блокируют результат.
+Cache рассчитывается существующим admission внутри4GiB, temporary sentinel
+удаляется при выходе. Flag не включён в routine CD/default conversion и не
+создаёт новое разрешение на production switch. Linux native и portable fallback
+используют одни logical checks; actual whole/current qualification остаётся
+обязательной, прежде чем выбирать этот path для поставки.
+
 ```bash
 python -m cryptowatcher.history_rebuild --source "$CW_CLOSED_BACKUP" --destination "$CW_NEW_CANDIDATE" --owner-id 233382575 --qualified-source-sha256 "$CW_QUALIFIED_SOURCE_SHA256"
 ```
