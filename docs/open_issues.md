@@ -428,7 +428,13 @@ Canonical build_native/build_vfs commands проверяют upstream hashes; Do
 содержит оба helpers и licenses. Native Linux5 substantive corruption/index/frame/
 closed-WAL/bounds/deadline/lifetime/write controls добавлены; existing native,
 codec/heads/rebuild/snapshot regressions подтверждены isolated134 PASS. Final
-query-only dirty package32536891… Linux134 PASS/owned probe removed before publication. Windows
+query-only dirty package32536891… Linux134 PASS/owned probe removed before publication.
+Publishedb5fe042: required CI38405497548/ci-required115324970264 SUCCESS13Oct13:34UTC,
+native build/Linux suite/Docker/image checks PASS. Previous38404196470 failed
+on vendor CRLF/hash mismatch;38404704373 failed on native image fixture using
+a file with readonly-readback sidecars. Exact upstream bytes preserved by
+gitattributes; image fixture uses untouched closed backup. Gates retained; no
+workflow rerun or production change. Full conversion/capacity still REQUIRED. Windows
 local77 PASS/5 Linux skips с основанием, quality PASS. Required CI нового published
 head и весь current25GB900s conversion ещё REQUIRED. Native benchmark27% не
 заменяет full source/candidate/manifests/private-byte/restore gate. Code54/58,
@@ -996,7 +1002,7 @@ Confidence: HIGH по code/fixture-backed gaps и inventory; MEDIUM у orphan ex
 
 2026-10-11 Europe/Moscow: G1 DONE по primary records, verified main40882eb и actual production run38087285142/artifact11682629335; image manifest38d238a6…/config7666f323…, backup pre-40882eb…-1791667365.sqlite3. Owner sample screenshot SHA256401ddabd… и ответ «вроде работает» подтверждают bounded owner smoke с указанными ограничениями. Production Environment DEPLOY_ENABLED=true; dedicated forced-command SSH и strict host key verification проверены; последующие eligible runtime merges доставляет CD. Первое failed CD38086969847 не дошло до authentication/target: Windows CRLF private-key stdin repaired binary transfer, verified bounded run38087285142 PASS. Credentials не хранятся в repository; existing SSH keys/unit другого приложения сохранены.
 
-Текущий checkpoint2026-10-13: verified main9634558a; PR31/codex/backup-validation-performance-20261011/base9634558a открыт и не merged. Published code heada356b59, required CI38384497657/ci-required115253623995 SUCCESS; readback13Oct10:39UTC подтверждает эту revision/checks. Local documentation follow-ups сохранены; metadata-only push/PR не требуется.
+Текущий checkpoint2026-10-13: verified main9634558a; PR31/codex/backup-validation-performance-20261011/base9634558a открыт и не merged. Published code headb5fe042, required CI38405497548/ci-required115324970264 SUCCESS; readback13Oct13:34UTC подтверждает эту revision/checks. Local documentation follow-ups сохранены; metadata-only push/PR не требуется.
 
 Production остаётся на прежнем G5afd107/crypto-watcher7039151; установленный privileged receiver9569f32c не обновлён. Current-dataset capture `current-dataset-qualification-gl9nijrj/status.json` завершён TIME_BUDGET_EXCEEDED/exit3/OOMfalse за888.557s: snapshot24,689,618,944bytes frozen около841s, full source/candidate/persisted recovery не подтверждены. Процессы предыдущих trials завершены, owned probe containers удалены; не ждать старые PID и не повторять capture из-за исчезновения observer handle. Current production compaction/replacement NOT_RUN. Historical archive-source qualification PASS относится к прежней5.42GB копии и не разрешает её promotion поверх текущей истории.
 
