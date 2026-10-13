@@ -554,6 +554,14 @@ Primary receipt `cw-cached-candidate-readback-f9b1c66c937a420bac7d631c2c892e07.j
 учитывается как PASS; diagnostic missing APSW устранён pinned tools overlay.
 Whole current900s qualification/CD остаются REQUIRED; counter54/58 unchanged.
 
+Writer-cache continuation13Oct: fixed256MiB заменён adaptive admission≤1GiB
+внутри4GiB cap, с128MiB source-cache reserve +512MiB overhead. Unknown RSS
+сохраняет256MiB; insufficient capacity отказывает без изменения cache/data.
+66 Windows rebuild/snapshot и158 Linux/native tests PASS; canonical quality PASS.
+Record `cw-copy-cache-regressions-2c6f426aa2f44d21bc0dd05a06af288d.json` в rehearsals.
+Full historical/current throughput effect PENDING; unchanged900s whole cap,
+source/candidate/recovery checks и отсутствие production replacement сохраняются.
+
 Bounded source-image diagnostics13Oct: Zstd level3 не дал стабильного выигрыша
 и отклонён.256KiB frame prototype с64KiB decoded cache slices сохраняет32MiB
 cache;6 Linux corruption/bounds/write/eviction tests PASS. Historical5.42GB

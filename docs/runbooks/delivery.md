@@ -245,6 +245,13 @@ runtime admission checks и не продлевает900s budget.
 manifests и финальные source/candidate/archive hashes остаются обязательными в
 том же900s deadline. Это изменение lifetime ресурсов, не разрешение на promotion.
 
+Во время копирования writer cache допускается по actual RSS: максимум1GiB
+внутри прежних4GiB, с дополнительным резервом128MiB для активного source reader
+и existing512MiB overhead reserve. При неизвестном RSS сохраняется прежний256MiB
+cache; недостаток capacity блокирует conversion до увеличения cache. Source
+cache остаётся128MiB; transaction, journaling, constraints и all hashes/manifests
+не меняются. Фактически выбранный `copy_cache_kib` включается в Evidence.
+
 Explicit flag `--compressed-candidate-validation` переносит полную candidate
 проверку в frozen compressed RAM после закрытия writer. Перед freeze читается
 owner snapshot; full writable integrity/CHECK выполняется через query-only VFS.

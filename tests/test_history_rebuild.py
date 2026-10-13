@@ -50,6 +50,37 @@ def test_logical_manifest_preserves_types_and_field_boundaries():
     assert len(set(hashes)) == len(values)
 
 
+@pytest.mark.parametrize("resident_mib", [None, 256, 3000, 3300])
+def test_copy_cache_reserves_active_source_and_overhead_without_changing_data(
+    tmp_path, monkeypatch, resident_mib
+):
+    from cryptowatcher import compressed_validation as cv
+    from cryptowatcher.history_rebuild import configure_copy_cache
+
+    monkeypatch.setattr(
+        cv, "resident_memory_bytes", lambda: None if resident_mib is None else resident_mib * 1024**2
+    )
+    with closing(sqlite3.connect(tmp_path / "cache.db")) as db:
+        db.execute("CREATE TABLE preserved(value TEXT)")
+        db.execute("INSERT INTO preserved VALUES('1.000')")
+        actual = configure_copy_cache(db, time.monotonic() + 10)
+        assert db.execute("PRAGMA cache_size").fetchone()[0] == -actual
+        assert db.execute("SELECT value FROM preserved").fetchall() == [("1.000",)]
+        if resident_mib is None:
+            assert actual == 262144
+        else:
+            assert (
+                actual * 1024 + resident_mib * 1024**2 + cv.VALIDATION_OVERHEAD_BYTES + 128 * 1024**2
+                <= cv.VALIDATION_MEMORY_BYTES
+            )
+            assert 128 * 1024 <= actual <= cv.MAX_SQLITE_CACHE_BYTES // 1024
+        before = db.execute("PRAGMA cache_size").fetchone()[0]
+        monkeypatch.setattr(cv, "resident_memory_bytes", lambda: cv.VALIDATION_MEMORY_BYTES)
+        with pytest.raises(IntegrityError, match="Insufficient copy cache"):
+            configure_copy_cache(db, time.monotonic() + 10)
+        assert db.execute("PRAGMA cache_size").fetchone()[0] == before
+
+
 def test_manifest_batching_retains_existing_v2_wire_bytes_at_buffer_boundaries():
     rows = [
         (),

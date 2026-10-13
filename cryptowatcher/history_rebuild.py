@@ -160,6 +160,32 @@ def configure_candidate_cache(database: sqlite3.Connection, deadline: float) -> 
     guard(deadline)
 
 
+def configure_copy_cache(database: sqlite3.Connection, deadline: float) -> int:
+    """Admit writer pages while reserving the active source cache and overhead."""
+    from .compressed_validation import (
+        MAX_SQLITE_CACHE_BYTES,
+        VALIDATION_MEMORY_BYTES,
+        VALIDATION_OVERHEAD_BYTES,
+        resident_memory_bytes,
+    )
+
+    guard(deadline)
+    resident = resident_memory_bytes()
+    # The source cache can still grow to 128MiB during the copy. Reserve its
+    # full bound in addition to the existing validation overhead allowance.
+    available = (
+        256 * 1024**2
+        if resident is None
+        else VALIDATION_MEMORY_BYTES - resident - VALIDATION_OVERHEAD_BYTES - 128 * 1024**2
+    )
+    if available < 128 * 1024**2:
+        raise IntegrityError("DATABASE_ERROR", "Insufficient copy cache capacity")
+    cache_kib = min(MAX_SQLITE_CACHE_BYTES, available) // 1024
+    database.execute(f"PRAGMA cache_size=-{cache_kib}")
+    guard(deadline)
+    return cache_kib
+
+
 def closed(path: Path) -> None:
     if any(p.is_symlink() for p in (path, *path.parents)):
         raise StateError("Symlink refused")
@@ -597,7 +623,7 @@ def copy_snapshot(
     candidate = Store(destination, owner)
     try:
         candidate.db.execute("PRAGMA journal_mode=DELETE")
-        candidate.db.execute("PRAGMA cache_size=-262144")
+        copy_cache_kib = configure_copy_cache(candidate.db, deadline)
         source_codec = Codec(original)
         candidate_codec = _CopyCodec(candidate.db, accelerator)
         page_size = candidate.db.execute("PRAGMA page_size").fetchone()[0]
@@ -691,6 +717,7 @@ def copy_snapshot(
     return {
         "conversion_backend": "native-v1" if accelerator is not None else "python",
         "candidate_validation": "COMPRESSED_RAM" if compressed_candidate_validation else "SQLITE_FILE",
+        "copy_cache_kib": copy_cache_kib,
         "table_rows": counts,
         "shared_bodies_added": added,
         "heads_converted": converted,
