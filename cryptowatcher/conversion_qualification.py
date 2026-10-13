@@ -135,7 +135,6 @@ def qualify_conversion(
             ]:
                 raise StateError("Source owner/revision changed")
             source_bytes = image.size
-            source_hash = image.reconstructed_hash() if source_encoding == "live" else image.sha256
             digest = hashlib.sha256()
             handle = os.open(archive, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             with os.fdopen(handle, "wb") as output:
@@ -152,7 +151,10 @@ def qualify_conversion(
                             raise StateError("Recovery archive exceeds byte limit")
                 output.flush()
                 os.fsync(output.fileno())
-            if digest.hexdigest() != source_hash or sink.size > max_archive_bytes:
+            source_hash = digest.hexdigest()
+            # The source context compares these same frozen bytes with its pre-check
+            # image at release. Closed sources additionally have a caller-pinned identity.
+            if (source_encoding != "live" and source_hash != image.sha256) or sink.size > max_archive_bytes:
                 raise StateError("Persisted source archive byte identity mismatch")
             archive_hash, archive_bytes = sink.digest.hexdigest(), sink.size
             candidate.touch(mode=0o600, exist_ok=False)
@@ -185,6 +187,8 @@ def qualify_conversion(
             decoded_bytes=source_bytes,
             deadline=deadline,
         )
+        if fingerprint(archive, deadline) != archive_hash or archive.stat().st_size != archive_bytes:
+            raise StateError("Persisted archive encoding changed")
         guard(deadline)
         return {
             "status": "ISOLATED_CONVERSION_PASS",

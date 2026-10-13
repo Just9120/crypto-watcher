@@ -1,6 +1,7 @@
 import gzip
 import hashlib
 import sqlite3
+import sys
 
 import pytest
 import zstandard
@@ -133,3 +134,34 @@ def test_preconditions_preserve_existing_files(tmp_path, fault):
     assert source.read_bytes() == raw
     if fault == "existing":
         assert (kwargs["directory"] / "candidate.sqlite3").read_bytes() == b"existing user data"
+
+
+def test_archive_change_after_byte_verifier_blocks_final_qualification(tmp_path, monkeypatch):
+    source, raw, kwargs = inputs(tmp_path)
+    verify = cq.verify_archive_bytes
+
+    def changed(path, **kw):
+        result = verify(path, **kw)
+        with path.open("ab") as archive:
+            archive.write(b"changed after decode")
+        return result
+
+    monkeypatch.setattr(cq, "verify_archive_bytes", changed)
+    with pytest.raises(StateError, match="Persisted archive encoding changed"):
+        cq.qualify_conversion(source, **kwargs)
+    assert source.read_bytes() == raw
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Native Linux conversion helper")
+def test_native_copy_reaches_identical_manifests_and_full_recovery_gate(tmp_path):
+    source, raw, kwargs = inputs(tmp_path)
+    reference = cq.qualify_conversion(source, **kwargs)
+    second = tmp_path / "native"
+    second.mkdir(mode=0o700)
+    kwargs.update(directory=second, backend="native")
+    native = cq.qualify_conversion(source, **kwargs)
+    assert native["conversion_backend"] == "native-v1"
+    assert native["logical_row_manifests"] == reference["logical_row_manifests"]
+    assert native["table_rows"] == reference["table_rows"]
+    assert native["recovery"] == reference["recovery"]
+    assert source.read_bytes() == raw
