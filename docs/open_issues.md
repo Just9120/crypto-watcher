@@ -343,6 +343,21 @@ SQLite/current qualification. Primary `bench-arena-capture-resources.jsonl`
 revision PENDING до grouped push. Next: qualified Linux native snapshot/recovery
 fixture и один whole-current attempt с прежними900s/CPU1/4GiB, после required CI.
 
+Arena actual-current proof attempt наe096715 завершён TIME_BUDGET_EXCEEDED,
+exit3/OOMfalse за888.557s общего времени. Primary:
+`current-dataset-qualification-gl9nijrj/status.json`. Snapshot24,689,618,944bytes
+достиг frozen state около841s, retained3,066,605,344bytes/peak RSS3,104,382,976bytes.
+На20.39GB capture RSS2.586GB против прежних3.893GB на20.51GB: ранний memory
+overhead уменьшен в actual observed conditions. Полный source integrity, copy,
+candidate и persisted recovery НЕ подтверждены; promotion NOT_RUN. Owned
+container removed, live container/source inode unchanged. Native capture/byte
+reconstruction из mutable WAL source расходуют почти весь900s budget до full
+checks. Required CI38368296557/ci-required115199421362 SUCCESS наe096715.
+Next: квалифицировать более быстрый способ получения согласованного source
+без увеличения limits и без ослабления checks; возможная quiescence production
+writer требует отдельной reviewed procedure/authorization до остановки бота.
+Same online capture run не повторять; current compaction/Goal DoD не завершены.
+
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный
 dataset. Read-only snapshot09:54UTC/G5afd10770: SQLite15,220,908,032bytes,
