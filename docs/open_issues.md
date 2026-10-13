@@ -311,6 +311,21 @@ UNSET; этот fix не доказывает fit/time текущего dataset.
 PENDING до grouped push. Next: ограничить и измерить peak source-validation memory,
 затем current qualification≤900s; production replacement остаётся NOT_RUN.
 
+Follow-up с точными phase/image diagnostics на CI-qualified9942665:
+`current-dataset-qualification-8666hjv1` остановлен оператором за677.511s,
+exit137/OOMfalse, до900s. Last sample: capture20,510,355,456 raw bytes,
+retained compressed2,561,701,937bytes, peak RSS3,892,543,488bytes;
+`image_frozen=false`, full integrity/cache admission ещё не начались.
+Это ранний capture footprint, не доказанный дефект CHECK либо corruption DB.
+Primary `operator-stop.json`/`status.json`; owned container removed,
+live container/source inode unchanged. Source/candidate/archive qualification
+НЕ получена. Resident admission fix local75/quality и required
+CI38363013439/ci-required115182217179 PASS на9942665; он защищает следующий
+этап cache, но не исправляет этот ранний capture allocation. Next: bounded
+contiguous/spooled compressed capture buffer вместо отдельных heap frames;
+сначала controlled resource/byte-equivalence qualification, затем whole current
+run≤900s. Memory/time/full-check gates и retention не меняются.
+
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный
 dataset. Read-only snapshot09:54UTC/G5afd10770: SQLite15,220,908,032bytes,
