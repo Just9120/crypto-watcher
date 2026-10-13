@@ -253,8 +253,11 @@ head identity/projection и число строк. Reference revision восст
 один раз; проверка малой projection не заменяет проверку полного public payload.
 Reconstructed bytes и повторный file SHA256 должны совпасть с frozen image;
 изменение file/metadata, отсутствие памяти или общий deadline блокируют результат.
-Cache рассчитывается существующим admission внутри4GiB, temporary sentinel
-удаляется при выходе. Flag не включён в routine CD/default conversion и не
+Cache рассчитывается существующим admission внутри4GiB; validated-body cache
+этого frozen readback ограничен64MiB внутри512MiB overhead reserve. Runtime
+и copy codecs сохраняют4MiB. При обходе shared bodies проверяется прочитанный
+payload той же row, без второго SELECT; encoding/size/hash/canonical проверки
+сохранены. Temporary sentinel удаляется при выходе. Flag не включён в routine CD/default conversion и не
 создаёт новое разрешение на production switch. Linux native и portable fallback
 используют одни logical checks; actual whole/current qualification остаётся
 обязательной, прежде чем выбирать этот path для поставки.

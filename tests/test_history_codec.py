@@ -193,6 +193,37 @@ def test_validated_cache_rechecks_stored_bytes_and_returns_independent_objects(s
         codec.load(key)
 
 
+@pytest.mark.parametrize("fault", ["missing", "schema", "size", "encoding", "wrong_hash", "invalid_json"])
+def test_scanned_body_validation_rejects_conflicts_even_with_valid_database_cache(store, fault):
+    codec = Codec(store.db)
+    value = {"source": [{"close": 1.0, "notes": "цена"}]}
+    with store.db:
+        key = codec.save(value)
+    row = store.db.execute("SELECT payload_json FROM runtime WHERE key=?", (BLOB_PREFIX + key,)).fetchone()
+    assert codec.validate_raw(key, row[0]) == (encode(value).encode(), None)
+    # The current DB/cache remain valid: a bad scanned payload must fail itself,
+    # rather than accepting a second lookup of a different, valid row.
+    body = json.loads(row[0])
+    candidate = key
+    if fault == "missing":
+        payload = None
+    elif fault == "invalid_json":
+        payload = "{"
+    else:
+        if fault == "schema":
+            body["schema"] = "future-schema"
+        elif fault == "size":
+            body["bytes"] += 1
+        elif fault == "encoding":
+            body["zlib"] = "invalid base64"
+        else:
+            candidate = "f" * 64
+        payload = encode(body)
+    with pytest.raises(StateError):
+        codec.validate_raw(candidate, payload)
+    assert codec.load(key) == value
+
+
 def test_validated_cache_is_bounded_and_does_not_admit_rolled_back_rows(store):
     codec = Codec(store.db)
     with pytest.raises(RuntimeError), store.db:

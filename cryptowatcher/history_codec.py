@@ -44,6 +44,7 @@ class Codec:
         self.cache_bytes = 0
         self.validated: OrderedDict[str, tuple[str, bytes, int | None]] = OrderedDict()
         self.validated_bytes = 0
+        self.cache_limit_bytes = CACHE_BYTES
 
     def read(self, payload: str) -> Any:
         value = json.loads(payload)
@@ -69,8 +70,8 @@ class Codec:
                 }
             )
             charge = len(raw) + len(payload) + 256
-            if charge <= CACHE_BYTES:
-                while self.encoded and self.cache_bytes + charge > CACHE_BYTES:
+            if charge <= self.cache_limit_bytes:
+                while self.encoded and self.cache_bytes + charge > self.cache_limit_bytes:
                     old, (_, body) = self.encoded.popitem(last=False)
                     self.cache_bytes -= len(old) + len(body) + 256
                 self.encoded[raw] = (key, payload)
@@ -96,13 +97,21 @@ class Codec:
         if not isinstance(key, str) or not re.fullmatch(r"[0-9a-f]{64}", key):
             raise StateError("Invalid shared snapshot identity")
         row = self.db.execute("SELECT payload_json FROM runtime WHERE key=?", (BLOB_PREFIX + key,)).fetchone()
+        return self.validate_raw(key, row[0] if row else None)
+
+    def validate_raw(self, key: str, payload: str | None) -> tuple[bytes, int | None]:
+        """Check a body already read from the same snapshot; no second SQL lookup."""
+        if not isinstance(key, str) or not re.fullmatch(r"[0-9a-f]{64}", key):
+            raise StateError("Invalid shared snapshot identity")
+        if payload is None:
+            raise StateError("Missing shared snapshot")
         cached = self.validated.get(key)
-        if row and cached is not None and row[0] == cached[0]:
+        if cached is not None and payload == cached[0]:
             self.validated.move_to_end(key)
             # Return a new object: callers must not be able to mutate cached evidence.
             return cached[1], cached[2]
         try:
-            value = json.loads(row[0]) if row else None
+            value = json.loads(payload)
         except (ValueError, TypeError) as exc:
             raise StateError("Invalid shared snapshot encoding") from exc
         if not isinstance(value, dict) or value.get("schema") != BLOB_SCHEMA:
@@ -126,15 +135,15 @@ class Codec:
             valid, count = self.canonical(raw)
             if not valid:
                 raise StateError("Noncanonical shared snapshot")
-            charge = len(raw) + len(row[0]) + 256
-            if charge <= CACHE_BYTES:
+            charge = len(raw) + len(payload) + 256
+            if charge <= self.cache_limit_bytes:
                 if cached is not None:
                     self.validated_bytes -= len(cached[0]) + len(cached[1]) + 256
                     del self.validated[key]
-                while self.validated and self.validated_bytes + charge > CACHE_BYTES:
+                while self.validated and self.validated_bytes + charge > self.cache_limit_bytes:
                     _, (body, previous, _) = self.validated.popitem(last=False)
                     self.validated_bytes -= len(body) + len(previous) + 256
-                self.validated[key] = (row[0], raw, count)
+                self.validated[key] = (payload, raw, count)
                 self.validated_bytes += charge
             return raw, count
         except (KeyError, ValueError, TypeError, zlib.error, UnicodeError) as exc:

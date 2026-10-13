@@ -513,7 +513,20 @@ receiver installation, merge и applicable delivery остаются REQUIRED/PE
 завершила writable physical integrity62.212s, но all-row logical/byte proof не
 завершилась в выбранном diagnostic budget300s: TIME_BUDGET_EXCEEDED304.916s.
 Это не corruption и не qualified whole conversion. Probe removed, preserved
-artifact и production unchanged. Диагностика не повышает owner limit900s и не
+artifact и production unchanged.
+
+Scanned-body correction: full verifier проверяет payload уже прочитанной row,
+без повторного SELECT; encoding/size/hash/canonical gates сохранены. Только frozen
+candidate validated-body cache64MiB размещён внутри прежнего512MiB overhead reserve;
+runtime/copy остаются4MiB.104 Windows storage/head/codec,59 outcome/analytics/export/
+digest/agent и152 Linux native tests PASS; malformed scanned body не подменяется
+valid DB/cache row. Full readback protected2.17GB historical artifact1810335b:
+3,179,502 framed rows (3,179,499 runtime +3 configuration/import),188,240 shared
+bodies, all5 source manifests и reconstructed/file SHA PASS391.133s/CPU1/4GiB.
+Source evidence относится к старой5.42GB копии61e4f087, не live dataset. Новый
+600s diagnostic cap не меняет owner900s whole conversion; source→copy→persisted
+recovery/current fit остаётся REQUIRED. Owned probe removed/live unchanged.
+ Диагностика не повышает owner limit900s и не
 разрешает новый production pause; unchanged большой trial не повторяется.
 
 Runtime inventory13Oct17:50UTC: прежний7039151/G5afd107 running/healthy,

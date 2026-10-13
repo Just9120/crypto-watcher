@@ -452,6 +452,10 @@ def _verify_candidate_rows(
     history = History(candidate)
     history.codec = _CopyCodec(candidate.db, accelerator)
     readback_codec = history.codec
+    if isinstance(candidate, _FrozenCandidate):
+        # Validation-only cache lives inside the existing 512MiB overhead reserve.
+        # Runtime and copy codecs retain their original 4MiB bounds.
+        readback_codec.cache_limit_bytes = 64 * 1024 * 1024
     resolved: OrderedDict[str, tuple[str, str]] = OrderedDict()
     resolved_bytes = 0
     for table in TABLES:
@@ -463,9 +467,9 @@ def _verify_candidate_rows(
             values = tuple(row)
             if table == "runtime":
                 if values[0].startswith(BLOB_PREFIX):
-                    # load_raw already verifies encoding, bounds, SHA and
-                    # canonical JSON. No decoded object is consumed here.
-                    readback_codec.load_raw(values[0][len(BLOB_PREFIX) :])
+                    # Validate the exact row just read, retaining every encoding,
+                    # bound, SHA and canonical check without another SELECT.
+                    readback_codec.validate_raw(values[0][len(BLOB_PREFIX) :], values[1])
                     continue
                 kind = values[0].removeprefix(PREFIX).partition(":")[0]
                 head = values[0].removeprefix(PREFIX).partition("-head:")[0]
