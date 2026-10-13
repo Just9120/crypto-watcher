@@ -266,6 +266,21 @@ conversion/capacity/recovery в900s/CPU1/4GiB перед exact-target promotion 
 остальные archives/source/qualified outputs сохраняются. Progress54/58 по коду,
 Goal ACTIVE, production compaction NOT_RUN; общий DoD ещё не выполнен.
 
+Следующий bounded improvement13Oct: isolated copy использует один lazy
+`executemany` на таблицу вместо отдельного Python execute на каждую строку.
+Порядок source rows, полный typed manifest, проверки каждого shared body,
+deadline/disk reserve, одна transaction и full readback сохранены; growing row
+buffer не создаётся. Local48 rebuild/snapshot regressions и canonical quality
+PASS. Linux native comparison на одинаковом32,296-row historical fixture:
+baseline median3.545s / lazy3.349s в6 чередующихся прогонах, все5 table manifests,
+heads/counts/shared bodies, candidate bytes и full integrity совпали. Это
+ограниченный benchmark, не throughput/SLO или proof current conversion≤900s.
+Required CI изменённой revision PENDING до нового grouped push; предыдущий
+published CI38335422635 относится кc168ba8. Read-only current count probe превысил
+observation timeout; exact child PID623799 при проверке уже отсутствовал. Его
+результат UNSET, новый полный COUNT не запускается ради повторения. Current
+source/archive qualification, promotion и CD по-прежнему незавершены.
+
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный
 dataset. Read-only snapshot09:54UTC/G5afd10770: SQLite15,220,908,032bytes,

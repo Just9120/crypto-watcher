@@ -329,52 +329,59 @@ def copy_snapshot(
         with candidate.db:
             for table, columns in TABLES.items():
                 count = 0
-                for row in original.execute(f"SELECT * FROM {table} ORDER BY rowid"):
-                    guard(deadline)
-                    if count % 1000 == 0 and shutil.disk_usage(destination.parent).free < DISK_RESERVE:
-                        raise StateError("Disk reserve exhausted; source preserved")
-                    values = tuple(row)
-                    if table == "runtime":
-                        fast = canonical_head(original, values[0], values[1], accelerator)
-                        source_public: str | None
-                        if fast is not None:
-                            payload, source_public = fast
+
+                def transformed_rows() -> Iterator[tuple[Any, ...]]:
+                    nonlocal count, converted, savings
+                    for row in original.execute(f"SELECT * FROM {table} ORDER BY rowid"):
+                        guard(deadline)
+                        if count % 1000 == 0 and shutil.disk_usage(destination.parent).free < DISK_RESERVE:
+                            raise StateError("Disk reserve exhausted; source preserved")
+                        values = tuple(row)
+                        if table == "runtime":
+                            fast = canonical_head(original, values[0], values[1], accelerator)
+                            source_public: str | None
+                            if fast is not None:
+                                payload, source_public = fast
+                            else:
+                                payload, public = head_record(
+                                    original, values[0], values[1], verify_revision=False
+                                )
+                                source_public = encode(public) if public is not None else None
+                            if source_public is not None and payload != values[1]:
+                                converted += 1
+                                savings += len(values[1].encode()) - len(payload.encode())
+                            kind, _, _ = values[0].removeprefix(PREFIX).partition(":")
+                            logical = (values[0], source_public) if source_public is not None else values
+                            if values[0].startswith(PREFIX) and kind in HEAD_FIELDS:
+                                normalized = (
+                                    source_codec.canonical_json(json.loads(payload)).decode()
+                                    if MARKER in payload
+                                    else payload
+                                )
+                                logical = (values[0], normalized)
+                                payload = encode(candidate_codec.pack_canonical(normalized))
+                            if not values[0].startswith(BLOB_PREFIX):
+                                feed(manifests[table], logical)
+                            values = (values[0], payload)
                         else:
-                            payload, public = head_record(
-                                original, values[0], values[1], verify_revision=False
-                            )
-                            source_public = encode(public) if public is not None else None
-                        if source_public is not None and payload != values[1]:
-                            converted += 1
-                            savings += len(values[1].encode()) - len(payload.encode())
-                        kind, _, _ = values[0].removeprefix(PREFIX).partition(":")
-                        logical = (values[0], source_public) if source_public is not None else values
-                        if values[0].startswith(PREFIX) and kind in HEAD_FIELDS:
-                            normalized = (
-                                source_codec.canonical_json(json.loads(payload)).decode()
-                                if MARKER in payload
-                                else payload
-                            )
-                            logical = (values[0], normalized)
-                            payload = encode(candidate_codec.pack_canonical(normalized))
-                        if not values[0].startswith(BLOB_PREFIX):
-                            feed(manifests[table], logical)
-                        values = (values[0], payload)
-                    else:
-                        feed(manifests[table], values)
-                    if table == "runtime" and values[0].startswith(BLOB_PREFIX):
-                        # Existing shared bodies may have been admitted by an earlier revision.
-                        expected_body = Codec(original).load(values[0][len(BLOB_PREFIX) :])
-                        if candidate.get_runtime(values[0]) is not None and encode(
-                            Codec(candidate.db).load(values[0][len(BLOB_PREFIX) :])
-                        ) != encode(expected_body):
-                            raise StateError("Conflicting preserved shared body")
-                        candidate.db.execute("INSERT OR REPLACE INTO runtime VALUES (?,?)", values)
-                    else:
-                        candidate.db.execute(
-                            f"INSERT INTO {table} VALUES ({','.join('?' for _ in columns)})", values
-                        )
-                    count += 1
+                            feed(manifests[table], values)
+                        if table == "runtime" and values[0].startswith(BLOB_PREFIX):
+                            # Earlier revisions can already have admitted this body.
+                            expected_body = Codec(original).load(values[0][len(BLOB_PREFIX) :])
+                            if candidate.get_runtime(values[0]) is not None and encode(
+                                Codec(candidate.db).load(values[0][len(BLOB_PREFIX) :])
+                            ) != encode(expected_body):
+                                raise StateError("Conflicting preserved shared body")
+                            candidate.db.execute("INSERT OR REPLACE INTO runtime VALUES (?,?)", values)
+                        else:
+                            yield values
+                        count += 1
+
+                # One prepared insert consumes rows lazily: source order, per-row
+                # checks and the transaction are retained without a growing buffer.
+                candidate.db.executemany(
+                    f"INSERT INTO {table} VALUES ({','.join('?' for _ in columns)})", transformed_rows()
+                )
                 counts[table] = count
         check_integrity(candidate.db, deadline=deadline)
         candidate.snapshot()  # Current owner settings must be readable without resetting defaults.
