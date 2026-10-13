@@ -1262,6 +1262,17 @@ preflight/identities/use и incremental receipt; после неоднознач
 сначала readback. Prepared next historical controller требуетone-pass capability,
 source/artifact identities итот же900s/CPU1/RAM4GiB; пока NOT_RUN.
 
+Independent converted-data contract validation14Oct: disposable125-event fixture
+with all revisions/episodes/outcomes/comparisons was rebuilt through Python and
+native one-pass paths. Exact NDJSON/CSV, cohorts/distributions, prior causal cutoff,
+unchanged input bytes иprivate serialized transport bytes match before/after;
+private transport не экспортируется. Local3 tests PASS (nativeN/A onWindows),
+Linux4 tests PASS3.64s; quality PASS. Primary receipt:
+`cw-converted-public-contracts-fa0ff5c6b7c148a8ad34ea9e804c912c.json`.
+Это controlled fixture, не whole/current DB qualification. Cleanup approval на
+4 exact files по-прежнему PENDING; unlink/new whole test/production replacement
+не выполнялись. Full Goal/54 of58 code scope сохраняется.
+
 Local recovery implementation: commit9e5f6d5 плюс final self-review correction
 (source digest из same persisted writer, final archive fingerprint, native copy
 parity). Новые canonical modules используются только разовой conversion procedure;
