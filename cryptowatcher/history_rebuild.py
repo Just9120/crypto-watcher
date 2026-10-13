@@ -19,6 +19,7 @@ from typing import Any
 
 from .events import HEAD_FIELDS, HEAD_SCHEMA, PREFIX, History
 from .history_codec import BLOB_PREFIX, MARKER, MAX_BYTES, Codec, sql_value
+from .native_history import Accelerator, load
 from .storage import IntegrityError, StateError, Store, check_integrity, create_schema, encode
 
 TABLES = {
@@ -34,9 +35,24 @@ DISK_RESERVE = 1536 * 1024 * 1024
 class _CopyCodec(Codec):
     """One exclusive copy transaction; every body/reference is checked after copy."""
 
-    def __init__(self, database: sqlite3.Connection):
+    def __init__(self, database: sqlite3.Connection, accelerator: Accelerator | None = None):
         super().__init__(database)
         self.admitted: OrderedDict[str, None] = OrderedDict()
+        self.accelerator = accelerator
+
+    def pack_canonical(self, payload: str) -> Any:
+        if self.accelerator is not None and MAX_BYTES == 32 * 1024 * 1024:
+            packed = self.accelerator.pack(payload, self.save_bytes)
+            if packed is not None:
+                return packed
+        return super().pack_canonical(payload)
+
+    def canonical(self, raw: bytes) -> tuple[bool, int | None]:
+        if self.accelerator is not None:
+            result = self.accelerator.canonical(raw)
+            if result is not None:
+                return result
+        return super().canonical(raw)
 
     def pack_window(self, item: str) -> dict[str, Any] | None:
         # Historical conversion preserves a complete frozen window without
@@ -151,20 +167,25 @@ def feed(manifest: Any, values: tuple[Any, ...]) -> None:
         manifest.update(raw)
 
 
-def canonical_head(source: sqlite3.Connection, key: str, payload: str) -> tuple[str, str] | None:
+def canonical_head(
+    source: sqlite3.Connection, key: str, payload: str, accelerator: Accelerator | None = None
+) -> tuple[str, str] | None:
     """Extract a legacy projection in JSON1, retaining full canonical source evidence."""
     kind, separator, record_id = key.removeprefix(PREFIX).partition("-head:")
     if not key.startswith(PREFIX) or not separator or kind not in HEAD_FIELDS or MARKER in payload:
         return None
-    fields = (*HEAD_FIELDS[kind], "schema")
-    rows = source.execute(
-        "SELECT key,CASE WHEN type='real' THEN ? -> fullkey ELSE value END,type "
-        "FROM json_each(?) WHERE key IN (" + ",".join("?" for _ in fields) + ")",
-        (payload, payload, *fields),
-    ).fetchall()
-    if any(type_ == "integer" and type(value) is not int for _, value, type_ in rows):
-        return None
-    values = {name: sql_value(value, type_) for name, value, type_ in rows}
+    if accelerator is not None:
+        values = accelerator.head_metadata(payload, kind)
+    else:
+        fields = (*HEAD_FIELDS[kind], "schema")
+        rows = source.execute(
+            "SELECT key,CASE WHEN type='real' THEN ? -> fullkey ELSE value END,type "
+            "FROM json_each(?) WHERE key IN (" + ",".join("?" for _ in fields) + ")",
+            (payload, payload, *fields),
+        ).fetchall()
+        if any(type_ == "integer" and type(value) is not int for _, value, type_ in rows):
+            return None
+        values = {name: sql_value(value, type_) for name, value, type_ in rows}
     if values.get("schema") == HEAD_SCHEMA:
         return None
     revision = values.get("revision")
@@ -174,11 +195,18 @@ def canonical_head(source: sqlite3.Connection, key: str, payload: str) -> tuple[
 
 
 def copy_snapshot(
-    original: sqlite3.Connection, destination: Path, owner: int, maximum: int, deadline: float
+    original: sqlite3.Connection,
+    destination: Path,
+    owner: int,
+    maximum: int,
+    deadline: float,
+    *,
+    backend: str = "auto",
 ) -> dict[str, Any]:
     """Copy every row from an already pinned source into an exclusive candidate."""
     counts: dict[str, int] = {}
     savings = converted = 0
+    accelerator = load(backend)
     manifests = {table: hashlib.sha256() for table in TABLES}
     original.execute("PRAGMA query_only=ON")
     original.execute("PRAGMA cache_size=-131072")
@@ -210,7 +238,7 @@ def copy_snapshot(
         candidate.db.execute("PRAGMA journal_mode=DELETE")
         candidate.db.execute("PRAGMA cache_size=-262144")
         source_codec = Codec(original)
-        candidate_codec = _CopyCodec(candidate.db)
+        candidate_codec = _CopyCodec(candidate.db, accelerator)
         page_size = candidate.db.execute("PRAGMA page_size").fetchone()[0]
         allowed_pages = candidate.db.execute(f"PRAGMA max_page_count={maximum // page_size}").fetchone()[0]
         if allowed_pages * page_size > maximum:
@@ -224,7 +252,7 @@ def copy_snapshot(
                         raise StateError("Disk reserve exhausted; source preserved")
                     values = tuple(row)
                     if table == "runtime":
-                        fast = canonical_head(original, values[0], values[1])
+                        fast = canonical_head(original, values[0], values[1], accelerator)
                         source_public: str | None
                         if fast is not None:
                             payload, source_public = fast
@@ -270,6 +298,7 @@ def copy_snapshot(
         # This exclusive candidate is frozen before evidence is reused during readback.
         candidate.db.execute("PRAGMA query_only=ON")
         history = History(candidate)
+        history.codec = _CopyCodec(candidate.db, accelerator)
         readback_codec = history.codec
         resolved: OrderedDict[str, tuple[str, str]] = OrderedDict()
         resolved_bytes = 0
@@ -353,6 +382,7 @@ def copy_snapshot(
     finally:
         candidate.close()
     return {
+        "conversion_backend": "native-v1" if accelerator is not None else "python",
         "table_rows": counts,
         "shared_bodies_added": added,
         "heads_converted": converted,
@@ -370,6 +400,7 @@ def rebuild(
     deadline: float,
     *,
     max_candidate_bytes: int | None = None,
+    backend: str = "auto",
 ) -> dict[str, Any]:
     if not math.isfinite(deadline) or deadline > time.monotonic() + 900:
         raise StateError("Invalid rebuild deadline")
@@ -396,7 +427,7 @@ def rebuild(
         raise StateError("Source fingerprint mismatch")
     destination.touch(mode=0o600, exist_ok=False)
     with closing(sqlite3.connect(source.resolve().as_uri() + "?mode=ro&immutable=1", uri=True)) as original:
-        copied = copy_snapshot(original, destination, owner, maximum, deadline)
+        copied = copy_snapshot(original, destination, owner, maximum, deadline, backend=backend)
     if fingerprint(source, deadline) != expected:
         raise StateError("Source changed; candidate not qualified")
     after = source.stat()
@@ -437,6 +468,7 @@ def main() -> int:
     parser.add_argument("--qualified-source-sha256", required=True)
     parser.add_argument("--timeout-seconds", type=float, default=900)
     parser.add_argument("--max-candidate-bytes", type=int)
+    parser.add_argument("--backend", choices=("auto", "python", "native"), default="auto")
     args = parser.parse_args()
     try:
         if not math.isfinite(args.timeout_seconds) or not 0 < args.timeout_seconds <= 900:
@@ -450,6 +482,7 @@ def main() -> int:
                     args.qualified_source_sha256,
                     time.monotonic() + args.timeout_seconds,
                     max_candidate_bytes=args.max_candidate_bytes,
+                    backend=args.backend,
                 )
             )
         )

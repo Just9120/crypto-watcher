@@ -303,11 +303,12 @@ check_integrity(s.db,deadline=time.monotonic()+30);s.close()
 expected=hashlib.sha256(source.read_bytes()).hexdigest()
 r=subprocess.run([sys.executable,'-m','cryptowatcher.history_rebuild',
     '--source',str(source),'--destination',str(target),'--owner-id','233382575',
-    '--qualified-source-sha256',expected,'--timeout-seconds','30'],
+    '--qualified-source-sha256',expected,'--timeout-seconds','30','--backend','native'],
     capture_output=True,text=True,check=True)
 value=json.loads(r.stdout)
 assert hashlib.sha256(source.read_bytes()).hexdigest()==expected
 assert value['heads_converted']==40 and value['candidate_bytes']<source.stat().st_size
+assert value['conversion_backend']=='native-v1'
 print(json.dumps(value))
 """,
                 validation=True,

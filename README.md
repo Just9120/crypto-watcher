@@ -20,6 +20,20 @@ Radar обрабатывает широкий metadata/liquidity universe обо
 
 Target runtime: Python 3.11/Linux; PTB20.8 с job queue, HTTPx async, websockets17.1 и стандартный SQLite. APSW3.53.4.0 и Zstandard0.25.0 используются только для bounded full validation private snapshots и pre-deploy archives. Lockfiles с hashes генерируются uv для Python3.11; `requirements.in` / `requirements-dev.in` — inputs, соответствующие `.txt` — canonical installation locks. Нужны только Telegram Bot API и public Bybit endpoints; Redis/DB server не требуются. Tests используют disposable fixtures и mocked adapters, без API tokens и сети.
 
+Isolated history converter дополнительно использует source-pinned yyjson0.12.0
+helper, собранный отдельной стадией Docker с fixed GCC image digest. Radar runtime
+его не выбирает. Linux dev/CI перед native tests выполняет из root:
+
+```bash
+python scripts/build_native.py
+```
+
+Команда требует GCC/C99 и проверяет upstream hashes; runtime image уже содержит
+готовый helper и license. `history_rebuild --backend native` требует этот artifact,
+`--backend python` выбирает прежний путь; default `auto` указывает фактический
+backend в результате. Windows local checks используют Python fallback, required
+Linux/image checks проверяют native artifact. Budget и data/recovery gates одинаковы.
+
 Команды выполняются из root repository. Создать virtual environment:
 
 ```bash

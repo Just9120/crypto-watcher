@@ -88,6 +88,10 @@ class Codec:
     def load(self, key: str) -> Any:
         return json.loads(self.load_raw(key)[0])
 
+    def canonical(self, raw: bytes) -> tuple[bool, int | None]:
+        decoded = json.loads(raw)
+        return encode(decoded).encode() == raw, len(decoded) if isinstance(decoded, list) else None
+
     def load_raw(self, key: str) -> tuple[bytes, int | None]:
         if not isinstance(key, str) or not re.fullmatch(r"[0-9a-f]{64}", key):
             raise StateError("Invalid shared snapshot identity")
@@ -119,8 +123,8 @@ class Codec:
                 raise StateError("Invalid shared snapshot encoding")
             if digest(raw) != key:
                 raise StateError("Shared snapshot hash mismatch")
-            decoded = json.loads(raw)
-            if encode(decoded).encode() != raw:
+            valid, count = self.canonical(raw)
+            if not valid:
                 raise StateError("Noncanonical shared snapshot")
             charge = len(raw) + len(row[0]) + 256
             if charge <= CACHE_BYTES:
@@ -130,9 +134,9 @@ class Codec:
                 while self.validated and self.validated_bytes + charge > CACHE_BYTES:
                     _, (body, previous, _) = self.validated.popitem(last=False)
                     self.validated_bytes -= len(body) + len(previous) + 256
-                self.validated[key] = (row[0], raw, len(decoded) if isinstance(decoded, list) else None)
+                self.validated[key] = (row[0], raw, count)
                 self.validated_bytes += charge
-            return raw, len(decoded) if isinstance(decoded, list) else None
+            return raw, count
         except (KeyError, ValueError, TypeError, zlib.error, UnicodeError) as exc:
             raise StateError("Invalid shared snapshot encoding") from exc
 

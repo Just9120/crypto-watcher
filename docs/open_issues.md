@@ -185,6 +185,23 @@ error handling; только подтверждённый выигрыш инт�
 reproducible build/meaningful tests. Whole conversion900s/1CPU/4GiB, full gates и
 production promotion requirements сохраняются. Code54/58, Goal ACTIVE.
 
+Native follow-up13Oct: controlled ABBA на той же32,296-row fixture дал native
+wall4.258/4.325s и CPU4.148/4.289s против baseline5.161/5.520s и5.141/5.461s.
+В каждом native run canonical checker вызван2351 раз; all-table manifests/integrity
+PASS и совпадают. Actual Linux3.11/SQLite3.46.1 integrated loader/backend прошёл
+93 targeted regressions, включая existing corruption, rollback, private bytes,
+owner state и mixed-format checks. Initial isolated harness failures относились к
+pytest shim/metadata/TMPDIR и insufficient virtual disk reserve; gates не менялись,
+owned containers удалены. Canonical checker дополнительно имеет2027-case differential
+proof из предыдущего шага. Это не whole/current conversion proof.
+В PR31 подготовлены converter-only loader, Python fallback для unsupported input,
+explicit required `--backend native`, source/field-map validation, pinned
+GCC13.3.0-bookworm Docker stage/yyjson source hashes и mandatory image native check.
+Ordinary runtime Codec и schema/data/retention policy сохраняются. Local Windows
+87 tests PASS,6 Linux-native cases N/A; integrated Linux93 PASS. Latest required
+CI/build identity и qualified full historical/current dataset ещё REQUIRED.
+Полный heavy rerun до artifact/throughput qualification не выполняется.
+
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный
 dataset. Read-only snapshot09:54UTC/G5afd10770: SQLite15,220,908,032bytes,
