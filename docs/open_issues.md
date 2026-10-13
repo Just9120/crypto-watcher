@@ -529,12 +529,24 @@ recovery/current fit остаётся REQUIRED. Owned probe removed/live unchang
  Диагностика не повышает owner limit900s и не
 разрешает новый production pause; unchanged большой trial не повторяется.
 
-Runtime inventory13Oct17:50UTC: прежний7039151/G5afd107 running/healthy,
-DB26,972,188,672bytes/WAL7,510,792bytes, free disk4,388,839,424bytes. Четыре
-owned derived candidate/archive files из двух последних trials занимают ещё
-5,333,725,246bytes; exact SHA/decode review готовится, удаления этих файлов пока
-не разрешены и не выполнены. Original recovery archive и qualified candidate
-сохраняются. Отсутствие promotion остаётся delivery blocker; Goal active54/58.
+Cleanup13Oct18:57–18:59UTC после explicit owner authorization: удалены ровно4
+полностью повторно проверенных derived files из trials cs8j2ly0/g9q3duky, освобождено
+5,336,481,792 allocated bytes. Receipt `derived-cleanup-20261013T185750Z-49ffd1b1.json`
+в VPS rehearsals PASS; readback всех4 paths отсутствуют. Сохраняемые recovery gzip
+и qualified candidate проверены по hashes/decode; baseline7039151/G5afd107 healthy.
+Production DB не заменялась. Fresh metadata18:59UTC: DB27,195,658,240bytes/
+WAL7,762,112bytes, free disk9,544,220,672bytes. Эти4 cleanup задачи закрыты;
+F34/current conversion/delivery остаются открыты, Goal54/58.
+
+Bounded source-image diagnostics13Oct: Zstd level3 не дал стабильного выигрыша
+и отклонён.256KiB frame prototype с64KiB decoded cache slices сохраняет32MiB
+cache;6 Linux corruption/bounds/write/eviction tests PASS. Historical5.42GB
+archive61e4f087: full CHECK/integrity, reconstructed/file hashes PASS258.407s,
+encoded547,373,779bytes; previous coarse256KiB cache prototype320.602s.
+Receipt `sliced256-archive-check.jsonl` вне repository; owned probe removed,
+live unchanged. Это independent component measurement, не whole/current
+conversion PASS; canonical64KiB defaults не изменены. Для принятия нужны
+полная проверка влияния и whole900s qualification текущего dataset.
 
 
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
@@ -1099,7 +1111,7 @@ Confidence: HIGH по code/fixture-backed gaps и inventory; MEDIUM у orphan ex
 
 2026-10-11 Europe/Moscow: G1 DONE по primary records, verified main40882eb и actual production run38087285142/artifact11682629335; image manifest38d238a6…/config7666f323…, backup pre-40882eb…-1791667365.sqlite3. Owner sample screenshot SHA256401ddabd… и ответ «вроде работает» подтверждают bounded owner smoke с указанными ограничениями. Production Environment DEPLOY_ENABLED=true; dedicated forced-command SSH и strict host key verification проверены; последующие eligible runtime merges доставляет CD. Первое failed CD38086969847 не дошло до authentication/target: Windows CRLF private-key stdin repaired binary transfer, verified bounded run38087285142 PASS. Credentials не хранятся в repository; existing SSH keys/unit другого приложения сохранены.
 
-Текущий checkpoint2026-10-13: verified main9634558a; PR31/codex/backup-validation-performance-20261011/base9634558a открыт и не merged. Published code headb5fe042, required CI38405497548/ci-required115324970264 SUCCESS; fresh readback13Oct13:55UTC подтверждает эту revision/checks. Local cache-release correction/документация ещё не published; CI прежней revision её не подтверждает. Metadata-only push/PR не требуется.
+Текущий checkpoint2026-10-13: verified main9634558a; PR31/codex/backup-validation-performance-20261011/base9634558a открыт и не merged. Published code headb5fe042, required CI38405497548/ci-required115324970264 SUCCESS; fresh readback13Oct18:16UTC подтверждает эту revision/checks. Local cache-release/head/scanned-body corrections и документация ещё не published; CI прежней revision их не подтверждает.104 Windows storage,59 application и152 Linux native targeted tests, canonical quality PASS; separate protected candidate all5 manifests/body/hash readback PASS391.133s. Это не whole current conversion proof. Metadata-only push/PR не требуется.
 
 Production остаётся на прежнем G5afd107/crypto-watcher7039151; установленный privileged receiver9569f32c не обновлён. Current-dataset capture `current-dataset-qualification-gl9nijrj/status.json` завершён TIME_BUDGET_EXCEEDED/exit3/OOMfalse за888.557s: snapshot24,689,618,944bytes frozen около841s, full source/candidate/persisted recovery не подтверждены. Процессы предыдущих trials завершены, owned probe containers удалены; не ждать старые PID и не повторять capture из-за исчезновения observer handle. Current production compaction/replacement NOT_RUN. Historical archive-source qualification PASS относится к прежней5.42GB копии и не разрешает её promotion поверх текущей истории.
 
@@ -1111,4 +1123,4 @@ Consumer actual binding readback13Oct09:18UTC: radar credential versions0, activ
 
 Последний whole historical trial13Oct: source full integrity/unchanged checks PASS, но весь source/candidate/restore proof не завершён за887.528s; result TIME_BUDGET_EXCEEDED, candidate UNQUALIFIED_THIS_RUN, OOMfalse, owned probe removed. Separate readonly candidate byte check подтвердил SHA1810335b и совпадение с ранее qualified artifact; production тот же G5afd107/7039151 running/healthy. Last DB-size snapshot14:16UTC: SQLite26,248,880,128bytes/WAL6,604,392bytes; он не является текущей free-disk оценкой после нового trial. Working DB compaction/replacement NOT_RUN. Нельзя выдавать candidate size reduction за уменьшение production DB или повторять unchanged pipeline/остановку бота без нового основания.
 
-Следующий шаг: измерить actual candidate verification отдельно от copy на existing qualified historical artifact. Native block experiment отклонён по cost/size evidence; не повторять unchanged whole pipeline и не ослаблять gates. Возможное exact-artifact proof reuse сначала подготовить и проверить; изменение обязательной validation policy требует конкретного owner review. Source-release/manifest correction qualified53 local/139 Linux tests, но actual whole fit остаётся неподтверждённым. Новый full trial требует fresh disk/resources preflight; newly generated duplicate outputs не удалять без конкретной reviewed authorization, original gzip и старый qualified candidate сохраняются. Только после full qualification подготовить review точного production switch и applicable receiver/merge/CD gates. Затем завершить qualified consumer activation/signed historical smoke и G6 full audit/docs PR. Полный scope58 AC и все findings сохраняются; по коду54/58, audit percentage не пересчитывался. До этого Goal DoD не достигнут. Primary detailed logs/receipts остаются вне repository; user state и другие VPS проекты сохраняются.
+Следующий шаг: проверить оставшийся whole900s critical path по измеренным source/candidate/copy/recovery phases. Source compression prototype qualified258.407s на protected historical archive; canonical code/defaults не менялись, whole fit ещё не доказан. Candidate verification отдельно от copy PASS391.133s для protected historical artifact; whole current conversion≤900s остаётся REQUIRED. Native event-window block experiment отклонён по cost/size evidence; не повторять unchanged whole pipeline и не ослаблять gates. Возможное exact-artifact proof reuse сначала подготовить и проверить; изменение обязательной validation policy требует конкретного owner review. Source-release/manifest correction qualified53 local/139 Linux tests, но actual whole fit остаётся неподтверждённым. Новый full trial требует fresh disk/resources preflight; newly generated duplicate outputs не удалять без конкретной reviewed authorization, original gzip и старый qualified candidate сохраняются. Только после full qualification подготовить review точного production switch и applicable receiver/merge/CD gates. Затем завершить qualified consumer activation/signed historical smoke и G6 full audit/docs PR. Полный scope58 AC и все findings сохраняются; по коду54/58, audit percentage не пересчитывался. До этого Goal DoD не достигнут. Primary detailed logs/receipts остаются вне repository; user state и другие VPS проекты сохраняются.
