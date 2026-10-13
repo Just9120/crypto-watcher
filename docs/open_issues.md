@@ -1246,6 +1246,22 @@ Older helper fallback и Python backend сохраняются. Runtime radar э
 `cw-saved-pack-refusals-576238ce9ed245b8b9f02d7060ff722a.json`.
 No production changes/promotion; current dataset qualification PENDING.
 
+Capacity/cleanup blocker14Oct: readonly13Oct22:43UTC production afd107/7039151
+healthy; SQLite27920867328bytes, WAL8120552bytes, free3254681600bytes. Exact
+four-file cleanup prepared, not executed: candidate.sqlite3 иsource.sqlite3.zst
+вhistorical-copy-cache-am7q8k0k/work иhistorical-zstd-gate-26m3jfsd/work.
+Allocated5268840448bytes. Read-only preflight повторён22:53UTC PASS66.937s:
+protected gzip encoded/decoded identities иqualifiedV1 candidate1810335b, exact
+paths/inodes/modes, terminal controllers, no open handles/no writable mounts.
+NewV2 candidate1e6c9853 — воспроизводимый failed output known historical source,
+не current live state. Original recovery source, qualified candidate иreceipts
+сохраняются; удаление не разрешено. Owner approval запрошен на ровно эти4 файла;
+прежние cleanup approvals имеют другие paths. До ответа только независимая работа,
+без unlink или source/production DB replacement. После approval повторить весь
+preflight/identities/use и incremental receipt; после неоднозначного результата
+сначала readback. Prepared next historical controller требуетone-pass capability,
+source/artifact identities итот же900s/CPU1/RAM4GiB; пока NOT_RUN.
+
 Local recovery implementation: commit9e5f6d5 плюс final self-review correction
 (source digest из same persisted writer, final archive fingerprint, native copy
 parity). Новые canonical modules используются только разовой conversion procedure;
