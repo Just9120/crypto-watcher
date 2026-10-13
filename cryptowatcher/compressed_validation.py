@@ -278,8 +278,13 @@ class Image:
         budget(self.deadline)
         if offset < 0 or amount < 0 or amount > 1024 * 1024:
             raise QualificationError("INVALID_READ")
-        pieces = []
         end = min(offset + amount, self.size)
+        if end <= offset:
+            return b""
+        index, start = divmod(offset, BLOCK)
+        if end - offset <= BLOCK - start:
+            return self.block(index)[start : start + end - offset]
+        pieces = []
         pos = offset
         while pos < end:
             index, start = divmod(pos, BLOCK)

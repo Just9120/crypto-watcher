@@ -157,6 +157,16 @@ def test_all_slice_reads_match_exact_source(database):
         a = random.randrange(len(data) + 1000)
         n = random.randrange(8000)
         assert image.read(n, a) == data[a : a + n]
+    for n, a in (
+        (0, 0),
+        (0, BLOCK),
+        (4096, BLOCK),
+        (BLOCK, BLOCK - 1),
+        (4096, len(data) - 17),
+        (1, len(data)),
+        (4096, len(data) + BLOCK),
+    ):
+        assert image.read(n, a) == data[a : a + n]
 
 
 def test_constraints_rejected(database):

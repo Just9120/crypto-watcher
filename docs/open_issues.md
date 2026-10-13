@@ -393,6 +393,26 @@ source/candidate/all-row/private-byte/restore proofs и900s/CPU1/4GiB. Прос�
 receiver update, merge/CD, consumer activation и G6 остаются незавершёнными;
 по коду54/58, новый audit percentage не рассчитан.
 
+Verifier engineering preparation: local single-block read path сохраняет
+EOF/boundary/deadline checks;77 targeted regressions/quality PASS. Controlled
+500k hot4KiB-page ABBA: previous1.233–1.244s/current1.174–1.184s, same SHA625dbc06…;
+это не whole-current qualification. Source-pinned native VFS prototype вне
+repository использует SQLite3.53.4 extension API и Zstd1.5.7,32MiB cache и тот же
+full integrity/CHECK. Isolated all5 typed rows/readonly write/CHECK corruption/
+broken frame/closed WAL/lifetime controls PASS. Same-engine fixture выявила:
+RO handle SQLite3.53.4 не сообщил нарушенный CHECK, RW handle сообщил; prototype
+повторяет RW metadata + query-only existing VFS, физические source writes запрещены.
+Эту особенность нельзя использовать для ложного source PASS.
+
+Historical5.42GB full-integrity benchmark остаётся live: source hash61e4f087…,
+CPU1/RAM4GiB/600s, no production changes. Completed Python76.780s,
+native55.989/54.273s; последний Python и final byte-identity ещё PENDING. Primary
+`native-vfs-benchmark.jsonl` вне repository; exact container7fc5b921/PID1295688,
+observer session50104 подтверждены live. Не перезапускать при observation timeout.
+Native integration/required CI/full current900s conversion пока не закрыты;
+следующий шаг — получить terminal benchmark и оценить весь pipeline, не отдельный
+micro-result. Production G5afd107 остаётся healthy, main9634558a/PR31 открыт.
+
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный
 dataset. Read-only snapshot09:54UTC/G5afd10770: SQLite15,220,908,032bytes,
