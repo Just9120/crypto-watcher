@@ -240,6 +240,19 @@ runtime admission checks и не продлевает900s budget.
 python -m cryptowatcher.history_rebuild --source "$CW_CLOSED_BACKUP" --destination "$CW_NEW_CANDIDATE" --owner-id 233382575 --qualified-source-sha256 "$CW_QUALIFIED_SOURCE_SHA256"
 ```
 
+Для сохранённого gzip/Zstandard archive доступны `--source-encoding gzip|zstd`
+и обязательный explicit `--max-candidate-bytes`. SHA256 выше относится к decoded
+SQLite bytes. Tool проверяет encoded archive SHA256 до/после, decoded SHA256,
+полную writable integrity/CHECK исходного frozen compressed image, все исходные
+rows и полную candidate integrity/readback. Source читается через existing bounded
+compressed VFS с cache128MiB; отдельный raw source file не создаётся. Private
+sentinel/sidecars удаляются после закрытия connection. Дополнительные hashes,
+source qualification и candidate copy/proof входят в тот же общий900s deadline;
+это не отдельные этапы с обновляемым budget. Decoded image ограничен existing3GiB
+compressed capacity, контейнер сохраняет cap4GiB/CPU1/no swap. Нехватка памяти,
+места, повреждённый архив или mismatch блокируют qualification. Этот вариант не
+изменяет production и не доказывает fit/time полного dataset по small fixtures.
+
 Это command template: три CW variables задаются по actual operator inventory,
 а не предполагаемым paths. Heads становятся ссылками на revision того же
 kind/ID/version; полное восстановленное значение включено в сравнение с source.

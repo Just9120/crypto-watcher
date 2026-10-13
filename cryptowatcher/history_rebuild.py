@@ -10,12 +10,13 @@ import os
 import re
 import shutil
 import sqlite3
+import tempfile
 import time
 from collections import OrderedDict
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator, Literal
 
 from .events import HEAD_FIELDS, HEAD_SCHEMA, PREFIX, History
 from .history_codec import BLOB_PREFIX, MARKER, MAX_BYTES, Codec, sql_value
@@ -112,6 +113,60 @@ def fingerprint(path: Path, deadline: float) -> str:
         raise StateError("Source changed during rebuild")
     closed(path)
     return digest.hexdigest()
+
+
+@contextmanager
+def archive_source(
+    source: Path, directory: Path, expected: str, deadline: float, encoding: str
+) -> Iterator[tuple[Any, dict[str, Any]]]:
+    """Use a verified frozen archive image without an additional multi-GB raw copy."""
+    import apsw
+
+    from .compressed_validation import MAX_COMPRESSED_BYTES, VFS, Image, classified_errors, full_check
+
+    if encoding not in ("gzip", "zstd"):
+        raise StateError("Unknown archive encoding")
+    archive_encoding: Literal["GZIP", "ZSTD"] = "GZIP" if encoding == "gzip" else "ZSTD"
+    with classified_errors(deadline):
+        image = Image(
+            source, limit=MAX_COMPRESSED_BYTES, deadline=deadline, archive_encoding=archive_encoding
+        )
+        if image.sha256 != expected:
+            raise StateError("Decoded source fingerprint mismatch")
+    with (
+        classified_errors(deadline),
+        tempfile.TemporaryDirectory(prefix="cw-rebuild-source-", dir=directory) as work,
+    ):
+        sentinel = Path(work) / "source.sqlite3"
+        sentinel.touch(mode=0o600)
+        vfs = VFS(image, sentinel)
+        original = None
+        try:
+            original = apsw.Connection(
+                str(sentinel.resolve()), flags=apsw.SQLITE_OPEN_READWRITE, vfs=vfs.name
+            )
+            # Keep room for the standard SQLite candidate connection and native helper.
+            original.execute("PRAGMA cache_size=-131072")
+            full_check(original, deadline)
+            yield (
+                original,
+                {
+                    "mode": "COMPRESSED_RAM",
+                    "bytes": image.size,
+                    "sha256": image.sha256,
+                    "compressed_bytes": image.retained,
+                    "full_integrity": "PASS",
+                    "sqlite_version": apsw.sqlitelibversion(),
+                },
+            )
+            guard(deadline)
+            if image.reconstructed_hash() != expected:
+                raise StateError("Decoded source changed during rebuild")
+            image.assert_source_unchanged()
+        finally:
+            if original is not None:
+                original.close()
+            vfs.unregister()
 
 
 def head_record(
@@ -401,10 +456,15 @@ def rebuild(
     *,
     max_candidate_bytes: int | None = None,
     backend: str = "auto",
+    source_encoding: str = "sqlite",
 ) -> dict[str, Any]:
     if not math.isfinite(deadline) or deadline > time.monotonic() + 900:
         raise StateError("Invalid rebuild deadline")
     guard(deadline)
+    if source_encoding not in ("sqlite", "gzip", "zstd"):
+        raise StateError("Unknown source encoding")
+    if source_encoding != "sqlite" and max_candidate_bytes is None:
+        raise StateError("Archived source requires explicit candidate byte limit")
     if not re.fullmatch(r"[0-9a-f]{64}", expected):
         raise StateError("Expected qualified source SHA256 required")
     if source.resolve() == destination.resolve() or destination.exists():
@@ -423,12 +483,23 @@ def rebuild(
         raise StateError("Invalid candidate byte limit")
     if shutil.disk_usage(destination.parent).free < maximum + DISK_RESERVE:
         raise StateError("Insufficient disk for bounded isolated candidate")
-    if fingerprint(source, deadline) != expected:
+    source_hash = fingerprint(source, deadline)
+    if source_encoding == "sqlite" and source_hash != expected:
         raise StateError("Source fingerprint mismatch")
     destination.touch(mode=0o600, exist_ok=False)
-    with closing(sqlite3.connect(source.resolve().as_uri() + "?mode=ro&immutable=1", uri=True)) as original:
-        copied = copy_snapshot(original, destination, owner, maximum, deadline, backend=backend)
-    if fingerprint(source, deadline) != expected:
+    source_proof = None
+    if source_encoding == "sqlite":
+        with closing(
+            sqlite3.connect(source.resolve().as_uri() + "?mode=ro&immutable=1", uri=True)
+        ) as original:
+            copied = copy_snapshot(original, destination, owner, maximum, deadline, backend=backend)
+    else:
+        with archive_source(source, destination.parent, expected, deadline, source_encoding) as (
+            archived,
+            source_proof,
+        ):
+            copied = copy_snapshot(archived, destination, owner, maximum, deadline, backend=backend)
+    if fingerprint(source, deadline) != source_hash:
         raise StateError("Source changed; candidate not qualified")
     after = source.stat()
     if (
@@ -447,14 +518,24 @@ def rebuild(
         "at_utc": datetime.now(timezone.utc).isoformat(),
         "tool_source_revision": revision,
         "source_sha256": expected,
-        "source_bytes": source_identity.st_size,
+        "source_bytes": source_proof["bytes"] if source_proof else source_identity.st_size,
         "candidate_sha256": candidate_hash,
         "candidate_bytes": destination.stat().st_size,
         "max_candidate_bytes": maximum,
         **copied,
         "candidate_full_integrity": "PASS",
         "immutable_rows_and_resolved_heads": "PASS",
-        "source_full_qualification": "REQUIRED_SEPARATELY_FOR_EXPECTED_HASH",
+        "source_full_qualification": "PASS" if source_proof else "REQUIRED_SEPARATELY_FOR_EXPECTED_HASH",
+        **(
+            {
+                "source_archive_sha256": source_hash,
+                "source_archive_bytes": source_identity.st_size,
+                "source_encoding": source_encoding,
+                "source_validation": source_proof,
+            }
+            if source_proof
+            else {}
+        ),
         "production_migration": "NOT_RUN",
         "incomplete_output": "PRESERVED_ON_FAILURE",
     }
@@ -469,6 +550,7 @@ def main() -> int:
     parser.add_argument("--timeout-seconds", type=float, default=900)
     parser.add_argument("--max-candidate-bytes", type=int)
     parser.add_argument("--backend", choices=("auto", "python", "native"), default="auto")
+    parser.add_argument("--source-encoding", choices=("sqlite", "gzip", "zstd"), default="sqlite")
     args = parser.parse_args()
     try:
         if not math.isfinite(args.timeout_seconds) or not 0 < args.timeout_seconds <= 900:
@@ -483,6 +565,7 @@ def main() -> int:
                     time.monotonic() + args.timeout_seconds,
                     max_candidate_bytes=args.max_candidate_bytes,
                     backend=args.backend,
+                    source_encoding=args.source_encoding,
                 )
             )
         )

@@ -34,6 +34,10 @@ python scripts/build_native.py
 backend в результате. Windows local checks используют Python fallback, required
 Linux/image checks проверяют native artifact. Budget и data/recovery gates одинаковы.
 
+Конвертер также читает сохранённые gzip/Zstandard archives через bounded compressed
+image без дополнительной raw source copy. Explicit encoding/byte cap и полный набор
+source/candidate проверок описаны в [процедуре конвертации](docs/runbooks/delivery.md#изолированная-конвертация-legacy-history-backup).
+
 Команды выполняются из root repository. Создать virtual environment:
 
 ```bash

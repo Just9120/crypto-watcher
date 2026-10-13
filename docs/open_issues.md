@@ -202,6 +202,25 @@ Ordinary runtime Codec и schema/data/retention policy сохраняются. L
 CI/build identity и qualified full historical/current dataset ещё REQUIRED.
 Полный heavy rerun до artifact/throughput qualification не выполняется.
 
+Archive-source follow-up13Oct: converter принимает explicit gzip/Zstandard source
+через frozen compressed VFS без дополнительной raw source copy. Decoded source
+SHA256 и writable full integrity/CHECK, encoded archive hashes до/после, полный
+candidate readback/manifests и immutable source identity обязательны. Общий900s
+deadline не сбрасывается; candidate byte cap для archive задаётся явно. Ordinary
+runtime/retention/CD gates сохраняются. Local Windows45 rebuild/snapshot tests и
+canonical quality PASS: обе archive encodings дают те же all-table manifests,
+exact float/signed-zero/large-int/Unicode values; wrong hash, truncated archive и
+реальное CHECK violation блокируют qualification. Actual Linux3.11/SQLite3.46.1
+с hash-locked APSW3.53.4.0/Zstandard0.25.0 и native loader прошёл97 targeted tests;
+owned container/staging удалены, production unchanged. Required CI нового diff
+и full old/current dataset proof ещё PENDING; последний CI38328025722 PASS относится
+к предыдущему f8f55f6.
+Bounded current-code cost profile на32,296-row disposable fixture13Oct01:11UTC
+подтвердил full fixture manifests/integrity; profile timing не является uninstrumented
+throughput или full conversion. Exact три terminal UNQUALIFIED candidate files
+могут освободить4.66GB после отдельного owner approval; preflight/свежий сохраняемый
+archive hash PASS01:19UTC, cleanup NOT_RUN. Рабочая база/source/archive сохранены.
+
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный
 dataset. Read-only snapshot09:54UTC/G5afd10770: SQLite15,220,908,032bytes,

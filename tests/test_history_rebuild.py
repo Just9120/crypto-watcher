@@ -26,6 +26,119 @@ def test_logical_manifest_preserves_types_and_field_boundaries():
     assert len(set(hashes)) == len(values)
 
 
+@pytest.mark.parametrize("encoding", ["gzip", "zstd"])
+def test_archive_rebuild_preserves_full_rows_without_a_raw_source_copy(tmp_path, encoding):
+    import gzip
+
+    import zstandard
+
+    source, _ = closed_backup(tmp_path)
+    with sqlite3.connect(source) as db:
+        for key in (PREFIX + "event:record-0:0000000001", PREFIX + "event-head:record-0"):
+            value = json.loads(
+                db.execute("SELECT payload_json FROM runtime WHERE key=?", (key,)).fetchone()[0]
+            )
+            value["strength"] = 2.095370825591371
+            value["source_inputs"] = [
+                {"start": 60000, "step": 60000, "close": -0.0, "integer": 2**100 + 123, "label": "Пример"}
+            ]
+            db.execute("UPDATE runtime SET payload_json=? WHERE key=?", (encode(value), key))
+    original = source.read_bytes()
+    expected = hashlib.sha256(original).hexdigest()
+    archive = tmp_path / ("source." + encoding)
+    archive.write_bytes(
+        gzip.compress(original) if encoding == "gzip" else zstandard.ZstdCompressor().compress(original)
+    )
+    archive_bytes = archive.read_bytes()
+    raw_result = rebuild(
+        source, tmp_path / "raw-candidate.sqlite3", 233382575, expected, time.monotonic() + 10
+    )
+    result = rebuild(
+        archive,
+        tmp_path / "archive-candidate.sqlite3",
+        233382575,
+        expected,
+        time.monotonic() + 10,
+        max_candidate_bytes=2 * 1024 * 1024,
+        source_encoding=encoding,
+    )
+    assert result["logical_row_manifests"] == raw_result["logical_row_manifests"]
+    assert result["table_rows"] == raw_result["table_rows"]
+    assert result["candidate_full_integrity"] == result["source_full_qualification"] == "PASS"
+    assert result["source_sha256"] == result["source_validation"]["sha256"] == expected
+    assert result["source_bytes"] == len(original)
+    assert result["source_archive_sha256"] == hashlib.sha256(archive_bytes).hexdigest()
+    assert source.read_bytes() == original and archive.read_bytes() == archive_bytes
+    assert not list(tmp_path.glob("cw-rebuild-source-*"))
+
+
+def test_archive_rebuild_rejects_unqualified_hash_and_check_violation(tmp_path):
+    import gzip
+
+    source, _ = closed_backup(tmp_path)
+    archive = tmp_path / "source.gz"
+    archive.write_bytes(gzip.compress(source.read_bytes()))
+    with pytest.raises(StateError, match="explicit candidate byte limit"):
+        rebuild(
+            archive,
+            tmp_path / "unbounded.sqlite3",
+            233382575,
+            "0" * 64,
+            time.monotonic() + 10,
+            source_encoding="gzip",
+        )
+    with pytest.raises(StateError, match="Decoded source fingerprint"):
+        rebuild(
+            archive,
+            tmp_path / "wrong-hash.sqlite3",
+            233382575,
+            "0" * 64,
+            time.monotonic() + 10,
+            max_candidate_bytes=2**20,
+            source_encoding="gzip",
+        )
+    with sqlite3.connect(source) as db:
+        db.execute("PRAGMA ignore_check_constraints=ON")
+        db.execute("UPDATE owner_settings SET revision=0")
+    corrupted = source.read_bytes()
+    archive.write_bytes(gzip.compress(corrupted))
+    preserved = archive.read_bytes()
+    with pytest.raises(IntegrityError) as failure:
+        rebuild(
+            archive,
+            tmp_path / "corrupt-candidate.sqlite3",
+            233382575,
+            hashlib.sha256(corrupted).hexdigest(),
+            time.monotonic() + 10,
+            max_candidate_bytes=2**20,
+            source_encoding="gzip",
+        )
+    assert failure.value.code == "DATABASE_CORRUPT"
+    assert archive.read_bytes() == preserved and source.read_bytes() == corrupted
+
+
+def test_truncated_archive_is_classified_and_never_qualified(tmp_path):
+    import gzip
+
+    source, _ = closed_backup(tmp_path)
+    raw = source.read_bytes()
+    archive = tmp_path / "truncated.gz"
+    broken = gzip.compress(raw)[:-7]
+    archive.write_bytes(broken)
+    with pytest.raises(IntegrityError) as failure:
+        rebuild(
+            archive,
+            tmp_path / "candidate.sqlite3",
+            233382575,
+            hashlib.sha256(raw).hexdigest(),
+            time.monotonic() + 10,
+            max_candidate_bytes=2**20,
+            source_encoding="gzip",
+        )
+    assert failure.value.code == "DATABASE_ERROR"
+    assert archive.read_bytes() == broken and source.read_bytes() == raw
+
+
 def test_historical_frozen_windows_share_one_lossless_value_while_live_uses_blocks(tmp_path):
     from cryptowatcher.history_codec import MARKER, Codec
 
