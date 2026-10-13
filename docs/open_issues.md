@@ -477,10 +477,16 @@ new0.2093/0.2083s, одинаковый SHA941ac4ed…; effect всего pipeli
 Canonical proof-cache эксперимент отклонён:14MB fixture не сократила число native
 checks540 и не показала устойчивого выигрыша. В tracked code он не включён.
 Новый historical whole trial `historical-full-pipeline-g9q3duky/status.json`
-RUNNING; owned container0bd81c22…/root PID1526230, source full integrity PASS.
+завершён TIME_BUDGET_EXCEEDED/exit3 за887.528s, OOMfalse. Source full integrity
+и unchanged-byte checks перед release завершены; candidate full readback и
+independent persisted restore не завершены. Owned container0bd81c22… удалён;
+прежний production container/main inode unchanged/running.
 Один deadline900s/CPU1/RAM4GiB/no swap; stricter output caps3GiB candidate/1GiB
 archive и2GiB disk/growth reserve, original archive read-only, production pause
-и replacement NOT_RUN. PASS не предсказывается; final candidate/restore gates REQUIRED.
+и replacement NOT_RUN. Final candidate/restore gates REQUIRED. Separate readonly
+byte check16.772s подтвердил candidate SHA1810335b… и полное совпадение с ранее
+qualified2.17GB историческим artifact. Это доказательство того же результата
+копирования; новый whole pipeline900s остался FAIL и current26GB не квалифицирован.
 
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный
@@ -1054,6 +1060,6 @@ Prepared closed-source qualification: exact one-container stop/checkpoint/read/r
 
 Consumer actual binding readback13Oct09:18UTC: radar credential versions0, active radar credentials0, binding отсутствует, ingest OFF, max age UNSET. Accepted policy900s остаётся требованием; runtime setting ещё не подтверждён. Unsigned probe из consumer не выполнен из-за отсутствующего diagnostic httpx; это не доказательство недоступности endpoint. Прежний actual producer HTTPx/TLS503 подтверждал disabled receiver в описанных условиях. Qualified master crypto/recovery-material match не заменяет current DB recovery или signed event delivery. Credential activation требует owner-protected qualified procedure; не обходить Admin/TOTP и не менять trading authority.
 
-Последний whole historical trial13Oct: source full integrity PASS, но весь source/candidate/restore proof не завершён за888.585s; result TIME_BUDGET_EXCEEDED, candidate UNQUALIFIED, OOMfalse, owned probe removed. Fresh read-only14:16UTC: прежний G5afd107/7039151 running/healthy, SQLite26,248,880,128bytes/WAL6,604,392bytes, free disk7,896,936,448bytes. Working DB compaction/replacement NOT_RUN. Нельзя выдавать candidate size reduction за уменьшение production DB или повторять unchanged pipeline/остановку бота без нового основания.
+Последний whole historical trial13Oct: source full integrity/unchanged checks PASS, но весь source/candidate/restore proof не завершён за887.528s; result TIME_BUDGET_EXCEEDED, candidate UNQUALIFIED_THIS_RUN, OOMfalse, owned probe removed. Separate readonly candidate byte check подтвердил SHA1810335b и совпадение с ранее qualified artifact; production тот же G5afd107/7039151 running/healthy. Last DB-size snapshot14:16UTC: SQLite26,248,880,128bytes/WAL6,604,392bytes; он не является текущей free-disk оценкой после нового trial. Working DB compaction/replacement NOT_RUN. Нельзя выдавать candidate size reduction за уменьшение production DB или повторять unchanged pipeline/остановку бота без нового основания.
 
-Следующий шаг: измерить существенное ускорение полного copy/readback перед новым whole-current qualification. Cache-release correction qualified49 local/135 Linux tests, сохраняет CPU1/RAM4GiB/900s и все проверки; actual fit остаётся неподтверждённым. Новый full trial требует fresh disk/resources preflight; исторические candidate/recovery outputs последнего trial остаются UNQUALIFIED и не заменяют source/старый qualified candidate. Только после full qualification подготовить review точного production switch и applicable receiver/merge/CD gates. Затем завершить qualified consumer activation/signed historical smoke и G6 full audit/docs PR. Полный scope58 AC и все findings сохраняются; по коду54/58, audit percentage не пересчитывался. До этого Goal DoD не достигнут. Primary detailed logs/receipts остаются вне repository; user state и другие VPS проекты сохраняются.
+Следующий шаг: проверить native16-candle blocks для historical windows вместо повторного whole-window хранения/декодирования; complete public/private data и все gates сохраняются. Source-release/manifest correction qualified53 local/139 Linux tests, но actual whole fit остаётся неподтверждённым. Новый full trial требует fresh disk/resources preflight; newly generated duplicate outputs не удалять без конкретной reviewed authorization, original gzip и старый qualified candidate сохраняются. Только после full qualification подготовить review точного production switch и applicable receiver/merge/CD gates. Затем завершить qualified consumer activation/signed historical smoke и G6 full audit/docs PR. Полный scope58 AC и все findings сохраняются; по коду54/58, audit percentage не пересчитывался. До этого Goal DoD не достигнут. Primary detailed logs/receipts остаются вне repository; user state и другие VPS проекты сохраняются.
