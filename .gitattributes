@@ -1,0 +1,2 @@
+# Native upstream hashes are byte identities on every checkout platform.
+native/** text eol=lf
