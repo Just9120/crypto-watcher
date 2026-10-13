@@ -221,6 +221,17 @@ throughput или full conversion. Exact три terminal UNQUALIFIED candidate f
 могут освободить4.66GB после отдельного owner approval; preflight/свежий сохраняемый
 archive hash PASS01:19UTC, cleanup NOT_RUN. Рабочая база/source/archive сохранены.
 
+Full archived-source trial13Oct01:45–01:54UTC завершён BLOCKED/exit2 за565.565s,
+до общего900s deadline. Источник5.42GB читался через compressed image; readonly
+mid-run metadata: physical reads0.78GB/RSS≈1.5GiB, candidate353MB. Transaction
+откатился, итоговый candidate36KiB UNQUALIFIED; container removed/live unchanged.
+Исходный CLI не сохранил класс отказа: причина UNSET, предел candidate2GiB только
+кандидат объяснения. Corruption, fit/time полного dataset и READY этим не доказаны.
+Follow-up классифицирует реальные SQLite FULL/CONSTRAINT/I/O и безопасные State
+refusals без exception text/private bytes. Local41 rebuild regressions/quality PASS;
+required CI этого follow-up PENDING. Новый полный запуск до диагностики и проверки
+доступной capacity не выполняется; whole900s/CPU1/4GiB policy сохраняется.
+
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный
 dataset. Read-only snapshot09:54UTC/G5afd10770: SQLite15,220,908,032bytes,

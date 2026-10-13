@@ -33,6 +33,34 @@ TABLES = {
 DISK_RESERVE = 1536 * 1024 * 1024
 
 
+def refusal_code(error: Exception) -> str:
+    """Classify refusal without disclosing exception text or source payloads."""
+    if isinstance(error, sqlite3.DatabaseError):
+        code = getattr(error, "sqlite_errorcode", 0) & 0xFF
+        return {
+            sqlite3.SQLITE_FULL: "CANDIDATE_CAPACITY_EXCEEDED",
+            sqlite3.SQLITE_CONSTRAINT: "CANDIDATE_CONSTRAINT_REJECTED",
+            sqlite3.SQLITE_IOERR: "IO_ERROR",
+            sqlite3.SQLITE_CORRUPT: "DATABASE_CORRUPT",
+            sqlite3.SQLITE_NOTADB: "DATABASE_CORRUPT",
+            sqlite3.SQLITE_BUSY: "DATABASE_BUSY",
+            sqlite3.SQLITE_LOCKED: "DATABASE_BUSY",
+        }.get(code, "DATABASE_ERROR")
+    if isinstance(error, OSError):
+        return "IO_ERROR"
+    if isinstance(error, StateError):
+        return {
+            "Disk reserve exhausted; source preserved": "DISK_RESERVE_EXHAUSTED",
+            "Candidate schema exceeds byte limit": "CANDIDATE_CAPACITY_EXCEEDED",
+            "Candidate history conflicts with source rows": "LOGICAL_MANIFEST_MISMATCH",
+            "Native extraction refused input": "NATIVE_INPUT_REJECTED",
+            "Source changed; candidate not qualified": "SOURCE_CHANGED",
+            "Source fingerprint mismatch": "SOURCE_FINGERPRINT_MISMATCH",
+            "Decoded source fingerprint mismatch": "SOURCE_FINGERPRINT_MISMATCH",
+        }.get(str(error), "STATE_REJECTED")
+    return "INVALID_INPUT"
+
+
 class _CopyCodec(Codec):
     """One exclusive copy transaction; every body/reference is checked after copy."""
 
@@ -582,8 +610,17 @@ def main() -> int:
             )
         )
         return exc.exit_status
-    except (StateError, sqlite3.DatabaseError, ValueError, OSError):
-        print('{"status":"BLOCKED","production_migration":"NOT_RUN","candidate":"UNQUALIFIED"}')
+    except (StateError, sqlite3.DatabaseError, ValueError, OSError) as exc:
+        print(
+            json.dumps(
+                {
+                    "status": "BLOCKED",
+                    "failure_code": refusal_code(exc),
+                    "production_migration": "NOT_RUN",
+                    "candidate": "UNQUALIFIED",
+                }
+            )
+        )
         return 2
 
 

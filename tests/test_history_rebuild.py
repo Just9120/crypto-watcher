@@ -504,3 +504,77 @@ def test_cli_distinguishes_failure_class_without_exposing_exception_data(
     value = json.loads(output)
     assert value["failure_code"] == code and value["candidate"] == "UNQUALIFIED"
     assert value["production_migration"] == "NOT_RUN"
+
+
+@pytest.mark.parametrize("failure", ["capacity", "constraint"])
+def test_cli_classifies_real_candidate_sqlite_refusal_and_preserves_source(
+    tmp_path, monkeypatch, capsys, failure
+):
+    from cryptowatcher import history_rebuild
+
+    source, _ = closed_backup(tmp_path)
+    with sqlite3.connect(source) as db:
+        if failure == "capacity":
+            db.execute(
+                "INSERT INTO runtime VALUES (?,?)", ("private-transport", "SENTINEL_PRIVATE_BYTES" * 10000)
+            )
+        else:
+            db.execute("PRAGMA ignore_check_constraints=ON")
+            db.execute("UPDATE owner_settings SET revision=0")
+    preserved = source.read_bytes()
+    expected = hashlib.sha256(preserved).hexdigest()
+    destination = tmp_path / "refused.sqlite3"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "history_rebuild",
+            "--source",
+            str(source),
+            "--destination",
+            str(destination),
+            "--owner-id",
+            "233382575",
+            "--qualified-source-sha256",
+            expected,
+            "--max-candidate-bytes",
+            "65536" if failure == "capacity" else str(2**20),
+        ],
+    )
+    assert history_rebuild.main() == 2
+    output = capsys.readouterr().out
+    assert "SENTINEL_PRIVATE_BYTES" not in output
+    result = json.loads(output)
+    assert result["failure_code"] == (
+        "CANDIDATE_CAPACITY_EXCEEDED" if failure == "capacity" else "CANDIDATE_CONSTRAINT_REJECTED"
+    )
+    assert result["candidate"] == "UNQUALIFIED" and result["production_migration"] == "NOT_RUN"
+    assert source.read_bytes() == preserved
+
+
+def test_cli_state_refusal_does_not_disclose_unrecognized_exception_text(monkeypatch, capsys):
+    from cryptowatcher import history_rebuild
+
+    def fail(*args, **kwargs):
+        raise StateError("SENTINEL_PRIVATE_SETTINGS")
+
+    monkeypatch.setattr(history_rebuild, "rebuild", fail)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "history_rebuild",
+            "--source",
+            "source.sqlite3",
+            "--destination",
+            "candidate.sqlite3",
+            "--owner-id",
+            "233382575",
+            "--qualified-source-sha256",
+            "a" * 64,
+        ],
+    )
+    assert history_rebuild.main() == 2
+    output = capsys.readouterr().out
+    assert "SENTINEL_PRIVATE_SETTINGS" not in output
+    assert json.loads(output)["failure_code"] == "STATE_REJECTED"
