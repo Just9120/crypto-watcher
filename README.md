@@ -34,6 +34,15 @@ python scripts/build_native.py
 backend в результате. Windows local checks используют Python fallback, required
 Linux/image checks проверяют native artifact. Budget и data/recovery gates одинаковы.
 
+Та же команда собирает frozen-image VFS с pinned SQLite3.53.4 headers и
+Zstd1.5.7 decoder. Он выполняет прежний full `integrity_check`/CHECK через
+SQLite extension API, физически запрещает запись source и сохраняет общий
+deadline/CPU1/RAM4GiB. Mutable capture использует Python VFS; frozen source и
+recovery выбирают native helper при наличии Linux artifact. Отсутствующий helper
+оставляет portable Python path; повреждённый или несовместимый установленный
+helper прекращает validation. Radar runtime extension не загружает. Native
+corruption/bounds/lifetime/deadline fixtures входят в required Linux suite.
+
 Конвертер также читает сохранённые gzip/Zstandard archives через bounded compressed
 image без дополнительной raw source copy. Explicit encoding/byte cap и полный набор
 source/candidate проверок описаны в [процедуре конвертации](docs/runbooks/delivery.md#изолированная-конвертация-legacy-history-backup).

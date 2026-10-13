@@ -9,6 +9,24 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def verify_vendor(directory: Path) -> None:
+    metadata = json.loads((directory / "upstream.json").read_text())
+    for name, expected in metadata["files"].items():
+        if hashlib.sha256((directory / name).read_bytes()).hexdigest() != expected:
+            raise RuntimeError("Native upstream content differs from pinned source")
+
+
+def build_vfs(compiler: str, output: Path) -> None:
+    sqlite = ROOT / "native/vendor/sqlite"
+    zstd = ROOT / "native/vendor/zstd"
+    verify_vendor(sqlite)
+    verify_vendor(zstd)
+    subprocess.run(
+        ["bash", str(ROOT / "native/build_vfs.sh"), str(output.resolve()), compiler],
+        check=True,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiler", default="gcc")
@@ -20,6 +38,7 @@ def main() -> None:
         if hashlib.sha256((vendor / name).read_bytes()).hexdigest() != metadata["files"][name]:
             raise RuntimeError("Native upstream content differs from pinned source")
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    build_vfs(args.compiler, args.output.with_name("compressed_vfs.so"))
     subprocess.run(
         [
             args.compiler,

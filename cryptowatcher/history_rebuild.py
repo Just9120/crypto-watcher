@@ -150,7 +150,7 @@ def archive_source(
     """Use a verified frozen archive image without an additional multi-GB raw copy."""
     import apsw
 
-    from .compressed_validation import MAX_COMPRESSED_BYTES, VFS, Image, classified_errors, full_check
+    from .compressed_validation import MAX_COMPRESSED_BYTES, Image, classified_errors, frozen_vfs, full_check
 
     if encoding not in ("gzip", "zstd"):
         raise StateError("Unknown archive encoding")
@@ -167,12 +167,13 @@ def archive_source(
     ):
         sentinel = Path(work) / "source.sqlite3"
         sentinel.touch(mode=0o600)
-        vfs = VFS(image, sentinel)
+        vfs = frozen_vfs(image, sentinel)
         original = None
         try:
             original = apsw.Connection(
                 str(sentinel.resolve()), flags=apsw.SQLITE_OPEN_READWRITE, vfs=vfs.name
             )
+            original.execute("PRAGMA query_only=ON")
             # Keep room for the standard SQLite candidate connection and native helper.
             original.execute("PRAGMA cache_size=-131072")
             full_check(original, deadline)

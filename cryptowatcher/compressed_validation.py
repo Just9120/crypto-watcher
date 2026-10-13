@@ -376,6 +376,15 @@ def resident_memory_bytes() -> int | None:
     return None  # Portable local checks retain the existing logical-byte bound.
 
 
+def frozen_vfs(image: Image, path: Path) -> Any:
+    """Select native only for a frozen image; a present broken helper fails closed."""
+    from .native_validation import NativeVFS, available
+
+    if image.mutable:
+        raise QualificationError("FROZEN_IMAGE_REQUIRED")
+    return NativeVFS(image, path) if available() else VFS(image, path)
+
+
 def configure_cache(db: apsw.Connection, image: Image) -> int:
     """Use only capacity left by the actual frozen image, preserving the container cap."""
     budget(image.deadline)
@@ -409,10 +418,11 @@ def validate_closed(
     with tempfile.TemporaryDirectory(prefix="cw-cvfs-", dir=directory or Path(path).parent) as work:
         path = Path(work) / "sentinel.sqlite3"
         path.touch(mode=0o600)
-        vfs = VFS(image, path)
+        vfs = frozen_vfs(image, path)
         db = None
         try:
             db = apsw.Connection(str(path.resolve()), flags=apsw.SQLITE_OPEN_READWRITE, vfs=vfs.name)
+            db.execute("PRAGMA query_only=ON")
             cache_kib = configure_cache(db, image)
             full_check(db, deadline)
         finally:
@@ -514,12 +524,14 @@ def snapshot_image(
             destination = None
             image.freeze()
             original = image.reconstructed_hash()
+            vfs.unregister()
+            vfs = frozen_vfs(image, sentinel)
             destination = apsw.Connection(
                 str(sentinel.resolve()), flags=apsw.SQLITE_OPEN_READWRITE, vfs=vfs.name
             )
             configure_cache(destination, image)
-            full_check(destination, deadline)
             destination.execute("PRAGMA query_only=ON")
+            full_check(destination, deadline)
             yield destination, image
             destination.close()
             destination = None

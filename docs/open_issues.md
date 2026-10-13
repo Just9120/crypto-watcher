@@ -415,6 +415,25 @@ terminal/exit0, owned probe removed/live unchanged. Не ждать и не пе
 main9634558a/PR31 открыт. Next: review/integrate verified native read path и
 квалифицировать весь pipeline с неизменными gates/лимитами.
 
+Native verifier integration в текущем PR31: source-pinned SQLite3.53.4 headers
+и Zstd1.5.7 decoder, same-engine full integrity/CHECK через extension API. Source
+xWrite/xTruncate запрещены, RW metadata/query-only сохраняет CHECK coverage;
+private WAL/journal sentinel delegates и data deadlines/3GiB image/4GiB container
+не меняются. Mutable capture остаётся Python, frozen source/archive/recovery
+выбирают native в Linux image. Present broken helper fail-closed; portable Python
+fallback сохраняет прежние checks. C cache eviction сначала инвалидирует slot,
+поэтому failed decode не оставляет старую mapping на изменённый buffer.
+
+Canonical build_native/build_vfs commands проверяют upstream hashes; Docker
+содержит оба helpers и licenses. Native Linux5 substantive corruption/index/frame/
+closed-WAL/bounds/deadline/lifetime/write controls добавлены; existing native,
+codec/heads/rebuild/snapshot regressions подтверждены isolated134 PASS. Final
+query-only dirty package32536891… Linux134 PASS/owned probe removed before publication. Windows
+local77 PASS/5 Linux skips с основанием, quality PASS. Required CI нового published
+head и весь current25GB900s conversion ещё REQUIRED. Native benchmark27% не
+заменяет full source/candidate/manifests/private-byte/restore gate. Code54/58,
+production G5afd107 не менялся; data retention/formulas/preferences сохраняются.
+
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный
 dataset. Read-only snapshot09:54UTC/G5afd10770: SQLite15,220,908,032bytes,

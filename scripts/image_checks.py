@@ -166,6 +166,18 @@ def main() -> None:
         ).strip()
         assert proof["phase"] == "COMPLETE" and proof["validation_mode"] == "TMPFS"
         assert proof["sha256"] == actual_hash
+        run(
+            args.image,
+            directory,
+            "-c",
+            "from pathlib import Path; from cryptowatcher.native_validation import available; "
+            "from cryptowatcher.compressed_validation import Image,frozen_vfs,MAX_COMPRESSED_BYTES; "
+            "import time; assert available(); "
+            "i=Image(Path('/data/restore.db'),limit=MAX_COMPRESSED_BYTES,deadline=time.monotonic()+30); "
+            "v=frozen_vfs(i,Path('/tmp/native-sentinel.sqlite3')); "
+            "assert v.stats()['vfs_backend']=='native'; v.unregister()",
+            temporary_size="64m",
+        )
         for command in ("state-check", "backup"):
             extra = ["--destination", "/data/compressed-restore.db"] if command == "backup" else []
             compressed = json.loads(
