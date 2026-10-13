@@ -232,6 +232,23 @@ refusals без exception text/private bytes. Local41 rebuild regressions/qualit
 required CI этого follow-up PENDING. Новый полный запуск до диагностики и проверки
 доступной capacity не выполняется; whole900s/CPU1/4GiB policy сохраняется.
 
+Historical full qualification13Oct02:39–02:53UTC PASS: тот же decoded source
+5,422,329,856bytes/hash61e4f087 преобразован в2,174,074,880bytes/hash1810335b
+за833.369s общего времени, включая cleanup. Candidate cap3GiB, CPU1/memory4GiB;
+все3,179,499 исходных runtime rows, private bytes/owner state, heads/revisions и
+manifests всех5 таблиц совпали; source/candidate full integrity и hashes PASS.
+Added188240 shared bodies/converted298250 heads. Root primary receipt/readback
+PASS, container removed/G5 unchanged. Full input diagnostic до запуска:
+686585 public rows/head identities PASS, fallback0, runtime column lower-bound1.586GB.
+Candidate file превысил прежний2GiB cap: он был недостаточен, без ослабления gates
+предел нового isolated output выбран по fresh disk reserve как3GiB. Это
+qualification сохранённого historical dataset; текущая production DB не заменена
+и не подтверждена этим PASS. Current-data/archive/CD/activation/G6 ещё REQUIRED.
+Свежий read-only snapshot02:58UTC: G5healthy, DB22,361,518,080bytes/free3,201,523,712.
+Free ниже CD archive preflight3GiB+512MiB. Exact cleanup трёх terminal failed
+candidates4.66GB имеет preflight PASS, explicit owner approval всё ещё PENDING;
+другие source/archive/qualified outputs сохраняются. Percentage не пересчитан.
+
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный
 dataset. Read-only snapshot09:54UTC/G5afd10770: SQLite15,220,908,032bytes,
