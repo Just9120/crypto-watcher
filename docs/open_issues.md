@@ -246,8 +246,25 @@ qualification сохранённого historical dataset; текущая produc
 и не подтверждена этим PASS. Current-data/archive/CD/activation/G6 ещё REQUIRED.
 Свежий read-only snapshot02:58UTC: G5healthy, DB22,361,518,080bytes/free3,201,523,712.
 Free ниже CD archive preflight3GiB+512MiB. Exact cleanup трёх terminal failed
-candidates4.66GB имеет preflight PASS, explicit owner approval всё ещё PENDING;
+candidates4.66GB на этом snapshot ожидал explicit owner approval;
 другие source/archive/qualified outputs сохраняются. Percentage не пересчитан.
+
+Current checkpoint13Oct05:15–05:39UTC: после явного owner approval удалены ровно
+три terminal UNQUALIFIED candidate files из reviewed whitelist. Повторные exact
+path/identity, terminal PID/exit, отсутствие mounts/open handles и полный SHA256
+сохраняемого recovery archive PASS. Освобождено4,663,693,312 allocated bytes;
+source/archive identities сохранены, production DB/config не изменены. Primary
+receipt: `rehearsals/failed-candidate-cleanup-20261013T051549Z.json` на VPS.
+Read-only post-check05:37UTC: прежний CryptoWatcher7039151/G5afd107 healthy,
+SQLite23,574,638,592bytes/WAL980,131,552, free6,657,507,328bytes; owned probes0.
+Fresh GitHub05:39UTC: main9634558a, PR31c168ba8 open/unmerged,
+required CI38335422635/ci-required115094771521 SUCCESS. Local docs checkpoint
+остаётся unpublished; старый required PASS не относится к его будущему push.
+Очищены временные результаты, рабочая база ещё не уменьшена. Historical PASS
+5.42GB→2.17GB не квалифицирует текущие23.57GB. Next: доказать whole current-data
+conversion/capacity/recovery в900s/CPU1/4GiB перед exact-target promotion и CD;
+остальные archives/source/qualified outputs сохраняются. Progress54/58 по коду,
+Goal ACTIVE, production compaction NOT_RUN; общий DoD ещё не выполнен.
 
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный
