@@ -281,6 +281,36 @@ observation timeout; exact child PID623799 при проверке уже отс
 результат UNSET, новый полный COUNT не запускается ради повторения. Current
 source/archive qualification, promotion и CD по-прежнему незавершены.
 
+Owner-approved continuation13Oct06:38UTC: после повторных encoded/decoded SHA256,
+exact identity и mount/open-handle проверок удалены только две служебные копии
+`rebuild-known-isdw3myk/work/source.sqlite3` и `rebuild-known-isdw3myk/archive.gz`.
+Освобождено6,203,174,912 allocated bytes; root recovery archive и qualified
+historical candidate сохранены. Primary receipt:
+`rehearsals/duplicate-input-cleanup-20261013T063825Z.json`. Post-check06:40UTC:
+тот же G5healthy, free12,426,526,720bytes. Это cleanup, не compaction live DB.
+
+Current-data qualification13Oct06:55UTC: native online snapshot → compact copy →
+full logical readback/persisted recovery qualification использовали один deadline
+900s, CPU1/RAM4GiB/no swap, read-only production mount. Disposable127-row fixture
+PASS5.002s с full source/candidate/restore integrity и hashes. Actual dataset
+`current-dataset-qualification-oomrk9ni/status.json` завершён BLOCKED/exit137,
+OOMtrue за644.404s на стадии capture/source integrity; полный source result,
+conversion и recovery archive НЕ подтверждены. Probe container removed,
+live container/source inode unchanged. Read-only07:20UTC: G5healthy,
+SQLite24,259,596,288bytes, free12,100,636,672bytes, owned probes0.
+Такой же full run не повторяется; fixture PASS не выдаётся за current proof.
+
+Memory-admission correction учитывает фактический Linux resident memory наряду
+с compressed image bytes до выделения SQLite cache. Native allocations/allocator
+overhead не гарантированно покрывались старым logical-byte расчётом. Сохраняются
+cache minimum512MiB, maximum1GiB, общий4GiB cap и все full integrity/CHECK/hash gates;
+при недостатке headroom input отклоняется, cache не выделяется. Local75 affected
+regressions/quality PASS, включая heap-pressure refusal без изменения CHECK policy.
+Точная внутренняя причина peak RSS в прежнем combined capture/source phase пока
+UNSET; этот fix не доказывает fit/time текущего dataset. Required CI новой revision
+PENDING до grouped push. Next: ограничить и измерить peak source-validation memory,
+затем current qualification≤900s; production replacement остаётся NOT_RUN.
+
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный
 dataset. Read-only snapshot09:54UTC/G5afd10770: SQLite15,220,908,032bytes,

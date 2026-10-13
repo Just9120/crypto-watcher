@@ -241,6 +241,36 @@ def test_native_cache_uses_only_remaining_cap_and_never_disables_integrity(datab
     assert proof["sqlite_cache_kib"] == 1024 * 1024
 
 
+def test_native_cache_accounts_for_resident_memory_beyond_compressed_payload(monkeypatch):
+    from types import SimpleNamespace
+
+    from cryptowatcher import compressed_validation as cv
+
+    resident = 2816 * 1024**2
+    monkeypatch.setattr(cv, "resident_memory_bytes", lambda: resident)
+    image = SimpleNamespace(mutable=False, retained=2 * 1024**3, blocks=[], deadline=time.monotonic() + 30)
+    with apsw.Connection(":memory:") as db:
+        kib = configure_cache(db, image)
+        assert 512 * 1024 <= kib < 1024 * 1024
+        assert resident + kib * 1024 + cv.VALIDATION_OVERHEAD_BYTES <= cv.VALIDATION_MEMORY_BYTES
+        assert db.execute("PRAGMA cache_size").fetchone()[0] == -kib
+
+
+def test_native_cache_refuses_existing_heap_pressure_without_allocating_or_weakening_checks(monkeypatch):
+    from types import SimpleNamespace
+
+    from cryptowatcher import compressed_validation as cv
+
+    monkeypatch.setattr(cv, "resident_memory_bytes", lambda: 3328 * 1024**2)
+    image = SimpleNamespace(mutable=False, retained=2 * 1024**3, blocks=[], deadline=time.monotonic() + 30)
+    with apsw.Connection(":memory:") as db:
+        before = db.execute("PRAGMA cache_size").fetchone()[0]
+        with pytest.raises(QualificationError, match="COMPRESSED_MEMORY_LIMIT"):
+            configure_cache(db, image)
+        assert db.execute("PRAGMA cache_size").fetchone()[0] == before
+        assert db.execute("PRAGMA ignore_check_constraints").fetchone()[0] == 0
+
+
 def test_live_wal_snapshot_frozen_and_reader_released(database, monkeypatch):
     from cryptowatcher import compressed_validation as c
 

@@ -298,6 +298,19 @@ class VFS(apsw.VFS):
         return super().xDelete(name, syncdir)
 
 
+def resident_memory_bytes() -> int | None:
+    """Include native allocations and allocator overhead in Linux cache admission."""
+    try:
+        for line in Path("/proc/self/status").read_text().splitlines():
+            if line.startswith("VmRSS:"):
+                fields = line.split()
+                if len(fields) == 3 and fields[2] == "kB" and int(fields[1]) >= 0:
+                    return int(fields[1]) * 1024
+    except (OSError, ValueError):
+        pass
+    return None  # Portable local checks retain the existing logical-byte bound.
+
+
 def configure_cache(db: apsw.Connection, image: Image) -> int:
     """Use only capacity left by the actual frozen image, preserving the container cap."""
     budget(image.deadline)
@@ -307,6 +320,9 @@ def configure_cache(db: apsw.Connection, image: Image) -> int:
     cache_bytes = min(
         MAX_SQLITE_CACHE_BYTES, VALIDATION_MEMORY_BYTES - image_bytes - VALIDATION_OVERHEAD_BYTES
     )
+    resident = resident_memory_bytes()
+    if resident is not None:
+        cache_bytes = min(cache_bytes, VALIDATION_MEMORY_BYTES - resident - VALIDATION_OVERHEAD_BYTES)
     if cache_bytes < 512 * 1024**2:
         raise QualificationError("COMPRESSED_MEMORY_LIMIT")
     cache_kib = cache_bytes // 1024
