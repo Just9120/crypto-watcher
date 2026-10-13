@@ -62,6 +62,21 @@ AC-10-02/03/04, AC-12-02/03. Thresholds, detector formulas, alerts preferences,
 event identity/reference/cutoff, immutable signed transport bytes и retention90days
 не меняются. Budget proposal30/70 не согласован и не применяется.
 
+Owner decision2026-10-14: разрешён конкретный разовый recovery gate по полному
+совпадению bytes с qualified source той же операции. Полные source/CHECK,
+unchanged source и candidate integrity/all5 manifests/private bytes сохраняются;
+для recovery — strict single checksummed Zstd frame, независимый full decode,
+encoded/decoded SHA256 и размеры. Canonical procedure:
+[разовая qualification](runbooks/delivery.md#разовый-recovery-gate-по-идентичности-проверенных-bytes).
+Обычный backup/CD,900s/CPU1/RAM4GiB/no swap и запрет production DB replacement
+сохраняются. Approval относится к этому gate, не к fit текущего dataset или
+повтору прежней остановки бота. Prototype33 controls, actual historical decode16.135s,
+small integrated fixture и4 Linux upstream/hash/trailer refusal controls PASS;
+canonical integration PASS:50 Windows tests и208 Linux3.11/native targeted tests;
+quality PASS. Primary Linux receipt:
+`cw-recovery-canonical-419eba4c04eb41b58f7e7d8220d12765.json` (13OctUTC/14Octlocal).
+Read-only fixtures, production unchanged; current whole qualification PENDING.
+
 Результат/DoD: new writes перестают дублировать большие snapshots; public records
 и every revision восстанавливаются без потери типов/значений; накопленная база
 уменьшена по квалифицированной exact-target procedure; latest required CI, merge,
@@ -559,8 +574,29 @@ Writer-cache continuation13Oct: fixed256MiB заменён adaptive admission≤
 сохраняет256MiB; insufficient capacity отказывает без изменения cache/data.
 66 Windows rebuild/snapshot и158 Linux/native tests PASS; canonical quality PASS.
 Record `cw-copy-cache-regressions-2c6f426aa2f44d21bc0dd05a06af288d.json` в rehearsals.
-Full historical/current throughput effect PENDING; unchanged900s whole cap,
-source/candidate/recovery checks и отсутствие production replacement сохраняются.
+Whole historical trial `historical-copy-cache-am7q8k0k/status.json` terminal
+13Oct20:41UTC/codeee775e2: TIME_BUDGET_EXCEEDED/exit3 за890.202s, OOMfalse.
+Source full integrity/copy/unchanged checks passed; candidate physical stage
+completed, но весь logical readback и persisted recovery не завершились.
+Candidate UNQUALIFIED_THIS_RUN, source/candidate/recovery whole gate FAIL.
+Observed boundaries: copy≈225→676s, full candidate readback≈706s; private cache
+admission не доказал достаточного throughput benefit, сравнение с прежним trial
+ограничено изменениями кода и host performance. Пиковый RSS≈2.04GiB внутри4GiB.
+Controller2007257 terminal, owned container removed; прежний bot healthy/unchanged.
+Outputs сохранены, deletion/promotion не выполнялись; current dataset не qualified.
+Unchanged900s whole cap/source/candidate/recovery checks сохраняются.
+
+
+Recovery proposal13Oct21:02UTC: existing whole trial остаётся FAIL; proposed
+one-time gate заменяет только повторный recovery SQL scan на strict frame/full
+independent decode/encoded+decoded hashes/size equality с уже checked source.
+Source/candidate full CHECK/manifests/private-byte gates неизменны.33 local
+controls и actual historical5.42GB decode PASS16.135s/CPU1/RAM512MiB; integrated
+Linux fixture/source2015232bytes PASS1.052s, fixture_only=true. Это prototype evidence,
+не current qualification. Owner decision14Oct разрешил описанный разовый gate;
+canonical implementation/local/Linux regressions PASS, ordinary backup/CD policy прежняя.
+Подробный diff/review и первичные receipts вне repository; ordinary backup/CD,
+900s/CPU1/RAM4GiB и production replacement prohibition сохраняются.
 
 Bounded source-image diagnostics13Oct: Zstd level3 не дал стабильного выигрыша
 и отклонён.256KiB frame prototype с64KiB decoded cache slices сохраняет32MiB
@@ -1147,4 +1183,4 @@ Consumer actual binding readback13Oct09:18UTC: radar credential versions0, activ
 
 Последний whole historical trial13Oct: source full integrity/unchanged checks PASS, но весь source/candidate/restore proof не завершён за887.528s; result TIME_BUDGET_EXCEEDED, candidate UNQUALIFIED_THIS_RUN, OOMfalse, owned probe removed. Separate readonly candidate byte check подтвердил SHA1810335b и совпадение с ранее qualified artifact; production тот же G5afd107/7039151 running/healthy. Last DB-size snapshot14:16UTC: SQLite26,248,880,128bytes/WAL6,604,392bytes; он не является текущей free-disk оценкой после нового trial. Working DB compaction/replacement NOT_RUN. Нельзя выдавать candidate size reduction за уменьшение production DB или повторять unchanged pipeline/остановку бота без нового основания.
 
-Следующий шаг: проверить оставшийся whole900s critical path по измеренным source/candidate/copy/recovery phases. Source compression prototype qualified258.407s на protected historical archive; canonical code/defaults не менялись, whole fit ещё не доказан. Candidate verification отдельно от copy PASS391.133s для protected historical artifact; whole current conversion≤900s остаётся REQUIRED. Native event-window block experiment отклонён по cost/size evidence; не повторять unchanged whole pipeline и не ослаблять gates. Возможное exact-artifact proof reuse сначала подготовить и проверить; изменение обязательной validation policy требует конкретного owner review. Source-release/manifest correction qualified53 local/139 Linux tests, но actual whole fit остаётся неподтверждённым. Новый full trial требует fresh disk/resources preflight; newly generated duplicate outputs не удалять без конкретной reviewed authorization, original gzip и старый qualified candidate сохраняются. Только после full qualification подготовить review точного production switch и applicable receiver/merge/CD gates. Затем завершить qualified consumer activation/signed historical smoke и G6 full audit/docs PR. Полный scope58 AC и все findings сохраняются; по коду54/58, audit percentage не пересчитывался. До этого Goal DoD не достигнут. Primary detailed logs/receipts остаются вне repository; user state и другие VPS проекты сохраняются.
+Следующий шаг: canonical/local/Linux validation разрешённого разового recovery gate завершена; доказать улучшение source/candidate critical path перед новым whole trial. Не повторять terminal failed whole trial без нового основания. Проверить конкретный exact-byte restore/proof-reuse proposal на corruption/bounds/races и actual historical archive; owner policy review14Oct разрешил только описанный recovery gate; source/candidate и routine CD gates остаются прежними. Fresh current qualification остаётся отдельным required результатом. Source compression prototype qualified258.407s на protected historical archive; canonical code/defaults не менялись, whole fit ещё не доказан. Candidate verification отдельно от copy PASS391.133s для protected historical artifact; whole current conversion≤900s остаётся REQUIRED. Native event-window block experiment отклонён по cost/size evidence; не повторять unchanged whole pipeline и не ослаблять gates. Разрешённое exact-byte recovery reuse требует canonical regression qualification; оно не закрывает source/candidate timeouts. Source-release/manifest correction qualified53 local/139 Linux tests, но actual whole fit остаётся неподтверждённым. Новый full trial требует fresh disk/resources preflight; newly generated duplicate outputs не удалять без конкретной reviewed authorization, original gzip и старый qualified candidate сохраняются. Только после full qualification подготовить review точного production switch и applicable receiver/merge/CD gates. Затем завершить qualified consumer activation/signed historical smoke и G6 full audit/docs PR. Полный scope58 AC и все findings сохраняются; по коду54/58, audit percentage не пересчитывался. До этого Goal DoD не достигнут. Primary detailed logs/receipts остаются вне repository; user state и другие VPS проекты сохраняются.

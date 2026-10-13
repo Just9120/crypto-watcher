@@ -315,6 +315,44 @@ runtime evidence либо CD. При failure новый partial output сохр�
 compatible binary, switch и обязательные post-checks. Такая процедура ещё не
 выполнена; архив5.42GB не выдаётся за current15GB dataset.
 
+### Разовый recovery gate по идентичности проверенных bytes
+
+Owner decision2026-10-14 разрешает только для разовой isolated conversion не
+повторять SQL integrity scan восстановленного recovery archive, когда source
+уже полностью qualified в той же операции. Canonical процедура —
+`python -m cryptowatcher.conversion_qualification`; обычный `archive_backup`,
+backup/CD и их обязательные проверки не используют этот gate.
+
+До recovery обязательны full writable source integrity/CHECK, unchanged source
+bytes, full candidate integrity/CHECK и полные logical manifests всех пяти таблиц,
+включая original JSON/settings/mutes/private serialized transport bytes. После
+них `recovery_bytes.verify_archive_bytes` независимо читает весь persisted archive:
+encoded SHA256/size, один checksummed dictionary-free Zstd frame с полными
+header/block/trailer boundaries, полный decode и decoded SHA256/size. Expected
+identities берутся из checked source и persisted writer той же операции, а не
+из caller receipt или прежнего failed trial. Любой mismatch/refusal блокирует
+весь результат; byte helper сам по себе не утверждает DB integrity.
+
+```bash
+python -m cryptowatcher.conversion_qualification --source "$CW_SOURCE" --directory "$CW_PRIVATE_NEW_TRIAL" --owner-id 233382575 --expected-owner-revision "$CW_CAPTURE_OWNER_REVISION" --max-candidate-bytes "$CW_MAX_CANDIDATE_BYTES" --max-archive-bytes "$CW_MAX_ARCHIVE_BYTES"
+```
+
+Default input — read-only pinned online snapshot. Для уже закрытого source
+используются `--source-encoding sqlite|gzip|zstd` и
+`--qualified-source-sha256 "$CW_QUALIFIED_SOURCE_SHA256"` (decoded SQLite bytes).
+Закрытый source не имеет sidecars; live snapshot может отстать от writer.
+Variables задаются по exact-target inventory. Directory private/owned, outputs
+новые; source и старые partial outputs не перезаписываются. Внешний runner обязан
+сохранить reviewed CPU1/RAM4GiB/no swap и один общий deadline≤900s, включая capture,
+source check, copy, candidate readback, hashes и recovery. При failure partial
+outputs сохраняются UNQUALIFIED, запуск не продолжается с обновлённым deadline.
+
+`ISOLATED_CONVERSION_PASS` подтверждает только данную копию; результат сохраняет
+`promotion_eligible=false`, `production_migration=NOT_RUN`. Gate не разрешает
+остановку/замену production DB и не превращает предыдущий timeout в PASS. Fit
+актуальной базы требует собственного whole qualification; small fixtures и
+отдельная проверка historical archive этого не доказывают.
+
 ## Recovery и stop criteria
 
 ### Read-only измерение compact current dataset
