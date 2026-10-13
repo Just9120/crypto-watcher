@@ -47,7 +47,7 @@ def budget(deadline: float) -> None:
 
 
 class _FrameArena:
-    """Keep mutable capture frames out of the interleaved Python allocation heap."""
+    """Keep compressed frames out of the interleaved Python allocation heap."""
 
     def __init__(self, limit: int) -> None:
         self.data = mmap.mmap(-1, limit)
@@ -114,7 +114,7 @@ class Image:
         progress: Any = lambda **kw: None,
         archive_encoding: Literal["GZIP", "ZSTD"] | None = None,
     ) -> None:
-        self.blocks: list[bytes] | _FrameArena = []
+        self.blocks = _FrameArena(limit)
         self.size = 0
         self.retained = 0
         self.deadline = deadline
@@ -126,7 +126,6 @@ class Image:
         self.decompressor = zstandard.ZstdDecompressor()
         self.archive_encoding = archive_encoding
         if path is None:
-            self.blocks = _FrameArena(limit)
             self.mutable = True
             return
         self.path = Path(path)

@@ -358,20 +358,32 @@ Next: квалифицировать более быстрый способ по
 writer требует отдельной reviewed procedure/authorization до остановки бота.
 Same online capture run не повторять; current compaction/Goal DoD не завершены.
 
-Closed-source preparation: generated286MB SQLite ABBA full integrity/CHECK и
-all5 typed manifests PASS; native4.373–5.031s, closed3.545–3.988s. Closed-file
-source → candidate → full readback/persisted recovery fixture127rows PASS5.121s.
-Отдельный isolated stop/checkpoint/intentional refusal/same-container restart
-rehearsal PASS с сохранением rows; production не останавливался. Exact target
-maintenance preflight PASS: только CryptoWatcher7039151/G5afd107, общий900s,
-CPU1/RAM4GiB, archive/reserve/checks неизменны; candidate cap5GiB выбран по fresh
-disk capacity. Для restart/post-checks зарезервировано90s внутри общего deadline.
-Неизвестны fit/time всего dataset: small fixture этого не доказывает. Prepared
-operation только квалифицирует закрытый source и возобновляет прежний container;
-production replacement/restore поверх live не разрешены. Explicit owner
-authorization на временную production quiescence PENDING; execute NOT_RUN.
-Перед execute повторить target/resource/concurrency gates. Next: дождаться
-ответа на reviewed procedure, не заменяя молчание разрешением.
+Closed-source qualification: owner разрешил exact one-container
+stop/checkpoint/read/restart procedure13Oct2026. Fresh preflight сначала отказал
+по disk reserve; temporary candidate cap ужесточён5→4.75GiB, прежние archive3GiB,
+disk1.5GiB/growth0.5GiB reserves и900s/CPU1/RAM4GiB/no swap сохранены. Whole
+operation `current-dataset-qualification-a1rdgi00/status.json` завершилась
+BLOCKED/exit137/OOMtrue за200.535s: stop/checkpoint PASS, source до остановки25.47GB;
+последний COMPRESS sample22.38GB/retained2.79GB/peak RSS4.24GB. Same baseline
+7039151/G5afd107 запущен снова, health healthy, source inode unchanged;
+production replacement NOT_RUN. Source/candidate/persisted recovery proof отсутствует.
+
+Причина captured memory overhead: closed-file Image оставлял множество bytes
+в Python heap, тогда как mutable capture уже использовал bounded frame arena.
+Текущий PR31 распространяет ту же arena на closed raw/gzip/ZSTD inputs, не меняя
+source bytes, artifact format, compressed cap или integrity/cache/deadline gates.
+Local77 affected regressions + quality PASS. Isolated Linux1GiB ABBA: identical
+SHA2569cfb00a5…/retained136,331,264bytes; baseline peak RSS233.65–233.70MB,
+arena165.66MB. Owned probes removed, live unchanged. Это fixture resource evidence,
+не full25GB qualification. Required CI исправленного head и full current-source
+source/candidate/recovery checks PENDING; не повторять failed operation вслепую.
+
+Предыдущие generated286MB full integrity/CHECK/all5 manifests и127-row full
+pipeline fixtures, isolated refusal/restart и cleanup-timeout/refusal regressions
+PASS сохраняют свой scope. Approval покрывает reviewed temporary maintenance;
+production DB replacement по-прежнему требует конкретного review/gate. Все900s,
+CPU1/RAM4GiB и data gates сохраняются; нет reset deadline или продолжения этапов
+из незавершённого trial.
 
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный
@@ -941,8 +953,8 @@ Production остаётся на прежнем G5afd107/crypto-watcher7039151; 
 
 Owner-approved cleanup завершён с повторной archive/hash/path/use проверкой: exact3 failed candidates освободили4,663,693,312 allocated bytes, exact2 duplicate history inputs —6,203,174,912. Primary receipts: `failed-candidate-cleanup-20261013T051549Z.json` и `duplicate-input-cleanup-20261013T063825Z.json`. Рабочая БД, qualified historical candidate и recovery archive `backup-archive-6crp6k3t/qualified.sqlite3.gz` сохранены. Эти удаления уже выполнены; не повторять и не расширять их scope.
 
-Prepared closed-source qualification: exact one-container stop/checkpoint/read/restart, общий900s/CPU1/RAM4GiB/no swap и все source/candidate/archive gates сохранены; production replacement запрещён. Closed-file127-row full pipeline и isolated refusal/restart fixtures PASS; они не доказывают fit текущего dataset. Local cleanup-timeout/refusal regressions PASS: ошибка удаления owned probe сохраняет BLOCKED и не пропускает restart того же baseline. Fresh read-only maintenance preflight13Oct09:16UTC PASS/files_changed=false. Explicit owner authorization на временную остановку/checkpoint ещё PENDING; execute NOT_RUN. До исполнения повторить exact target/resources/concurrency preflight; молчание и automatic Goal continuation не являются разрешением.
+Prepared closed-source qualification: exact one-container stop/checkpoint/read/restart, общий900s/CPU1/RAM4GiB/no swap и все source/candidate/archive gates сохранены; production replacement запрещён. Closed-file127-row full pipeline и isolated refusal/restart fixtures PASS; они не доказывают fit текущего dataset. Local cleanup-timeout/refusal regressions PASS: ошибка удаления owned probe сохраняет BLOCKED и не пропускает restart того же baseline. Fresh read-only maintenance preflight13Oct09:16UTC PASS/files_changed=false. Explicit owner authorization на временную остановку/checkpoint получена13Oct; первый execute завершён BLOCKED/OOMtrue за200.535s с возвратом healthy baseline. Memory fix/full qualification ещё PENDING. До исполнения повторить exact target/resources/concurrency preflight; молчание и automatic Goal continuation не являются разрешением.
 
 Consumer actual binding readback13Oct09:18UTC: radar credential versions0, active radar credentials0, binding отсутствует, ingest OFF, max age UNSET. Accepted policy900s остаётся требованием; runtime setting ещё не подтверждён. Unsigned probe из consumer не выполнен из-за отсутствующего diagnostic httpx; это не доказательство недоступности endpoint. Прежний actual producer HTTPx/TLS503 подтверждал disabled receiver в описанных условиях. Qualified master crypto/recovery-material match не заменяет current DB recovery или signed event delivery. Credential activation требует owner-protected qualified procedure; не обходить Admin/TOTP и не менять trading authority.
 
-Следующий шаг: получить ответ на pending reviewed quiescence procedure; при разрешении выполнить bounded current-source qualification с возвратом прежнего бота. Только после full qualification подготовить review точного production switch и applicable receiver/merge/CD gates. Затем завершить qualified consumer activation/signed historical smoke и G6 full audit/docs PR. Полный scope58 AC и все findings сохраняются; по коду54/58, audit percentage не пересчитывался. До этого Goal DoD не достигнут. Primary detailed logs/receipts остаются вне repository; user state и другие VPS проекты сохраняются.
+Следующий шаг: required CI memory fix в текущем PR31, затем повторная оценка current-source qualification в разрешённой maintenance procedure с fresh preconditions и возвратом прежнего бота. Только после full qualification подготовить review точного production switch и applicable receiver/merge/CD gates. Затем завершить qualified consumer activation/signed historical smoke и G6 full audit/docs PR. Полный scope58 AC и все findings сохраняются; по коду54/58, audit percentage не пересчитывался. До этого Goal DoD не достигнут. Primary detailed logs/receipts остаются вне repository; user state и другие VPS проекты сохраняются.
