@@ -404,14 +404,16 @@ RO handle SQLite3.53.4 не сообщил нарушенный CHECK, RW handle
 повторяет RW metadata + query-only existing VFS, физические source writes запрещены.
 Эту особенность нельзя использовать для ложного source PASS.
 
-Historical5.42GB full-integrity benchmark остаётся live: source hash61e4f087…,
-CPU1/RAM4GiB/600s, no production changes. Completed Python76.780s,
-native55.989/54.273s; последний Python и final byte-identity ещё PENDING. Primary
-`native-vfs-benchmark.jsonl` вне repository; exact container7fc5b921/PID1295688,
-observer session50104 подтверждены live. Не перезапускать при observation timeout.
-Native integration/required CI/full current900s conversion пока не закрыты;
-следующий шаг — получить terminal benchmark и оценить весь pipeline, не отдельный
-micro-result. Production G5afd107 остаётся healthy, main9634558a/PR31 открыт.
+Historical5.42GB full-integrity ABBA benchmark завершён PASS за374.079s:
+source hash61e4f087…, CPU1/RAM4GiB/600s, same SQLite cache512MiB. Python76.780/
+75.148s, native55.989/54.273s; все4 full integrity и final byte-identity PASS.
+Observed gain≈27% относится к этому preserved dataset; fit текущего25GB≤900s
+не подтверждён. Primary `native-vfs-benchmark.jsonl` вне repository, observer50104
+terminal/exit0, owned probe removed/live unchanged. Не ждать и не перезапускать
+завершённый benchmark. Native integration, bound/corruption tests, required CI
+и whole current conversion ещё REQUIRED; production G5afd107 остаётся healthy,
+main9634558a/PR31 открыт. Next: review/integrate verified native read path и
+квалифицировать весь pipeline с неизменными gates/лимитами.
 
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный
