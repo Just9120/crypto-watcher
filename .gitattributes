@@ -1,2 +1,4 @@
 # Native upstream hashes are byte identities on every checkout platform.
 native/** text eol=lf
+native/vendor/sqlite/** -text
+native/vendor/zstd/** -text
