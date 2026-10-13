@@ -257,7 +257,12 @@ Cache рассчитывается существующим admission внутр
 этого frozen readback ограничен64MiB внутри512MiB overhead reserve. Runtime
 и copy codecs сохраняют4MiB. При обходе shared bodies проверяется прочитанный
 payload той же row, без второго SELECT; encoding/size/hash/canonical проверки
-сохранены. Temporary sentinel удаляется при выходе. Flag не включён в routine CD/default conversion и не
+сохранены. Frozen-only readback codec повторно использует уже verified body
+по content hash без SQL lookup: VFS отказывает source writes, connection query-only,
+после полного обхода проверяются unchanged file/reconstructed hashes. Каждый
+scanned body всё равно проходит validation своего текущего payload; cache miss
+и eviction снова читают SQL. Обычный Store/runtime/copy path всегда перечитывает
+изменяемые rows и не может включить frozen cache. Temporary sentinel удаляется при выходе. Flag не включён в routine CD/default conversion и не
 создаёт новое разрешение на production switch. Linux native и portable fallback
 используют одни logical checks; actual whole/current qualification остаётся
 обязательной, прежде чем выбирать этот path для поставки.

@@ -473,6 +473,58 @@ def test_compressed_candidate_checks_constraints_and_refuses_writes(store):
                 pytest.fail("Candidate with a violated CHECK constraint was admitted")
 
 
+def test_frozen_body_cache_reuses_exact_verified_bytes_and_rechecks_scanned_payload(store):
+    from cryptowatcher.history_codec import BLOB_PREFIX, Codec
+    from cryptowatcher.history_rebuild import _FrozenReadbackCodec, compressed_candidate
+
+    with store.db:
+        key = Codec(store.db).save({"window": [{"close": 1.0, "notes": "цена"}]})
+    with pytest.raises(StateError, match="Frozen candidate required"):
+        _FrozenReadbackCodec(store)
+    with compressed_candidate(store, store.path, time.monotonic() + 10) as frozen:
+        queries = []
+
+        def traced(db, sql, bindings):
+            if sql.startswith("SELECT payload_json FROM runtime WHERE key="):
+                queries.append(sql)
+            return True
+
+        frozen.db.set_exec_trace(traced)
+        codec = _FrozenReadbackCodec(frozen)
+        first = codec.load_raw(key)
+        assert codec.load_raw(key) == first and len(queries) == 1
+        payload = frozen.db.execute(
+            "SELECT payload_json FROM runtime WHERE key=?", (BLOB_PREFIX + key,)
+        ).fetchone()[0]
+        assert codec.validate_raw(key, payload) == first
+        with pytest.raises(StateError):
+            codec.validate_raw(key, encode({"schema": "corrupt"}))
+        with pytest.raises(StateError, match="Invalid shared snapshot identity"):
+            codec.load_raw("invalid")
+        with pytest.raises(StateError, match="Missing shared snapshot"):
+            codec.load_raw("f" * 64)
+        codec.validated.clear()  # An evicted body is read and verified again.
+        codec.validated_bytes = 0
+        assert codec.load_raw(key) == first and len(queries) == 4
+        frozen.db.set_exec_trace(None)
+
+
+def test_frozen_body_cache_never_qualifies_changed_source_file(store):
+    from cryptowatcher.history_codec import BLOB_PREFIX, Codec
+    from cryptowatcher.history_rebuild import _FrozenReadbackCodec, compressed_candidate
+
+    with store.db:
+        key = Codec(store.db).save({"source": "original"})
+    path = store.path
+    with pytest.raises((StateError, IntegrityError), match="Candidate changed|SOURCE_CHANGED"):
+        with compressed_candidate(store, path, time.monotonic() + 10) as frozen:
+            codec = _FrozenReadbackCodec(frozen)
+            original = codec.load_raw(key)
+            with closing(sqlite3.connect(path)) as changed, changed:
+                changed.execute("DELETE FROM runtime WHERE key=?", (BLOB_PREFIX + key,))
+            assert codec.load_raw(key) == original
+
+
 def test_compressed_candidate_rejects_changed_file_and_preserves_original_bytes(store):
     from cryptowatcher.history_rebuild import compressed_candidate
 

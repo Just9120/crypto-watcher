@@ -538,6 +538,22 @@ Production DB не заменялась. Fresh metadata18:59UTC: DB27,195,658,24
 WAL7,762,112bytes, free disk9,544,220,672bytes. Эти4 cleanup задачи закрыты;
 F34/current conversion/delivery остаются открыты, Goal54/58.
 
+Frozen readback continuation13Oct: bounded historical public profile47,343 rows/
+15,000 events/episodes выявил8,152 shared-body SQL lookups. Profile intentionally
+PARTIAL; не full qualification. Local correction повторно использует только
+verified immutable body в frozen candidate VFS, сохраняя scanned-payload validation,
+miss/eviction lookup и final unchanged hashes. Generic runtime/copy codec продолжает
+проверять SQL при каждом чтении.106 Windows targeted tests и canonical quality
+PASS;154 Linux native tests PASS11.04s, persisted receipt
+`cw-frozen-cache-receipted-524a8bb254524838bf290eebf6123523.json`.
+Полный actual historical readback PASS366.347s: all5 source manifests,
+3,179,502 rows/188,240 bodies, CHECK/integrity и reconstructed/file hashes
+совпали.444,120 из444,178 body requests использовали verified frozen cache.
+Primary receipt `cw-cached-candidate-readback-f9b1c66c937a420bac7d631c2c892e07.json`
+в VPS rehearsals; owned probe removed, live unchanged. Disconnected suite не
+учитывается как PASS; diagnostic missing APSW устранён pinned tools overlay.
+Whole current900s qualification/CD остаются REQUIRED; counter54/58 unchanged.
+
 Bounded source-image diagnostics13Oct: Zstd level3 не дал стабильного выигрыша
 и отклонён.256KiB frame prototype с64KiB decoded cache slices сохраняет32MiB
 cache;6 Linux corruption/bounds/write/eviction tests PASS. Historical5.42GB
@@ -1111,7 +1127,7 @@ Confidence: HIGH по code/fixture-backed gaps и inventory; MEDIUM у orphan ex
 
 2026-10-11 Europe/Moscow: G1 DONE по primary records, verified main40882eb и actual production run38087285142/artifact11682629335; image manifest38d238a6…/config7666f323…, backup pre-40882eb…-1791667365.sqlite3. Owner sample screenshot SHA256401ddabd… и ответ «вроде работает» подтверждают bounded owner smoke с указанными ограничениями. Production Environment DEPLOY_ENABLED=true; dedicated forced-command SSH и strict host key verification проверены; последующие eligible runtime merges доставляет CD. Первое failed CD38086969847 не дошло до authentication/target: Windows CRLF private-key stdin repaired binary transfer, verified bounded run38087285142 PASS. Credentials не хранятся в repository; existing SSH keys/unit другого приложения сохранены.
 
-Текущий checkpoint2026-10-13: verified main9634558a; PR31/codex/backup-validation-performance-20261011/base9634558a открыт и не merged. Published code headb5fe042, required CI38405497548/ci-required115324970264 SUCCESS; fresh readback13Oct18:16UTC подтверждает эту revision/checks. Local cache-release/head/scanned-body corrections и документация ещё не published; CI прежней revision их не подтверждает.104 Windows storage,59 application и152 Linux native targeted tests, canonical quality PASS; separate protected candidate all5 manifests/body/hash readback PASS391.133s. Это не whole current conversion proof. Metadata-only push/PR не требуется.
+Текущий checkpoint2026-10-13: verified main9634558a; PR31/codex/backup-validation-performance-20261011/base9634558a открыт и не merged. Published code headb5fe042, required CI38405497548/ci-required115324970264 SUCCESS; fresh readback13Oct20:07UTC подтверждает эту revision/checks. Local cache-release/head/scanned-body corrections и документация ещё не published; CI прежней revision их не подтверждает.104 Windows storage,59 application и152 Linux native targeted tests, canonical quality PASS; separate protected candidate all5 manifests/body/hash readback PASS391.133s. Это не whole current conversion proof. Metadata-only push/PR не требуется.
 
 Production остаётся на прежнем G5afd107/crypto-watcher7039151; установленный privileged receiver9569f32c не обновлён. Current-dataset capture `current-dataset-qualification-gl9nijrj/status.json` завершён TIME_BUDGET_EXCEEDED/exit3/OOMfalse за888.557s: snapshot24,689,618,944bytes frozen около841s, full source/candidate/persisted recovery не подтверждены. Процессы предыдущих trials завершены, owned probe containers удалены; не ждать старые PID и не повторять capture из-за исчезновения observer handle. Current production compaction/replacement NOT_RUN. Historical archive-source qualification PASS относится к прежней5.42GB копии и не разрешает её promotion поверх текущей истории.
 

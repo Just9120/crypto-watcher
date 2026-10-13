@@ -379,6 +379,27 @@ class _FrozenCandidate(Store):
         return self.owner_snapshot
 
 
+class _FrozenReadbackCodec(_CopyCodec):
+    """Reuse verified bodies only in the frozen, write-refusing candidate VFS."""
+
+    def __init__(self, candidate: _FrozenCandidate, accelerator: Accelerator | None = None):
+        if not isinstance(candidate, _FrozenCandidate):
+            raise StateError("Frozen candidate required for readback cache")
+        super().__init__(candidate.db, accelerator)
+        # Inside the existing 512MiB validation overhead reserve. Live and
+        # copy codecs retain their 4MiB bounds and re-read mutable SQL rows.
+        self.cache_limit_bytes = 64 * 1024 * 1024
+
+    def load_raw(self, key: str) -> tuple[bytes, int | None]:
+        if not isinstance(key, str) or not re.fullmatch(r"[0-9a-f]{64}", key):
+            raise StateError("Invalid shared snapshot identity")
+        cached = self.validated.get(key)
+        if cached is not None:
+            self.validated.move_to_end(key)
+            return cached[1], cached[2]
+        return super().load_raw(key)
+
+
 @contextmanager
 def compressed_candidate(
     candidate: Store, path: Path, deadline: float, *, directory: Path | None = None
@@ -450,12 +471,12 @@ def _verify_candidate_rows(
     # This exclusive candidate is frozen before evidence is reused during readback.
     candidate.db.execute("PRAGMA query_only=ON")
     history = History(candidate)
-    history.codec = _CopyCodec(candidate.db, accelerator)
+    history.codec = (
+        _FrozenReadbackCodec(candidate, accelerator)
+        if isinstance(candidate, _FrozenCandidate)
+        else _CopyCodec(candidate.db, accelerator)
+    )
     readback_codec = history.codec
-    if isinstance(candidate, _FrozenCandidate):
-        # Validation-only cache lives inside the existing 512MiB overhead reserve.
-        # Runtime and copy codecs retain their original 4MiB bounds.
-        readback_codec.cache_limit_bytes = 64 * 1024 * 1024
     resolved: OrderedDict[str, tuple[str, str]] = OrderedDict()
     resolved_bytes = 0
     for table in TABLES:
