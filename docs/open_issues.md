@@ -162,6 +162,29 @@ inherited Compose label признаком чужого контейнера; ex
 Primary records: `consumer-vault-pg-fixture-fixed.jsonl`, `vault-fixture-cleanup.jsonl`,
 `profile-complete-rebuild.jsonl`, `bench-parsed-json-once.jsonl` вне repository.
 
+Experimental native prototype (вне tracked runtime): SQL field assembly отклонена
+после paired4k проверок — public bytes совпали, но warm copy CPU2.95s против1.78s.
+Stateless C extractor/head projection на fixed yyjson0.12.0/commit8b4a38dc и
+host GCC13.3.0 прошёл actual Python3.11/SQLite3.46.1 fixtures.4k revision copy
+CPU1.105/1.327s против1.795/1.809s; existing row admission/compression/hash checks
+сохранены. Без accelerated canonical validation полный32,296-row fixture дал
+CPU4.471s против4.862s; parser-only оптимизация не устраняет основной bottleneck.
+Отдельный exact checker использует CPython stable-ABI float conversion/repr,
+проверяет key order/duplicate keys, canonical escaping/numbers и array count;
+unsupported depth/number cases сохраняют Python fallback. Differential2,027 cases
+PASS, включая malformed/nonfinite, random float bits, large integers и Unicode.
+Complete fixture с checker: all-table row manifests/integrity PASS, CPU4.475s
+против6.011s и wall4.524s против6.387s в одной паре. Timing variation не позволяет
+выдать это за sustained throughput или proof≤900s на historical/current dataset.
+Owned test containers removed, source/live unchanged. Native code/dependency пока
+не включены в app/CI/image; compiler был только в bounded transient prototype job.
+Primary records: `build-native-json-prototype-v3.jsonl`, `bench-native-json-extract.jsonl`,
+`qualify-native-canonical.jsonl`, `bench-native-canonical-complete.jsonl` вне repository.
+Next: проверить ускорение full readback на сопоставимых сериях и изоляцию/native
+error handling; только подтверждённый выигрыш интегрировать в existing PR31 с
+reproducible build/meaningful tests. Whole conversion900s/1CPU/4GiB, full gates и
+production promotion requirements сохраняются. Code54/58, Goal ACTIVE.
+
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный
 dataset. Read-only snapshot09:54UTC/G5afd10770: SQLite15,220,908,032bytes,
