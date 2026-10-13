@@ -326,6 +326,23 @@ contiguous/spooled compressed capture buffer вместо отдельных hea
 сначала controlled resource/byte-equivalence qualification, затем whole current
 run≤900s. Memory/time/full-check gates и retention не меняются.
 
+Capture buffer correction: mutable native snapshot хранит compressed frames в
+одной anonymous mapping с компактными offset/length/capacity arrays, а не в
+отдельных долговечных Python bytes objects. Frame bytes/Zstandard/checksums,
+holes/partial writes/truncate/freeze, compressed cap3GiB и full checks сохраняются.
+Mapping резервирует virtual capacity; реальные pages заполняются по мере capture,
+growing-buffer realloc с временной второй копией не нужен. Oversized frame growth
+отклоняется до изменения прежних bytes; stale frame spans не выходят за arena cap.
+Local77 affected regressions/quality PASS, включая repeated grow/shrink/truncate
+byte equality и refusal preservation. Controlled Linux fresh-process ABBA на
+synthetic1GiB/4KiB-page fixture: baseline RSS231.38–232.10MB, arena164.52MB;
+wall7.06–7.24s против5.71–5.91s. Полные input/reconstructed SHA одинаковые;
+retained compressed bytes136,331,264 неизменны. Это capture benchmark, не full
+SQLite/current qualification. Primary `bench-arena-capture-resources.jsonl`
+вне repository; owned test containers removed/live unchanged. Required CI новой
+revision PENDING до grouped push. Next: qualified Linux native snapshot/recovery
+fixture и один whole-current attempt с прежними900s/CPU1/4GiB, после required CI.
+
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный
 dataset. Read-only snapshot09:54UTC/G5afd10770: SQLite15,220,908,032bytes,

@@ -58,6 +58,44 @@ def test_coalesced_truncate_before_buffer_flush_discards_removed_bytes():
     assert image.reconstructed_hash() == hashlib.sha256(expected).hexdigest()
 
 
+def test_capture_frames_survive_repeated_growth_shrink_and_tail_reuse():
+    image = Image(None, limit=2**20, deadline=time.monotonic() + 10)
+    expected = bytearray(BLOCK * 20)
+    randomizer = random.Random(321)
+    for index in range(20):
+        page = randomizer.randbytes(BLOCK)
+        image.write(page, index * BLOCK)
+        expected[index * BLOCK : (index + 1) * BLOCK] = page
+    image.write(bytes(BLOCK), 0)
+    expected[:BLOCK] = bytes(BLOCK)
+    replacement = randomizer.randbytes(BLOCK)
+    image.write(replacement, 0)
+    expected[:BLOCK] = replacement
+    image.truncate(BLOCK * 10)
+    del expected[BLOCK * 10 :]
+    image.write(b"tail", BLOCK * 12 + 5)
+    expected.extend(bytes(BLOCK * 12 + 9 - len(expected)))
+    expected[-4:] = b"tail"
+    image.freeze()
+    assert image.reconstructed_hash() == hashlib.sha256(expected).hexdigest()
+    assert b"".join(image.iter_bytes()) == expected
+
+
+def test_capture_arena_capacity_failure_keeps_existing_frame_bytes():
+    from cryptowatcher.compressed_validation import _FrameArena
+
+    arena = _FrameArena(32)
+    arena.append(b"first-frame")
+    arena.append(b"second")
+    before = list(arena)
+    with pytest.raises(QualificationError, match="COMPRESSED_MEMORY_LIMIT"):
+        arena[0] = b"x" * 32
+    assert list(arena) == before
+    with pytest.raises(QualificationError, match="COMPRESSED_MEMORY_LIMIT"):
+        arena.append(b"y" * 32)
+    assert list(arena) == before
+
+
 def validate(path, *, limit, deadline, progress=lambda **kw: None):
     with classified_errors(deadline):
         result = validate_closed(

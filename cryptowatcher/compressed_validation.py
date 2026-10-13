@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import mmap
 import os
 import stat
 import sys
 import tempfile
 import time
 import uuid
+from array import array
 from collections import OrderedDict
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -44,6 +46,64 @@ def budget(deadline: float) -> None:
         raise QualificationError("TIME_BUDGET_EXCEEDED")
 
 
+class _FrameArena:
+    """Keep mutable capture frames out of the interleaved Python allocation heap."""
+
+    def __init__(self, limit: int) -> None:
+        self.data = mmap.mmap(-1, limit)
+        self.limit = limit
+        self.end = 0
+        self.offsets = array("Q")
+        self.lengths = array("Q")
+        self.capacities = array("Q")
+
+    def __len__(self) -> int:
+        return len(self.offsets)
+
+    def __sizeof__(self) -> int:
+        return object.__sizeof__(self) + sum(
+            sys.getsizeof(value) for value in (self.data, self.offsets, self.lengths, self.capacities)
+        )
+
+    def __getitem__(self, index: int) -> bytes:
+        offset, length = self.offsets[index], self.lengths[index]
+        return self.data[offset : offset + length]
+
+    def __iter__(self) -> Iterator[bytes]:
+        for index in range(len(self)):
+            yield self[index]
+
+    def __setitem__(self, index: int, value: bytes) -> None:
+        length = len(value)
+        if length <= self.capacities[index]:
+            offset = self.offsets[index]
+        else:
+            if self.end + length > self.limit:
+                raise QualificationError("COMPRESSED_MEMORY_LIMIT")
+            offset = self.end
+            self.end += length
+            self.offsets[index] = offset
+            self.capacities[index] = length
+        self.data[offset : offset + length] = value
+        self.lengths[index] = length
+
+    def append(self, value: bytes) -> None:
+        if self.end + len(value) > self.limit:
+            raise QualificationError("COMPRESSED_MEMORY_LIMIT")
+        self.offsets.append(self.end)
+        self.lengths.append(0)
+        self.capacities.append(0)
+        self[len(self) - 1] = value
+
+    def pop(self) -> bytes:
+        value = self[-1]
+        offset, capacity = self.offsets.pop(), self.capacities.pop()
+        self.lengths.pop()
+        if offset + capacity == self.end:
+            self.end = offset
+        return value
+
+
 class Image:
     def __init__(
         self,
@@ -54,7 +114,7 @@ class Image:
         progress: Any = lambda **kw: None,
         archive_encoding: Literal["GZIP", "ZSTD"] | None = None,
     ) -> None:
-        self.blocks: list[bytes] = []
+        self.blocks: list[bytes] | _FrameArena = []
         self.size = 0
         self.retained = 0
         self.deadline = deadline
@@ -66,6 +126,7 @@ class Image:
         self.decompressor = zstandard.ZstdDecompressor()
         self.archive_encoding = archive_encoding
         if path is None:
+            self.blocks = _FrameArena(limit)
             self.mutable = True
             return
         self.path = Path(path)
