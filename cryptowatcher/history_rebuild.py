@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import json
 import math
@@ -10,6 +11,7 @@ import os
 import re
 import shutil
 import sqlite3
+import sys
 import tempfile
 import time
 from collections import OrderedDict
@@ -110,6 +112,24 @@ class _CopyCodec(Codec):
 def guard(deadline: float) -> None:
     if time.monotonic() >= deadline:
         raise IntegrityError("TIME_BUDGET_EXCEEDED", "Rebuild time budget exceeded")
+
+
+def release_source_cache(database: Any, deadline: float) -> None:
+    """Release validation-only caches before the next bounded conversion stage."""
+    guard(deadline)
+    database.execute("PRAGMA shrink_memory")
+    if sys.platform == "linux":
+        # SQLite frees its pages, but glibc can retain their arena allocation.
+        # Trim only unused allocator pages; live image buffers are unaffected.
+        try:
+            trim = ctypes.CDLL(None).malloc_trim
+        except AttributeError:
+            pass  # Other libc implementations still get SQLite's cache release.
+        else:
+            trim.argtypes = [ctypes.c_size_t]
+            trim.restype = ctypes.c_int
+            trim(0)
+    guard(deadline)
 
 
 def closed(path: Path) -> None:
@@ -294,6 +314,7 @@ def copy_snapshot(
     manifests = {table: hashlib.sha256() for table in TABLES}
     original.execute("PRAGMA query_only=ON")
     original.execute("PRAGMA cache_size=-131072")
+    release_source_cache(original, deadline)
     if original.execute("PRAGMA user_version").fetchone()[0] != 1:
         raise StateError("Unsupported source schema")
     objects = original.execute(
@@ -384,6 +405,7 @@ def copy_snapshot(
                     f"INSERT INTO {table} VALUES ({','.join('?' for _ in columns)})", transformed_rows()
                 )
                 counts[table] = count
+        release_source_cache(original, deadline)
         check_integrity(candidate.db, deadline=deadline)
         candidate.snapshot()  # Current owner settings must be readable without resetting defaults.
         # This exclusive candidate is frozen before evidence is reused during readback.

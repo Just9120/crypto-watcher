@@ -26,6 +26,42 @@ def test_logical_manifest_preserves_types_and_field_boundaries():
     assert len(set(hashes)) == len(values)
 
 
+def test_source_cache_release_preserves_frozen_bytes_and_readonly_snapshot(tmp_path):
+    import apsw
+
+    from cryptowatcher.compressed_validation import Image, frozen_vfs
+    from cryptowatcher.history_rebuild import release_source_cache
+
+    source = tmp_path / "cache-source.sqlite3"
+    with closing(sqlite3.connect(source)) as db:
+        db.execute("CREATE TABLE samples (id INTEGER PRIMARY KEY, payload BLOB)")
+        db.executemany(
+            "INSERT INTO samples VALUES (?,?)", ((i, bytes([i % 256]) * 4096) for i in range(2048))
+        )
+        db.commit()
+    expected = hashlib.sha256(source.read_bytes()).hexdigest()
+    deadline = time.monotonic() + 20
+    image = Image(source, limit=32 * 1024**2, deadline=deadline)
+    sentinel = tmp_path / "sentinel.sqlite3"
+    sentinel.touch()
+    vfs = frozen_vfs(image, sentinel)
+    db = apsw.Connection(str(sentinel), flags=apsw.SQLITE_OPEN_READWRITE, vfs=vfs.name)
+    try:
+        db.execute("PRAGMA query_only=ON")
+        db.execute("PRAGMA cache_size=-8192")
+        assert list(db.execute("SELECT SUM(length(payload)) FROM samples")) == [(2048 * 4096,)]
+        before = db.status(apsw.SQLITE_DBSTATUS_CACHE_USED)[0]
+        release_source_cache(db, deadline)
+        assert db.status(apsw.SQLITE_DBSTATUS_CACHE_USED)[0] < before
+        assert list(db.execute("PRAGMA query_only")) == [(1,)]
+        assert list(db.execute("SELECT payload FROM samples WHERE id=1025")) == [(b"\x01" * 4096,)]
+        assert image.reconstructed_hash() == expected
+        assert hashlib.sha256(source.read_bytes()).hexdigest() == expected
+    finally:
+        db.close()
+        vfs.unregister()
+
+
 @pytest.mark.parametrize("encoding", ["gzip", "zstd"])
 def test_archive_rebuild_preserves_full_rows_without_a_raw_source_copy(tmp_path, encoding):
     import gzip
