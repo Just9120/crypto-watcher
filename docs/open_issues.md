@@ -1211,6 +1211,26 @@ SQLite27653779456bytes/WAL7762112bytes, free6426107904bytes. Новые исто
 candidate outputs требуют отдельного bounded preflight; этот snapshot не гарантирует
 будущее free disk. DB replacement и снижение production размера NOT_RUN.
 
+Whole historical qualification новогоb849dbe завершена14Oct local /
+13Oct22:06UTC: TIME_BUDGET_EXCEEDED/exit3 за888.92s, OOMfalse, candidate
+UNQUALIFIED_THIS_RUN. Source/copy дошли до frozen candidate phase; source5422329856bytes,
+новый candidate2107183104bytes. Этот размер — unqualified artifact, не уменьшение
+production DB. Полный source/candidate/recovery результат не получен; recovery
+byte gate не превращает timeout вPASS. Source inode и afd107/7039151 healthy baseline
+сохранены, probe удалён. Primary record:
+`historical-zstd-gate-26m3jfsd/status.json`; operator job2141322 terminal.
+Actual helper SHAe227871e подтверждён до запуска и readback; ошибочный old hash в
+launcher metadata отмечен отдельным `historical-zstd-gate-job-yg0zbau9/launcher-correction.json`,
+исходный launcher сохранён. Операция не перезапускалась.
+
+Следующая performance зависимость — source/copy path: прежний per-record native
+extractor возвращает packed JSON, затем Python заново materializes и сериализует
+metadata после binding references. Допустим bounded prototype direct serialized
+binding с exact semantic/numeric parity и refusal controls; текущий immutable/raw
+source, full source/candidate gates и900s/CPU1/RAM4GiB не менять. Новый whole trial
+без measured critical-path improvement не запускать. Live compaction, PR31 merge/CD,
+consumer activation иG6 по-прежнему PENDING; progress54/58.
+
 Local recovery implementation: commit9e5f6d5 плюс final self-review correction
 (source digest из same persisted writer, final archive fingerprint, native copy
 parity). Новые canonical modules используются только разовой conversion procedure;
@@ -1227,4 +1247,4 @@ canonical reconstruction8.813s cumulative, body loading4.219s cumulative.
 Full/current conversion, production switch, PR31 merge/CD, consumer activation
 и final G6 AUDIT остаются незавершёнными; scope58/progress54/58 сохраняются.
 
-Следующий шаг: local/Linux qualification recovery/field reuse/Zstd bodies завершена; whole≤900s historical test допускается только после fresh disk/resources/concurrency preflight, с новым canonical code и теми же full gates. Fresh current dataset остаётся отдельной required qualification. Не повторять terminal failed whole trial без нового основания. Проверить конкретный exact-byte restore/proof-reuse proposal на corruption/bounds/races и actual historical archive; owner policy review14Oct разрешил только описанный recovery gate; source/candidate и routine CD gates остаются прежними. Fresh current qualification остаётся отдельным required результатом. Source compression prototype qualified258.407s на protected historical archive; canonical code/defaults не менялись, whole fit ещё не доказан. Candidate verification отдельно от copy PASS391.133s для protected historical artifact; whole current conversion≤900s остаётся REQUIRED. Native event-window block experiment отклонён по cost/size evidence; не повторять unchanged whole pipeline и не ослаблять gates. Разрешённое exact-byte recovery reuse требует canonical regression qualification; оно не закрывает source/candidate timeouts. Source-release/manifest correction qualified53 local/139 Linux tests, но actual whole fit остаётся неподтверждённым. Новый full trial требует fresh disk/resources preflight; newly generated duplicate outputs не удалять без конкретной reviewed authorization, original gzip и старый qualified candidate сохраняются. Только после full qualification подготовить review точного production switch и applicable receiver/merge/CD gates. Затем завершить qualified consumer activation/signed historical smoke и G6 full audit/docs PR. Полный scope58 AC и все findings сохраняются; по коду54/58, audit percentage не пересчитывался. До этого Goal DoD не достигнут. Primary detailed logs/receipts остаются вне repository; user state и другие VPS проекты сохраняются.
+Следующий шаг: terminal whole b849dbe не повторять. Проверить bounded direct-serialized native binding prototype для copy critical path с numeric/reference/private-byte parity; затем решать о новом full qualification по measured improvement. Fresh current dataset остаётся отдельной required qualification. Не повторять terminal failed whole trial без нового основания. Проверить конкретный exact-byte restore/proof-reuse proposal на corruption/bounds/races и actual historical archive; owner policy review14Oct разрешил только описанный recovery gate; source/candidate и routine CD gates остаются прежними. Fresh current qualification остаётся отдельным required результатом. Source compression prototype qualified258.407s на protected historical archive; canonical code/defaults не менялись, whole fit ещё не доказан. Candidate verification отдельно от copy PASS391.133s для protected historical artifact; whole current conversion≤900s остаётся REQUIRED. Native event-window block experiment отклонён по cost/size evidence; не повторять unchanged whole pipeline и не ослаблять gates. Разрешённое exact-byte recovery reuse требует canonical regression qualification; оно не закрывает source/candidate timeouts. Source-release/manifest correction qualified53 local/139 Linux tests, но actual whole fit остаётся неподтверждённым. Новый full trial требует fresh disk/resources preflight; newly generated duplicate outputs не удалять без конкретной reviewed authorization, original gzip и старый qualified candidate сохраняются. Только после full qualification подготовить review точного production switch и applicable receiver/merge/CD gates. Затем завершить qualified consumer activation/signed historical smoke и G6 full audit/docs PR. Полный scope58 AC и все findings сохраняются; по коду54/58, audit percentage не пересчитывался. До этого Goal DoD не достигнут. Primary detailed logs/receipts остаются вне repository; user state и другие VPS проекты сохраняются.
