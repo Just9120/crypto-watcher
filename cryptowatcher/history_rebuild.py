@@ -67,7 +67,7 @@ class _CopyCodec(Codec):
     """One exclusive copy transaction; every body/reference is checked after copy."""
 
     def __init__(self, database: sqlite3.Connection, accelerator: Accelerator | None = None):
-        super().__init__(database)
+        super().__init__(database, body_encoding="zstd")
         self.admitted: OrderedDict[str, None] = OrderedDict()
         self.accelerator = accelerator
 
@@ -424,6 +424,23 @@ class _FrozenReadbackCodec(_CopyCodec):
             self.validated.move_to_end(key)
             return cached[1], cached[2]
         return super().load_raw(key)
+
+    def field_raw(self, reference: Any) -> bytes:
+        if (
+            isinstance(reference, dict)
+            and set(reference) == {"mode", "ids", "sha256"}
+            and reference["mode"] == "value"
+            and isinstance(reference["ids"], list)
+            and len(reference["ids"]) == 1
+        ):
+            key = reference["ids"][0]
+            if key != reference["sha256"]:
+                raise StateError("Shared field hash mismatch")
+            # load_raw checks SHA256(raw)==key, or reuses that exact proof in
+            # this immutable VFS. The field requires the same identity, so no
+            # second hash of those bytes is needed. Window joins still hash fully.
+            return self.load_raw(key)[0]
+        return super().field_raw(reference)
 
 
 @contextmanager

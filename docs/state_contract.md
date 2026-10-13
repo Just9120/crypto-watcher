@@ -1,5 +1,40 @@
 # CryptoWatcher — state contract
 
+## Compact history representation
+
+Physical SQLite user_version остаётся1. Public immutable revisions могут содержать
+`_history_storage` / `cryptowatcher.shared-fields.v1`: content-addressed ссылки на
+полные lossless settings/context/windows; head `cryptowatcher.history-head.v1`
+содержит projection и revision_key. Public history/export/analytics/agent readers
+восстанавливают все исходные значения и numeric types, а не возвращают storage
+markers. Формулы, reference/cutoff, event identity и signed private transport bytes
+не меняются. Private namespaces не преобразуются public codec.
+
+`historyblob:v1:SHA256` идентифицирует canonical decoded JSON bytes независимо
+от compression encoding. Поддерживаются `cryptowatcher.shared-json.v1` (zlib) и
+`cryptowatcher.shared-json.v2` (один checksummed dictionary-free Zstd frame).
+V2 хранит ровно schema/bytes/zstd; bytes≤32MiB, encoded bound, frame content size,
+window≤32MiB, complete checksum/trailer, отсутствие дополнительных frames/data,
+decoded SHA256 и canonical JSON обязательны. Unknown schema и любое нарушение
+блокируют чтение; пустой state вместо исходника не создаётся.
+
+Разовая history conversion создаёт новые bodies вV2 по измеренному cost/size
+выигрышу. Existing V1/V2 bodies и остальные исходные private rows сохраняются;
+live writer по-прежнему создаётV1 и использует UTC-aligned16-candle blocks.
+Historical conversion хранит целые frozen windows как shared values, не удаляя
+исходные candles/provenance. Одинаковые decoded bytes имеют тот же key; более
+новый codec не перезаписывает existing body только ради compression encoding.
+
+Full readback проверяет каждую body row, каждый reference и logical manifests всех
+пяти таблиц. Только frozen, физически write-refusing candidate может использовать
+cache проверенных body bytes; single-value field сравнивает reference SHA с тем
+же уже проверенным body key. Window joins по-прежнему проверяют полный joined hash.
+Mutable runtime reader повторно читает актуальный DB payload перед cache reuse.
+
+Старая G5 application не является reader-compatible с compact representation.
+NONE/physical schema1 не разрешает app downgrade или restore поверх live данных.
+Поставка/promotion требует [изолированной qualification и exact-target review](runbooks/delivery.md#разовый-recovery-gate-по-идентичности-проверенных-bytes).
+
 ## Advisory agent state
 
 Logical `radar:v1:agent:*` namespaces сохраняют schema1 preference (default OFF),

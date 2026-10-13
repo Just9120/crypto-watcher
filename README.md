@@ -18,7 +18,7 @@ Radar обрабатывает широкий metadata/liquidity universe обо
 
 ## Stack и установка
 
-Target runtime: Python 3.11/Linux; PTB20.8 с job queue, HTTPx async, websockets17.1 и стандартный SQLite. APSW3.53.4.0 и Zstandard0.25.0 используются только для bounded full validation private snapshots и pre-deploy archives. Lockfiles с hashes генерируются uv для Python3.11; `requirements.in` / `requirements-dev.in` — inputs, соответствующие `.txt` — canonical installation locks. Нужны только Telegram Bot API и public Bybit endpoints; Redis/DB server не требуются. Tests используют disposable fixtures и mocked adapters, без API tokens и сети.
+Target runtime: Python 3.11/Linux; PTB20.8 с job queue, HTTPx async, websockets17.1 и стандартный SQLite. APSW3.53.4.0 используется для bounded full validation private snapshots; Zstandard0.25.0 — для pre-deploy archives и lossless shared-body decoding. Lockfiles с hashes генерируются uv для Python3.11; `requirements.in` / `requirements-dev.in` — inputs, соответствующие `.txt` — canonical installation locks. Нужны только Telegram Bot API и public Bybit endpoints; Redis/DB server не требуются. Tests используют disposable fixtures и mocked adapters, без API tokens и сети.
 
 Isolated history converter дополнительно использует source-pinned yyjson0.12.0
 helper, собранный отдельной стадией Docker с fixed GCC image digest. Radar runtime

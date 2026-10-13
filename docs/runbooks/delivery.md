@@ -292,7 +292,11 @@ compressed capacity, контейнер сохраняет cap4GiB/CPU1/no swap.
 изменяет production и не доказывает fit/time полного dataset по small fixtures.
 
 Это command template: три CW variables задаются по actual operator inventory,
-а не предполагаемым paths. Heads становятся ссылками на revision того же
+а не по предполагаемым paths. Новые shared bodies isolated converter пишет как
+`cryptowatcher.shared-json.v2` / checksummed Zstd; существующие V1/V2 bodies
+сохраняются. Decoded content identities и public values прежние; encoding и
+boundaries — в [state contract](../state_contract.md#compact-history-representation).
+Heads становятся ссылками на revision того же
 kind/ID/version; полное восстановленное значение включено в сравнение с source.
 Numeric provenance не нормализуется. Все пять таблиц копируются; original JSON,
 settings/mutes/queues и private serialized transport bytes сохраняются. Public

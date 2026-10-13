@@ -1,13 +1,105 @@
+import base64
 import json
 
 import pytest
+import zstandard
 
 from cryptowatcher.analytics import as_of
 from cryptowatcher.events import HEAD_SCHEMA, PREFIX, History
-from cryptowatcher.history_codec import BLOB_PREFIX, CACHE_BYTES, MARKER, Codec
+from cryptowatcher.history_codec import BLOB_PREFIX, BLOB_SCHEMA, CACHE_BYTES, MARKER, ZSTD_BLOB_SCHEMA, Codec
 from cryptowatcher.storage import StateError, encode
 
 from .test_history_heads import record
+
+
+def test_mixed_zlib_zstd_bodies_preserve_types_identity_and_legacy_encoding(store):
+    old, new = Codec(store.db), Codec(store.db, body_encoding="zstd")
+    value = {"price": 0.0175454454105349, "count": 2, "real": 2.0, "notes": "история" * 80}
+    with store.db:
+        key = old.save(value)
+        original = store.db.execute(
+            "SELECT payload_json FROM runtime WHERE key=?", (BLOB_PREFIX + key,)
+        ).fetchone()[0]
+        assert new.save(value) == key
+        second = new.save({**value, "count": 3})
+    assert (
+        store.db.execute("SELECT payload_json FROM runtime WHERE key=?", (BLOB_PREFIX + key,)).fetchone()[0]
+        == original
+    )
+    assert json.loads(original)["schema"] == BLOB_SCHEMA
+    assert store.get_runtime(BLOB_PREFIX + second)["schema"] == ZSTD_BLOB_SCHEMA
+    assert encode(new.load(key)) == encode(value)
+    assert encode(old.load(second)) == encode({**value, "count": 3})
+    assert type(old.load(second)["count"]) is int and type(old.load(second)["real"]) is float
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "size",
+        "trailer1",
+        "trailer4",
+        "checksum",
+        "extra_frame",
+        "no_checksum",
+        "unknown_size",
+        "oversized_window",
+        "extra_field",
+        "future_schema",
+    ],
+)
+def test_zstd_body_refuses_corruption_unbounded_or_future_format(store, monkeypatch, fault):
+    codec = Codec(store.db, body_encoding="zstd")
+    value = {"source": "candle" * 1000, "price": 1.0}
+    raw = encode(value).encode()
+    with store.db:
+        key = codec.save(value)
+        saved = store.get_runtime(BLOB_PREFIX + key)
+        encoded = base64.b64decode(saved["zstd"])
+        if fault == "size":
+            saved["bytes"] -= 1
+        elif fault.startswith("trailer"):
+            encoded = encoded[: -int(fault[-1])]
+        elif fault == "checksum":
+            encoded = encoded[:-1] + bytes([encoded[-1] ^ 1])
+        elif fault == "extra_frame":
+            encoded += zstandard.ZstdCompressor(write_checksum=True).compress(b"extra")
+        elif fault == "no_checksum":
+            encoded = zstandard.ZstdCompressor(write_checksum=False).compress(raw)
+        elif fault == "unknown_size":
+            encoded = zstandard.ZstdCompressor(write_checksum=True, write_content_size=False).compress(raw)
+        elif fault == "oversized_window":
+            assert encoded[4] & 32 and encoded[4] >> 6 > 0
+            encoded = encoded[:4] + bytes([encoded[4] & ~32, 0xA0]) + encoded[5:]
+            assert zstandard.get_frame_parameters(encoded).content_size == len(raw)
+            assert zstandard.get_frame_parameters(encoded).window_size > 32 * 1024**2
+        elif fault == "extra_field":
+            saved["zlib"] = saved["zstd"]
+        else:
+            saved["schema"] = "cryptowatcher.shared-json.v999"
+        saved["zstd"] = base64.b64encode(encoded).decode()
+        store.db.execute("UPDATE runtime SET payload_json=? WHERE key=?", (encode(saved), BLOB_PREFIX + key))
+    if fault in ("size", "unknown_size", "oversized_window"):
+
+        def forbidden(*args, **kw):
+            pytest.fail("Malformed frame identity/window must be rejected before decoder allocation")
+
+        monkeypatch.setattr(zstandard, "ZstdDecompressor", forbidden)
+    with pytest.raises(StateError):
+        Codec(store.db).load(key)
+
+
+def test_zstd_body_encoding_rollback_does_not_admit_a_cached_dangling_body(store):
+    codec = Codec(store.db, body_encoding="zstd")
+    value = {"source": "frozen" * 100}
+    with pytest.raises(RuntimeError), store.db:
+        key = codec.save(value)
+        raise RuntimeError("rollback")
+    with pytest.raises(StateError, match="Missing shared snapshot"):
+        Codec(store.db).load(key)
+    with store.db:
+        assert codec.save(value) == key
+    assert Codec(store.db).load(key) == value
 
 
 def large_record(kind, name="one", revision=1):

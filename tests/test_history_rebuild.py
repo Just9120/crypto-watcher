@@ -504,6 +504,55 @@ def test_compressed_candidate_checks_constraints_and_refuses_writes(store):
                 pytest.fail("Candidate with a violated CHECK constraint was admitted")
 
 
+@pytest.mark.parametrize("fault", ["different_hash", "missing", "malformed", "window_hash", "window_order"])
+def test_frozen_field_identity_reuse_rejects_bad_references_and_checks_joined_windows(store, fault):
+    from cryptowatcher.history_codec import Codec
+    from cryptowatcher.history_rebuild import _FrozenReadbackCodec, compressed_candidate
+
+    original = [{"close": 1.0, "n": 2}, {"close": 3, "n": 4.0}]
+    with store.db:
+        codec = Codec(store.db)
+        key = codec.save(original)
+        blocks = [codec.save([part]) for part in original]
+    value = {"mode": "value", "ids": [key], "sha256": key}
+    window = {"mode": "window", "ids": blocks, "sha256": key}
+    with compressed_candidate(store, store.path, time.monotonic() + 10) as frozen:
+        reader = _FrozenReadbackCodec(frozen)
+        assert reader.field_raw(value) == encode(original).encode()
+        assert reader.field_raw(window) == encode(original).encode()
+        if fault == "different_hash":
+            value["sha256"] = "0" * 64
+        elif fault == "missing":
+            value.update(ids=["0" * 64], sha256="0" * 64)
+        elif fault == "malformed":
+            value.update(ids=[True], sha256=True)
+        elif fault == "window_hash":
+            value = {**window, "sha256": "0" * 64}
+        else:
+            value = {**window, "ids": list(reversed(blocks))}
+        with pytest.raises(StateError):
+            reader.field_raw(value)
+
+
+def test_frozen_field_reuse_never_admits_corrupt_body_under_an_existing_key(store):
+    from cryptowatcher.history_codec import BLOB_PREFIX, Codec
+    from cryptowatcher.history_rebuild import _FrozenReadbackCodec, compressed_candidate
+
+    with store.db:
+        codec = Codec(store.db)
+        key = codec.save({"price": 1.0})
+        other = codec.save({"price": 2.0})
+        bad = store.db.execute(
+            "SELECT payload_json FROM runtime WHERE key=?", (BLOB_PREFIX + other,)
+        ).fetchone()[0]
+        store.db.execute("UPDATE runtime SET payload_json=? WHERE key=?", (bad, BLOB_PREFIX + key))
+    # Physical SQLite integrity passes, but content-addressed body identity fails.
+    with compressed_candidate(store, store.path, time.monotonic() + 10) as frozen:
+        reader = _FrozenReadbackCodec(frozen)
+        with pytest.raises(StateError, match="Shared snapshot hash mismatch"):
+            reader.field_raw({"mode": "value", "ids": [key], "sha256": key})
+
+
 def test_frozen_body_cache_reuses_exact_verified_bytes_and_rechecks_scanned_payload(store):
     from cryptowatcher.history_codec import BLOB_PREFIX, Codec
     from cryptowatcher.history_rebuild import _FrozenReadbackCodec, compressed_candidate

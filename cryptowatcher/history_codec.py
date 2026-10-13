@@ -12,11 +12,14 @@ import zlib
 from collections import OrderedDict
 from typing import Any
 
+import zstandard
+
 from .storage import StateError, encode
 
 MARKER = "_history_storage"
 SCHEMA = "cryptowatcher.shared-fields.v1"
 BLOB_SCHEMA = "cryptowatcher.shared-json.v1"
+ZSTD_BLOB_SCHEMA = "cryptowatcher.shared-json.v2"
 BLOB_PREFIX = "historyblob:v1:"
 MAX_BYTES = 32 * 1024 * 1024
 CACHE_BYTES = 4 * 1024 * 1024
@@ -38,8 +41,11 @@ def sql_value(value: Any, kind: str) -> Any:
 
 
 class Codec:
-    def __init__(self, database: sqlite3.Connection):
+    def __init__(self, database: sqlite3.Connection, *, body_encoding: str = "zlib"):
+        if body_encoding not in ("zlib", "zstd"):
+            raise StateError("Unknown shared snapshot encoding")
         self.db = database
+        self.body_encoding = body_encoding
         self.encoded: OrderedDict[bytes, tuple[str, str]] = OrderedDict()
         self.cache_bytes = 0
         self.validated: OrderedDict[str, tuple[str, bytes, int | None]] = OrderedDict()
@@ -62,11 +68,16 @@ class Codec:
             key, payload = cached
         else:
             key = digest(raw)
+            compressed = (
+                zlib.compress(raw, 3)
+                if self.body_encoding == "zlib"
+                else zstandard.ZstdCompressor(level=1, write_checksum=True).compress(raw)
+            )
             payload = encode(
                 {
-                    "schema": BLOB_SCHEMA,
+                    "schema": BLOB_SCHEMA if self.body_encoding == "zlib" else ZSTD_BLOB_SCHEMA,
                     "bytes": len(raw),
-                    "zlib": base64.b64encode(zlib.compress(raw, 3)).decode(),
+                    self.body_encoding: base64.b64encode(compressed).decode(),
                 }
             )
             charge = len(raw) + len(payload) + 256
@@ -114,21 +125,36 @@ class Codec:
             value = json.loads(payload)
         except (ValueError, TypeError) as exc:
             raise StateError("Invalid shared snapshot encoding") from exc
-        if not isinstance(value, dict) or value.get("schema") != BLOB_SCHEMA:
+        if not isinstance(value, dict) or value.get("schema") not in (BLOB_SCHEMA, ZSTD_BLOB_SCHEMA):
             raise StateError("Missing shared snapshot")
         size = value.get("bytes")
         if type(size) is not int or not 0 <= size <= MAX_BYTES:
             raise StateError("Invalid shared snapshot size")
         try:
-            if (
-                not isinstance(value.get("zlib"), str)
-                or len(value["zlib"]) > (MAX_BYTES + 65536) * 4 // 3 + 4
-            ):
+            field = "zlib" if value["schema"] == BLOB_SCHEMA else "zstd"
+            if field == "zstd" and set(value) != {"schema", "bytes", "zstd"}:
                 raise StateError("Invalid shared snapshot encoding")
-            encoded = base64.b64decode(value["zlib"], validate=True)
-            reader = zlib.decompressobj()
-            raw = reader.decompress(encoded, size + 1)
-            if len(raw) != size or not reader.eof or reader.unused_data or reader.unconsumed_tail:
+            if not isinstance(value.get(field), str) or len(value[field]) > (MAX_BYTES + 65536) * 4 // 3 + 4:
+                raise StateError("Invalid shared snapshot encoding")
+            encoded = base64.b64decode(value[field], validate=True)
+            if field == "zlib":
+                reader = zlib.decompressobj()
+                raw = reader.decompress(encoded, size + 1)
+                if not reader.eof or reader.unused_data or reader.unconsumed_tail:
+                    raise StateError("Invalid shared snapshot encoding")
+            else:
+                parameters = zstandard.get_frame_parameters(encoded)
+                if (
+                    parameters.content_size != size
+                    or parameters.window_size > MAX_BYTES
+                    or parameters.dict_id
+                    or not parameters.has_checksum
+                ):
+                    raise StateError("Invalid shared snapshot encoding")
+                raw = zstandard.ZstdDecompressor(max_window_size=MAX_BYTES // 1024).decompress(
+                    encoded, max_output_size=size, allow_extra_data=False
+                )
+            if len(raw) != size:
                 raise StateError("Invalid shared snapshot encoding")
             if digest(raw) != key:
                 raise StateError("Shared snapshot hash mismatch")
@@ -146,7 +172,7 @@ class Codec:
                 self.validated[key] = (payload, raw, count)
                 self.validated_bytes += charge
             return raw, count
-        except (KeyError, ValueError, TypeError, zlib.error, UnicodeError) as exc:
+        except (KeyError, ValueError, TypeError, zlib.error, zstandard.ZstdError, UnicodeError) as exc:
             raise StateError("Invalid shared snapshot encoding") from exc
 
     def field(self, reference: Any) -> Any:

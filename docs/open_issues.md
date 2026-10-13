@@ -1185,6 +1185,32 @@ Consumer actual binding readback13Oct09:18UTC: radar credential versions0, activ
 
 Последний whole historical trial13Oct: source full integrity/unchanged checks PASS, но весь source/candidate/restore proof не завершён за887.528s; result TIME_BUDGET_EXCEEDED, candidate UNQUALIFIED_THIS_RUN, OOMfalse, owned probe removed. Separate readonly candidate byte check подтвердил SHA1810335b и совпадение с ранее qualified artifact; production тот же G5afd107/7039151 running/healthy. Last DB-size snapshot14:16UTC: SQLite26,248,880,128bytes/WAL6,604,392bytes; он не является текущей free-disk оценкой после нового trial. Working DB compaction/replacement NOT_RUN. Нельзя выдавать candidate size reduction за уменьшение production DB или повторять unchanged pipeline/остановку бота без нового основания.
 
+Current local optimization14Oct: frozen single-value field использует уже
+проверенный body SHA вместо повторного hash; mutable runtime reader и joined
+window hash прежние. ABBA cohort32k revisions сохраняет identical129366817 public
+bytes/SHA4a458062; warm baseline16.853s против14.606/14.746s. Full protected
+historical candidate readback PASS300.913s против прежних366.347s: all5 manifests,
+3179502 logical rows и188240 bodies; source1810335b/production unchanged.
+Primary receipts: `cw-field-hash-abba-025ae230bd494455841ea696178a4f4c.json`,
+`cw-field-identity-readback-913dca8a19ec4791bbb1aab9be5efda6.json` и6 Linux
+refusal controls `cw-field-identity-controls-055b1420613a484889b1e8a797ce6f5a.json`.
+
+Isolated converter создаёт новые shared bodies вlossless Zstd v2; reader принимает
+V1/V2, existing bodies/private bytes сохраняются, live writer default остаётсяV1.
+Measured8k-body cohort37.84MB: encoded6.27MB против7.80MB; Zstd0.425/0.448s против
+zlib3 0.823/0.909s, decoded SHAee3b767d совпадает. Это bounded cohort, не весь
+copy/current DB. Менее плотный zlib1 вариант не выбран: stable выигрыш не подтверждён.
+Positive mixed encodings/private bytes/rollback и negative frame size/window/checksum/
+trailer/extra-frame/future-version checks PASS.129 local tests/quality PASS;
+Linux3.11/native228 targeted regressions PASS, receipt
+`cw-zstd-body-regressions-9dd35bd5b3d849c2b59ed50787ab2af5.json`.
+Actual full source/copy/new-candidate/recovery qualification≤900s ещё PENDING.
+
+Fresh read-only capacity13Oct21:32UTC: production afd107/7039151 healthy, main
+SQLite27653779456bytes/WAL7762112bytes, free6426107904bytes. Новые исторические
+candidate outputs требуют отдельного bounded preflight; этот snapshot не гарантирует
+будущее free disk. DB replacement и снижение production размера NOT_RUN.
+
 Local recovery implementation: commit9e5f6d5 плюс final self-review correction
 (source digest из same persisted writer, final archive fingerprint, native copy
 parity). Новые canonical modules используются только разовой conversion procedure;
@@ -1201,4 +1227,4 @@ canonical reconstruction8.813s cumulative, body loading4.219s cumulative.
 Full/current conversion, production switch, PR31 merge/CD, consumer activation
 и final G6 AUDIT остаются незавершёнными; scope58/progress54/58 сохраняются.
 
-Следующий шаг: canonical/local/Linux validation разрешённого разового recovery gate завершена; доказать улучшение source/candidate critical path перед новым whole trial. Не повторять terminal failed whole trial без нового основания. Проверить конкретный exact-byte restore/proof-reuse proposal на corruption/bounds/races и actual historical archive; owner policy review14Oct разрешил только описанный recovery gate; source/candidate и routine CD gates остаются прежними. Fresh current qualification остаётся отдельным required результатом. Source compression prototype qualified258.407s на protected historical archive; canonical code/defaults не менялись, whole fit ещё не доказан. Candidate verification отдельно от copy PASS391.133s для protected historical artifact; whole current conversion≤900s остаётся REQUIRED. Native event-window block experiment отклонён по cost/size evidence; не повторять unchanged whole pipeline и не ослаблять gates. Разрешённое exact-byte recovery reuse требует canonical regression qualification; оно не закрывает source/candidate timeouts. Source-release/manifest correction qualified53 local/139 Linux tests, но actual whole fit остаётся неподтверждённым. Новый full trial требует fresh disk/resources preflight; newly generated duplicate outputs не удалять без конкретной reviewed authorization, original gzip и старый qualified candidate сохраняются. Только после full qualification подготовить review точного production switch и applicable receiver/merge/CD gates. Затем завершить qualified consumer activation/signed historical smoke и G6 full audit/docs PR. Полный scope58 AC и все findings сохраняются; по коду54/58, audit percentage не пересчитывался. До этого Goal DoD не достигнут. Primary detailed logs/receipts остаются вне repository; user state и другие VPS проекты сохраняются.
+Следующий шаг: local/Linux qualification recovery/field reuse/Zstd bodies завершена; whole≤900s historical test допускается только после fresh disk/resources/concurrency preflight, с новым canonical code и теми же full gates. Fresh current dataset остаётся отдельной required qualification. Не повторять terminal failed whole trial без нового основания. Проверить конкретный exact-byte restore/proof-reuse proposal на corruption/bounds/races и actual historical archive; owner policy review14Oct разрешил только описанный recovery gate; source/candidate и routine CD gates остаются прежними. Fresh current qualification остаётся отдельным required результатом. Source compression prototype qualified258.407s на protected historical archive; canonical code/defaults не менялись, whole fit ещё не доказан. Candidate verification отдельно от copy PASS391.133s для protected historical artifact; whole current conversion≤900s остаётся REQUIRED. Native event-window block experiment отклонён по cost/size evidence; не повторять unchanged whole pipeline и не ослаблять gates. Разрешённое exact-byte recovery reuse требует canonical regression qualification; оно не закрывает source/candidate timeouts. Source-release/manifest correction qualified53 local/139 Linux tests, но actual whole fit остаётся неподтверждённым. Новый full trial требует fresh disk/resources preflight; newly generated duplicate outputs не удалять без конкретной reviewed authorization, original gzip и старый qualified candidate сохраняются. Только после full qualification подготовить review точного production switch и applicable receiver/merge/CD gates. Затем завершить qualified consumer activation/signed historical smoke и G6 full audit/docs PR. Полный scope58 AC и все findings сохраняются; по коду54/58, audit percentage не пересчитывался. До этого Goal DoD не достигнут. Primary detailed logs/receipts остаются вне repository; user state и другие VPS проекты сохраняются.
