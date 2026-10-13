@@ -358,6 +358,21 @@ Next: квалифицировать более быстрый способ по
 writer требует отдельной reviewed procedure/authorization до остановки бота.
 Same online capture run не повторять; current compaction/Goal DoD не завершены.
 
+Closed-source preparation: generated286MB SQLite ABBA full integrity/CHECK и
+all5 typed manifests PASS; native4.373–5.031s, closed3.545–3.988s. Closed-file
+source → candidate → full readback/persisted recovery fixture127rows PASS5.121s.
+Отдельный isolated stop/checkpoint/intentional refusal/same-container restart
+rehearsal PASS с сохранением rows; production не останавливался. Exact target
+maintenance preflight PASS: только CryptoWatcher7039151/G5afd107, общий900s,
+CPU1/RAM4GiB, archive/reserve/checks неизменны; candidate cap5GiB выбран по fresh
+disk capacity. Для restart/post-checks зарезервировано90s внутри общего deadline.
+Неизвестны fit/time всего dataset: small fixture этого не доказывает. Prepared
+operation только квалифицирует закрытый source и возобновляет прежний container;
+production replacement/restore поверх live не разрешены. Explicit owner
+authorization на временную production quiescence PENDING; execute NOT_RUN.
+Перед execute повторить target/resource/concurrency gates. Next: дождаться
+ответа на reviewed procedure, не заменяя молчание разрешением.
+
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный
 dataset. Read-only snapshot09:54UTC/G5afd10770: SQLite15,220,908,032bytes,
