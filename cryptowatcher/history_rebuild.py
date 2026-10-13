@@ -15,10 +15,10 @@ import sys
 import tempfile
 import time
 from collections import OrderedDict
-from contextlib import closing, contextmanager
+from contextlib import ExitStack, closing, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Literal
+from typing import Any, Callable, Iterator, Literal
 
 from .events import HEAD_FIELDS, HEAD_SCHEMA, PREFIX, History
 from .history_codec import BLOB_PREFIX, MARKER, MAX_BYTES, Codec, sql_value
@@ -114,10 +114,8 @@ def guard(deadline: float) -> None:
         raise IntegrityError("TIME_BUDGET_EXCEEDED", "Rebuild time budget exceeded")
 
 
-def release_source_cache(database: Any, deadline: float) -> None:
-    """Release validation-only caches before the next bounded conversion stage."""
-    guard(deadline)
-    database.execute("PRAGMA shrink_memory")
+def trim_unused_memory() -> None:
+    """Release unused allocator pages without changing any live buffers."""
     if sys.platform == "linux":
         # SQLite frees its pages, but glibc can retain their arena allocation.
         # Trim only unused allocator pages; live image buffers are unaffected.
@@ -129,6 +127,36 @@ def release_source_cache(database: Any, deadline: float) -> None:
             trim.argtypes = [ctypes.c_size_t]
             trim.restype = ctypes.c_int
             trim(0)
+
+
+def release_source_cache(database: Any, deadline: float) -> None:
+    """Release validation-only caches before the next bounded conversion stage."""
+    guard(deadline)
+    database.execute("PRAGMA shrink_memory")
+    trim_unused_memory()
+    guard(deadline)
+
+
+def configure_candidate_cache(database: sqlite3.Connection, deadline: float) -> None:
+    """Admit verification cache only after the owner has released source resources."""
+    from .compressed_validation import (
+        VALIDATION_MEMORY_BYTES,
+        VALIDATION_OVERHEAD_BYTES,
+        resident_memory_bytes,
+    )
+
+    guard(deadline)
+    resident = resident_memory_bytes()
+    available = (
+        256 * 1024**2
+        if resident is None
+        else (VALIDATION_MEMORY_BYTES - resident - VALIDATION_OVERHEAD_BYTES)
+    )
+    if available < 128 * 1024**2:
+        raise IntegrityError("DATABASE_ERROR", "Insufficient verification cache capacity")
+    cache_kib = min(1024**3, available) // 1024
+    database.execute(f"PRAGMA cache_size=-{cache_kib}")
+    database.execute("PRAGMA shrink_memory")
     guard(deadline)
 
 
@@ -263,12 +291,25 @@ def feed(manifest: Any, values: tuple[Any, ...]) -> None:
     # Strings (including canonical public JSON) are length framed directly, rather
     # than escaped into a second large JSON document. The type tag keeps a numeric
     # field distinct from the same text; JSON retains int/float distinctions.
-    manifest.update(len(values).to_bytes(8, "big"))
+    parts = [len(values).to_bytes(8, "big")]
+    size = 8
     for value in values:
         raw = value.encode() if isinstance(value, str) else encode(value).encode()
-        manifest.update(b"s" if isinstance(value, str) else b"j")
-        manifest.update(len(raw).to_bytes(8, "big"))
-        manifest.update(raw)
+        prefix = (b"s" if isinstance(value, str) else b"j") + len(raw).to_bytes(8, "big")
+        if len(raw) > 4096:
+            # Large public windows stay streamed rather than copied into a new buffer.
+            parts.append(prefix)
+            manifest.update(b"".join(parts))
+            manifest.update(raw)
+            parts, size = [], 0
+        else:
+            parts.append(prefix + raw)
+            size += len(prefix) + len(raw)
+            if size >= 65536:
+                manifest.update(b"".join(parts))
+                parts, size = [], 0
+    if parts:
+        manifest.update(b"".join(parts))
 
 
 def canonical_head(
@@ -306,6 +347,7 @@ def copy_snapshot(
     deadline: float,
     *,
     backend: str = "auto",
+    source_copied: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """Copy every row from an already pinned source into an exclusive candidate."""
     counts: dict[str, int] = {}
@@ -405,7 +447,16 @@ def copy_snapshot(
                     f"INSERT INTO {table} VALUES ({','.join('?' for _ in columns)})", transformed_rows()
                 )
                 counts[table] = count
+        source_shared = original.execute(
+            "SELECT COUNT(*) FROM runtime WHERE key>=? AND key<?", (BLOB_PREFIX, BLOB_PREFIX + "~")
+        ).fetchone()[0]
         release_source_cache(original, deadline)
+        if source_copied is not None:
+            # The source owner completes its unchanged-byte proof and closes it.
+            # Only fixed manifests/counts are needed by the candidate readback.
+            source_copied()
+            trim_unused_memory()
+            configure_candidate_cache(candidate.db, deadline)
         check_integrity(candidate.db, deadline=deadline)
         candidate.snapshot()  # Current owner settings must be readable without resetting defaults.
         # This exclusive candidate is frozen before evidence is reused during readback.
@@ -484,9 +535,6 @@ def copy_snapshot(
         added = candidate.db.execute("SELECT COUNT(*) FROM runtime").fetchone()[0] - counts["runtime"]
         if added < 0:
             raise StateError("Candidate lost runtime records")
-        source_shared = original.execute(
-            "SELECT COUNT(*) FROM runtime WHERE key>=? AND key<?", (BLOB_PREFIX, BLOB_PREFIX + "~")
-        ).fetchone()[0]
         candidate_shared = candidate.db.execute(
             "SELECT COUNT(*) FROM runtime WHERE key>=? AND key<?", (BLOB_PREFIX, BLOB_PREFIX + "~")
         ).fetchone()[0]
@@ -547,16 +595,33 @@ def rebuild(
     destination.touch(mode=0o600, exist_ok=False)
     source_proof = None
     if source_encoding == "sqlite":
-        with closing(
-            sqlite3.connect(source.resolve().as_uri() + "?mode=ro&immutable=1", uri=True)
-        ) as original:
-            copied = copy_snapshot(original, destination, owner, maximum, deadline, backend=backend)
+        with ExitStack() as source_scope:
+            original = source_scope.enter_context(
+                closing(sqlite3.connect(source.resolve().as_uri() + "?mode=ro&immutable=1", uri=True))
+            )
+            copied = copy_snapshot(
+                original,
+                destination,
+                owner,
+                maximum,
+                deadline,
+                backend=backend,
+                source_copied=source_scope.close,
+            )
     else:
-        with archive_source(source, destination.parent, expected, deadline, source_encoding) as (
-            archived,
-            source_proof,
-        ):
-            copied = copy_snapshot(archived, destination, owner, maximum, deadline, backend=backend)
+        with ExitStack() as source_scope:
+            archived, source_proof = source_scope.enter_context(
+                archive_source(source, destination.parent, expected, deadline, source_encoding)
+            )
+            copied = copy_snapshot(
+                archived,
+                destination,
+                owner,
+                maximum,
+                deadline,
+                backend=backend,
+                source_copied=source_scope.close,
+            )
     if fingerprint(source, deadline) != source_hash:
         raise StateError("Source changed; candidate not qualified")
     after = source.stat()

@@ -26,6 +26,28 @@ def test_logical_manifest_preserves_types_and_field_boundaries():
     assert len(set(hashes)) == len(values)
 
 
+def test_manifest_batching_retains_existing_v2_wire_bytes_at_buffer_boundaries():
+    rows = [
+        (),
+        (None, False, 1, 1.0, -0.0, 2**100),
+        ("Пример\x00", "😀"),
+        ("x" * 4096, "y" * 4097, ""),
+        tuple("z" * 4000 for _ in range(18)),
+        ("large" * 20000, "tail"),
+    ]
+    legacy = hashlib.sha256()
+    actual = hashlib.sha256()
+    for row in rows:
+        legacy.update(len(row).to_bytes(8, "big"))
+        for value in row:
+            raw = value.encode() if isinstance(value, str) else encode(value).encode()
+            legacy.update(b"s" if isinstance(value, str) else b"j")
+            legacy.update(len(raw).to_bytes(8, "big"))
+            legacy.update(raw)
+        feed(actual, row)
+    assert actual.digest() == legacy.digest()
+
+
 def test_source_cache_release_preserves_frozen_bytes_and_readonly_snapshot(tmp_path):
     import apsw
 
@@ -274,6 +296,84 @@ def closed_backup(tmp_path, *, conflict=None):
     source.db.execute("PRAGMA journal_mode=DELETE")
     source.close()
     return path, hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_copy_can_release_source_before_full_candidate_validation(tmp_path, monkeypatch):
+    from cryptowatcher import history_rebuild
+
+    source, expected = closed_backup(tmp_path)
+    baseline = rebuild(source, tmp_path / "baseline.sqlite3", 233382575, expected, time.monotonic() + 10)
+    original = sqlite3.connect(source.resolve().as_uri() + "?mode=ro&immutable=1", uri=True)
+    checked = []
+    real_check = history_rebuild.check_integrity
+
+    def check_after_close(database, *, deadline):
+        with pytest.raises(sqlite3.ProgrammingError):
+            original.execute("SELECT 1")
+        checked.append(True)
+        real_check(database, deadline=deadline)
+
+    monkeypatch.setattr(history_rebuild, "check_integrity", check_after_close)
+    result = history_rebuild.copy_snapshot(
+        original,
+        tmp_path / "released.sqlite3",
+        233382575,
+        2**20,
+        time.monotonic() + 10,
+        source_copied=original.close,
+    )
+    assert checked == [True]
+    assert result["logical_row_manifests"] == baseline["logical_row_manifests"]
+    assert result["table_rows"] == baseline["table_rows"]
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == expected
+
+
+def test_source_release_failure_never_proceeds_to_candidate_validation(tmp_path, monkeypatch):
+    from cryptowatcher import history_rebuild
+
+    source, expected = closed_backup(tmp_path)
+    original = sqlite3.connect(source.resolve().as_uri() + "?mode=ro&immutable=1", uri=True)
+
+    def failed_release():
+        original.close()
+        raise StateError("Source qualification failed before release")
+
+    def unexpected_check(*args, **kwargs):
+        pytest.fail("Candidate validation must not bypass failed source qualification")
+
+    monkeypatch.setattr(history_rebuild, "check_integrity", unexpected_check)
+    with pytest.raises(StateError, match="Source qualification failed"):
+        history_rebuild.copy_snapshot(
+            original,
+            tmp_path / "unqualified.sqlite3",
+            233382575,
+            2**20,
+            time.monotonic() + 10,
+            source_copied=failed_release,
+        )
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == expected
+
+
+def test_candidate_verification_cache_uses_only_remaining_memory(monkeypatch):
+    from cryptowatcher import compressed_validation as cv
+    from cryptowatcher.history_rebuild import configure_candidate_cache
+
+    resident = 3328 * 1024**2
+    monkeypatch.setattr(cv, "resident_memory_bytes", lambda: resident)
+    with closing(sqlite3.connect(":memory:")) as db:
+        db.execute("CREATE TABLE values_to_preserve (value TEXT)")
+        db.execute("INSERT INTO values_to_preserve VALUES ('1.000')")
+        db.execute("PRAGMA query_only=ON")
+        configure_candidate_cache(db, time.monotonic() + 10)
+        allocated = -db.execute("PRAGMA cache_size").fetchone()[0] * 1024
+        assert allocated + resident + cv.VALIDATION_OVERHEAD_BYTES <= cv.VALIDATION_MEMORY_BYTES
+        assert db.execute("PRAGMA query_only").fetchone() == (1,)
+        assert db.execute("SELECT value FROM values_to_preserve").fetchall() == [("1.000",)]
+        before = db.execute("PRAGMA cache_size").fetchone()[0]
+        monkeypatch.setattr(cv, "resident_memory_bytes", lambda: cv.VALIDATION_MEMORY_BYTES)
+        with pytest.raises(IntegrityError, match="Insufficient verification cache"):
+            configure_candidate_cache(db, time.monotonic() + 10)
+        assert db.execute("PRAGMA cache_size").fetchone()[0] == before
 
 
 def test_rebuild_compacts_history_without_losing_any_revision_or_owner_state(tmp_path):

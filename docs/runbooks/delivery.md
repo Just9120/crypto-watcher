@@ -236,6 +236,15 @@ runtime admission checks и не продлевает900s budget.
 копирование, full integrity, все manifests и hashes; последовательность запусков
 не сбрасывает общий budget одной конвертации.
 
+После commit всех copied tables converter фиксирует source counts/manifests.
+Владелец source scope завершает unchanged-byte checks и закрывает connection/VFS
+до candidate full integrity/readback. Source buffers и unused allocator pages
+освобождаются; проверки candidate не зависят от открытого source. Cache допускается
+по фактическому RSS с512MiB reserve внутри4GiB cap, максимум1GiB; недостаток памяти
+или ошибка source release блокируют qualification. Все full checks, typed logical
+manifests и финальные source/candidate/archive hashes остаются обязательными в
+том же900s deadline. Это изменение lifetime ресурсов, не разрешение на promotion.
+
 ```bash
 python -m cryptowatcher.history_rebuild --source "$CW_CLOSED_BACKUP" --destination "$CW_NEW_CANDIDATE" --owner-id 233382575 --qualified-source-sha256 "$CW_QUALIFIED_SOURCE_SHA256"
 ```

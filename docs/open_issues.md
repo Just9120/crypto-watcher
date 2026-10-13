@@ -458,6 +458,30 @@ Actual capacity effect ещё REQUIRED. Это resource
 optimization, не доказательство fit полной26GB конвертации в900s. Primary CI
 38405497548 относится к publishedb5fe042 до этой local correction; новый CI не запускался.
 
+Source lifetime correction13Oct: source owner завершает unchanged-byte proof и
+закрывает connection/VFS сразу после commit всех пяти copied tables. Candidate
+full integrity/readback используют зафиксированные counts/manifests; source shared
+count захвачен до release. Frozen buffers освобождаются до candidate validation,
+cache допускается по current RSS с reserve512MiB внутри existing4GiB cap, максимум
+1GiB. Missing capacity/source-release failure блокируют verification.53 Windows
+targeted tests/quality и139 Linux native regressions PASS. Closed-source pipeline
+на127-row fixture полностью PASS0.991s, включая independent persisted restore.
+Synthetic3000MiB arena pressure ABBA подтвердил те же manifests во всех4 cases;
+RSS при early release снизился≈3.23GB→84–87MB. Это lifetime/resource fixture,
+не actual26GB timing. Copy-only case timings исключают cleanup в retained variant
+и не доказывают ускорение whole pipeline.
+
+Manifest batching сохраняет existing v2 byte framing/type tags, bounded small
+buffer и streaming large values. Synthetic262,784-row ABBA: old0.2940/0.2844s,
+new0.2093/0.2083s, одинаковый SHA941ac4ed…; effect всего pipeline не измерен.
+Canonical proof-cache эксперимент отклонён:14MB fixture не сократила число native
+checks540 и не показала устойчивого выигрыша. В tracked code он не включён.
+Новый historical whole trial `historical-full-pipeline-g9q3duky/status.json`
+RUNNING; owned container0bd81c22…/root PID1526230, source full integrity PASS.
+Один deadline900s/CPU1/RAM4GiB/no swap; stricter output caps3GiB candidate/1GiB
+archive и2GiB disk/growth reserve, original archive read-only, production pause
+и replacement NOT_RUN. PASS не предсказывается; final candidate/restore gates REQUIRED.
+
 Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
 подтверждённую избыточность history representation, сохранив весь согласованный
 dataset. Read-only snapshot09:54UTC/G5afd10770: SQLite15,220,908,032bytes,
