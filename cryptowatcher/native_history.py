@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import re
 from pathlib import Path
 from typing import Any, Callable
 
@@ -11,6 +12,9 @@ from .history_codec import MARKER
 from .storage import StateError
 
 KINDS = ("event", "outcome", "episode", "comparison")
+_SaveCallback = ctypes.CFUNCTYPE(
+    ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_void_p
+)
 
 
 class _Part(ctypes.Structure):
@@ -37,6 +41,10 @@ class Accelerator:
         self.library.cw_release.restype = None
         self.library.cw_head.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_uint]
         self.library.cw_head.restype = ctypes.POINTER(_Result)
+        self.saved_extractor = getattr(self.library, "cw_extract_saved", None)
+        if self.saved_extractor is not None:
+            self.saved_extractor.argtypes = [ctypes.c_char_p, ctypes.c_size_t, _SaveCallback, ctypes.c_void_p]
+            self.saved_extractor.restype = ctypes.POINTER(_Result)
         # Stable CPython conversion APIs require the GIL throughout validation.
         self.python_library = ctypes.PyDLL(str(path))
         self.python_library.cw_validate.argtypes = [
@@ -46,6 +54,40 @@ class Accelerator:
             ctypes.POINTER(ctypes.c_size_t),
         ]
         self.python_library.cw_validate.restype = ctypes.c_int
+
+    def pack_serialized(self, payload: str, save: Callable[[bytes], str]) -> str | None:
+        """Bind admitted keys in the original parse; caller owns rollback on fallback/refusal."""
+        if self.saved_extractor is None:
+            return None
+        failures: list[BaseException] = []
+
+        def admitted(data: int, size: int, output: int, context: int) -> int:
+            try:
+                key = save(ctypes.string_at(data, size))
+                if not isinstance(key, str) or not re.fullmatch(r"[0-9a-f]{64}", key):
+                    raise StateError("Native reference binding refused input")
+                ctypes.memmove(output, key.encode(), 64)
+                return 1
+            except BaseException as error:
+                # ctypes callbacks cannot propagate Python exceptions through C.
+                failures.append(error)
+                return 0
+
+        callback = _SaveCallback(admitted)
+        raw = payload.encode()
+        result = self.saved_extractor(raw, len(raw), callback, None)
+        if not result:
+            raise MemoryError("Native extraction allocation failed")
+        try:
+            if failures:
+                raise failures[0]
+            if result.contents.status == 1:
+                return None
+            if result.contents.status != 0:
+                raise StateError("Native extraction refused input")
+            return ctypes.string_at(result.contents.packed, result.contents.packed_length).decode()
+        finally:
+            self.library.cw_release(result)
 
     def pack(self, payload: str, save: Callable[[bytes], str]) -> dict[str, Any] | None:
         raw = payload.encode()

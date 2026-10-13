@@ -50,6 +50,40 @@ def test_logical_manifest_preserves_types_and_field_boundaries():
     assert len(set(hashes)) == len(values)
 
 
+@pytest.mark.parametrize("outcome", ["fallback", "failure"])
+def test_partial_native_admission_rolls_back_and_does_not_leave_cached_dangling_body(store, outcome):
+    class PartialAccelerator:
+        saved_extractor = object()
+
+        def pack_serialized(self, payload, save):
+            save(encode({"temporary": True}).encode())
+            if outcome == "failure":
+                raise StateError("fixture callback refusal")
+            return None
+
+        def pack(self, payload, save):
+            return None
+
+        def canonical(self, raw):
+            return None
+
+    codec = _CopyCodec(store.db, PartialAccelerator())
+    with store.db:
+        store.db.execute("INSERT INTO runtime VALUES ('fixture', 'null')")
+        if outcome == "failure":
+            with pytest.raises(StateError, match="fixture callback refusal"):
+                codec.pack_payload(encode({"a": 1}))
+        else:
+            assert codec.pack_payload(encode({"a": 1})) == encode({"a": 1})
+        assert (
+            store.db.execute("SELECT COUNT(*) FROM runtime WHERE key LIKE 'historyblob:%'").fetchone()[0] == 0
+        )
+        assert not codec.admitted
+        # The encoding cache may remain, but rollback cleared its admission proof.
+        key = codec.save_bytes(encode({"temporary": True}).encode())
+        assert codec.load(key) == {"temporary": True}
+
+
 @pytest.mark.parametrize("resident_mib", [None, 256, 3000, 3300])
 def test_copy_cache_reserves_active_source_and_overhead_without_changing_data(
     tmp_path, monkeypatch, resident_mib

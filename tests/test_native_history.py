@@ -87,3 +87,43 @@ def test_native_unsupported_depth_keeps_python_canonical_gate(store, accelerator
         raw = b"[" + raw + b"]"
     assert accelerator.canonical(raw) is None
     assert _CopyCodec(store.db, accelerator).canonical(raw) == Codec(store.db).canonical(raw)
+
+
+@pytest.mark.parametrize("kind", ["event", "outcome", "episode", "comparison"])
+def test_one_pass_saved_packing_keeps_full_public_bytes_and_scalar_types(store, accelerator, kind):
+    assert accelerator.saved_extractor is not None
+    value = large_record(kind)
+    value.update(strength=2.095370825591371, signed_zero=-0.0, huge=2**100 + 123, text="цена🪙\0")
+    value["samples"] = [{"source_inputs": value["source_inputs"]}]
+    codec = _CopyCodec(store.db, accelerator)
+    with store.db:
+        store.db.execute("INSERT INTO runtime VALUES ('fixture', 'null')")
+        packed = codec.pack_payload(encode(value))
+    assert codec.canonical_json(json.loads(packed)) == encode(value).encode()
+
+
+def test_one_pass_late_depth_fallback_keeps_no_extra_shared_bodies(store, accelerator):
+    assert accelerator.saved_extractor is not None
+    nested = {"n": 1}
+    for _ in range(205):
+        nested = [nested]
+    value = {"a": {"source_inputs": [{"close": 1.0}]}, "z": nested}
+    codec = _CopyCodec(store.db, accelerator)
+    with store.db:
+        store.db.execute("INSERT INTO runtime VALUES ('fixture', 'null')")
+        packed = codec.pack_payload(encode(value))
+    assert codec.canonical_json(json.loads(packed)) == encode(value).encode()
+    assert store.db.execute("SELECT COUNT(*) FROM runtime WHERE key LIKE 'historyblob:%'").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("fault", ["short", "uppercase", "callback_error"])
+def test_one_pass_callback_refusal_and_exception_never_return_partial_payload(accelerator, fault):
+    assert accelerator.saved_extractor is not None
+
+    def refused(raw):
+        if fault == "callback_error":
+            raise StateError("fixture body admission failed")
+        return "a" * 63 if fault == "short" else "A" * 64
+
+    with pytest.raises(StateError, match="fixture body admission failed|Native reference binding refused"):
+        accelerator.pack_serialized(encode(large_record("event")), refused)

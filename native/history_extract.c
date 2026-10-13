@@ -1,4 +1,4 @@
-/* Experimental stateless JSON extraction only. No files, SQLite or network I/O. */
+/* Stateless JSON packing/projection; body admission belongs to the caller. */
 #include "yyjson.h"
 #include <stdint.h>
 #include <stdlib.h>
@@ -58,15 +58,24 @@ static int add_part(cw_result *result, char *raw, size_t length, size_t *index) 
     result->count++;
     return 1;
 }
+typedef int (*cw_save_fn)(const char *, size_t, char *, void *);
+static yyjson_mut_val *saved_reference(yyjson_mut_doc *doc, const char *key) {
+    yyjson_mut_val *ref = yyjson_mut_obj(doc), *ids = yyjson_mut_arr(doc);
+    if (!ref || !ids || !yyjson_mut_arr_add_val(ids, yyjson_mut_strncpy(doc, key, 64)) ||
+        !yyjson_mut_obj_add_str(doc, ref, "mode", "value") ||
+        !yyjson_mut_obj_add(ref, yyjson_mut_str(doc, "ids"), ids) ||
+        !yyjson_mut_obj_add(ref, yyjson_mut_str(doc, "sha256"), yyjson_mut_strncpy(doc, key, 64))) return NULL;
+    return ref;
+}
 static yyjson_mut_val *pack(yyjson_mut_doc *doc, yyjson_val *value,
-                            cw_result *result, unsigned depth) {
+                            cw_result *result, unsigned depth, cw_save_fn save, void *context) {
     if (depth > 200) { result->status = 1; return NULL; }
     if (yyjson_is_arr(value)) {
         size_t i, length; yyjson_val *child;
         yyjson_mut_val *array = yyjson_mut_arr(doc);
         if (!array) goto allocation;
         yyjson_arr_foreach(value, i, length, child) {
-            yyjson_mut_val *item = pack(doc, child, result, depth + 1);
+            yyjson_mut_val *item = pack(doc, child, result, depth + 1, save, context);
             if (!item) return NULL;
             if (!yyjson_mut_arr_add_val(array, item)) goto allocation;
         }
@@ -96,7 +105,17 @@ static yyjson_mut_val *pack(yyjson_mut_doc *doc, yyjson_val *value,
         if (share || is_window) {
             size_t index;
             if (!add_part(result, raw, raw_length, &index)) return NULL;
-            yyjson_mut_val *ref = reference(doc, index);
+            yyjson_mut_val *ref;
+            if (save) {
+                char key[65] = {0};
+                if (!save(result->parts[index].data, result->parts[index].length, key, context) || key[64]) {
+                    result->status = 3; return NULL;
+                }
+                for (size_t j = 0; j < 64; j++) if (!((key[j] >= '0' && key[j] <= '9') || (key[j] >= 'a' && key[j] <= 'f'))) {
+                    result->status = 3; return NULL;
+                }
+                ref = saved_reference(doc, key);
+            } else ref = reference(doc, index);
             if (!ref || !yyjson_mut_obj_add(fields, mutable_key, ref)) goto allocation;
             has_fields = 1;
             if (name_is(key, "settings_snapshot")) {
@@ -115,7 +134,7 @@ static yyjson_mut_val *pack(yyjson_mut_doc *doc, yyjson_val *value,
                 if (!projection_key || !yyjson_mut_obj_add(object, projection_key, projection)) goto allocation;
             }
         } else {
-            yyjson_mut_val *copy = pack(doc, child, result, depth + 1);
+            yyjson_mut_val *copy = pack(doc, child, result, depth + 1, save, context);
             if (!copy) return NULL;
             if (!yyjson_mut_obj_add(object, mutable_key, copy)) goto allocation;
         }
@@ -131,7 +150,7 @@ allocation:
     result->status = 2; return NULL;
 }
 
-cw_result *cw_extract(const char *data, size_t length) {
+cw_result *cw_extract_saved(const char *data, size_t length, cw_save_fn save, void *context) {
     cw_result *result = calloc(1, sizeof(*result));
     if (!result) return NULL;
     yyjson_doc *source = yyjson_read(data, length, YYJSON_READ_NUMBER_AS_RAW);
@@ -141,7 +160,7 @@ cw_result *cw_extract(const char *data, size_t length) {
     yyjson_val *root = yyjson_doc_get_root(source);
     if (!yyjson_is_obj(root)) result->status = 3;
     else {
-        yyjson_mut_val *packed = pack(destination, root, result, 0);
+        yyjson_mut_val *packed = pack(destination, root, result, 0, save, context);
         if (packed) {
             yyjson_mut_doc_set_root(destination, packed);
             result->packed = yyjson_mut_write(destination, 0, &result->packed_length);
@@ -150,6 +169,9 @@ cw_result *cw_extract(const char *data, size_t length) {
     }
     yyjson_mut_doc_free(destination); yyjson_doc_free(source);
     return result;
+}
+cw_result *cw_extract(const char *data, size_t length) {
+    return cw_extract_saved(data, length, NULL, NULL);
 }
 void cw_release(cw_result *result) {
     if (!result) return;

@@ -78,6 +78,31 @@ class _CopyCodec(Codec):
                 return packed
         return super().pack_canonical(payload)
 
+    def pack_payload(self, payload: str) -> str:
+        if (
+            self.accelerator is not None
+            and self.accelerator.saved_extractor is not None
+            and MAX_BYTES == 32 * 1024 * 1024
+            and self.db.in_transaction
+        ):
+            self.db.execute("SAVEPOINT cw_native_pack")
+            try:
+                packed = self.accelerator.pack_serialized(payload, self.save_bytes)
+                if packed is not None:
+                    self.db.execute("RELEASE cw_native_pack")
+                    return packed
+            except BaseException:
+                self.db.execute("ROLLBACK TO cw_native_pack")
+                self.db.execute("RELEASE cw_native_pack")
+                self.admitted.clear()
+                raise
+            # Unsupported depth/format can be discovered after callbacks. Keep
+            # no extra bodies, and invalidate admission proofs rolled back here.
+            self.db.execute("ROLLBACK TO cw_native_pack")
+            self.db.execute("RELEASE cw_native_pack")
+            self.admitted.clear()
+        return encode(self.pack_canonical(payload))
+
     def canonical(self, raw: bytes) -> tuple[bool, int | None]:
         if self.accelerator is not None:
             result = self.accelerator.canonical(raw)
@@ -680,7 +705,7 @@ def copy_snapshot(
                                     else payload
                                 )
                                 logical = (values[0], normalized)
-                                payload = encode(candidate_codec.pack_canonical(normalized))
+                                payload = candidate_codec.pack_payload(normalized)
                             if not values[0].startswith(BLOB_PREFIX):
                                 feed(manifests[table], logical)
                             values = (values[0], payload)
@@ -733,6 +758,8 @@ def copy_snapshot(
         candidate.close()
     return {
         "conversion_backend": "native-v1" if accelerator is not None else "python",
+        "native_reference_binding_available": accelerator is not None
+        and accelerator.saved_extractor is not None,
         "candidate_validation": "COMPRESSED_RAM" if compressed_candidate_validation else "SQLITE_FILE",
         "copy_cache_kib": copy_cache_kib,
         "table_rows": counts,

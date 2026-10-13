@@ -252,6 +252,14 @@ cache; недостаток capacity блокирует conversion до увел
 cache остаётся128MiB; transaction, journaling, constraints и all hashes/manifests
 не меняются. Фактически выбранный `copy_cache_kib` включается в Evidence.
 
+Native conversion helper
+может связывать admitted body IDs в том же parse без повторной Python serialization
+metadata; numeric tokens сохраняются. Эта возможность выбирается только в активной
+copy transaction и отмечается `native_reference_binding_available`. Каждый record
+имеет nested savepoint: late unsupported format/depth или callback refusal откатывает
+partial body admission и очищает rolled-back cache proofs до fallback/ошибки.
+Старый helper без функции использует прежний путь; runtime radar helper не выбирает.
+
 Explicit flag `--compressed-candidate-validation` переносит полную candidate
 проверку в frozen compressed RAM после закрытия writer. Перед freeze читается
 owner snapshot; full writable integrity/CHECK выполняется через query-only VFS.
