@@ -239,11 +239,14 @@ class BybitRadar(BybitREST):
             self._pending.pop(stream, None)
             self._history.pop(stream, None)
             self._history_errors.pop(stream, None)
-        for stream in added:
-            self.sources.load(stream)
+        for index, stream in enumerate(added):
             saved = self.store.get_runtime(f"source:v1:gap:{stream}", {})
             if saved.get("state") == "PENDING":
                 self._history[stream] = saved
+            if index % 32 == 31:
+                await asyncio.sleep(0)
+        # Recovery/closed WS observations load each bounded window on demand. Loading
+        # every stored candle here blocks subscriptions and the event loop at restart.
         # Each market gets early bootstrap slots; no market waits for the other's entire universe.
         by_market = {
             m: sorted(
@@ -615,6 +618,8 @@ class BybitRadar(BybitREST):
                         raise MarketError(self.market_errors[market])
                     if stream not in self.streams:
                         raise MarketError("subscription_pending")
+                    if stream not in self.sources.windows:
+                        raise MarketError("bootstrap_pending")
                     if stream in self.sources.blocked:
                         raise MarketError(self.sources.blocked[stream])
                     parameters = effective_parameters(settings, instrument.key)
@@ -701,6 +706,7 @@ class BybitRadar(BybitREST):
                 },
                 "subscriptions": self.connections,
                 "active_streams": len(self.streams),
+                "bootstrap_pending_streams": len(self.streams - self.sources.windows.keys()),
                 "recovery_pending": len(self._pending),
                 "recovery_working": len(self._working),
                 "blocked_streams": len(self.sources.blocked),

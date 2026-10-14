@@ -1,7 +1,7 @@
 import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -322,6 +322,41 @@ async def test_universe_delta_keeps_unchanged_market_session(radar):
         assert not linear_task.cancelled() and spot_task.cancelled()
         assert "spot:0" not in radar._sessions
         assert all(s.startswith("linear/") for s in radar.sources.windows)
+    finally:
+        await radar.close()
+
+
+async def test_restart_subscribes_without_eager_windows_and_snapshot_does_not_load_all(radar, monkeypatch):
+    # Persisted windows exist, but a restart must connect before reading every window.
+    radar.streams.clear()
+    radar.sources.windows.clear()
+
+    async def hold(*args):
+        await asyncio.Event().wait()
+
+    radar._session = AsyncMock(side_effect=hold)
+    original = radar.sources.load
+    loader = Mock(side_effect=AssertionError("eager startup window read"))
+    monkeypatch.setattr(radar.sources, "load", loader)
+    try:
+        await radar.reconcile(OwnerSettings())
+        assert set(radar._sessions) == {"spot:0", "linear:0"}
+        result = await radar.snapshot(OwnerSettings())
+        assert result.requested == 8 and not result.quotes
+        assert set(result.errors.values()) == {"bootstrap_pending"}
+        assert not radar.delivery_ready(result)
+        loader.assert_not_called()
+        monkeypatch.setattr(radar.sources, "load", original)
+        # Recovery reuses persisted candles, yet the historical window is never live.
+        radar._get = AsyncMock(return_value={"time": NOW, "result": {"list": history()}})
+        await radar.backfill("spot/BTCUSDT/1m")
+        result = await radar.snapshot(OwnerSettings())
+        assert len(result.quotes) == 1 and not result.quotes["spot/BTCUSDT/1m"]["live"]
+        assert not radar.delivery_ready(result)  # other market/TF remain pending
+        # A closed live candle still loads only its own persisted window.
+        radar.accept_message("linear", message("3m"), radar.streams)
+        assert "linear/BTCUSDT/3m" in radar.sources.windows
+        assert len(radar.sources.windows) == 2
     finally:
         await radar.close()
 
