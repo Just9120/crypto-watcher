@@ -12,11 +12,40 @@ Radar обрабатывает широкий metadata/liquidity universe обо
 - [Runtime boundaries](docs/architecture.md)
 - [Advisory agent contract, configuration и recovery](docs/runbooks/agent-delivery.md)
 - [CI/CD, VPS target, первая поставка и recovery](docs/runbooks/delivery.md)
+- [Изолированная конвертация qualified history backup](docs/runbooks/delivery.md#изолированная-конвертация-legacy-history-backup)
+- [Read-only compact snapshot текущей базы](docs/runbooks/delivery.md#read-only-измерение-compact-current-dataset)
 - [Repository procedures](AGENTS.md) и [CI/CD configuration contract](ci-cd-rules.md)
 
 ## Stack и установка
 
-Target runtime: Python 3.11/Linux; PTB20.8 с job queue, HTTPx async, websockets17.1 и стандартный SQLite. Lockfiles с hashes генерируются uv для Python3.11; `requirements.in` / `requirements-dev.in` — inputs, соответствующие `.txt` — canonical installation locks. Нужны только Telegram Bot API и public Bybit endpoints; Redis/DB server не требуются. Tests используют disposable fixtures и mocked adapters, без API tokens и сети.
+Target runtime: Python 3.11/Linux; PTB20.8 с job queue, HTTPx async, websockets17.1 и стандартный SQLite. APSW3.53.4.0 используется для bounded full validation private snapshots; Zstandard0.25.0 — для pre-deploy archives и lossless shared-body decoding. Lockfiles с hashes генерируются uv для Python3.11; `requirements.in` / `requirements-dev.in` — inputs, соответствующие `.txt` — canonical installation locks. Нужны только Telegram Bot API и public Bybit endpoints; Redis/DB server не требуются. Tests используют disposable fixtures и mocked adapters, без API tokens и сети.
+
+Isolated history converter дополнительно использует source-pinned yyjson0.12.0
+helper, собранный отдельной стадией Docker с fixed GCC image digest. Radar runtime
+его не выбирает. Linux dev/CI перед native tests выполняет из root:
+
+```bash
+python scripts/build_native.py
+```
+
+Команда требует GCC/C99 и проверяет upstream hashes; runtime image уже содержит
+готовый helper и license. `history_rebuild --backend native` требует этот artifact,
+`--backend python` выбирает прежний путь; default `auto` указывает фактический
+backend в результате. Windows local checks используют Python fallback, required
+Linux/image checks проверяют native artifact. Budget и data/recovery gates одинаковы.
+
+Та же команда собирает frozen-image VFS с pinned SQLite3.53.4 headers и
+Zstd1.5.7 decoder. Он выполняет прежний full `integrity_check`/CHECK через
+SQLite extension API, физически запрещает запись source и сохраняет общий
+deadline/CPU1/RAM4GiB. Mutable capture использует Python VFS; frozen source и
+recovery выбирают native helper при наличии Linux artifact. Отсутствующий helper
+оставляет portable Python path; повреждённый или несовместимый установленный
+helper прекращает validation. Radar runtime extension не загружает. Native
+corruption/bounds/lifetime/deadline fixtures входят в required Linux suite.
+
+Конвертер также читает сохранённые gzip/Zstandard archives через bounded compressed
+image без дополнительной raw source copy. Explicit encoding/byte cap и полный набор
+source/candidate проверок описаны в [процедуре конвертации](docs/runbooks/delivery.md#изолированная-конвертация-legacy-history-backup).
 
 Команды выполняются из root repository. Создать virtual environment:
 

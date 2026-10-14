@@ -45,7 +45,837 @@ Snapshot: 2026-10-10, проверка около 10:00–10:15 Europe/Moscow; `
 
 ### Текущий этап — G4: signed advisory delivery / consumer-first v2
 
+#### Текущий hotfix — производительность полной backup validation
+
+##### Приоритетное продолжение: компактное хранение и уменьшение накопленной базы
+
+Owner steering2026-10-14: сначала поставить через CD исправление new writes,
+сохранив alerts и тот же production DB; уменьшение накопленной базы выполнять
+отдельно. Current-dataset conversion больше не является prerequisite проверки
+new-write runtime кода. При этом действующий routine CD требует full source и
+persistent backup до switch; автоматического исключения из этих gates нет.
+Разрешена конкретная one-time delivery exception, owner approval14Oct:
+scope-bound permit, bounded legacy/compact readback и маленький private config
+snapshot вместо full-history scan/backup; ordinary defaults не меняются.
+У этой операции не будет нового полного backup актуальной history; после compact
+writes прежний G5 reader несовместим, recovery только compatible forward-fix.
+Owner reply call_1ece72ffadf74d4cb986afc82314cf27: «Разрешаю разовую поставку по
+процедуре». Точная реализация: root-owned tree/previous-runtime/target permit в
+[receiver](../scripts/deploy_receiver.py), выдаётся reviewed
+[operator update](../scripts/update_cd_receiver.py) с explicit approval flag;
+[bounded checker](../cryptowatcher/new_write_check.py) имеет source read-only,
+private config snapshot/restore и disposable legacy/compact write/restart.
+Permit consumed после PASS; missing/other-tree/consumed => обычный full-backup
+flow. Full-history integrity/backup явно NOT_RUN_OWNER_EXCEPTION, не PASS.
+Local53 gate/probe/capture/receiver regressions и quality PASS. Linux93 runtime/
+new-gate tests PASS; bounded current source sample32 records/write-restart PASS,
+config-recovery payload38,528bytes/revision2 (read-only, fixture-only writes).
+Primary probe/gate record `new-write-probe-gate-linux.jsonl` вне repository.
+Required latest
+CI и actual CD/source/health/ingestion/new-write readback ещё PENDING.
+Подробный review и measurements остаются вне repository.
+
+New-write-only regression подтверждает mixed legacy/compact write/restart на той
+же DB без rebuild, unchanged immutable revision/private serialized transport,
+общие bodies и неизменные schema/settings. Local85 PASS,1 Linux-only N/A;
+quality PASS. Isolated Linux3.11 runtime84 PASS11.19s/06:30:16UTC; два isolated
+conversion сценария вне этого rollout deselected, прежние qualification Evidence
+сохраняются; production не монтировался/container unchanged. Package SHA24392fec…,
+primary local record `new-write-only-linux-runtime.jsonl` вне repository.
+Read-only VPS06:20:50UTC: working29.63GB/free1.48GB/healthy G5afd107.
+Это размер snapshot, не текущая гарантия capacity и не full integrity result.
+Полный scope58 AC/progress54/58 и obligation old-data compaction сохраняются;
+new-write rollout сам по себе не закрывает F34 или оставшиеся capacity AC.
+
+Основание: explicit owner request2026-10-12 — исправить дублирование, уменьшить
+накопленную базу и остановить чрезмерный рост, сохранив полезную историю и alerts.
+Текущий PR31/branch `codex/backup-validation-performance-20261011`, base9634558a;
+до изменения fresh main/PR/checks подтверждены, head8300614, clean worktree.
+Scope: shared content-addressed lossless snapshots для settings/context/source
+windows; compact revision/head representation; совместимые history/export/analytics
+readers; isolated conversion всех накопленных записей с семантическим readback,
+full integrity и source/candidate hashes; конкретная production promotion/recovery
+procedure после квалификации. Затрагивает F34/F22/F15 и AC-06-01/02/05/06,
+AC-10-02/03/04, AC-12-02/03. Thresholds, detector formulas, alerts preferences,
+event identity/reference/cutoff, immutable signed transport bytes и retention90days
+не меняются. Budget proposal30/70 не согласован и не применяется.
+
+Owner decision2026-10-14: разрешён конкретный разовый recovery gate по полному
+совпадению bytes с qualified source той же операции. Полные source/CHECK,
+unchanged source и candidate integrity/all5 manifests/private bytes сохраняются;
+для recovery — strict single checksummed Zstd frame, независимый full decode,
+encoded/decoded SHA256 и размеры. Canonical procedure:
+[разовая qualification](runbooks/delivery.md#разовый-recovery-gate-по-идентичности-проверенных-bytes).
+Обычный backup/CD,900s/CPU1/RAM4GiB/no swap и запрет production DB replacement
+сохраняются. Approval относится к этому gate, не к fit текущего dataset или
+повтору прежней остановки бота. Prototype33 controls, actual historical decode16.135s,
+small integrated fixture и4 Linux upstream/hash/trailer refusal controls PASS;
+canonical integration PASS:51 Windows tests (native-only scenario N/A наWindows),
+208 Linux3.11/native storage regressions и final52 targeted Linux recovery/conversion tests;
+quality PASS. Primary Linux receipt:
+`cw-recovery-canonical-419eba4c04eb41b58f7e7d8220d12765.json` и
+`cw-recovery-canonical-c326c0f3d37f4d02b9a656a3db95f150.json` (13OctUTC/14Octlocal).
+Read-only fixtures, production unchanged; current whole qualification PENDING.
+
+Результат/DoD: new writes перестают дублировать большие snapshots; public records
+и every revision восстанавливаются без потери типов/значений; накопленная база
+уменьшена по квалифицированной exact-target procedure; latest required CI, merge,
+delivery и runtime source/health/persistence/alerts checks подтверждены. До этого
+storage finding остаётся PARTIAL, progress54/58 не пересчитывается как audit.
+
+| Риск / AC | Проверка | Команда / environment | Этап / обязательность |
+| --- | --- | --- | --- |
+| Shared snapshot corruption, loss of history | Mixed legacy/compact records, identity/hash checks, revisions, settings race | Targeted pytest; repository root, locked dev Python | Local REQUIRED |
+| Public contracts / AC-06/07/09 | Export completeness, cohorts/cutoff, signed replay, event/episode alerts regression | Existing affected tests плюс compact fixtures; locked Python | Local targeted / full Linux PR CI REQUIRED |
+| Existing state / AC-10-03 | Isolated source→candidate semantic equality всех записей, owner/mutes/queues, full integrity, source unchanged and hashes | Canonical history_rebuild CLI; exact qualified copy, bounded offline resources | Isolated qualification REQUIRED |
+| Actual capacity / AC-12-03 | Before/after file size и short CPU/RAM/I/O snapshot, no historical alert flood | Read-only VPS inventory и reviewed delivery post-checks | Before promotion / runtime REQUIRED |
+
+Evidence before fix: readonly VPS2026-10-12T14:31UTC G5afd107: source history
+1124 streams8Oct06:00→12Oct14:30UTC; events10Oct22:45→12Oct14:31UTC (1.6569days).
+SQLite17.1GB/page free0, previous short resource snapshot14:19UTC main17.0GB/WAL0.98GB,
+working set≈270MiB/CPU21–28%one core, rehearsal regular files≈11.25GB depth≤3.
+Это short bounded measurement, не peak/SLO или full payload attribution.
+
+Code checkpoint: PR31/branch `codex/backup-validation-performance-20261011`,
+base9634558a, runtime-code head1cfe64a. Shared lossless snapshots, identity-checked
+heads всех четырёх kinds, compatible history/export/analytics/agent readers и
+complete typed logical manifests реализованы. Runtime пишет16-candle blocks;
+historical conversion сохраняет целые frozen windows как compressed shared values.
+Одинаковые целые windows разделяют body, разные пересекающиеся исторические windows
+сохраняются независимо. Readers поддерживают оба варианта; window>32MiB использует
+bounded blocks. Это не удаление inputs/provenance и не изменение retention.
+
+Owner decision:900 секунд на всю конвертацию, включая copy/full verification;
+checkpointed multi-run и сбросы deadline исключены. CPU1/RAM4GiB/no swap,
+required source/archive/CI/CD gates и ordinary CD limits сохранены. Budget
+proposals30/70/60min не применялись. Exact JSON real tokens декодируются в Python:
+SQLite3.46.1 иначе менял последнюю значащую цифру production strength. Large integers,
+numeric types, corruption/deletion/rollback, immutable private bytes и mixed formats
+покрыты regressions. Local128 affected tests/quality PASS; required Linux/image
+CI38300184149/ci-required114981497402 PASS на1cfe64a. Последующий docs-only checkpoint
+требует latest PR gate; прежний PASS не предсказывает его результат.
+
+Validation evidence: paired4000-revision sample дал exact public equality PASS,
+whole-window copy CPU2.101/2.666s против4.143/4.446s и bodies5.97MB против6.83MB.
+Это sample, не full throughput/savings. Native grouping/private SQL copy,
+compressed-source backend, expanded caches и boundary-regex не дали существенного
+устойчивого общего выигрыша и не включены; raw исследовательские logs вне repository.
+
+Full qualification `shared-qualification-n6_zdys5` stopped2026-10-12T20:02UTC:
+operator STOP_REQUESTED до900s по недостаточной скорости, exit137/OOMfalse;
+это не timeout и не qualified conversion. Last COPY evidence575.962s:
+1,108,235 runtime rows,39,142 из95,759 event revisions. Candidate629,420,032bytes
+с journal — UNQUALIFIED, не использовать для promotion. Источник — закрытая
+qualified5.42GB историческая копия61e4f087; текущая production база этим источником
+не представлена. Primary records: `shared-qualification-n6_zdys5/status.json`,
+`operator-stop.json`, `operation.log` в VPS rehearsals. Owned verifier removed;
+CryptoWatcher7039151/G5afd107 и оба trading-agent units unchanged/running.
+Production compaction/migration NOT_RUN; ни один полный copy/integrity/readback
+результат в общем900s budget пока не получен.
+
+Remaining: существенно иной способ полной исторической/current conversion≤900s,
+current dataset/recovery proof и reviewed exact-target promotion → merge/applicable
+delivery → actual disk/growth/alerts checks. Не повторять unchanged full run и
+не подменять qualified dataset sample-ом. Read-only current WAL snapshot tool
+promotion_eligible=false не подтверждает full physical source integrity. PR31
+open/unmerged, F34 PARTIAL_IN_BRANCH; общая Goal по коду54/58, audit percentage
+не пересчитывается. Полный scope сохраняется, Goal не завершена.
+
+Independent requalification12Oct2026: current CryptoWatcherG5afd107 healthy,
+SQLite19,466,387,456bytes/WAL980,131,552, disk free9,228,931,072bytes на20:35UTC.
+Full-record archival prototype на4000 revisions отклонён: representation16.85MB
+против12.83MB и отсутствие устойчивого выигрыша verification; code не изменён,
+full rerun не запускался. Consumer2bfeda8: current keyring crypto20:46UTC PASS,
+active master соответствует verified recovery material/package20:52UTC PASS.
+Это master-key recovery qualification, не current PostgreSQL restore. Все runtime
+units unchanged/running. Actual producer httpx0.26/TLS unsigned POST503 подтверждает
+доступ к disabled receiver. Radar credential/binding0, ingest OFF, max age UNSET;
+consumer production/dry_run, exact API/image/Compose/config-owner target установлен.
+Следующий независимый шаг — qualified exact-target HMAC/config bootstrap с сохранением
+other credentials/Strategies и private bytes; end-to-end delivery ждёт producer CD.
+Historical/current conversion≤900s и F34 остаются незавершёнными,54/58 unchanged.
+
+Read-only revalidation12Oct22:53UTC: producerG5afd107 healthy/тот же7039151,
+SQLite20,520,615,936bytes/WAL980,131,552, free disk7,304,253,440bytes; consumer2bfeda8
+и PostgreSQL unchanged/running. Fresh main9634558a/PR31 head1cfe64a и required
+CI38300184149 SUCCESS подтверждены без workflow rerun. Bounded complete-path profile
+на disposable fixture32,296 runtime rows, derived из старой qualified копии,
+дал full fixture integrity/readback PASS9.502s; это не current/full qualification.
+Убран неиспользуемый повторный JSON decode при final shared-body scan: `load_raw`
+сохраняет encoding/size/SHA/canonical проверки.41 targeted rebuild/snapshot tests
+и canonical quality PASS; изменённый converter ещё не qualified на full dataset.
+Однократный JSONB parse на4k revisions сохранил exact bytes, но не дал устойчивого
+выигрыша всего copy/proof пути и отклонён; buffered manifest framing оказался
+медленнее и также отклонён. Полный повторный запуск не выполнялся.
+
+Consumer activation preparation на actual API2bfeda8 и PostgreSQL16.14: isolated
+SAVE/SELECT/decrypt, transaction rollback, UUID replay, stale CAS и preservation
+unrelated credential PASS12Oct22:14UTC. Initial cleanup assertion ошибочно считала
+inherited Compose label признаком чужого контейнера; exact owned fixtures удалены
+с отдельным cleanup/live-readback PASS22:20UTC. Production config/credentials не
+менялись; это qualification operator procedure, не activation или signed smoke.
+Primary records: `consumer-vault-pg-fixture-fixed.jsonl`, `vault-fixture-cleanup.jsonl`,
+`profile-complete-rebuild.jsonl`, `bench-parsed-json-once.jsonl` вне repository.
+
+Experimental native prototype (вне tracked runtime): SQL field assembly отклонена
+после paired4k проверок — public bytes совпали, но warm copy CPU2.95s против1.78s.
+Stateless C extractor/head projection на fixed yyjson0.12.0/commit8b4a38dc и
+host GCC13.3.0 прошёл actual Python3.11/SQLite3.46.1 fixtures.4k revision copy
+CPU1.105/1.327s против1.795/1.809s; existing row admission/compression/hash checks
+сохранены. Без accelerated canonical validation полный32,296-row fixture дал
+CPU4.471s против4.862s; parser-only оптимизация не устраняет основной bottleneck.
+Отдельный exact checker использует CPython stable-ABI float conversion/repr,
+проверяет key order/duplicate keys, canonical escaping/numbers и array count;
+unsupported depth/number cases сохраняют Python fallback. Differential2,027 cases
+PASS, включая malformed/nonfinite, random float bits, large integers и Unicode.
+Complete fixture с checker: all-table row manifests/integrity PASS, CPU4.475s
+против6.011s и wall4.524s против6.387s в одной паре. Timing variation не позволяет
+выдать это за sustained throughput или proof≤900s на historical/current dataset.
+Owned test containers removed, source/live unchanged. Native code/dependency пока
+не включены в app/CI/image; compiler был только в bounded transient prototype job.
+Primary records: `build-native-json-prototype-v3.jsonl`, `bench-native-json-extract.jsonl`,
+`qualify-native-canonical.jsonl`, `bench-native-canonical-complete.jsonl` вне repository.
+Next: проверить ускорение full readback на сопоставимых сериях и изоляцию/native
+error handling; только подтверждённый выигрыш интегрировать в existing PR31 с
+reproducible build/meaningful tests. Whole conversion900s/1CPU/4GiB, full gates и
+production promotion requirements сохраняются. Code54/58, Goal ACTIVE.
+
+Native follow-up13Oct: controlled ABBA на той же32,296-row fixture дал native
+wall4.258/4.325s и CPU4.148/4.289s против baseline5.161/5.520s и5.141/5.461s.
+В каждом native run canonical checker вызван2351 раз; all-table manifests/integrity
+PASS и совпадают. Actual Linux3.11/SQLite3.46.1 integrated loader/backend прошёл
+93 targeted regressions, включая existing corruption, rollback, private bytes,
+owner state и mixed-format checks. Initial isolated harness failures относились к
+pytest shim/metadata/TMPDIR и insufficient virtual disk reserve; gates не менялись,
+owned containers удалены. Canonical checker дополнительно имеет2027-case differential
+proof из предыдущего шага. Это не whole/current conversion proof.
+В PR31 подготовлены converter-only loader, Python fallback для unsupported input,
+explicit required `--backend native`, source/field-map validation, pinned
+GCC13.3.0-bookworm Docker stage/yyjson source hashes и mandatory image native check.
+Ordinary runtime Codec и schema/data/retention policy сохраняются. Local Windows
+87 tests PASS,6 Linux-native cases N/A; integrated Linux93 PASS. Latest required
+CI/build identity и qualified full historical/current dataset ещё REQUIRED.
+Полный heavy rerun до artifact/throughput qualification не выполняется.
+
+Archive-source follow-up13Oct: converter принимает explicit gzip/Zstandard source
+через frozen compressed VFS без дополнительной raw source copy. Decoded source
+SHA256 и writable full integrity/CHECK, encoded archive hashes до/после, полный
+candidate readback/manifests и immutable source identity обязательны. Общий900s
+deadline не сбрасывается; candidate byte cap для archive задаётся явно. Ordinary
+runtime/retention/CD gates сохраняются. Local Windows45 rebuild/snapshot tests и
+canonical quality PASS: обе archive encodings дают те же all-table manifests,
+exact float/signed-zero/large-int/Unicode values; wrong hash, truncated archive и
+реальное CHECK violation блокируют qualification. Actual Linux3.11/SQLite3.46.1
+с hash-locked APSW3.53.4.0/Zstandard0.25.0 и native loader прошёл97 targeted tests;
+owned container/staging удалены, production unchanged. Required CI нового diff
+и full old/current dataset proof ещё PENDING; последний CI38328025722 PASS относится
+к предыдущему f8f55f6.
+Bounded current-code cost profile на32,296-row disposable fixture13Oct01:11UTC
+подтвердил full fixture manifests/integrity; profile timing не является uninstrumented
+throughput или full conversion. Exact три terminal UNQUALIFIED candidate files
+могут освободить4.66GB после отдельного owner approval; preflight/свежий сохраняемый
+archive hash PASS01:19UTC, cleanup NOT_RUN. Рабочая база/source/archive сохранены.
+
+Full archived-source trial13Oct01:45–01:54UTC завершён BLOCKED/exit2 за565.565s,
+до общего900s deadline. Источник5.42GB читался через compressed image; readonly
+mid-run metadata: physical reads0.78GB/RSS≈1.5GiB, candidate353MB. Transaction
+откатился, итоговый candidate36KiB UNQUALIFIED; container removed/live unchanged.
+Исходный CLI не сохранил класс отказа: причина UNSET, предел candidate2GiB только
+кандидат объяснения. Corruption, fit/time полного dataset и READY этим не доказаны.
+Follow-up классифицирует реальные SQLite FULL/CONSTRAINT/I/O и безопасные State
+refusals без exception text/private bytes. Local41 rebuild regressions/quality PASS;
+required CI этого follow-up PENDING. Новый полный запуск до диагностики и проверки
+доступной capacity не выполняется; whole900s/CPU1/4GiB policy сохраняется.
+
+Historical full qualification13Oct02:39–02:53UTC PASS: тот же decoded source
+5,422,329,856bytes/hash61e4f087 преобразован в2,174,074,880bytes/hash1810335b
+за833.369s общего времени, включая cleanup. Candidate cap3GiB, CPU1/memory4GiB;
+все3,179,499 исходных runtime rows, private bytes/owner state, heads/revisions и
+manifests всех5 таблиц совпали; source/candidate full integrity и hashes PASS.
+Added188240 shared bodies/converted298250 heads. Root primary receipt/readback
+PASS, container removed/G5 unchanged. Full input diagnostic до запуска:
+686585 public rows/head identities PASS, fallback0, runtime column lower-bound1.586GB.
+Candidate file превысил прежний2GiB cap: он был недостаточен, без ослабления gates
+предел нового isolated output выбран по fresh disk reserve как3GiB. Это
+qualification сохранённого historical dataset; текущая production DB не заменена
+и не подтверждена этим PASS. Current-data/archive/CD/activation/G6 ещё REQUIRED.
+Свежий read-only snapshot02:58UTC: G5healthy, DB22,361,518,080bytes/free3,201,523,712.
+Free ниже CD archive preflight3GiB+512MiB. Exact cleanup трёх terminal failed
+candidates4.66GB на этом snapshot ожидал explicit owner approval;
+другие source/archive/qualified outputs сохраняются. Percentage не пересчитан.
+
+Current checkpoint13Oct05:15–05:39UTC: после явного owner approval удалены ровно
+три terminal UNQUALIFIED candidate files из reviewed whitelist. Повторные exact
+path/identity, terminal PID/exit, отсутствие mounts/open handles и полный SHA256
+сохраняемого recovery archive PASS. Освобождено4,663,693,312 allocated bytes;
+source/archive identities сохранены, production DB/config не изменены. Primary
+receipt: `rehearsals/failed-candidate-cleanup-20261013T051549Z.json` на VPS.
+Read-only post-check05:37UTC: прежний CryptoWatcher7039151/G5afd107 healthy,
+SQLite23,574,638,592bytes/WAL980,131,552, free6,657,507,328bytes; owned probes0.
+Fresh GitHub05:39UTC: main9634558a, PR31c168ba8 open/unmerged,
+required CI38335422635/ci-required115094771521 SUCCESS. Local docs checkpoint
+остаётся unpublished; старый required PASS не относится к его будущему push.
+Очищены временные результаты, рабочая база ещё не уменьшена. Historical PASS
+5.42GB→2.17GB не квалифицирует текущие23.57GB. Next: доказать whole current-data
+conversion/capacity/recovery в900s/CPU1/4GiB перед exact-target promotion и CD;
+остальные archives/source/qualified outputs сохраняются. Progress54/58 по коду,
+Goal ACTIVE, production compaction NOT_RUN; общий DoD ещё не выполнен.
+
+Следующий bounded improvement13Oct: isolated copy использует один lazy
+`executemany` на таблицу вместо отдельного Python execute на каждую строку.
+Порядок source rows, полный typed manifest, проверки каждого shared body,
+deadline/disk reserve, одна transaction и full readback сохранены; growing row
+buffer не создаётся. Local48 rebuild/snapshot regressions и canonical quality
+PASS. Linux native comparison на одинаковом32,296-row historical fixture:
+baseline median3.545s / lazy3.349s в6 чередующихся прогонах, все5 table manifests,
+heads/counts/shared bodies, candidate bytes и full integrity совпали. Это
+ограниченный benchmark, не throughput/SLO или proof current conversion≤900s.
+Required CI изменённой revision PENDING до нового grouped push; предыдущий
+published CI38335422635 относится кc168ba8. Read-only current count probe превысил
+observation timeout; exact child PID623799 при проверке уже отсутствовал. Его
+результат UNSET, новый полный COUNT не запускается ради повторения. Current
+source/archive qualification, promotion и CD по-прежнему незавершены.
+
+Owner-approved continuation13Oct06:38UTC: после повторных encoded/decoded SHA256,
+exact identity и mount/open-handle проверок удалены только две служебные копии
+`rebuild-known-isdw3myk/work/source.sqlite3` и `rebuild-known-isdw3myk/archive.gz`.
+Освобождено6,203,174,912 allocated bytes; root recovery archive и qualified
+historical candidate сохранены. Primary receipt:
+`rehearsals/duplicate-input-cleanup-20261013T063825Z.json`. Post-check06:40UTC:
+тот же G5healthy, free12,426,526,720bytes. Это cleanup, не compaction live DB.
+
+Current-data qualification13Oct06:55UTC: native online snapshot → compact copy →
+full logical readback/persisted recovery qualification использовали один deadline
+900s, CPU1/RAM4GiB/no swap, read-only production mount. Disposable127-row fixture
+PASS5.002s с full source/candidate/restore integrity и hashes. Actual dataset
+`current-dataset-qualification-oomrk9ni/status.json` завершён BLOCKED/exit137,
+OOMtrue за644.404s на стадии capture/source integrity; полный source result,
+conversion и recovery archive НЕ подтверждены. Probe container removed,
+live container/source inode unchanged. Read-only07:20UTC: G5healthy,
+SQLite24,259,596,288bytes, free12,100,636,672bytes, owned probes0.
+Такой же full run не повторяется; fixture PASS не выдаётся за current proof.
+
+Memory-admission correction учитывает фактический Linux resident memory наряду
+с compressed image bytes до выделения SQLite cache. Native allocations/allocator
+overhead не гарантированно покрывались старым logical-byte расчётом. Сохраняются
+cache minimum512MiB, maximum1GiB, общий4GiB cap и все full integrity/CHECK/hash gates;
+при недостатке headroom input отклоняется, cache не выделяется. Local75 affected
+regressions/quality PASS, включая heap-pressure refusal без изменения CHECK policy.
+Точная внутренняя причина peak RSS в прежнем combined capture/source phase пока
+UNSET; этот fix не доказывает fit/time текущего dataset. Required CI новой revision
+PENDING до grouped push. Next: ограничить и измерить peak source-validation memory,
+затем current qualification≤900s; production replacement остаётся NOT_RUN.
+
+Follow-up с точными phase/image diagnostics на CI-qualified9942665:
+`current-dataset-qualification-8666hjv1` остановлен оператором за677.511s,
+exit137/OOMfalse, до900s. Last sample: capture20,510,355,456 raw bytes,
+retained compressed2,561,701,937bytes, peak RSS3,892,543,488bytes;
+`image_frozen=false`, full integrity/cache admission ещё не начались.
+Это ранний capture footprint, не доказанный дефект CHECK либо corruption DB.
+Primary `operator-stop.json`/`status.json`; owned container removed,
+live container/source inode unchanged. Source/candidate/archive qualification
+НЕ получена. Resident admission fix local75/quality и required
+CI38363013439/ci-required115182217179 PASS на9942665; он защищает следующий
+этап cache, но не исправляет этот ранний capture allocation. Next: bounded
+contiguous/spooled compressed capture buffer вместо отдельных heap frames;
+сначала controlled resource/byte-equivalence qualification, затем whole current
+run≤900s. Memory/time/full-check gates и retention не меняются.
+
+Capture buffer correction: mutable native snapshot хранит compressed frames в
+одной anonymous mapping с компактными offset/length/capacity arrays, а не в
+отдельных долговечных Python bytes objects. Frame bytes/Zstandard/checksums,
+holes/partial writes/truncate/freeze, compressed cap3GiB и full checks сохраняются.
+Mapping резервирует virtual capacity; реальные pages заполняются по мере capture,
+growing-buffer realloc с временной второй копией не нужен. Oversized frame growth
+отклоняется до изменения прежних bytes; stale frame spans не выходят за arena cap.
+Local77 affected regressions/quality PASS, включая repeated grow/shrink/truncate
+byte equality и refusal preservation. Controlled Linux fresh-process ABBA на
+synthetic1GiB/4KiB-page fixture: baseline RSS231.38–232.10MB, arena164.52MB;
+wall7.06–7.24s против5.71–5.91s. Полные input/reconstructed SHA одинаковые;
+retained compressed bytes136,331,264 неизменны. Это capture benchmark, не full
+SQLite/current qualification. Primary `bench-arena-capture-resources.jsonl`
+вне repository; owned test containers removed/live unchanged. Required CI новой
+revision PENDING до grouped push. Next: qualified Linux native snapshot/recovery
+fixture и один whole-current attempt с прежними900s/CPU1/4GiB, после required CI.
+
+Arena actual-current proof attempt наe096715 завершён TIME_BUDGET_EXCEEDED,
+exit3/OOMfalse за888.557s общего времени. Primary:
+`current-dataset-qualification-gl9nijrj/status.json`. Snapshot24,689,618,944bytes
+достиг frozen state около841s, retained3,066,605,344bytes/peak RSS3,104,382,976bytes.
+На20.39GB capture RSS2.586GB против прежних3.893GB на20.51GB: ранний memory
+overhead уменьшен в actual observed conditions. Полный source integrity, copy,
+candidate и persisted recovery НЕ подтверждены; promotion NOT_RUN. Owned
+container removed, live container/source inode unchanged. Native capture/byte
+reconstruction из mutable WAL source расходуют почти весь900s budget до full
+checks. Required CI38368296557/ci-required115199421362 SUCCESS наe096715.
+Next: квалифицировать более быстрый способ получения согласованного source
+без увеличения limits и без ослабления checks; возможная quiescence production
+writer требует отдельной reviewed procedure/authorization до остановки бота.
+Same online capture run не повторять; current compaction/Goal DoD не завершены.
+
+Current-source maintenance13Oct2026 (owner-authorized stop/checkpoint/read/restart):
+первый whole triala1rdgi00 завершён OOM/exit137 за200.535s с healthy baseline
+recovery. Closed inputs теперь используют bounded contiguous frame arena,
+как mutable capture: raw/gzip/ZSTD bytes/formats,3GiB compressed cap и все gates
+сохранены.77 affected regressions/quality и required CI38384497657/gate115253623995
+SUCCESS наa356b59. Synthetic Linux1GiB ABBA сохраняет SHA9cfb00a5…;
+peak RSS233.65–233.70MB→165.66MB. Closed127-row full source/candidate/private-byte/
+all5 typed manifests/persisted recovery fixture PASS4.737s; actual dataset не закрывает.
+
+Fixed whole trial `current-dataset-qualification-tahz5_xs/status.json` завершён
+TIME_BUDGET_EXCEEDED/exit3/OOMfalse за826.201s. Source25,532,657,664bytes
+загружен около225s; retained3,170,524,825bytes/peak RSS3,827,253,248bytes. Full
+source integrity не завершён; candidate/archive не созданы (readback11:00UTC).
+Same crypto-watcher7039151/G5afd107 restart/health PASS, source inode unchanged,
+owned probe removed, production replacement NOT_RUN. Прежняя15-minute whole
+boundary/CPU1/RAM4GiB/no swap сохранена;90s зарезервированы внутри неё для recovery.
+Candidate cap ужесточён5→4.75GiB; archive3GiB/disk1.5GiB/growth0.5GiB reserves сохранены.
+Operator initial check ошибочно назывался PERSISTED_RECOVERY_FULL_INTEGRITY;
+control flow/нет artifacts подтверждают SOURCE_FULL_INTEGRITY, future diagnostic
+wrapper исправлен. Raw logs и подробные profiles находятся вне repository.
+
+Independent preserved5.42GB archive integrity profile: encoded/decoded hashes
+подтверждены; completed cases с SQLite512MiB/1GiB full integrity PASS86.882/89.486s
+(cProfile overhead included), остальные ABBA cases остановлены по общему300s.
+Отдельное completed comparison при SQLite512MiB: VFS32/256MiB full integrity
+PASS81.464/88.173s, decompressions413,708/320,195. Эти limited samples не показывают
+wall-time выигрыша; production/default cache не меняется. Owned probes removed,
+live unchanged. Current read-only page metadata: source25.62GB,6,255,829pages,
+freelist1page/4096bytes; точный эффект VACUUM по partially occupied pages не измерен.
+Next: подтвердить ускорение verifier до новых production stops, сохраняя full
+source/candidate/all-row/private-byte/restore proofs и900s/CPU1/4GiB. Простое
+повторение текущего trial не разрешает обойти deadline. Current compaction,
+receiver update, merge/CD, consumer activation и G6 остаются незавершёнными;
+по коду54/58, новый audit percentage не рассчитан.
+
+Verifier engineering preparation: local single-block read path сохраняет
+EOF/boundary/deadline checks;77 targeted regressions/quality PASS. Controlled
+500k hot4KiB-page ABBA: previous1.233–1.244s/current1.174–1.184s, same SHA625dbc06…;
+это не whole-current qualification. Source-pinned native VFS prototype вне
+repository использует SQLite3.53.4 extension API и Zstd1.5.7,32MiB cache и тот же
+full integrity/CHECK. Isolated all5 typed rows/readonly write/CHECK corruption/
+broken frame/closed WAL/lifetime controls PASS. Same-engine fixture выявила:
+RO handle SQLite3.53.4 не сообщил нарушенный CHECK, RW handle сообщил; prototype
+повторяет RW metadata + query-only existing VFS, физические source writes запрещены.
+Эту особенность нельзя использовать для ложного source PASS.
+
+Historical5.42GB full-integrity ABBA benchmark завершён PASS за374.079s:
+source hash61e4f087…, CPU1/RAM4GiB/600s, same SQLite cache512MiB. Python76.780/
+75.148s, native55.989/54.273s; все4 full integrity и final byte-identity PASS.
+Observed gain≈27% относится к этому preserved dataset; fit текущего25GB≤900s
+не подтверждён. Primary `native-vfs-benchmark.jsonl` вне repository, observer50104
+terminal/exit0, owned probe removed/live unchanged. Не ждать и не перезапускать
+завершённый benchmark. Native integration, bound/corruption tests, required CI
+и whole current conversion ещё REQUIRED; production G5afd107 остаётся healthy,
+main9634558a/PR31 открыт. Next: review/integrate verified native read path и
+квалифицировать весь pipeline с неизменными gates/лимитами.
+
+Native verifier integration в текущем PR31: source-pinned SQLite3.53.4 headers
+и Zstd1.5.7 decoder, same-engine full integrity/CHECK через extension API. Source
+xWrite/xTruncate запрещены, RW metadata/query-only сохраняет CHECK coverage;
+private WAL/journal sentinel delegates и data deadlines/3GiB image/4GiB container
+не меняются. Mutable capture остаётся Python, frozen source/archive/recovery
+выбирают native в Linux image. Present broken helper fail-closed; portable Python
+fallback сохраняет прежние checks. C cache eviction сначала инвалидирует slot,
+поэтому failed decode не оставляет старую mapping на изменённый buffer.
+
+Canonical build_native/build_vfs commands проверяют upstream hashes; Docker
+содержит оба helpers и licenses. Native Linux5 substantive corruption/index/frame/
+closed-WAL/bounds/deadline/lifetime/write controls добавлены; existing native,
+codec/heads/rebuild/snapshot regressions подтверждены isolated134 PASS. Final
+query-only dirty package32536891… Linux134 PASS/owned probe removed before publication.
+Publishedb5fe042: required CI38405497548/ci-required115324970264 SUCCESS13Oct13:34UTC,
+native build/Linux suite/Docker/image checks PASS. Previous38404196470 failed
+on vendor CRLF/hash mismatch;38404704373 failed on native image fixture using
+a file with readonly-readback sidecars. Exact upstream bytes preserved by
+gitattributes; image fixture uses untouched closed backup. Gates retained; no
+workflow rerun or production change. Full conversion/capacity still REQUIRED. Windows
+local77 PASS/5 Linux skips с основанием, quality PASS. Required CI нового published
+local cache-release change и весь current26GB900s conversion ещё REQUIRED. Native benchmark27% не
+заменяет full source/candidate/manifests/private-byte/restore gate. Code54/58,
+production G5afd107 не менялся; data retention/formulas/preferences сохраняются.
+
+Whole historical pipeline13Oct2026: `historical-full-pipeline-cs8j2ly0/status.json`
+на preserved5,422,329,856-byte source61e4f087 завершён TIME_BUDGET_EXCEEDED/exit3
+за888.585s, OOMfalse. Source full native integrity PASS и новый recovery archive
+492,787,743bytes построен; candidate2,174,074,880bytes остался UNQUALIFIED:
+полные manifests/readback и independent persisted recovery не завершены.
+Общий900s/CPU1/RAM4GiB/no swap не увеличивался; owned probe удалён,
+production container/main inode unchanged. Preflight предыдущего trial отказал
+из-за несовпадения UID private work с root-owned input; исправлен только isolated
+work owner, production permissions не менялись. Повтор unchanged full run не нужен.
+
+Local cache-release correction освобождает SQLite pages и unused glibc arenas
+перед copy и candidate validation, сохраняя frozen image bytes, source query-only,
+все integrity/manifests и общий deadline.49 targeted Windows tests/quality и135
+Linux native regressions PASS; disposable test container removed/live unchanged.
+Actual capacity effect ещё REQUIRED. Это resource
+optimization, не доказательство fit полной26GB конвертации в900s. Primary CI
+38405497548 относится к publishedb5fe042 до этой local correction; новый CI не запускался.
+
+Source lifetime correction13Oct: source owner завершает unchanged-byte proof и
+закрывает connection/VFS сразу после commit всех пяти copied tables. Candidate
+full integrity/readback используют зафиксированные counts/manifests; source shared
+count захвачен до release. Frozen buffers освобождаются до candidate validation,
+cache допускается по current RSS с reserve512MiB внутри existing4GiB cap, максимум
+1GiB. Missing capacity/source-release failure блокируют verification.53 Windows
+targeted tests/quality и139 Linux native regressions PASS. Closed-source pipeline
+на127-row fixture полностью PASS0.991s, включая independent persisted restore.
+Synthetic3000MiB arena pressure ABBA подтвердил те же manifests во всех4 cases;
+RSS при early release снизился≈3.23GB→84–87MB. Это lifetime/resource fixture,
+не actual26GB timing. Copy-only case timings исключают cleanup в retained variant
+и не доказывают ускорение whole pipeline.
+
+Manifest batching сохраняет existing v2 byte framing/type tags, bounded small
+buffer и streaming large values. Synthetic262,784-row ABBA: old0.2940/0.2844s,
+new0.2093/0.2083s, одинаковый SHA941ac4ed…; effect всего pipeline не измерен.
+Canonical proof-cache эксперимент отклонён:14MB fixture не сократила число native
+checks540 и не показала устойчивого выигрыша. В tracked code он не включён.
+Новый historical whole trial `historical-full-pipeline-g9q3duky/status.json`
+завершён TIME_BUDGET_EXCEEDED/exit3 за887.528s, OOMfalse. Source full integrity
+и unchanged-byte checks перед release завершены; candidate full readback и
+independent persisted restore не завершены. Owned container0bd81c22… удалён;
+прежний production container/main inode unchanged/running.
+Один deadline900s/CPU1/RAM4GiB/no swap; stricter output caps3GiB candidate/1GiB
+archive и2GiB disk/growth reserve, original archive read-only, production pause
+и replacement NOT_RUN. Final candidate/restore gates REQUIRED. Separate readonly
+byte check16.772s подтвердил candidate SHA1810335b… и полное совпадение с ранее
+qualified2.17GB историческим artifact. Это доказательство того же результата
+копирования; новый whole pipeline900s остался FAIL и current26GB не квалифицирован.
+
+Native historical-window и compressed-record-cache experiments отклонены:
+complete fixture equality PASS, устойчивого whole-path ускорения нет; собственные
+experimental diffs сохранены вне repository и reverted. Whole-value conversion
+сохраняется. Они не подтверждают fit текущего dataset в900s.
+
+Candidate readback correction13Oct: большой revision больше не распаковывается
+сначала для проверки compact head, затем повторно для manifest. Identity/revision
+и exact typed projection проверяются отдельно; полный canonical payload со всеми
+shared references восстанавливается один раз. Synthetic256-candle/1000-head ABBA:
+old0.3136/0.3047s, new0.1194/0.1080s, exact bytes PASS; bounded14MB whole-path ABBA
+не доказала устойчивого ускорения. Это component Evidence, не whole900s proof.
+
+Добавлен explicit opt-in `--compressed-candidate-validation`: frozen candidate
+full writable integrity/CHECK через existing VFS, затем unchanged all-row manifests
+и independent reconstructed/file hashes. Default/routine CD не изменён.98 Windows
+storage/head/codec regressions и146 Linux native regressions PASS, включая CHECK,
+ref corruption, file mutation и query-only rejection. Required CI38405497548/gate
+115324970264 повторно подтверждены13Oct18:16UTC только для publishedb5fe042;
+эти local corrections ещё не опубликованы. Full historical/current conversion,
+receiver installation, merge и applicable delivery остаются REQUIRED/PENDING.
+
+Полная readback диагностика сохранённого2.17GB artifact1810335b с новым opt-in
+завершила writable physical integrity62.212s, но all-row logical/byte proof не
+завершилась в выбранном diagnostic budget300s: TIME_BUDGET_EXCEEDED304.916s.
+Это не corruption и не qualified whole conversion. Probe removed, preserved
+artifact и production unchanged.
+
+Scanned-body correction: full verifier проверяет payload уже прочитанной row,
+без повторного SELECT; encoding/size/hash/canonical gates сохранены. Только frozen
+candidate validated-body cache64MiB размещён внутри прежнего512MiB overhead reserve;
+runtime/copy остаются4MiB.104 Windows storage/head/codec,59 outcome/analytics/export/
+digest/agent и152 Linux native tests PASS; malformed scanned body не подменяется
+valid DB/cache row. Full readback protected2.17GB historical artifact1810335b:
+3,179,502 framed rows (3,179,499 runtime +3 configuration/import),188,240 shared
+bodies, all5 source manifests и reconstructed/file SHA PASS391.133s/CPU1/4GiB.
+Source evidence относится к старой5.42GB копии61e4f087, не live dataset. Новый
+600s diagnostic cap не меняет owner900s whole conversion; source→copy→persisted
+recovery/current fit остаётся REQUIRED. Owned probe removed/live unchanged.
+ Диагностика не повышает owner limit900s и не
+разрешает новый production pause; unchanged большой trial не повторяется.
+
+Cleanup13Oct18:57–18:59UTC после explicit owner authorization: удалены ровно4
+полностью повторно проверенных derived files из trials cs8j2ly0/g9q3duky, освобождено
+5,336,481,792 allocated bytes. Receipt `derived-cleanup-20261013T185750Z-49ffd1b1.json`
+в VPS rehearsals PASS; readback всех4 paths отсутствуют. Сохраняемые recovery gzip
+и qualified candidate проверены по hashes/decode; baseline7039151/G5afd107 healthy.
+Production DB не заменялась. Fresh metadata18:59UTC: DB27,195,658,240bytes/
+WAL7,762,112bytes, free disk9,544,220,672bytes. Эти4 cleanup задачи закрыты;
+F34/current conversion/delivery остаются открыты, Goal54/58.
+
+Frozen readback continuation13Oct: bounded historical public profile47,343 rows/
+15,000 events/episodes выявил8,152 shared-body SQL lookups. Profile intentionally
+PARTIAL; не full qualification. Local correction повторно использует только
+verified immutable body в frozen candidate VFS, сохраняя scanned-payload validation,
+miss/eviction lookup и final unchanged hashes. Generic runtime/copy codec продолжает
+проверять SQL при каждом чтении.106 Windows targeted tests и canonical quality
+PASS;154 Linux native tests PASS11.04s, persisted receipt
+`cw-frozen-cache-receipted-524a8bb254524838bf290eebf6123523.json`.
+Полный actual historical readback PASS366.347s: all5 source manifests,
+3,179,502 rows/188,240 bodies, CHECK/integrity и reconstructed/file hashes
+совпали.444,120 из444,178 body requests использовали verified frozen cache.
+Primary receipt `cw-cached-candidate-readback-f9b1c66c937a420bac7d631c2c892e07.json`
+в VPS rehearsals; owned probe removed, live unchanged. Disconnected suite не
+учитывается как PASS; diagnostic missing APSW устранён pinned tools overlay.
+Whole current900s qualification/CD остаются REQUIRED; counter54/58 unchanged.
+
+Writer-cache continuation13Oct: fixed256MiB заменён adaptive admission≤1GiB
+внутри4GiB cap, с128MiB source-cache reserve +512MiB overhead. Unknown RSS
+сохраняет256MiB; insufficient capacity отказывает без изменения cache/data.
+66 Windows rebuild/snapshot и158 Linux/native tests PASS; canonical quality PASS.
+Record `cw-copy-cache-regressions-2c6f426aa2f44d21bc0dd05a06af288d.json` в rehearsals.
+Whole historical trial `historical-copy-cache-am7q8k0k/status.json` terminal
+13Oct20:41UTC/codeee775e2: TIME_BUDGET_EXCEEDED/exit3 за890.202s, OOMfalse.
+Source full integrity/copy/unchanged checks passed; candidate physical stage
+completed, но весь logical readback и persisted recovery не завершились.
+Candidate UNQUALIFIED_THIS_RUN, source/candidate/recovery whole gate FAIL.
+Observed boundaries: copy≈225→676s, full candidate readback≈706s; private cache
+admission не доказал достаточного throughput benefit, сравнение с прежним trial
+ограничено изменениями кода и host performance. Пиковый RSS≈2.04GiB внутри4GiB.
+Controller2007257 terminal, owned container removed; прежний bot healthy/unchanged.
+Outputs сохранены, deletion/promotion не выполнялись; current dataset не qualified.
+Unchanged900s whole cap/source/candidate/recovery checks сохраняются.
+
+
+Recovery proposal13Oct21:02UTC: existing whole trial остаётся FAIL; proposed
+one-time gate заменяет только повторный recovery SQL scan на strict frame/full
+independent decode/encoded+decoded hashes/size equality с уже checked source.
+Source/candidate full CHECK/manifests/private-byte gates неизменны.33 local
+controls и actual historical5.42GB decode PASS16.135s/CPU1/RAM512MiB; integrated
+Linux fixture/source2015232bytes PASS1.052s, fixture_only=true. Это prototype evidence,
+не current qualification. Owner decision14Oct разрешил описанный разовый gate;
+canonical implementation/local/Linux regressions PASS, ordinary backup/CD policy прежняя.
+Подробный diff/review и первичные receipts вне repository; ordinary backup/CD,
+900s/CPU1/RAM4GiB и production replacement prohibition сохраняются.
+
+Bounded source-image diagnostics13Oct: Zstd level3 не дал стабильного выигрыша
+и отклонён.256KiB frame prototype с64KiB decoded cache slices сохраняет32MiB
+cache;6 Linux corruption/bounds/write/eviction tests PASS. Historical5.42GB
+archive61e4f087: full CHECK/integrity, reconstructed/file hashes PASS258.407s,
+encoded547,373,779bytes; previous coarse256KiB cache prototype320.602s.
+Receipt `sliced256-archive-check.jsonl` вне repository; owned probe removed,
+live unchanged. Это independent component measurement, не whole/current
+conversion PASS; canonical64KiB defaults не изменены. Для принятия нужны
+полная проверка влияния и whole900s qualification текущего dataset.
+
+
+Уточнение scope12Oct2026 после owner вопроса о размере базы: сначала устранить
+подтверждённую избыточность history representation, сохранив весь согласованный
+dataset. Read-only snapshot09:54UTC/G5afd10770: SQLite15,220,908,032bytes,
+WAL980,131,552bytes;1100 streams. Earlier same-revision sample:1,230,965 candles,
+estimated JSON253,867,297bytes;16-record event sample mean7392.6bytes. Bounded
+covering-index read09:59UTC:264,332 event heads. Это не полный byte attribution;
+indices/page overhead и outcome volume требуют отдельного измерения.
+
+Локальный scope в этом же PR: event/outcome head хранит reference на неизменную
+revision и малую query projection, все публичные history readers возвращают
+полный прежний record. Legacy full heads читаются рядом с новым форматом;
+существующие revisions/inputs не переписываются. Bulk conversion/удаление live
+данных и изменение delivery gates в этот блок не входят. Старые binaries не
+считаются совместимыми после первых новых head writes; recovery — forward-fix
+либо verified reader новой representation, без DB downgrade.
+
+Validation Plan для representation: REQUIRED local mixed legacy/new readback,
+reordered revisions/conflict/reference identity, missing/cross-record reference
+fail-closed, source preservation и no duplicate large payload. Existing
+event/outcome/export/analytics/digest/agent suites проверяют прежние observable
+records, cutoff/filter/completeness и signed provenance. Canonical local quality,
+latest Linux PR CI/image и actual full source/archive/CD gates остаются REQUIRED.
+Owner ещё не разрешил предложенную корректировку900→1800s; budgets неизменны.
+Implementation checkpoint54/58 AC не пересчитывается; новый findingF34 связан
+сAC-10-02/F15/F22, не создаёт нового продуктового требования.
+
+Дополнительная read-only выборка64 heads каждого kind10:10UTC: event query
+projection меньше full head JSON на94.32%, outcome на90.95%. Полный covering-index
+count непересекающихся ranges в одном WAL snapshot:468,080 outcome heads.
+При этих sample means и earlier264,332 event count устранение second-copy payload
+оценивается примерно4.7GB; это estimate JSON, не измеренный размер SQLite после
+конвертации. Перезапись heads не обязана уменьшать file bytes: потребуется отдельно
+квалифицированное освобождение/reuse страниц. Existing-data conversion/compaction
+не выполнялись и не входят в автоматический startup.
+
+Подготовлена отдельная copy-only команда
+`python -m cryptowatcher.history_rebuild` по [процедуре](runbooks/delivery.md#изолированная-конвертация-legacy-history-backup).
+Она читает только закрытый backup с expected qualified SHA256 и создаёт новый
+exclusive candidate; original/не-head column values/types и revisions сохраняются.
+Full candidate integrity, все5 table rows/counts, resolved-head readback и
+source unchanged hash/metadata обязательны. Unknown tables/schema/collation,
+конфликт reference или numeric provenance, source sidecars, destination collision,
+byte cap/disk reserve/deadline блокируют result. Source full qualification —
+отдельный precondition exact hash; tool не утверждает PASS current live source.
+Startup/CD этот tool не вызывают; privileged production promotion не разрешена.
+
+Local:38 storage/CLI/rebuild tests PASS до последних дополнительных guards;
+итоговые18 rebuild risk tests и canonical quality31 sources PASS. Контролируемая
+fixture уменьшилась более30%, source bytes/mutes/settings/original JSON сохранены;
+это не measured production shrink/capacity. Linux image check включает non-root
+CLI invocation, source full check и all-row/candidate proof; latest CI этого diff
+ещё REQUIRED. Budget≤900s/cap/source-size+1.5GiB reserve не ослабляют delivery gates.
+
+CI38238946968/head0802b06: unit/static/build stages прошли, job FAIL на cleanup
+private reconstruction fixture: directory UID10001/mode0700 внутри host bind
+не удаляется GitHub runner UID1001. Fixture перенесена в container-owned `/tmp`
+tmpfs; tmpfs virtual capacity2GiB позволяет проверить1.5GiB free-space reserve
+на малой fixture, hard memory/swap256MiB и CPU1 остаются прежними. Production
+permissions, application health и source/backup checks не меняются. Canonical
+quality PASS; latest actual Linux image run этого correction ещё REQUIRED.
+
+CI38241572841/head3db9149 PASS, включая real non-root reconstruction fixture.
+Изолированная qualification сохранённого old5.42GB archive:
+rebuild-known-isdw3myk завершилась BLOCKED2026-10-12T11:50:27UTC.
+Decoded exact61e4f087/5,422,329,856bytes PASS; candidate3,339,722,752bytes создан,
+но complete all-row/integrity/hash proof отсутствует. Exception class IntegrityError
+на911.826s, failure_code UNSET в старом wrapper; не выдавать это за corruption
+либо за verified shrink. OOMfalse, actual runner terminal, owned container removed,
+G5 live unchanged/running и original archive preserved. Это source-code overlay
+на qualified base953 image, не released artifact и не current15.65GB dataset.
+Source/candidate сохранены как isolated diagnostic material; production NOT_RUN.
+Дополнительный bounded readonly row-count probe не завершён за25s/host40s,
+complete counts UNSET; повтор полного scan без устранения причины не выполняется.
+
+CLI reconstruction теперь сохраняет safe failure_code/exit status для
+TIME_BUDGET_EXCEEDED/DATABASE_CORRUPT/IO_ERROR, без exception body или sensitive
+contents.21 targeted reconstruction cases/canonical quality PASS; latest CI
+classifier diff REQUIRED.900s source/backup/reconstruction bounds и40min CD job
+не изменены; предложенное увеличение требует owner policy decision.
+
+Checkpoint12Oct2026: PR31 остаётся открытым; main9634558a/running G5afd10770,
+installed receiver9569f32c. Required CI38227994274/head8613839d PASS. Root qualification
+`/tmp/cw-pr31-job-v4fo3g8t` завершилась BLOCKED09:33:59UTC:
+known5.42GB closed full integrity/exact hash PASS252.627s; LIVE source
+TIME_BUDGET_EXCEEDED886.087s в full integrity, OOMfalse. Actual runner отсутствует,
+owned containers удалены, все3 live units unchanged/running; ARCHIVE/receiver/switch
+NOT_RUN. После этого локальный compact-head diff проверен85 affected tests и
+canonical quality, затем дополнительный signed complete-outcome replay PASS;
+latest Linux CI этого diff ещё REQUIRED. Новый full validation
+не запускается ради повторения результата без устранения причины или решения
+о policy. Этот primary FAIL supersedes прежние running checkpoints.
+
+По явному разрешению владельца и повторной проверке raw61e4f087/archive d0cc5a88
+удалён только exact qualified raw pre-9634558a…-1791716917.sqlite3.
+Receipt `/opt/crypto_watcher/rehearsals/backup-archive-6crp6k3t/raw-removal.json`
+PASS2026-10-12T07:15:52UTC: freed allocated5,422,342,144bytes, gzip780,833,702bytes
+и archive-preparation receipt сохранены; other backups/production DB untouched.
+Readback07:19:08UTC подтвердил raw отсутствует/archive присутствует/free13,625,688,064bytes.
+Growing live history не позволяет рассчитывать на полный raw pre-deploy duplicate.
+
+В этом же PR подготовлен validation-only Zstandard0.25.0/hash locks и bounded
+persistent `.sqlite3.zst` вместо нового raw CD backup. Full snapshot integrity,
+независимый persisted archive full integrity, decoded/encoded SHA256/size,
+private4GiB cap/CPU1/no swap и900s stage gates сохранены. Source snapshot/native
+SQLite bytes не меняются. Incomplete archive сохраняется, existing backups не
+переписываются; recovery сначала распаковывает новый isolated raw файл и сверяет
+native integrity/все5 таблиц по [процедуре](runbooks/delivery.md).
+126 targeted Windows tests и canonical quality PASS: WAL race/reader release,
+native all-table restore/exact hashes, CRC/truncated/corrupt archive, output limit,
+deadline, existing-output preservation, capture/CLI/storage/bootstrap regressions.
+OSV querybatch12Oct07:36:09UTC для new zstandard0.25.0 — active findings0;
+это не assessment OS packages. Self-review подтверждает exclusive destination,
+fsync, released live reader, независимую проверку persisted archive до switch,
+safe hash/size proof в capture и native restore в реальном Linux image check.
+Новый latest Linux CI/image и3-stage VPS qualification ещё REQUIRED;
+после PASS — exact receiver update, merge, automatic CD и bounded application checks.
+Implementation checkpoint54/58 AC сохраняется; delivery/activation/G6 остаются незавершёнными.
+
+CI38218817527/head05388ec:429 tests PASS,5 operator fixture failures до image build.
+Fixtures ещё ожидали2-stage/one-wheel interface. Исправлены в том же PR:3-stage
+fixed deadlines, отказ при timeout live либо archive, hash-pinned second wheel,
+3 readonly inputs и единственный owned temporary writable output, cap/cleanup/all3
+unit identity assertions сохранены.8 targeted qualification tests и canonical
+quality PASS; полный required Linux прогон актуальной revision остаётся gate.
+
+CI38219144588/heada61b5a4:434 tests PASS, одна existing analytics recovery fixture
+FAIL до image build. Причина: request использует advanced exchange clock, а fixture
+запускает work в constant NOW; при задержке CPU job ещё не due. Test exchange clock
+зафиксирован в обеих affected fixtures, production scheduling/retry/conflict guards
+не изменены.2 targeted recovery scenarios и canonical quality PASS; current CI
+и actual source/backup qualification остаются REQUIRED.
+
+CI38219504549/head4e2dd4f:435 tests/static/dependency/build PASS; real image check
+обнаружил некорректное сравнение physical hash независимых stdlib/APSW backups.
+Image check теперь требует archive encoded hash, decoded hash собственного pinned
+snapshot и native restore/full integrity плюс точное совпадение всех rows5 таблиц
+со stdlib backup. Cross-API header normalization не является потерей данных;
+обязательная exact-byte identity archive↔snapshot и source row equivalence сохранены.
+Full Linux image qualification актуальной revision остаётся REQUIRED.
+
+CI38219821534/headec0dd5f PASS,435 tests/quality/build/native image restore checks.
+Root operator `/tmp/cw-pr31-job-3x3mcvgs` PREFLIGHT PASS, затем setup FAIL07:51:18UTC
+до SQLite execution: loop unpacking Zstandard wheel затёр Docker container name.
+Изменений runtime/receiver/production DB нет; все3 live units unchanged/running.
+Loop member имеет отдельное имя; fixture дополнительно требует valid owned
+container prefix/name. Latest CI и новая qualification исправленного helper REQUIRED;
+предыдущий setup failure не считается результатом integrity/performance measurement.
+
+Root qualification `/tmp/cw-pr31-job-nms9x9rt`/head41f5f67 завершилась BLOCKED
+2026-10-12T08:14:26UTC: closed5.42GB full integrity/exact61e4f087 PASS186.444s,
+retained673,056,291bytes. Live TIME_BUDGET_EXCEEDED в final reconstructed hash;
+trace показывает возврат full_check и metadata read до истечения общего stage
+budget, но complete source proof отсутствует. Durable archive stage NOT_RUN,
+receiver unchanged, OOMfalse, own container removed/all3 live units unchanged.
+
+В том же PR prepared validation-only adaptive SQLite cache:512–1024MiB по
+фактическому frozen compressed image/index, с512MiB reserve для interpreter/native/
+decoded caches, суммарно≤4GiB. Source/backup checks, hashes, CPU1/no swap и885/900s
+deadlines сохранены. Добавлены diagnostic native cache hits/misses/used bytes
+при завершении/отказе integrity; ускорение пока не объявлено доказанным.
+46 targeted archive/cache/qualification/RAM regressions и canonical quality PASS;
+latest CI/image и новая complete source+durable archive qualification REQUIRED.
+
+CI38224172390/head291fa8d PASS. Root `/tmp/cw-pr31-job-q_rqvjnm`08:37–08:48UTC:
+closed archive PASS208.270s/cache1024MiB, затем LIVE_SNAPSHOT isolated OOM137 до
+full integrity/adaptive cache. Процесс terminal, own container removed, all3
+units unchanged/running, receiver NOT_RUN. Возможное удержание native allocator
+предыдущего closed stage — ограничение combined-process verifier; это не PASS
+или proof failure production CLI, где stages уже отдельные containers.
+
+Оператор теперь изолирует каждый из3 REQUIRED этапов новым container/process,
+каждый с885/900s fixed budgets/4GiB/CPU1/no swap, новым reserve check и exact
+cleanup перед следующим. Failure любого этапа прекращает flow и блокирует
+receiver/merge; all3 runtime IDs и preserved source archive проверяются в конце.
+37 targeted cache/archive/qualification regressions и canonical quality PASS;
+actual isolated live/durable archive qualification и latest CI/image REQUIRED.
+
+Base `9634558a654d5f13279ff0e76710585bf1105d66`, branch `codex/backup-validation-performance-20261011`, root worktree. Fresh main/clean checkout, strict required `ci-required`, production Environment, отсутствие открытых PR/active Actions подтверждены GitHub API2026-10-11T11:36:44UTC. Основание — устранение failed delivery в согласованной whole-project Goal; отдельный implementation scope не добавляется.
+
+PR30 merged2026-10-11T10:52:33UTC, head2495ac037/baseb13081e/squash9634558a, required CI38131846878 PASS370 tests. Operator receiver update10:50:50UTC PASS: installed receiver9569f32c, target/SSH/runtime/database сохранены. Automatic CD38133517275: merged Linux3.11 suite370 tests PASS/build PASS, delivery FAIL11:23:36UTC на BACKUP_AND_VALIDATE с `docker exit 3` — TIME_BUDGET_EXCEEDED. Полная проверка source DB прошла: backup stage следует после неё. Нельзя считать backup пригодной, corruption установленной или CD завершённой. Точные времена copy и destination validation UNSET; CLI885s является общим budget обеих фаз.
+
+Owner snapshot11:10:37UTC: candidate9634558a/imagefe4ac4a, PRE_SWITCH/BACKUP_AND_VALIDATE, DB5,305,679,872bytes/budget900s; сохранённая копия `pre-9634558a654d5f13279ff0e76710585bf1105d66-1791716917.sqlite3`. Последующие readbacks11:40:56/11:57:57UTC подтвердили прежний running unit и отсутствие switch. До qualification никаких retries/restore/deletion. Предложенный validation-only cache512MiB проверен на closed copy, но не уложился в бюджет; изменение cache отклонено как неподтверждённое. Scope: установить I/O/limits по bounded read-only snapshot, затем выбрать исправление по Evidence. Установленный privileged receiver, target, SSH, schema, history и cap900s сохраняются; speculative initial push не выполняется.
+
+Validation Plan этого hotfix: REQUIRED operator exact backup/image/latest runtime readback и bounded full integrity measurement в offline temporary container (networknone, backup-only read-only mount, bounded CPU/RAM, cleanup exact owned identity); REQUIRED local canonical quality и существующие storage/CLI/corruption/shared-deadline/WAL-snapshot tests в locked Windows environment; REQUIRED latest PR Linux3.11 CI и immutable build; REQUIRED automatic CD full source+backup checks/source/image/health/persistence/dual-market4TF readback; REQUIRED bounded actual backlog/diagnostic freshness qualification после поставки. Недоступная обязательная проверка остаётся PENDING. Non-goals: weakening integrity/timeout gates, data pruning, повтор migration, live restore/downgrade, receiver access expansion и торговая активация.
+
+Operator readback2026-10-11T11:40:56UTC подтверждает FAILED_PRE_SWITCH/BACKUP_AND_VALIDATE, switch_started=null, прежний running sourceafd10770/container7039151a/image1120624b. Closed backup5,422,329,856bytes сохранена. Первый probe с read-only single-file mount не открыл SQLite connection (OperationalError), integrity measurement не началось; это не integrity FAIL. Temporary container удалён, running unit/backup не изменены. Исправленный diagnostic допускает immutable URI только для этой закрытой exact backup без sidecars; live database всегда сохраняет обычное WAL-aware чтение/locking.
+
+EV-BACKUP-512, owner primary receipt2026-10-11T11:42:46–11:57:57UTC: exact closed backup5,422,329,856bytes/UID10001/mode0600/WAL header2,2, SQLite3.46.1, cache512MiB/effective mmap2,147,418,112bytes, offline networknone/read-only mount/CPU1/memory3GiB. Full integrity прервана SQLITE_INTERRUPT: BUDGET_EXCEEDED, elapsed906.861s при inner budget885s; userCPU28.384s/systemCPU120.513s/read_bytes2,907,975,680. Outer910s timeout, exact temporary container удалён; live unit/running state/backup неизменны, production files changed=false. Full integrity PASS/FAIL отсутствует. Progress callback не прерывает блокирующий I/O немедленно. Wall time существенно выше CPU; источник ожидания/ограничения ещё UNSET. Этот замер отличается от EV-INTEGRITY-FULL файлом, resource limits и состоянием host/cache, поэтому не доказывает сравнительное ускорение либо замедление от размера cache. Cache128MiB в коде сохранён, повтор full scan/deploy не запущен; следующий шаг — короткий read-only I/O/pressure/limits snapshot и bounded sequential read закрытой копии.
+
+Local backup observability: CLI сохраняет прежний success status и добавляет safe copy/integrity/total durations; shared-budget failure содержит phase и durations, без DB payload/config/path. Timeout во время copy теперь тоже classified exit3; source и incomplete destination сохраняются.43 existing affected storage/CLI/recovery tests и canonical quality/docs/Ruff/format/mypy PASS, Windows locked environment2026-10-11; snapshot/WAL concurrency, shared deadline, corruption, no-mmap и existing-destination refusal остаются обязательными. Performance change и required CI/CD ещё PENDING; первичный failure не заменяется PASS по маленькой fixture.
+
+EV-CD-FAILURE-ARTIFACT, primary GitHub readback2026-10-11T11:52:45UTC: CD38133517275/artifact11700577981, verified zip digestf6e08b5b7b42bf5ddda54a1556b625c15e81601bd0a2a53dbbe98bcd334c0b10, deployment.json0bytes. Подтверждён дополнительный gap F27: receiver пишет terminal failure JSON в stderr, workflow сохранял только stdout. Hotfix включает CI-side [deliver_release.py](../scripts/deliver_release.py): safe nonempty success/failure record, exact source/build/bundle/post-check proof для PASS, no raw SSH/exception output, no retries, strict existing host/key/forced command. Прерывание оставляет UNCONFIRMED; error никогда не повышается до PASS. Installed privileged receiver/SSH/target/permissions/job timeout не меняются.32 targeted capture/recovery tests и canonical quality PASS Windows/offline; original failed artifact сохранён, актуальная Linux CI и actual delivery остаются REQUIRED. Первичная ошибка parameter IDs в Windows fixture исправлена локально явными короткими IDs; behaviour assertions сохранены. Scope hotfix теперь application validation плюс исправление CI reporting, без нового host setup.
+
+Self-review CI capture PASS: только trusted main/production job вызывает helper с теми же protected SSH inputs; bundle hash/source/build сверяются до единственной передачи; success требует receiver source/artifact/post-check proof, чужие fields/raw errors отбрасываются. Даже interim UNCONFIRMED record связывается с safe attempted source/build/target; итоговый artifact schema `cryptowatcher.delivery-record.v1`. Existing artifact не перезаписывается, callback не выполняет retries/cleanup или host setup.13 capture tests после final identity уточнения и canonical quality PASS. Initial push/PR всё ещё не выполнены: полный hotfix ждёт установления причины backup timeout и последующей qualification, а не speculative deploy.
+
+EV-R2-RECOVERY, owner readback11:10:37UTC: existing private recovery bundle hash9560abdd совпадает, prepared master hasha4a54701 валиден и ещё не активирован; consumer67716b3, host config hashfb734710/0600root, все5 vault tables0, ingestfalse/master/max-age blank, trading flagsfalse/runtime dry_run-stopped. Existing encrypted R2 backup receipt10:47:17UTC подтверждает ciphertext/manifest readback и recovered-key decrypt, key-bucket AccessDenied. EV-R2-FULL-RESTORE: owner primary receipt в чате «Bybit Trading», 2026-10-11T11:29:48.413219UTC, ISOLATED_R2_RESTORE_PASS, source67716b3/schema20261010_0117, dump hash33041dd2;124 tables/239118 rows, inventory matches dump TOC, invalid indexes/unvalidated constraints0, dry_run-stopped; original config/container IDs сохранены, disposable test container удалён. Workspace `restore-20261011T112839Z-b27f46f33622404a94a6e4907e375592` внутри existing initial R2 backup directory. Source row-hash snapshot, roles/ownership/grants и scheduler этим не подтверждены; production vault был пуст. Recovered-master exact-image crypto ещё PENDING; повтор restore не нужен. Используется подготовленный ключ и существующий private owner-managed recovery bucket, второй master/bucket не создаются. Consumer R2 scheduler/retention остаются самостоятельной работой своего проекта. Context cap900s утверждён; первая production credential configuration сохраняет concrete operation gate.
+
+EV-R2-KEY-CHECK, owner primary receipt в чате «Bybit Trading»2026-10-11T12:08:33.866812UTC: recovered bundle9560abdd/prepared master comparison выполнены до стадии recovered_key_crypto, но isolated exact-image helper завершился exit1; RECOVERED_VAULT_KEY_REHEARSAL_UNCONFIRMED. Контейнер удалён, master/config/production DB не активированы/не менялись, upload/provider calls отсутствуют. Причина runtime error UNSET; counterpart выдал synthetic diagnostic без owner keys/password. Повтор qualified full restore и повторная генерация master не нужны; credential activation остаётся заблокирована до crypto PASS.
+
+G6 preparation requalification2026-10-11T12:53:36UTC: исследовательская матрица вне repository обновлена по fresh origin/main9634558a,58 AC/33 findings без потерь. Прежнее blanket code_implemented=true/58 на363bd04e superseded: текущий implementation checkpoint54/58, четыре AC-06-02/06-05/12-02/12-03 IN_PROGRESS. Это не новый полный AUDIT или READY review: все критерии требуют финальной индивидуальной сверки, code locators/прошлые fixtures не заменяют latest runtime Evidence. Учтены full R2 restore PASS, master crypto UNCONFIRMED, failed pre-switch backup и empty failure artifact; final percentage не пересчитан. Independent preparation завершена в доступном scope.
+
+External blocker revalidated2026-10-11T12:54:55UTC: GitHub main9634558a unchanged, open PR0, active/queued/waiting/pending Actions0; deployment не перезапущен. Counterpart «Bybit Trading» завершил текущий turn, повторно получен тот же crypto receipt12:08:33UTC, нового PASS нет; там выданы две read-only проверки прав доступа, не повторять восстановление с паролем. Дальнейшее продвижение BLOCKED до owner I/O/pressure/limits64MiB readback и crypto qualification: forced CD key не предоставляет shell для этих операций, подтверждённого live process/job для ожидания нет. Этот же blocker повторился в последовательных goal continuations; доступный независимый scope/fixtures/preparation завершён. Сохранены локальные commits/полный scope/failed copies/user state; не выполнять speculative push/deploy, повышение cache/budget или privileged credential activation. Продолжение использует существующую Goal после получения нужного input, новая Goal не нужна.
+
+EV-IO-KEY, owner primary receipt2026-10-11T14:39:48–14:40:26UTC: closed backup5,422,329,856bytes/unchanged; sequential64MiB read PASS0.730s/physical65MiB,87.67MiB/s.30.008s host snapshot: cgroups CPUmax/memorymax unlimited, io.max empty, OOM0/memory pressure0; available7185.83MiB/free17.33GiB. CryptoWatcher physical writes58.387MiB/5914 operations and reads8.117MiB/1471 operations, CPU13.125s; host IO/CPU pressure present. Это короткий current snapshot, не доказательство состояния при прежнем timeout, sustained disk throughput или конкретной причины SQLite задержки. Sequential bandwidth не объясняет full integrity автоматически; random page access/cache residency остаются гипотезой. Все3 live containers сохранили identity/running state; config/DB mutations отсутствуют.
+
+Crypto runtime на consumer67716b3: UID65534 читает каталоги0755, но root-owned source0600 недоступен; contracts_import завершается PermissionError/errno13. UID0 actual synthetic encrypt/decrypt PASS. Это подтверждает mismatch пользователя прежнего isolated rehearsal и доступности image source; настоящий master не читался и не активирован, его recovered-key qualification по-прежнему PENDING. В чате «Bybit Trading» подготовлена исправленная isolated root rehearsal существующего master/bundle, без permission changes production или новой генерации ключа.
+
+EV-BACKUP-PREFETCH, owner primary receipt2026-10-11T15:03:04–15:18:08UTC: exact closed backup5,422,329,856bytes/image9634558a, offline CPU1/memory7GiB/no swap, прежние cache128MiB/mmap policy и shared885s. Sequential read completed49.811s (103.82MiB/s); physical reads5,354,242,048bytes, cgroup memory.current2,585,202,688bytes. Затем full integrity TIME_BUDGET_EXCEEDED891.109s: userCPU24.548s/systemCPU144.373s/physical reads8,436,711,424bytes. После предварительного чтения потребовалось ещё3,082,469,376bytes физических чтений; полная копия в RAM не подтверждена. Причина reclaim/cache behaviour UNSET, отсутствие OOM не доказывает residency. Reporting helper exit0 не означает PASS. Exact owned container removed; backup/все3 live containers unchanged/running; production files changed=false. Prefetch отклонён: этот подход не включать в application/CD и не повторять тот же full scan. Cache128MiB/900s production cap/full checks сохранены; initial push/PR/deploy отсутствуют.
+
+Следующая qualification — отдельная byte-identical копия closed backup в disposable tmpfs, затем existing full check_integrity на writable connection (как backup gate) с CHECK-constraint negative control и SHA256 original→RAM→after validation. Это новая проверка влияния физического I/O, а не ещё один read-ahead/cache experiment. Scope только closed backup read-only mount; scratch writes только внутри owned temporary container, networknone/user10001/capdropALL/read-only root/CPU1/no swap. Memory cap = rounded backup size+384MiB; MemAvailable требует cap+1536MiB reserve, иначе preflight останавливается без запуска. Tmpfs size = rounded backup size+32MiB. Shared diagnostic budget300s, outer325s; deadline включает copy/full validation/hash readbacks, actual production budget/gates не меняются. Cleanup exact name/label/ID/image/security/mount/tmpfs identity; original backup/live IDs обязательны в readback. Production performance default ещё не меняется; RAM approach требует PASS этой qualification, отдельного design review для растущей DB и subsequent actual CD, а не автоматического переноса diagnostic allocation в production. Local syntax/valid/corrupt header/deadline/changed-copy rejection PASS на маленьких Windows fixtures; это не Linux tmpfs или VPS timing Evidence. Дополнительное ограничение F25: SQLite3.49.1 Windows CHECK-constraint fixture в mode=ro отличалась от writable validation; соответствие Linux3.46.1 UNSET. Новая qualification явно проверяет writable negative control; существующая required backup constraint regression сохраняется.
+
+EV-R2-KEY-PASS, owner primary receipt в чате «Bybit Trading»2026-10-11T14:47:06.871531UTC: RECOVERED_VAULT_KEY_REHEARSAL_PASS, consumer67716b32/schema0117/image972cb5e1. Existing recovered key roundtrip PASS; wrong binding/damaged ciphertext/wrong key rejected. Application env/live API/PG unchanged; owned container removed; no production DB writes/activation/provider calls/scheduler/R2 upload. Receipt `key-check-20261011T144652Z-5e0d4f67a19f4c4e862f20dce080efe9` в existing private R2 restore workspace. Этот receipt supersedes UNCONFIRMED12:08 для исправленной isolated rehearsal; qualification prerequisite снят. Production keyring/binding activation и recovery реальных новых encrypted rows остаются PENDING, synthetic payload не подтверждает их. Повтор восстановлений/key generation/permission changes не требуется; unrelated R2 HTTP501/scheduler work сохраняется в counterpart scope.
+
+EV-BACKUP-RAM, owner receipt2026-10-11T15:44:52–15:48:32UTC: exact closed backup5,422,329,856bytes/image9634558a/SQLite3.46.1. Copy/hash complete109.940s, writable full integrity PASS141.661s (31.721s validation, no additional physical reads during it), CHECK negative control PASS. Whole copy/full validation/original+RAM hash readbacks PASS201.800s; SHA25661e4f08763b2db0dc437c5103af94bb3185269b0b731eff719a587c145ec6e22. Memory cap5,825,888,256bytes/no swap/CPU1, OOM=false, exact scratch container removed; original backup/all3 live containers unchanged/running. Это квалифицирует RAM validation этой копии, не растущую live DB или будущую CD revision.
+
+Implementation design до кода: explicit CLI `--validation-directory` для state-check/backup, default legacy disk path сохраняется. CD receiver создаёт private tmpfs `/validation` только в offline check container, snapshot bytes получает из WAL-aware diagnostic page_count×page_size; cap=rounded snapshot bytes+512MiB, scratch=rounded bytes+64MiB, host reserve1536MiB/CPU1/no swap. Эти limits относятся к временной проверке, не runtime бота. Недостаток памяти/space или growth сверх allocation останавливает pre-switch stage, не переключает на ослабленную проверку. State-check копирует pinned WAL snapshot SQLite backup API→RAM, освобождает live reader до full writable integrity и возвращает metadata того же validated snapshot. Persistent backup создаётся прежним pinned online copy; после закрытия проверяется byte-identical RAM copy/full integrity/SHA256 persistent file до и после. Source/backup schema/history/settings не меняются; shared900s cap и все source+backup gates сохраняются. Рост DB требует fresh resource qualification; RAM не объявляется универсальным решением capacity. Installed receiver9569f32c требует одного hash-bound update до merge через existing operator installer; SSH/target/permissions не расширяются. Validation: meaningful WAL race/full constraint/corruption/hash mismatch/deadline/resource/mount/cleanup tests, canonical local quality, required Linux CI/image, operator receiver receipt, actual automatic CD и bounded backlog/freshness readback. Runtime fixes предыдущих PR остаются pending delivery.
+
+Local RAM hotfix/self-review2026-10-11:70 affected real storage/CLI/closed-copy/hash/WAL/deadline/capture tests PASS;13 RAM tests,3 installer и16 capture scenarios PASS (32 successful non-bootstrap scenarios следующего batch).39 bootstrap identity/preservation/fault tests PASS после обновления LF-normalized receiver hash96d9b739. Initial bootstrap source pin не ослаблен; прежняя выполненная процедура не повторяется. Canonical docs/Ruff/format/mypy29 files PASS. Image checks расширены реальным isolated Linux tmpfs source/backup SHA256/negative constraint check; их execution ждёт required CI, локального Docker нет. Schema1/NONE, runtime config/JSON/history/settings не меняются. Initial push готовится только после scope/self-review/checkpoint; merge ждёт latest required CI и operator receiver receipt, actual CD/capacity/signed activation/G6 остаются PENDING.
+
 #### Hotfix runtime capacity / CD recovery — 2026-10-11
+
+PR31 head1de4e81, required CI38154596464:398 tests PASS, один existing workflow trust test FAIL до Docker build. Причина: test искал StrictHostKeyChecking в YAML после переноса SSH command в canonical deliver_release.py. Проверка перенесена на actual client source с сохранением strict host/known_hosts/identity/batch assertions и проверкой вызова helper из workflow; behavioral capture tests проверяют реальные SSH argv. Gate не ослаблен, первый CI не считается PASS; исправление в том же PR, latest CI/image и receiver receipt остаются обязательными. После нового head operator использует свежий immutable installer pin, не initial1de4e81.
+
+PR31 latest head139102b/CI38155013933 PASS399 tests и real Linux Docker tmpfs/backup-hash/restart checks. Owner receiver preflight PASS, но live snapshot8,982,642,688bytes / available7,471,837,184bytes отказал по RAM до execute. Installed9569f32c/G5afd107/DB/SSH preserved; UTC owner receipt UNSET. Plain RAM design superseded для CD; failure не доказывает corruption. Update/merge/deploy не выполнены.
+
+Correction design: offline validation cap4GiB/no swap/CPU1, compressed limit3GiB + margin1GiB, scratch64MiB, host reserve1536MiB, unchanged production900s stage cap. APSW3.53.4.0 сохраняет full CHECK/integrity и byte SHA proofs; source reader закрывается до scan. Latest pushed headbd3123d/CI38175858872 PASS. Actual level2 qualification2026-10-11T21:21–21:45UTC: known backup full/hash PASS561.612s, compressed1,483,937,093bytes; current WAL snapshot истёк внутри full integrity на собственном885s, proof отсутствует, OOMfalse. Owned probe removed; CryptoWatcher container unchanged/running. Consumer API independently changed, cleanup assertion masked primary timeout; receiver update NOT_RUN. Follow-up в том же PR:64KiB lossless blocks, bounded8-block write coalescing, direct streamed reconstruction hash,512MiB private SQLite validation cache within existing4GiB cap, physical sector4096. Source/schema/settings/data не меняются. Sample16MiB:64KiB blocks ratio0.163 / encoding0.137s vs4KiB:0.2745 /0.283s; это не whole-DB proof. Local24 targeted cases + canonical quality PASS; включены partial/sparse writes, truncation/zero extension, frozen hashes, complete readback при concurrent change и сохранение primary failure. Latest CI/Linux image/new-module VPS proof PENDING. Read-only metadata2026-10-12T05:18:42UTC: logical DB13,416,587,264bytes, WAL980,131,552bytes, free disk9,960,628,224bytes. Raw pre-switch backup не помещается. Existing CryptoWatcher image archives/rehearsals менее1GB, backups6.20GB (known qualified5.42GB основная часть); unneeded status не доказан самим размером. Подготавливается private gzip copy known backup и isolated restore byte/native readback без удаления оригинала; raw removal/cleanup требует конкретной operator authorization. F22/F27 открыты, код54/58; percentage не пересчитан.
+
 
 Основание: согласованная whole-project Goal, recovery после failed production CD38102363430 и operator read-only snapshot 2026-10-11 07:13–07:14UTC. Base `363bd04e680621f1aa5a45da25a2f37d1a75bdc1`, branch `codex/runtime-backlog-recovery-20261011`, root worktree; fresh GitHub main/protections/production Environment и отсутствие открытых PR проверены07:25UTC. Runtime остаётся на G5 `afd10770aa3a330e6c5a28e3ea85a676060e6c29`, healthy; candidate image363bd04 загружен, deployment record/backup/lock отсутствуют, switch не выполнялся. Точный timeout stage старого receiver не установлен; исправление не предполагает, что backup уже запускался.
 
@@ -198,7 +1028,7 @@ READY в branch по EVG4-PRODUCER/JOINT и ранее delivered restart suites.
 
 ### Состояние общей Goal и checkpoint
 
-Current verified mainb13081e содержит G4 producer PR28 и capacity/diagnostics hotfix PR29; required CI38127039913 и merged Linux3.11 full350 tests PASS. Actual CD38127147184 FAIL на CHECK_STATE_INTEGRITY до backup/switch: production всё ещё G5afd107, что подтверждено operator snapshot09:27UTC. AC-06-02/06-05/12-02/12-03 сохраняют IN_PROGRESS до qualification исправления, текущий code baseline54/58. Receiver update PASS; отдельная recovery branch готовит классификацию integrity failures и исправление установленной причины. Остальные54 AC сохраняют ранее подтверждённое code Evidence с его ограничениями; actual integration activation не завершена. Это не процент audit и не DONE проекта.
+Current verified main9634558a содержит G4 producer PR28, capacity/diagnostics PR29 и integrity classifier/budget PR30. Required CI38131846878 и merged Linux3.11 full370 tests PASS. Actual CD38133517275 FAIL на BACKUP_AND_VALIDATE11:23:36UTC до switch: source integrity завершена, backup copy+validation исчерпали общий CLI885s budget. Operator post-failure readback11:40:56UTC подтверждает running baselineG5afd107 и сохранённую backup. AC-06-02/06-05/12-02/12-03 IN_PROGRESS до runtime qualification, code baseline54/58. Installed receiver9569f32c/update PASS; новая app-only hotfix branch готовит measured validation performance без изменения safety gates. Actual integration activation ещё PENDING. Это не audit percentage и не DONE проекта.
 
 G5 local/required CI/source/image/backup/health/persistence/two-market post-check PASS, Context OFF сохранён; actual public metric freshness/load не объявляются доказанными. Independent preparation G4 продолжается без нового выбора owner. External B02 runtime/vault/live policy переносится в конец при independent work; delivery failures не игнорируются и dependent promotion не выполняется. Built-in Goal active, metadata-only follow-up PR нет; primary receipts/raw diagnostics вне tracked repository.
 
@@ -339,15 +1169,16 @@ Priority: P1 — блокирует correctness/security/основной scope;
 | F22 ARCHITECTURE/PERFORMANCE | Monolith и per-chat REST fanout мешают расширению; telegram_crypto_watcher.py 2177 строк; AC-12-03 | Два pools 4/12; ~1 ticker+100 klines на scan/chat, без shared snapshot; awaits Telegram при state lock; legacy follow-up #2/#5; G1 update: EVG1 module boundaries, shared owner scan, bounded async REST outside DB transactions; WS dataset/load ещё G2A/G6 ; Current update: G2A shared dataset, bounded windows and one queued recovery per stream; all actual-universe subscriptions acknowledged in isolated smoke. VPS steady-state capacity remains G6; G2B update: G2B: pure detectors, atomic history/episode producer and separate consumer; indexed active/pending/history access, bounded batch20, network outside DB transactions. Actual capacity remains G6.; G3: SQLite aggregations instead of unbounded raw-return arrays, paged readonly export, one comparator/page and bounded outcomes/retention; measured actual capacity remains G6. Hotfix update EV-HOTFIX-RUNTIME/CAPACITY: synchronous analytics и comparator1/5s отстают от snapshot arrival; bounded readonly worker/CAS/actual availability/yield +256/64 batches prepared; isolated3072/768 drain and pending restore PASS; реальная VPS backlog/disk qualification PENDING. | P2 | REFACTOR: Разделить ingestion/domain/state/render/delivery, общий owner dataset, измерять backlog/cadence/rate budget; load tests по реальной нагрузке | G1/G2; текущая performance/VPS limits UNSET | HIGH / PARTIAL |
 | F23 LEGACY | CMC/source/core/reset действия остаются достижимыми вне v1; код 536–874, 1583–1643, 1798–1881, 1967–2041, 2163–2168; AC-01-03 | Commands resetbase/resetallbase зарегистрированы; старые inline callbacks src/core/cmctop поддерживаются. CMC main poll отключён, но пути живы; G1 update: EVG1 active CMC/reset code deprecation по D04/Q06; old callbacks explain change, baselines archived; startup entrypoint retained | P2 | DEPRECATE: После state compatibility review убрать superseded UX/network paths; baselines.last_alert не удалять как якобы полностью dead | Goal cleanup после G1; D04/Q06 | HIGH / FIXED_IN_G1_BRANCH |
 | F24 ORPHAN CANDIDATES | Невызванные legacy helpers/caches; внешние consumers неизвестны; код _fetch_async/_prepare_core_context/tracked_desc/price_unit/_mode_label/_rank_prefix/_sub_metrics/_directional_marker | AST+rg и регистрация entrypoints: прямых callers нет; executor/handler functions исключены из кандидатов; legacy follow-up #3; G1 update: G1 сохраняет startup entrypoint; source/history/registrations reviewed for CMC/reset deprecation. Unknown external private helper consumers не доказаны; остальные orphan candidates DOCUMENT/DEFER до G6 | P3 | DEFER: Проверить историю/внешние imports/старые callbacks; затем REMOVE подтверждённых helpers либо DOCUMENT compatibility; imports alone недостаточно | Q06; external Python consumers UNSET | MEDIUM / DEFERRED |
-| F25 TEST GAP | Нет tracked воспроизводимой regression suite; EV01 tracked inventory; E01/E03/E08/E10/E12 | Есть только assertions import token и исторические ad-hoc PR18 проверки; tests/config/fixtures отсутствуют; legacy #4; G1 update: EVG1 meaningful auth/config/migration/race/composite/send/CLI/delivery suite; PR21 CI112 tests PASS; sample regression added EVG10, current required CI PENDING; G2B update: G2B: meaningful formulas/episodes/transaction/restore/replay/Telegram fault/config/UI tests added; targeted PASS, latest Linux CI pending. Future subsystem suites grow with G3-G5.; G3: meaningful full-window/cohort/export/causal/toggle/race/recovery/upgrade/UI fixtures added; local targeted PASS, required Linux CI PENDING. G5 update: G5: mapping/missing/stale/cadence/identity/owner race/restart/frozen context/export/recompare/UI fixtures added; local targeted PASS; required Linux CI pending. | P1 | IMPLEMENT: Минимальные auth/migration/config/composite/recovery tests в существующем Python stack; CI запускает meaningful suite | G1; external audit scripts не заменяют suite | HIGH / PARTIAL |
+| F25 TEST GAP | Нет tracked воспроизводимой regression suite; EV01 tracked inventory; E01/E03/E08/E10/E12 | Есть только assertions import token и исторические ad-hoc PR18 проверки; tests/config/fixtures отсутствуют; legacy #4; G1 update: EVG1 meaningful auth/config/migration/race/composite/send/CLI/delivery suite; PR21 CI112 tests PASS; sample regression added EVG10, current required CI PENDING; G2B update: G2B: meaningful formulas/episodes/transaction/restore/replay/Telegram fault/config/UI tests added; targeted PASS, latest Linux CI pending. Future subsystem suites grow with G3-G5.; G3: meaningful full-window/cohort/export/causal/toggle/race/recovery/upgrade/UI fixtures added; local targeted PASS, required Linux CI PENDING. G5 update: G5: mapping/missing/stale/cadence/identity/owner race/restart/frozen context/export/recompare/UI fixtures added; local targeted PASS; required Linux CI pending. Current qualification: EV-IO-KEY/synthetic root crypto PASS; readonly Windows SQLite3.49.1 CHECK fixture differs from writable mode, Linux3.46.1 behaviour UNSET. Preserve writable full-backup regression; readonly timing PASS alone does not qualify constraints. | P1 | IMPLEMENT: Минимальные auth/migration/config/composite/recovery tests в существующем Python stack; CI запускает meaningful suite | G1; external audit scripts не заменяют suite | HIGH / PARTIAL |
 | F26 DEPENDENCIES | Нет lock/hash constraints; разрешены уязвимые requests releases; requirements.txt:2–3; Dockerfile:1,9 | requests>=2.31.0/python-dotenv>=1.0.0, unpinned base/pip; EV04 current18 packages: advisories=[]; 2.31.0 имеет GHSA-9wx4-h78v-vm56/GHSA-9hjg-9r4m-mvj7; G1 update: EVG2 hash locks/base digest; async HTTPx replaces requests;15 runtime advisories=[]; installed VPS requests2.33.1 observed, full artifact validation PENDING | P2 | FIX: Выбрать проверенный reproducible manifest/lock и safe bounds; audit точного Docker artifact. Не утверждать vulnerable package на VPS без inventory | G1; exploitability по fixed Bybit URLs не доказана | HIGH / PARTIAL |
-| F27 CI/CD | CI/protections/build foundation реализована; first actual delivery и portable image identity требуют завершения; AC-12-02 | Исходный EV03: workflows/runs/Environments/deployments=0, rulesets=[], main unprotected. G1 EVG5: CI/merge/release/protections/production Environment PASS. EVG6 обнаружил receiver config-ID/OCI-ID mismatch до DB; PR21/EVG8 verified identity, actual rehearsal/first migration/runtime PASS; automatic CD PENDING ; Current update: G1 PR20–23/required CI/main40882eb/production CD38087285142 PASS; dedicated restricted SSH, production variable/secrets verified and owner smoke accepted Hotfix update: producer PR28 CI38102228959 PASS/merge363bd04; CD38102363430 TimeoutExpired до switch, exact stage UNSET. Stage-specific atomic records, size-bounded full integrity/online snapshot backup и offline candidate cleanup prepared; reviewed receiver installer/latest CI/operator receipt/actual CD REQUIRED. | P1 | IMPLEMENT: Сохранить verified archive/host identity и packaging round-trip; завершить sample hotfix и automatic CD/post-checks; не обходить digest проверки и закрытый gate | G1; B01; hotfix после PR20 merge | HIGH / REOPENED_HOTFIX |
+| F27 CI/CD | CI/protections/build foundation подтверждена; текущая поставка и failure artifact ещё незавершены; AC-12-02 | Исходный EV03: workflows/settings отсутствовали. G1 PR20–23/required CI/main40882eb/production CD38087285142 PASS, restricted SSH/identity/settings/owner smoke подтверждены. Current: PR29/30 required CI PASS; CD38133517275 FAIL до switch на BACKUP_AND_VALIDATE/exit3; operator11:40/11:57UTC подтвердил G5afd107 unchanged. EV-CD-FAILURE-ARTIFACT: verified artifact11700577981 содержит0-byte JSON. EV-BACKUP-512: closed-copy full check906.861s/BUDGET_EXCEEDED, performance fix не квалифицирован, ожидается bounded I/O readback; safe CI-side capture fixtures/quality PASS, required latest CI/actual CD ещё gates. | P1 | FIX: Qualification full source+snapshot integrity в bounded budget, safe nonempty success/failure artifact и source/image/health/persistence/market post-checks. Installed receiver/SSH/gates сохраняются; retries/cleanup не автоматизировать | Current hotfix; F22/F31 capacity; owner measurement | HIGH / REOPENED_HOTFIX |
 | F28 OPS EVIDENCE | Target/config/source inventory и first migration/restore/runtime подтверждены; automatic CD ещё не завершён; AC-12-01/02/10-04 | Исходно runtime/unit/access UNSET. G1 EVG3/6: app/unit/data/code hashes/NTP/resources, amd64/project, root-owned config/permissions, clean checkout8ace3638… и owner record confirmed. Legacy image полный source provenance UNSET; EVG8 actual isolated restore/first migration/source/health/persistence PASS; current hotfix и automatic CD PENDING ; Current update: G1 actual bootstrap/first migration/restore/source/image/health/persistence/CD PASS; primary records restored without redeploy. Future runtime capacity/source subsystem evidence checked in their Goals | P1 | DOCUMENT: Сохранить target evidence и выполнить exact artifact rehearsal/reviewed delivery/recovery/post-checks; наличие legacy backup не означает пригодность restore | B01; deployment не запускать ради статуса | HIGH / CLOSED_G1_SCOPE |
 | F29 CONFIG/UX | Env category/runtime knobs могут противоречить Spot UI и raw input; BYBIT_CATEGORY, settings_text/status_text/alert_keyboard, .env.example | Env category unrestricted, UI/link всегда Spot; .env example не описывает many legacy knobs. env default SIGNAL_TIMEFRAME и state_contract фиксированный5m могут расходиться; G1 update: EVG1 validated market category, labels and links, owner state precedence; typed dual-market watchlist/eligibility remains G2A ; Current update: G2A typed validated market identity/card selection/dual-market status/links; selected market no longer limits ingestion | P2 | CONSOLIDATE: Явная market identity и validated current config; убрать конфликтующие legacy settings после compatibility review, синхронизировать UI/contract | G1/G2 и F02; actual VPS env UNSET | HIGH / IMPLEMENTED_IN_BRANCH |
 | F30 BUILD HYGIENE | Docker context не исключает data/ и .git;  .dockerignore, Dockerfile | Ignore содержит .env/state file, но не data/ и .git; Dockerfile копирует только manifest/code, поэтому inclusion в image не доказан; G1 update: G1 Docker context whitelist excludes .git/.env/data/cache/test fixtures; actual image build review PENDING CI | P3 | FIX: Исключить runtime data/Git из build context для уменьшения context и риска передачи builder; verify context/image artifact | G1; deployment build location UNSET | MEDIUM / PARTIAL |
 | F31 HARDENING | Docker runtime использует root default; resource/health policy UNSET; Dockerfile/Compose; AC-12-01 | Нет USER/healthcheck/resource settings; фактические VPS user/resource limits не проверены; G1 update: G1 image UID10001/cap-drop/read-only root/health prepared; EVG8 actual UID10001/SQLite ownership/health/persistence PASS; EVG3 resource snapshot only, future full-universe load unverified. No invented CPU/RAM limits | P3 | DEFER: После runtime inventory выбрать минимальные privileges/health/resources по необходимости; отсутствие инструмента само по себе не defect | B01; не превращать hardening в новый AC автоматически | MEDIUM / PARTIAL |
 | F32 UX CANDIDATE | Legacy polish/preset strategy без конкретного нового дефекта; прежний open_issues #6/#7; E07/E08 | Следить за едиными русскими terms/threshold explanations; visual quality/чувствительность требуют user feedback/statistics, не подтверждены как bug; G2B update: G2B: five-detector explanations, actual profiles/manual parameters and event detail implemented. Statistical calibration/views G3/G5; unsupported polish remains DEFER.; G3: event→outcome/noise/completeness and descriptive cohorts/no-signal N доступны; enrichment/manual version comparison views G5, unsupported polish DEFER. G5 update: G5: recorded profile/version/settings comparison with N/noise/limits and explicit revision-preserving recompare; no auto threshold change. Unsupported visual polish remains DEFER. | P3 | DEFER: Сохранить полезные terms/presets; улучшать объяснения и выбор thresholds по согласованным detector profiles и outcome statistics | G3 calibration; Q01, не откладывает agent integration | MEDIUM / PARTIAL |
 | F33 G1 REGRESSION | `/sample_alert` потерял baseline Bybit/mute/coin controls и не учитывает active TF; cryptowatcher/bot.py/render.py; G1 preservation / AC-07-03 | EVG9 msg656783 на deployed065e49d подтверждает code regression относительно legacy8ace3638; EVG10 исправляет current snapshot rendering/buttons без REST/state writes ; Current update: PR22 code/CI PASS, actual CD38087285142 main40882eb; owner screenshot401ddabd… and “вроде работает” smoke PASS with assertion limits | P2: неверный sample и потеря manual controls | FIX: Восстановить existing demonstration/controls, не менять live formula, auth, settings или schema; meaningful regression tests | Necessary G1 hotfix, required CI/merge/release/CD | HIGH / CLOSED |
+| F34 HISTORY CAPACITY | Полные heads дублируют revisions; пересекающиеся inputs/settings/context повторяются. events.py/outcomes.py; AC-10-02/F15/F22 | G5afd107 readonly13Oct14:16UTC: SQLite26.25GB. PR31/b5fe042 shared snapshots/heads и native validation; required CI38405497548 PASS. Historical5.42GB→2.17GB qualified copy833.369s относится к старому source. Последний whole pipeline cs8j2ly0 завершён TIME_BUDGET_EXCEEDED888.585s/OOMfalse: source full integrity PASS, candidate/full manifests/persisted recovery UNQUALIFIED. Local cache release49 Windows/135 Linux regressions PASS; actual current fit и CD ещё REQUIRED | P1: disk/write amplification, capacity не доказана | REFACTOR: shared references/projections и bounded validated bytes; квалифицированная existing-data conversion без потери provenance. Policy900s/1CPU/4GiB/retention сохраняется по owner decision | Same PR31; source/archive/CD gates; production promotion только по конкретной reviewed procedure | HIGH / PARTIAL_IN_BRANCH |
 
 ### План консолидации документов/кода
 
@@ -364,7 +1195,7 @@ Priority: P1 — блокирует correctness/security/основной scope;
 | ID | Что неизвестно / блокирует | Что нужно для снятия |
 | --- | --- | --- |
 | B01 | RESOLVED G1: first migration/restore/runtime and automatic CD38087285142 PASS; owner smoke accepted | Preserve existing restricted SSH/host verification/backup gates. No repeated first migration or manual image transfers |
-| B02 | v1 receiver PRESENT verified counterpart maincc8c632c…; v2/binding/live qualification UNSET, last main CD38084741177 FAIL | В конце общей Goal: fresh primary running record, backward-compatible v2 consumer-first CI/CD, exact vault binding и authorized delivery; preserve unrelated counterpart workspace |
+| B02 | Consumer actual2bfeda8: current-keyring crypto и active-master/recovery-material match12Oct20:46/20:52UTC PASS. Dedicated radar credential/binding0, ingest OFF,900s setting UNSET; actual producer HTTPx/TLS reaches receiver503. Producer9634558a CD failed pre-switch, hotfix PR31 unmerged | Prepare/qualify exact-target bootstrap preserving existing master/other credentials/config/trading flags; configure encrypted radar binding and900s policy. Actual signed historical delivery requires qualified producer hotfix/CD. Master-key proof does not confirm current PostgreSQL restore; unrelated counterpart R2 scope preserved |
 | B03 | Numeric SPEC gaps RESOLVED approved D09–D20; owner mapping EVG6 и actual migration/restore EVG8 PASS | Сохранять accepted policies и migrated settings/custom empty/delivery/mutes; новые unknown/conflicting states сохраняют diagnostic gate |
 | B04 | RESOLVED: Just9120 admin; strict main protection/production Environment and DEPLOY_ENABLED=true readback PASS | Reread current protections/revision before each merge; runtime delivery via dedicated CD |
 
@@ -380,4 +1211,129 @@ Confidence: HIGH по code/fixture-backed gaps и inventory; MEDIUM у orphan ex
 
 2026-10-11 Europe/Moscow: G1 DONE по primary records, verified main40882eb и actual production run38087285142/artifact11682629335; image manifest38d238a6…/config7666f323…, backup pre-40882eb…-1791667365.sqlite3. Owner sample screenshot SHA256401ddabd… и ответ «вроде работает» подтверждают bounded owner smoke с указанными ограничениями. Production Environment DEPLOY_ENABLED=true; dedicated forced-command SSH и strict host key verification проверены; последующие eligible runtime merges доставляет CD. Первое failed CD38086969847 не дошло до authentication/target: Windows CRLF private-key stdin repaired binary transfer, verified bounded run38087285142 PASS. Credentials не хранятся в repository; existing SSH keys/unit другого приложения сохранены.
 
-Текущий checkpoint2026-10-11: verified mainb13081e/PR29/current required CI38127039913 PASS; CD38127147184 full350 tests/build PASS, delivery failed at CHECK_STATE_INTEGRITY09:15:41UTC до backup/switch. Operator09:27UTC подтвердил FAILED_PRE_SWITCH и running baselineG5afd107; receiver update08:55UTC PASS. Owned recovery branch `codex/integrity-delivery-recovery-20261011`, baseb13081e/root, hotfix PR30: classifier/validation I/O/bounded budget и точный installer от known installed receiver aa2b1a7a. Full operator check EV-INTEGRITY-FULL PASS614.323s превышает старый465s CLI budget. Local46 storage/CLI/recovery tests PASS; initial CI38131556499 FAIL исправлен batch в том же PR (bootstrap Git blob pin/controlled ingestion clock),60 targeted bootstrap/ingestion/receiver tests и quality/self-review PASS. Fresh main/protections/production Environment/no competing PR/deploy проверены10:15UTC. Следующие gates — актуальный required Linux3.11 CI, operator receiver update receipt до merge, затем automatic CD/full snapshot backup и runtime capacity qualification. Consumer ownership/disarm/schema подтверждены09:27UTC; encrypted owner recovery/privileged config activation/historical smoke ещё PENDING. 403/code1010 касается urllib; actual VPS httpx достигает disabled receiver, Zero Trust не требуется. Context cap900s утверждён. После подтверждённой поставки и joint runtime qualification — final G6 audit/spec-plan docs PR. Whole-project Goal продолжается по явному поручению владельца; исходные58 AC/33 findings сохранены, процент во время реализации не пересчитывается. Built-in Goal остаётся BLOCKED от прежнего external SSH gate; инструмент не поддерживает самостоятельный resume, это не объявление завершения работ. Raw diagnostics/fixtures вне tracked repository; failed releases/data, обе previous owned producer branches и unrelated consumer R2 changes сохранены до qualification/cleanup.
+Текущий checkpoint2026-10-13: verified main9634558a; PR31/codex/backup-validation-performance-20261011/base9634558a открыт и не merged. Published code headb5fe042, required CI38405497548/ci-required115324970264 SUCCESS; fresh readback13Oct20:07UTC подтверждает эту revision/checks. Local cache-release/head/scanned-body corrections и документация ещё не published; CI прежней revision их не подтверждает.104 Windows storage,59 application и152 Linux native targeted tests, canonical quality PASS; separate protected candidate all5 manifests/body/hash readback PASS391.133s. Это не whole current conversion proof. Metadata-only push/PR не требуется.
+
+Production остаётся на прежнем G5afd107/crypto-watcher7039151; установленный privileged receiver9569f32c не обновлён. Current-dataset capture `current-dataset-qualification-gl9nijrj/status.json` завершён TIME_BUDGET_EXCEEDED/exit3/OOMfalse за888.557s: snapshot24,689,618,944bytes frozen около841s, full source/candidate/persisted recovery не подтверждены. Процессы предыдущих trials завершены, owned probe containers удалены; не ждать старые PID и не повторять capture из-за исчезновения observer handle. Current production compaction/replacement NOT_RUN. Historical archive-source qualification PASS относится к прежней5.42GB копии и не разрешает её promotion поверх текущей истории.
+
+Owner-approved cleanup завершён с повторной archive/hash/path/use проверкой: exact3 failed candidates освободили4,663,693,312 allocated bytes, exact2 duplicate history inputs —6,203,174,912. Primary receipts: `failed-candidate-cleanup-20261013T051549Z.json` и `duplicate-input-cleanup-20261013T063825Z.json`. Рабочая БД, qualified historical candidate и recovery archive `backup-archive-6crp6k3t/qualified.sqlite3.gz` сохранены. Эти удаления уже выполнены; не повторять и не расширять их scope.
+
+Prepared closed-source qualification: exact one-container stop/checkpoint/read/restart, общий900s/CPU1/RAM4GiB/no swap и все source/candidate/archive gates сохранены; production replacement запрещён. Closed-file127-row full pipeline и isolated refusal/restart fixtures PASS; они не доказывают fit текущего dataset. Local cleanup-timeout/refusal regressions PASS: ошибка удаления owned probe сохраняет BLOCKED и не пропускает restart того же baseline. Fresh read-only maintenance preflight13Oct09:16UTC PASS/files_changed=false. Explicit owner authorization на временную остановку/checkpoint получена13Oct; первый execute завершён BLOCKED/OOMtrue за200.535s с возвратом healthy baseline. Memory fix qualified в local/Linux fixtures/CI и actual25.53GB загрузке; full source integrity/copy/recovery qualification ещё PENDING. До исполнения повторить exact target/resources/concurrency preflight; молчание и automatic Goal continuation не являются разрешением.
+
+Consumer actual binding readback13Oct09:18UTC: radar credential versions0, active radar credentials0, binding отсутствует, ingest OFF, max age UNSET. Accepted policy900s остаётся требованием; runtime setting ещё не подтверждён. Unsigned probe из consumer не выполнен из-за отсутствующего diagnostic httpx; это не доказательство недоступности endpoint. Прежний actual producer HTTPx/TLS503 подтверждал disabled receiver в описанных условиях. Qualified master crypto/recovery-material match не заменяет current DB recovery или signed event delivery. Credential activation требует owner-protected qualified procedure; не обходить Admin/TOTP и не менять trading authority.
+
+Последний whole historical trial13Oct: source full integrity/unchanged checks PASS, но весь source/candidate/restore proof не завершён за887.528s; result TIME_BUDGET_EXCEEDED, candidate UNQUALIFIED_THIS_RUN, OOMfalse, owned probe removed. Separate readonly candidate byte check подтвердил SHA1810335b и совпадение с ранее qualified artifact; production тот же G5afd107/7039151 running/healthy. Last DB-size snapshot14:16UTC: SQLite26,248,880,128bytes/WAL6,604,392bytes; он не является текущей free-disk оценкой после нового trial. Working DB compaction/replacement NOT_RUN. Нельзя выдавать candidate size reduction за уменьшение production DB или повторять unchanged pipeline/остановку бота без нового основания.
+
+Current local optimization14Oct: frozen single-value field использует уже
+проверенный body SHA вместо повторного hash; mutable runtime reader и joined
+window hash прежние. ABBA cohort32k revisions сохраняет identical129366817 public
+bytes/SHA4a458062; warm baseline16.853s против14.606/14.746s. Full protected
+historical candidate readback PASS300.913s против прежних366.347s: all5 manifests,
+3179502 logical rows и188240 bodies; source1810335b/production unchanged.
+Primary receipts: `cw-field-hash-abba-025ae230bd494455841ea696178a4f4c.json`,
+`cw-field-identity-readback-913dca8a19ec4791bbb1aab9be5efda6.json` и6 Linux
+refusal controls `cw-field-identity-controls-055b1420613a484889b1e8a797ce6f5a.json`.
+
+Isolated converter создаёт новые shared bodies вlossless Zstd v2; reader принимает
+V1/V2, existing bodies/private bytes сохраняются, live writer default остаётсяV1.
+Measured8k-body cohort37.84MB: encoded6.27MB против7.80MB; Zstd0.425/0.448s против
+zlib3 0.823/0.909s, decoded SHAee3b767d совпадает. Это bounded cohort, не весь
+copy/current DB. Менее плотный zlib1 вариант не выбран: stable выигрыш не подтверждён.
+Positive mixed encodings/private bytes/rollback и negative frame size/window/checksum/
+trailer/extra-frame/future-version checks PASS.129 local tests/quality PASS;
+Linux3.11/native228 targeted regressions PASS, receipt
+`cw-zstd-body-regressions-9dd35bd5b3d849c2b59ed50787ab2af5.json`.
+Actual full source/copy/new-candidate/recovery qualification≤900s ещё PENDING.
+
+Fresh read-only capacity13Oct21:32UTC: production afd107/7039151 healthy, main
+SQLite27653779456bytes/WAL7762112bytes, free6426107904bytes. Новые исторические
+candidate outputs требуют отдельного bounded preflight; этот snapshot не гарантирует
+будущее free disk. DB replacement и снижение production размера NOT_RUN.
+
+Whole historical qualification новогоb849dbe завершена14Oct local /
+13Oct22:06UTC: TIME_BUDGET_EXCEEDED/exit3 за888.92s, OOMfalse, candidate
+UNQUALIFIED_THIS_RUN. Source/copy дошли до frozen candidate phase; source5422329856bytes,
+новый candidate2107183104bytes. Этот размер — unqualified artifact, не уменьшение
+production DB. Полный source/candidate/recovery результат не получен; recovery
+byte gate не превращает timeout вPASS. Source inode и afd107/7039151 healthy baseline
+сохранены, probe удалён. Primary record:
+`historical-zstd-gate-26m3jfsd/status.json`; operator job2141322 terminal.
+Actual helper SHAe227871e подтверждён до запуска и readback; ошибочный old hash в
+launcher metadata отмечен отдельным `historical-zstd-gate-job-yg0zbau9/launcher-correction.json`,
+исходный launcher сохранён. Операция не перезапускалась.
+
+Следующая performance зависимость — source/copy path: прежний per-record native
+extractor возвращает packed JSON, затем Python заново materializes и сериализует
+metadata после binding references. Допустим bounded prototype direct serialized
+binding с exact semantic/numeric parity и refusal controls; текущий immutable/raw
+source, full source/candidate gates и900s/CPU1/RAM4GiB не менять. Новый whole trial
+без measured critical-path improvement не запускать. Live compaction, PR31 merge/CD,
+consumer activation иG6 по-прежнему PENDING; progress54/58.
+
+One-pass native packing14Oct: direct second-parse binding prototype отклонён
+поABBA cost (same public SHA, slower copy). Callback-in-original-parse prototype
+и canonical guarded path сохраняют same full12000-record public SHA99b49d0f;
+warm baseline copy3.330s против1.659/2.410s. Это bounded cohort, не whole fit.
+Canonical path сохраняет numeric lexemes и active outer transaction; per-record
+savepoint откатывает partial bodies/admission proofs при late fallback/refusal.
+Older helper fallback и Python backend сохраняются. Runtime radar этот helper
+не выбирает; all source/candidate/manifests/recovery/budget gates прежние.
+119 local tests/quality,144 Linux native/history/full fixture conversion tests
+и3 canonical callback refusal tests PASS. Primary receipts:
+`cw-one-pass-canonical-00e2a7c80f354ed982e422933e5f288b.json`,
+`cw-canonical-saved-pack-abba-dab976579cda47d3b6059767f1c39132.json`,
+`cw-saved-pack-refusals-576238ce9ed245b8b9f02d7060ff722a.json`.
+No production changes/promotion; current dataset qualification PENDING.
+
+Capacity/cleanup blocker14Oct: readonly13Oct22:43UTC production afd107/7039151
+healthy; SQLite27920867328bytes, WAL8120552bytes, free3254681600bytes. Exact
+four-file cleanup prepared, not executed: candidate.sqlite3 иsource.sqlite3.zst
+вhistorical-copy-cache-am7q8k0k/work иhistorical-zstd-gate-26m3jfsd/work.
+Allocated5268840448bytes. Read-only preflight повторён22:53UTC PASS66.937s:
+protected gzip encoded/decoded identities иqualifiedV1 candidate1810335b, exact
+paths/inodes/modes, terminal controllers, no open handles/no writable mounts.
+NewV2 candidate1e6c9853 — воспроизводимый failed output known historical source,
+не current live state. Original recovery source, qualified candidate иreceipts
+сохраняются; удаление не разрешено. Owner approval запрошен на ровно эти4 файла;
+прежние cleanup approvals имеют другие paths. До ответа только независимая работа,
+без unlink или source/production DB replacement. После approval повторить весь
+preflight/identities/use и incremental receipt; после неоднозначного результата
+сначала readback. Prepared next historical controller требуетone-pass capability,
+source/artifact identities итот же900s/CPU1/RAM4GiB; пока NOT_RUN.
+
+Independent converted-data contract validation14Oct: disposable125-event fixture
+with all revisions/episodes/outcomes/comparisons was rebuilt through Python and
+native one-pass paths. Exact NDJSON/CSV, cohorts/distributions, prior causal cutoff,
+unchanged input bytes иprivate serialized transport bytes match before/after;
+private transport не экспортируется. Local3 tests PASS (nativeN/A onWindows),
+Linux4 tests PASS3.64s; quality PASS. Primary receipt:
+`cw-converted-public-contracts-fa0ff5c6b7c148a8ad34ea9e804c912c.json`.
+Это controlled fixture, не whole/current DB qualification. Cleanup approval на
+4 exact files по-прежнему PENDING; unlink/new whole test/production replacement
+не выполнялись. Full Goal/54 of58 code scope сохраняется.
+
+Local recovery implementation: commit9e5f6d5 плюс final self-review correction
+(source digest из same persisted writer, final archive fingerprint, native copy
+parity). Новые canonical modules используются только разовой conversion procedure;
+обычный backup/CD не изменён. Published PR31/CI по-прежнему относятся кb5fe042,
+локальные изменения ещё не published. Small fixtures всех source modes и отказов
+не являются full current qualification.
+
+Bounded immutable candidate CPU profile14Oct:8000 revisions четырёх kinds,
+32,446,070 восстановленных public bytes, sample18.337s/whole probe57.993s;
+canonical reconstruction8.813s cumulative, body loading4.219s cumulative.
+Это SAMPLE_ONLY, не весь readback/copy и не модель fit27GB dataset. SourceSHA1810335b
+и healthy baseline сохранены; primary receipt
+`cw-bounded-readback-profile-b19271bf365a4e92888ccba2c43b6e90.json`.
+Full/current conversion, production switch, PR31 merge/CD, consumer activation
+и final G6 AUDIT остаются незавершёнными; scope58/progress54/58 сохраняются.
+
+Следующий шаг по owner steering14Oct: сначала new-write-only CD без conversion
+накопленной DB. Legacy/compact write/restart qualified; latest PR CI и delivery
+gates REQUIRED. Owner разрешил точную one-time exception из полного source/history
+backup flow; реализация проверена локально. Довести PR31 до latest CI, gated
+operator receiver+permit update, merge и automatic CD; проверить exact source/image,
+health/config/ingestion и compact writes. Не выполнять conversion, production
+replacement или pending cleanup четырёх файлов. Old-data compaction остаётся
+отдельным этапом; scope58/progress54/58 сохраняются.
+
+Terminal whole b849dbe не повторять. One-pass canonical packing qualified на bounded cohort/fixtures; fresh capacity и exact cleanup review нужны перед возможным full qualification. Новый whole trial требует fresh resource/concurrency preflight и measured code/artifact identity. Fresh current dataset остаётся отдельной required qualification. Не повторять terminal failed whole trial без нового основания. Проверить конкретный exact-byte restore/proof-reuse proposal на corruption/bounds/races и actual historical archive; owner policy review14Oct разрешил только описанный recovery gate; source/candidate и routine CD gates остаются прежними. Fresh current qualification остаётся отдельным required результатом. Source compression prototype qualified258.407s на protected historical archive; canonical code/defaults не менялись, whole fit ещё не доказан. Candidate verification отдельно от copy PASS391.133s для protected historical artifact; whole current conversion≤900s остаётся REQUIRED. Native event-window block experiment отклонён по cost/size evidence; не повторять unchanged whole pipeline и не ослаблять gates. Разрешённое exact-byte recovery reuse требует canonical regression qualification; оно не закрывает source/candidate timeouts. Source-release/manifest correction qualified53 local/139 Linux tests, но actual whole fit остаётся неподтверждённым. Новый full trial требует fresh disk/resources preflight; newly generated duplicate outputs не удалять без конкретной reviewed authorization, original gzip и старый qualified candidate сохраняются. Только после full qualification подготовить review точного production switch и applicable receiver/merge/CD gates. Затем завершить qualified consumer activation/signed historical smoke и G6 full audit/docs PR. Полный scope58 AC и все findings сохраняются; по коду54/58, audit percentage не пересчитывался. До этого Goal DoD не достигнут. Primary detailed logs/receipts остаются вне repository; user state и другие VPS проекты сохраняются.

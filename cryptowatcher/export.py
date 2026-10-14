@@ -10,7 +10,8 @@ from dataclasses import dataclass
 from typing import Any, Iterator
 
 from .analytics import cohort_rows
-from .events import PREFIX
+from .events import PREFIX, History
+from .history_codec import MARKER
 from .storage import Store, encode
 
 SCHEMA = "cryptowatcher.export.v1"
@@ -64,6 +65,7 @@ def ndjson(store: Store, selection: Selection) -> Iterator[str]:
     if not store.readonly or store.db.in_transaction:
         raise ValueError("Export requires a separate read-only connection")
     cte, args = event_selection(selection)
+    history = History(store)
     store.db.execute("BEGIN")
     try:
         # First read pins the WAL snapshot before any output; later writes cannot enter this export.
@@ -93,21 +95,23 @@ def ndjson(store: Store, selection: Selection) -> Iterator[str]:
             start = PREFIX + kind + ":"
             rows = store.db.execute(
                 cte
-                + "SELECT r.payload_json FROM runtime r WHERE r.key>=? AND r.key<? AND "
+                + "SELECT r.key,r.payload_json FROM runtime r WHERE r.key>=? AND r.key<? AND "
                 + relation
                 + " ORDER BY r.key",
                 [*args, start, start + "~"],
             )
             for row in paged(rows):
-                record = json.loads(row[0])
+                record = history.resolve(row[0][len(PREFIX) :], json.loads(row[1]))
                 counts[kind] = counts.get(kind, 0) + 1
                 yield encode({"schema": SCHEMA, "type": kind, "record": record}) + "\n"
         # Historical settings are frozen in every selected revision; export them independently too.
         rows = store.db.execute(
             cte
-            + "SELECT DISTINCT json_extract(r.payload_json,'$.settings_revision'), json_extract(r.payload_json,'$.settings_snapshot') FROM runtime r WHERE r.key>=? AND r.key<? AND "
+            + "SELECT DISTINCT json_extract(r.payload_json,'$.settings_revision'), json_extract(r.payload_json,'$.settings_snapshot'), "
+            + f"json_extract(r.payload_json,'$.{MARKER}.fields.settings_snapshot') "
+            + "FROM runtime r WHERE r.key>=? AND r.key<? AND "
             + relations["event"]
-            + " ORDER BY 1,2",
+            + " ORDER BY 1,2,3",
             [*args, PREFIX + "event:", PREFIX + "event:~"],
         )
         for row in paged(rows):
@@ -117,7 +121,12 @@ def ndjson(store: Store, selection: Selection) -> Iterator[str]:
                     {
                         "schema": SCHEMA,
                         "type": "settings",
-                        "record": {"revision": row[0], "snapshot": json.loads(row[1])},
+                        "record": {
+                            "revision": row[0],
+                            "snapshot": history.codec.field(json.loads(row[2]))
+                            if row[2]
+                            else json.loads(row[1]),
+                        },
                     }
                 )
                 + "\n"

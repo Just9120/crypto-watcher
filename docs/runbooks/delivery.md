@@ -72,13 +72,162 @@ Bootstrap берёт existing target lock, сохраняет backup `authorized
 
 ## Routine CD: schema1 / NONE
 
+### Разовая owner-approved поставка compact new writes
+
+Owner decision14Oct: PR31 new-write fix поставляется на ту же SQLite отдельно
+от уменьшения накопленной истории. [Operator update](../../scripts/update_cd_receiver.py)
+при latest required CI/PREFLIGHT и `--execute --approve-new-writes-only` создаёт
+root0600 `/etc/cryptowatcher/new-write-permit.json`: exact approved PR31 Git tree,
+previous container/image/revision и hash действующего target. Receiver сверяет
+tree через primary GitHub commit record и проверяет previous runtime; artifact
+или environment variable не могут включить exception. Permit CONSUMED после
+successful post-checks; отсутствующий, consumed или другой tree использует
+обычные полные source/persistent-backup gates ниже.
+
+Только matching permit заменяет полные scans/history backup ограниченной
+[проверкой](../../cryptowatcher/new_write_check.py)120s/CPU1/512MiB/no swap.
+Source mount read-only; WAL snapshot/schema/owner/migration/config identity,
+bounded sampled legacy/compact readback, private owner/settings/preferences/mutes
+snapshot с restore rehearsal и fixture write/restart. Host env и active/checkout
+Compose сохраняются в private release/config-recovery, secrets не экспортируются.
+DB не конвертируется/заменяется/очищается; lifecycle alerts и settings сохраняются.
+Post-checks требуют exact image/source, health, fresh ingestion/config и bounded
+history/new compact event readback; отсутствие fresh event фиксируется отдельно,
+fixture write/restart остаётся обязательным. Full integrity/backup имеют явные
+NOT_RUN_OWNER_EXCEPTION/FULL_HISTORY_BACKUP_NOT_RUN_OWNER_EXCEPTION, не PASS.
+
+Нового полного recovery snapshot всей текущей history у этой операции нет;
+старый qualified archive покрывает только своё прежнее состояние. После compact
+writes G5 reader не совместим: automatic rollback на него/DB restore запрещены;
+при post-check failure остановить продвижение и применить compatible forward-fix.
+Все остальные target/SSH/CI/artifact/lock/eligibility gates, обычные backup/CD
+defaults и900s/CPU1/RAM4GiB предел отдельной конвертации сохраняются. Permit и
+deployment record сохраняются для readback; повтор после ambiguous result требует
+сначала проверки state, никакого blind retry. Разовый rollout не разрешает cleanup.
+
+### Полная проверка многогигабайтной SQLite
+
+Source и persistent backup остаются обязательными full integrity gates до switch.
+Проверочные контейнеры имеют отдельный private tmpfs `/validation`, UID/GID10001,
+read-only root, network none, cap-drop ALL, CPU1 и memory-swap=memory (без swap).
+Бот и другие service units эти limits не получают. CD использует cap4GiB/no swap;
+Offline CLI containers отключают inherited app healthcheck через `--no-healthcheck`:
+они не запускают бот, а health imports тратят тот же CPU budget и дают
+неприменимый `Invalid owner_id` без app env. Полные integrity/backup проверки
+и health/readiness реального production container остаются обязательными.
+3GiB доступны compressed pages/index,1GiB — interpreter/SQLite/cache.
+Private scratch64MiB хранит только disposable sentinel/WAL/SHM, не полную DB.
+Host MemAvailable должен оставить1536MiB reserve сверх cap. WAL-aware
+`database.snapshot_bytes` обязателен для current size/deadline/disk Evidence.
+Unknown metadata, insufficient RAM/space, compressed limit или deadline блокируют
+pre-switch stage; fallback на более слабую проверку отсутствует.
+
+CLI [validation.py](../../cryptowatcher/validation.py) принимает explicit
+`--validation-directory /validation` только для `state-check` и `backup`.
+Directory — отдельный tmpfs текущего UID/mode700, без symlinks. CD добавляет
+`--compressed-validation`, mandatory mode `COMPRESSED_RAM`.
+[Compressed validation](../../cryptowatcher/compressed_validation.py) использует
+hash-locked APSW3.53.4.0/SQLite3.53.4 только в isolated validation connections;
+основное приложение продолжает использовать standard SQLite. Compressed VFS
+использует64KiB lossless Zstandard0.25.0 blocks (level1/checksum/single thread)
+и bounded8-block mutable write cache. Codec не меняет SQLite bytes.
+Physical SQLite sector остаётся4096; compressed VFS сохраняет page/header bytes
+native online backup. Отдельные backup API могут нормализовать header по-разному;
+encoded/decoded identity проверяется относительно собственного pinned snapshot,
+а совместимость — native restore и совпадением всех rows исходных5 таблиц.
+Reconstruction hash декодирует blocks последовательно без удержания LRU.
+Private full-integrity cache использует512–1024MiB, вычисленные после freeze из
+фактических compressed bytes/index: image+SQLite cache+512MiB overhead reserve
+не превышают4GiB. Reserve включает decoded-block cache32MiB, interpreter/native
+contexts и temporary buffers. При image near3GiB сохраняется cache512MiB;
+accounting overflow блокирует stage. Основной app cache не меняется.
+VFS возвращает исходные байты каждой страницы и проверяет reconstructed SHA256
+до и после full integrity. Source snapshot создаётся pinned SQLite online backup;
+live reader закрывается до полного сканирования, metadata берётся из этого snapshot.
+CD создаёт новый persistent `pre-<revision>-<time>.sqlite3.zst` explicit flags
+`--compressed-validation --archive-backup`. Native pinned online snapshot полностью
+проверяется в compressed RAM, затем streaming lossless archive fsync сохраняет
+его страницы. После освобождения первой image архив независимо читается заново:
+full writable integrity и decoded SHA256/size должны совпасть с snapshot;
+encoded archive SHA256/size также сверяются с записанными bytes.
+Новый архив ограничен3GiB; disk preflight требует этот предел плюс512MiB.
+Default CLI backup без archive flag по-прежнему создаёт обычную SQLite.
+Только owned workspace проверки удаляется; incomplete persistent archive сохраняется
+и не получает COMPLETE. DB/schema/settings/history и остальные backups не меняются.
+
+Для recovery `.zst` сначала проверяются encoded hash/size по deployment record,
+затем он потоково распаковывается `zstandard.ZstdDecompressor().copy_stream`
+в новый isolated raw файл. Его SHA256/size должны совпасть с decoded proof;
+native SQLite full integrity и readback всех5 таблиц обязательны. Для raw restore
+заранее нужны disk space и установленная compatible image. Restore поверх живой
+DB требует отдельной согласованной процедуры; обычный CD не выполняет downgrade/restore.
+
+Full writable `PRAGMA integrity_check`, включая CHECK constraints, выполняется
+целиком. `immutable=1` или read-only SQLite handle не используются для validator:
+их CHECK behaviour не подходит квалифицированным negative controls. Main VFS
+после copy отвергает writes; metadata connection дополнительно query_only.
+WAL/SHM операции разрешены лишь в private sentinel workspace. Default CLI без flags
+сохраняет disk validation; plain TMPFS flag доступен для отдельной qualification.
+Stage cap900s сохранён. Deployment record содержит allocations,
+COMPLETE/COMPRESSED_RAM/full-backup SHA256 proof/source/build/artifact/post-checks;
+capture отвергает отсутствие доказательства и не публикует unknown fields/secrets.
+Installed receiver9569f32c требует hash-bound operator update до merge;
+SSH key/target/forced-command permissions сохраняются.
+
+Plain RAM closed-copy rehearsal2026-10-11T15:44–15:48UTC PASS201.800s,
+integrity31.721s, но последующий live readback8,982,642,688bytes при available
+7,471,837,184bytes блокировал update до execute. Plain RAM не используется CD.
+REQUIRED pre-merge qualification выполняет [operator helper](../../scripts/qualify_compressed_validation.py)
+на preserved known gzip archive, current live WAL snapshot и новом isolated
+persistent `.zst` backup с отдельными885s на каждый этап/CPU1/cap4GiB
+(maximum combined2655s плюс45s host cleanup margin),
+reserve1536MiB/constraint negative control/hashes/точным cleanup/all3 live ID readback.
+Каждый этап выполняется в новом container/process с900s outer deadline,
+с повторным host reserve check и завершённым cleanup предыдущего. Это соответствует
+отдельным offline CLI containers CD и исключает перенос native allocator/cache
+предыдущего этапа. Все3 этапа REQUIRED; failure прекращает дальнейшие этапы.
+Оба источника монтируются read-only; production container/config/DB не меняются.
+Helper использует existing image9634558a и hash-pinned Linux APSW/Zstandard wheels,
+не устанавливая wheel на host. PASS не заменяет latest Linux CI/image или
+actual automatic CD/running source/capacity checks.
+
+Первая compressed qualification2026-10-11T20:57–21:12UTC: backup5.42GB
+full integrity/byte hash PASS641.243s, но shared885s истёк во время live copy.
+Receiver/runtime не менялись; оба полных этапа остаются REQUIRED. Отдельные
+необновляемые deadlines соответствуют existing CD source/backup stages,
+production cap900s не меняется. Zlib level2 closed proof прошёл366.168s12Oct,
+но current live stage превысил885s во время full integrity. Новый Zstandard codec
+выбран после bounded synthetic24.7MiB fixture: compression0.026s/decode0.010s
+против zlib0.106s/0.030s с exact decoded bytes. Это локальное Evidence выбора;
+fit/time всей текущей DB и actual durable archive остаются REQUIRED qualification.
+Byte identity и memory/deadline guards сохраняются.
+
+Zstandard qualification12Oct07:56–08:14UTC: known closed5.42GB PASS186.444s,
+retained673,056,291bytes. Live stage превысил885s на final reconstructed hash
+после возврата full integrity; complete live proof отсутствует. OOMfalse,
+all3 units unchanged; receiver NOT_RUN. CPU увеличивался во время integrity,
+physical reads оставались14,081,437,696bytes. Следующий candidate использует
+bounded remaining-memory cache и записывает native cache hit/miss/used metrics;
+выбор hint не является доказанным ускорением до actual qualification.
+
+Combined-process adaptive run12Oct08:37–08:48UTC: closed archive PASS208.270s,
+но live copy завершилась isolated OOM137 до integrity/cache application. Все3
+units unchanged, probe removed. Предыдущие allocations могут сохраняться после
+gc/close; это limitation combined verifier, а не доказанная production CLI OOM.
+Новая per-stage isolation сохраняет dataset, checks и limits; её пригодность
+для current live/source и durable archive остаётся обязательной qualification.
+
 ### Hotfix receiver update до merge
 
 При подтверждённом mismatch установленных operation timeouts с multi-GiB history применяется [update_cd_receiver.py](../../scripts/update_cd_receiver.py). Это один operator setup step из существующей root SSH session; restricted Actions key не получает shell/self-update permissions. Подготовленный installer и receiver берутся из immutable reviewed PR head с проверенными hashes. Preflight и execute требуют unchanged expected main/base/head, trusted repository и latest successful `ci-required` app15368. До изменения проверяются exact host/account, target hash, old receiver hash/permissions, healthy running G5 revision и отсутствие competing deploy под target lock. Execute сохраняет verified old receiver, атомарно заменяет только root-owned receiver и записывает receipt; app/data/SSH/secrets не меняет. Unknown/partial state не повторяется вслепую. После receipt PASS агент merges PR через обычные gates; последующий CD проверяет новый main artifact.
 
 Обновлённый receiver сохраняет pre-switch phases и error class в atomic `deployment.json`, не exception body/env. Full state integrity и full snapshot backup integrity остаются REQUIRED. Database budget180s+150s на каждый начатыйGiB, максимум900s на stage; внутренний CLI budget короче на15s для controlled exit. Основание: readonly production snapshot2026-10-11T09:49:43UTC, DB4,820,512,768bytes, full integrity PASS за614.323s с validation cache128MiB и effective mmap2,147,418,112bytes. При этом размере outer budget900s/CLI885s оставляет около270s сверх измеренной проверки для copy/variation; пригодность snapshot backup подтверждается отдельно actual CD. Cache/mmap/progress10000 применяются только на validation connection, затем восстанавливаются; steady-state runtime settings и DB format не меняются. Release job имеет40min upper bound для build и двух таких checks, это не monitoring или latency SLO. Online backup использует pinned read snapshot и incremental copy, чтобы live WAL writer не перезапускал его бесконечно. Incomplete destination сохраняется и не считается пригодной backup. После timeout останавливается только созданный этой operation named offline candidate с проверенной image/name и отсутствием Compose project; running application не затрагивается. Данные и старые failed releases не удаляются.
 
-CLI `state-check` и full integrity этап `backup` возвращают безопасный JSON `failure_code` и отдельный exit status:3 TIME_BUDGET_EXCEEDED,4 DATABASE_CORRUPT,5 INTERRUPTED,6 IO_ERROR,7 DATABASE_ERROR. Поэтому установленный receiver различает причины по `docker exit N` даже без публикации stderr/body. Общие ошибки configuration/state сохраняют exit2. TIME_BUDGET_EXCEEDED не доказывает повреждения; DATABASE_CORRUPT означает non-ok результат полной проверки либо SQLite CORRUPT/NOTADB. Полная проверка читает все возвращённые rows; interruption очищает progress handler. Ошибка или незавершённый результат блокируют switch, не заменяются quick_check или PASS.
+Qualification ограничена actual delivery. CD38133517275/9634558a прошёл source integrity, но завершился FAILED_PRE_SWITCH на BACKUP_AND_VALIDATE по общему copy+integrity budget. Отдельный read-only probe закрытой копии5,422,329,856bytes2026-10-11T11:42–11:57UTC с cache512MiB/CPU1/memory3GiB также превысил885s; полный результат отсутствует. Cache128MiB и gates сохраняются, efficacy увеличения cache не доказана. Перед следующей поставкой требуется установление причины ожидания и qualification исправления; повтор full scan/deploy не используется для speculative tuning. Primary receipt и ограничения — в [текущем hotfix](../open_issues.md#current-goal--полный-scope-cryptowatcher-implement).
+
+CLI `state-check` и full integrity этап `backup` возвращают безопасный JSON `failure_code` и отдельный exit status:3 TIME_BUDGET_EXCEEDED,4 DATABASE_CORRUPT,5 INTERRUPTED,6 IO_ERROR,7 DATABASE_ERROR. Timeout во время backup copy тоже exit3; CLI backup result дополнительно содержит copy/integrity/total durations и phase без содержимого DB/config. Поэтому установленный receiver различает причины по `docker exit N` даже без публикации stderr/body; durations остаются CLI Evidence, текущий receiver их не переносит в host record. Общие ошибки configuration/state сохраняют exit2. TIME_BUDGET_EXCEEDED не доказывает повреждения; DATABASE_CORRUPT означает non-ok результат полной проверки либо SQLite CORRUPT/NOTADB. Полная проверка читает все возвращённые rows; interruption очищает progress handler. Ошибка или незавершённый результат блокируют switch, не заменяются quick_check или PASS.
+
+CI-side [deliver_release.py](../../scripts/deliver_release.py) сохраняет непустой safe deployment artifact для success/failure. PASS требует exact revision/build run/bundle digest, image identity и обязательный receiver post-check result; raw stderr/exception text и неизвестные fields не публикуются. Receiver rejection из stderr даёт BLOCKED с allowed phase/constant failure code; unknown transport response остаётся UNCONFIRMED по runtime и требует primary host readback. Клиент сохраняет strict host verification, fixed target/forced command, единственную попытку и не повторяет поставку. Existing record не перезаписывается. Наличие failure artifact не подтверждает фактическое состояние runtime и не даёт разрешение retry.
 
 Canonical receiver — [deploy_receiver.py](../../scripts/deploy_receiver.py). Он принимает только `cryptowatcher-deploy SHA BUNDLE_SHA256 BYTE_COUNT`, не shell/произвольную команду. Проверяет established root-owned target, migration receipt и migrated DB, lock, latest main, free disk, stream length/hash, tar allowlist/regular members, schema/migration class, image/architecture/source, exact Compose service и persistent mount.
 
@@ -86,7 +235,192 @@ Canonical receiver — [deploy_receiver.py](../../scripts/deploy_receiver.py). �
 
 Records: Actions tested SHA/check/run/attempt, build artifact/manifest, target release `deployment.json` (previous image, backup, switch and post-check state), uploaded deployment artifact. Секреты и resolved config не логируются. Failed operation сохраняет attempted release; повтор с тем же bundle отвергается до разбора state. После transient failure новая artifact attempt допустима только после known state inspection. Advanced cleanup/backups retention пока manual, без system prune или удаления живых данных.
 
+## Изолированная конвертация legacy history backup
+
+Canonical command из root repository в locked Python environment либо внутри
+проверенного immutable image — `python -m cryptowatcher.history_rebuild`.
+Назначение: создать новый isolated candidate с compact history/shared snapshots из
+закрытого qualified SQLite backup. Production DB, Compose, config и исходный
+backup не изменяются; automatic CD не запускает этот tool.
+
+Перед запуском установить actual source path и SHA256, связанный с успешной full
+qualification этого exact закрытого backup. Source без WAL/SHM/journal sidecars;
+symlinks, другой owner/schema, unknown objects и existing destination блокируются.
+Destination directory private/owned, новый file exclusive0600. Default byte cap
+равен source size; нужен cap плюс1.5GiB free reserve, reserve проверяется в copy.
+Operation общий budget≤900s. Его изменение не согласовано. Текущее explicit
+поручение compact storage расширяет conversion на shared settings/context/windows,
+heads всех четырёх kinds и legacy/new mixed revisions; retention/alerts не меняет.
+
+Legacy public records принимаются в canonical JSON representation текущего
+producer (`storage.encode`). JSON1 извлекает projection/shared fields; большие
+integers используют exact Python fallback. Полный восстановленный canonical JSON
+сравнивается с исходным для каждой public row. Non-canonical или конфликтующая
+запись блокирует qualification с сохранением source, без скрытого исправления.
+Private-copy admission reuse разрешён только в exclusive transaction нового
+candidate; отдельный frozen readback проверяет каждый body/ref. Это не отменяет
+runtime admission checks и не продлевает900s budget.
+
+Исторические windows до32MiB переводятся в shared whole-value snapshot. Это
+снижает стоимость преобразования; разные пересекающиеся frozen windows остаются
+независимыми сжатыми values, без потери timestamps/provenance. Более крупные windows
+используют bounded blocks. Новые live records используют16-candle blocks; readers
+обязаны поддерживать mixed whole-value/block history. Deadline900s включает
+копирование, full integrity, все manifests и hashes; последовательность запусков
+не сбрасывает общий budget одной конвертации.
+
+После commit всех copied tables converter фиксирует source counts/manifests.
+Владелец source scope завершает unchanged-byte checks и закрывает connection/VFS
+до candidate full integrity/readback. Source buffers и unused allocator pages
+освобождаются; проверки candidate не зависят от открытого source. Cache допускается
+по фактическому RSS с512MiB reserve внутри4GiB cap, максимум1GiB; недостаток памяти
+или ошибка source release блокируют qualification. Все full checks, typed logical
+manifests и финальные source/candidate/archive hashes остаются обязательными в
+том же900s deadline. Это изменение lifetime ресурсов, не разрешение на promotion.
+
+Во время копирования writer cache допускается по actual RSS: максимум1GiB
+внутри прежних4GiB, с дополнительным резервом128MiB для активного source reader
+и existing512MiB overhead reserve. При неизвестном RSS сохраняется прежний256MiB
+cache; недостаток capacity блокирует conversion до увеличения cache. Source
+cache остаётся128MiB; transaction, journaling, constraints и all hashes/manifests
+не меняются. Фактически выбранный `copy_cache_kib` включается в Evidence.
+
+Native conversion helper
+может связывать admitted body IDs в том же parse без повторной Python serialization
+metadata; numeric tokens сохраняются. Эта возможность выбирается только в активной
+copy transaction и отмечается `native_reference_binding_available`. Каждый record
+имеет nested savepoint: late unsupported format/depth или callback refusal откатывает
+partial body admission и очищает rolled-back cache proofs до fallback/ошибки.
+Старый helper без функции использует прежний путь; runtime radar helper не выбирает.
+
+Explicit flag `--compressed-candidate-validation` переносит полную candidate
+проверку в frozen compressed RAM после закрытия writer. Перед freeze читается
+owner snapshot; full writable integrity/CHECK выполняется через query-only VFS.
+Затем тот же verifier сверяет все пять typed manifests, каждый shared body,
+head identity/projection и число строк. Reference revision восстанавливается
+один раз; проверка малой projection не заменяет проверку полного public payload.
+Reconstructed bytes и повторный file SHA256 должны совпасть с frozen image;
+изменение file/metadata, отсутствие памяти или общий deadline блокируют результат.
+Cache рассчитывается существующим admission внутри4GiB; validated-body cache
+этого frozen readback ограничен64MiB внутри512MiB overhead reserve. Runtime
+и copy codecs сохраняют4MiB. При обходе shared bodies проверяется прочитанный
+payload той же row, без второго SELECT; encoding/size/hash/canonical проверки
+сохранены. Frozen-only readback codec повторно использует уже verified body
+по content hash без SQL lookup: VFS отказывает source writes, connection query-only,
+после полного обхода проверяются unchanged file/reconstructed hashes. Каждый
+scanned body всё равно проходит validation своего текущего payload; cache miss
+и eviction снова читают SQL. Обычный Store/runtime/copy path всегда перечитывает
+изменяемые rows и не может включить frozen cache. Temporary sentinel удаляется при выходе. Flag не включён в routine CD/default conversion и не
+создаёт новое разрешение на production switch. Linux native и portable fallback
+используют одни logical checks; actual whole/current qualification остаётся
+обязательной, прежде чем выбирать этот path для поставки.
+
+```bash
+python -m cryptowatcher.history_rebuild --source "$CW_CLOSED_BACKUP" --destination "$CW_NEW_CANDIDATE" --owner-id 233382575 --qualified-source-sha256 "$CW_QUALIFIED_SOURCE_SHA256"
+```
+
+Для сохранённого gzip/Zstandard archive доступны `--source-encoding gzip|zstd`
+и обязательный explicit `--max-candidate-bytes`. SHA256 выше относится к decoded
+SQLite bytes. Tool проверяет encoded archive SHA256 до/после, decoded SHA256,
+полную writable integrity/CHECK исходного frozen compressed image, все исходные
+rows и полную candidate integrity/readback. Source читается через existing bounded
+compressed VFS с cache128MiB; отдельный raw source file не создаётся. Private
+sentinel/sidecars удаляются после закрытия connection. Дополнительные hashes,
+source qualification и candidate copy/proof входят в тот же общий900s deadline;
+это не отдельные этапы с обновляемым budget. Decoded image ограничен existing3GiB
+compressed capacity, контейнер сохраняет cap4GiB/CPU1/no swap. Нехватка памяти,
+места, повреждённый архив или mismatch блокируют qualification. Этот вариант не
+изменяет production и не доказывает fit/time полного dataset по small fixtures.
+
+Это command template: три CW variables задаются по actual operator inventory,
+а не по предполагаемым paths. Новые shared bodies isolated converter пишет как
+`cryptowatcher.shared-json.v2` / checksummed Zstd; существующие V1/V2 bodies
+сохраняются. Decoded content identities и public values прежние; encoding и
+boundaries — в [state contract](../state_contract.md#compact-history-representation).
+Heads становятся ссылками на revision того же
+kind/ID/version; полное восстановленное значение включено в сравнение с source.
+Numeric provenance не нормализуется. Все пять таблиц копируются; original JSON,
+settings/mutes/queues и private serialized transport bytes сохраняются. Public
+immutable revisions компактно представлены shared compressed snapshots и
+восстанавливаются полностью. Для каждой таблицы сравниваются полные length-framed
+SHA256 manifests всех logical rows в исходном порядке: каждый ключ, тип/значение
+columns, decoded revision/head и exact payload bytes остальных namespaces.
+Дополнительные rows допускаются только для проверенных shared bodies. Это full
+readback, не sample. Новый файл строится плотно; full integrity/CHECK,
+counts/manifests, source unchanged hash и candidate SHA256 обязательны. Повторное
+чтение legacy heads по random source lookup не требуется: candidate dereferencing
+должно совпасть с исходным полным значением каждого head.
+
+`ISOLATED_CANDIDATE_PASS` доказывает только этот candidate и lineage к expected
+source hash. Output явно сохраняет `source_full_qualification=REQUIRED_SEPARATELY_FOR_EXPECTED_HASH`
+и `production_migration=NOT_RUN`; он не заменяет source qualification, current
+runtime evidence либо CD. При failure новый partial output сохраняется UNQUALIFIED;
+не повторять запись в тот же destination. Promotion/replacement live DB требует
+отдельной exact-target approved procedure: current recovery copy, one writer,
+compatible binary, switch и обязательные post-checks. Такая процедура ещё не
+выполнена; архив5.42GB не выдаётся за current15GB dataset.
+
+### Разовый recovery gate по идентичности проверенных bytes
+
+Owner decision2026-10-14 разрешает только для разовой isolated conversion не
+повторять SQL integrity scan восстановленного recovery archive, когда source
+уже полностью qualified в той же операции. Canonical процедура —
+`python -m cryptowatcher.conversion_qualification`; обычный `archive_backup`,
+backup/CD и их обязательные проверки не используют этот gate.
+
+До recovery обязательны full writable source integrity/CHECK, unchanged source
+bytes, full candidate integrity/CHECK и полные logical manifests всех пяти таблиц,
+включая original JSON/settings/mutes/private serialized transport bytes. После
+них `recovery_bytes.verify_archive_bytes` независимо читает весь persisted archive:
+encoded SHA256/size, один checksummed dictionary-free Zstd frame с полными
+header/block/trailer boundaries, полный decode и decoded SHA256/size. Expected
+identities берутся из checked source и persisted writer той же операции, а не
+из caller receipt или прежнего failed trial. Любой mismatch/refusal блокирует
+весь результат; byte helper сам по себе не утверждает DB integrity.
+
+```bash
+python -m cryptowatcher.conversion_qualification --source "$CW_SOURCE" --directory "$CW_PRIVATE_NEW_TRIAL" --owner-id 233382575 --expected-owner-revision "$CW_CAPTURE_OWNER_REVISION" --max-candidate-bytes "$CW_MAX_CANDIDATE_BYTES" --max-archive-bytes "$CW_MAX_ARCHIVE_BYTES"
+```
+
+Default input — read-only pinned online snapshot. Для уже закрытого source
+используются `--source-encoding sqlite|gzip|zstd` и
+`--qualified-source-sha256 "$CW_QUALIFIED_SOURCE_SHA256"` (decoded SQLite bytes).
+Закрытый source не имеет sidecars; live snapshot может отстать от writer.
+Variables задаются по exact-target inventory. Directory private/owned, outputs
+новые; source и старые partial outputs не перезаписываются. Внешний runner обязан
+сохранить reviewed CPU1/RAM4GiB/no swap и один общий deadline≤900s, включая capture,
+source check, copy, candidate readback, hashes и recovery. При failure partial
+outputs сохраняются UNQUALIFIED, запуск не продолжается с обновлённым deadline.
+
+`ISOLATED_CONVERSION_PASS` подтверждает только данную копию; результат сохраняет
+`promotion_eligible=false`, `production_migration=NOT_RUN`. Gate не разрешает
+остановку/замену production DB и не превращает предыдущий timeout в PASS. Fit
+актуальной базы требует собственного whole qualification; small fixtures и
+отдельная проверка historical archive этого не доказывают.
+
 ## Recovery и stop criteria
+
+### Read-only измерение compact current dataset
+
+`python -m cryptowatcher.history_snapshot` создаёт новый изолированный candidate
+из единой read-only WAL transaction действующей базы. Writer может продолжать
+работу; все пять таблиц, logical rows и public history snapshot сравниваются
+полностью общим conversion core. Owner ID/revision, schema, new/private destination,
+byte/disk/deadline bounds, full candidate integrity и hash обязательны. Не запускать
+параллельно другой тяжёлый verifier; использовать reviewed offline resource bounds.
+
+```bash
+python -m cryptowatcher.history_snapshot --source "$CW_CURRENT_DB" --destination "$CW_MEASURE_CANDIDATE" --owner-id 233382575 --expected-owner-revision "$CW_CAPTURE_OWNER_REVISION" --max-candidate-bytes "$CW_MAX_CANDIDATE_BYTES"
+```
+
+Variables задаются по actual inventory. Общий budget≤900s остаётся прежним.
+`ISOLATED_WAL_SNAPSHOT_PASS` подтверждает только consistent captured snapshot,
+полную logical equivalence и candidate integrity. Output явно сохраняет
+`promotion_eligible=false`, `source_full_physical_integrity=NOT_CONFIRMED`,
+`source_byte_hash=UNSET_FOR_MUTABLE_INPUT` и `production_migration=NOT_RUN`.
+Snapshot может отстать от продолжающегося writer. Он не подменяет qualified
+recovery source, current delivery gates или exact-target promotion procedure.
+Input открывается только mode=ro/query_only; source DB и runtime не заменяются.
 
 До first switch при import/rehearsal failure: legacy JSON не изменён, new bot не запущен; после проверки единственного writer можно по согласованной procedure запустить прежний unit/image с исходным JSON. Частичный новый DB не подменяет legacy. Не удалять его для скрытого retry.
 

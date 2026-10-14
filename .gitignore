@@ -26,3 +26,4 @@ backup/
 .ruff_cache/
 .mypy_cache/
 .cache-g1/
+cryptowatcher/_native/*.so

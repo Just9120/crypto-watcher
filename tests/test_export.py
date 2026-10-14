@@ -1,13 +1,18 @@
 import csv
+import hashlib
 import io
 import json
+import sys
+import time
+from contextlib import closing
 
 import pytest
 
-from cryptowatcher.analytics import cohorts
+from cryptowatcher.analytics import as_of, cohorts
 from cryptowatcher.config import OwnerSettings
 from cryptowatcher.events import History, identity
 from cryptowatcher.export import Selection, csv_summary, ndjson
+from cryptowatcher.history_rebuild import rebuild
 from cryptowatcher.outcomes import MINUTE
 from cryptowatcher.storage import Store
 
@@ -128,3 +133,55 @@ def test_known_cohort_distribution_comparison_cutoff_and_streaming_csv(tmp_path)
     assert list(csv.DictReader(io.StringIO("".join(csv_summary(reader, Selection(market="linear")))))) == []
     assert reader.db.in_transaction is False
     reader.close()
+
+
+@pytest.mark.parametrize("backend", ["python", "native"])
+def test_converted_history_keeps_export_cohorts_causal_cutoff_and_private_bytes(
+    tmp_path, backend, monkeypatch
+):
+    if backend == "native" and sys.platform != "linux":
+        pytest.skip("Native converter is built and required in Linux CI")
+    from cryptowatcher import export
+
+    monkeypatch.setattr(export.time, "time", lambda: (NOW + 2 * DAY) / 1000)
+    source = tmp_path / "source.sqlite3"
+    original = Store(source, 233382575)
+    original.initialize(OwnerSettings())
+    history = populate(original)
+    secret_key = "radar:v1:agent:outbox:fixture"
+    private_bytes = '{ "immutable_transport":true, "value":1.00, "model_invoked":false }'
+    with original.db:
+        original.db.execute("INSERT INTO runtime VALUES (?,?)", (secret_key, private_bytes))
+    selection = Selection(NOW, NOW + 125 * MINUTE, "price", "1", "spot")
+    with closing(Store(source, original.owner_id, readonly=True)) as reader:
+        before_export = list(ndjson(reader, selection))
+        before_csv = list(csv_summary(reader, selection))
+    before_cohorts = cohorts(original)
+    event_id = identity("export-fixture/0")
+    before_cutoff = as_of(history, "event", event_id, NOW + DAY - 1)
+    assert before_cutoff["revision"] == 1 and before_cutoff["strength"] == 2
+    original.db.execute("PRAGMA journal_mode=DELETE")
+    original.close()
+    source_bytes = source.read_bytes()
+    destination = tmp_path / "converted.sqlite3"
+    result = rebuild(
+        source,
+        destination,
+        233382575,
+        hashlib.sha256(source_bytes).hexdigest(),
+        time.monotonic() + 20,
+        backend=backend,
+        compressed_candidate_validation=True,
+    )
+    assert result["candidate_validation"] == "COMPRESSED_RAM"
+    with closing(Store(destination, 233382575, readonly=True)) as reader:
+        assert list(ndjson(reader, selection)) == before_export
+        assert list(csv_summary(reader, selection)) == before_csv
+        assert cohorts(reader) == before_cohorts
+        assert as_of(History(reader), "event", event_id, NOW + DAY - 1) == before_cutoff
+        assert (
+            reader.db.execute("SELECT payload_json FROM runtime WHERE key=?", (secret_key,)).fetchone()[0]
+            == private_bytes
+        )
+        assert "immutable_transport" not in "".join(ndjson(reader, selection))
+    assert source.read_bytes() == source_bytes

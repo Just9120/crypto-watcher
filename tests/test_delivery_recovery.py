@@ -75,8 +75,10 @@ def test_expired_backup_preserves_source_and_rejects_reuse(tmp_path):
     store = Store(tmp_path / "source.sqlite", 233382575)
     store.initialize(OwnerSettings())
     destination = tmp_path / "partial.sqlite"
-    with pytest.raises(StateError, match="time budget"):
+    with pytest.raises(IntegrityError, match="time budget") as error:
         store.backup(destination, timeout_seconds=0)
+    assert error.value.code == "TIME_BUDGET_EXCEEDED"
+    assert error.value.backup_metrics["phase"] == "COPY"
     assert destination.exists() and store.snapshot().revision == 1
     with pytest.raises(StateError, match="must be new"):
         store.backup(destination)
@@ -134,6 +136,12 @@ def test_backup_copy_and_validation_share_budget_without_replacing_destination(t
     with pytest.raises(IntegrityError) as error:
         store.backup(destination, timeout_seconds=1)
     assert error.value.code == "TIME_BUDGET_EXCEEDED"
+    assert error.value.backup_metrics == {
+        "phase": "INTEGRITY",
+        "copy_seconds": 2.0,
+        "integrity_seconds": 0.0,
+        "elapsed_seconds": 2.0,
+    }
     assert destination.exists() and store.snapshot().revision == 1
     preserved = destination.read_bytes()
     with pytest.raises(StateError, match="must be new"):

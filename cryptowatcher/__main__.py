@@ -47,6 +47,9 @@ def main() -> int:
     parser.add_argument("--backup-dir", type=Path)
     parser.add_argument("--timeout-seconds", type=float, default=900)
     parser.add_argument("--destination", type=Path)
+    parser.add_argument("--validation-directory", type=Path)
+    parser.add_argument("--compressed-validation", action="store_true")
+    parser.add_argument("--archive-backup", action="store_true")
     parser.add_argument("--owner-id", type=int)
     parser.add_argument("--format", choices=("ndjson", "csv"), default="ndjson")
     parser.add_argument("--start-ms", type=int, default=0)
@@ -67,6 +70,12 @@ def main() -> int:
     load_dotenv(override=False)
     configure_logging(os.environ.get("TELEGRAM_BOT_TOKEN", ""))
     try:
+        if args.validation_directory is not None and args.command not in ("state-check", "backup"):
+            raise ConfigError("validation-directory is only supported for state-check and backup")
+        if args.compressed_validation and args.validation_directory is None:
+            raise ConfigError("compressed-validation requires validation-directory")
+        if args.archive_backup and (args.command != "backup" or not args.compressed_validation):
+            raise ConfigError("archive-backup requires backup and compressed-validation")
         if args.command == "migrate":
             if (
                 args.database is None
@@ -141,8 +150,34 @@ def main() -> int:
                     if not math.isfinite(args.timeout_seconds) or not 0 < args.timeout_seconds <= 900:
                         raise ConfigError("Invalid integrity time budget")
                     deadline = time.monotonic() + args.timeout_seconds
-                    check_integrity(store.db, deadline=deadline)
-                    imported = store.db.execute("SELECT source_sha256 FROM legacy_import").fetchone()
+                    if args.validation_directory is None:
+                        check_integrity(store.db, deadline=deadline)
+                        imported = store.db.execute("SELECT source_sha256 FROM legacy_import").fetchone()
+                        enabled = store.enabled()
+                    else:
+                        from .storage import Snapshot
+                        from .validation import validated_snapshot
+
+                        with validated_snapshot(
+                            database,
+                            args.validation_directory,
+                            deadline=deadline,
+                            compressed=args.compressed_validation,
+                        ) as validated:
+                            owner_row = validated.execute(
+                                "SELECT owner_id,revision,settings_json FROM owner_settings"
+                            ).fetchone()
+                            if owner_row is None:
+                                raise StateError("Validated owner settings unavailable")
+                            owner_id, revision, payload = owner_row
+                            if owner_id != store.owner_id:
+                                raise StateError("Validated snapshot owner mismatch")
+                            snapshot = Snapshot(revision, OwnerSettings.from_payload(json.loads(payload)))
+                            imported = validated.execute("SELECT source_sha256 FROM legacy_import").fetchone()
+                            preference = validated.execute(
+                                "SELECT enabled FROM delivery_preferences WHERE chat_id=?", (owner_id,)
+                            ).fetchone()
+                            enabled = bool(preference and preference[0])
                     print(
                         json.dumps(
                             {
@@ -154,7 +189,10 @@ def main() -> int:
                                     encode(snapshot.settings.payload()).encode()
                                 ).hexdigest(),
                                 "legacy_sha256": imported[0] if imported else None,
-                                "alerts_enabled": store.enabled(),
+                                "alerts_enabled": enabled,
+                                "validation_mode": "COMPRESSED_RAM"
+                                if args.compressed_validation
+                                else ("TMPFS" if args.validation_directory else "DISK"),
                             }
                         )
                     )
@@ -171,8 +209,14 @@ def main() -> int:
                         raise ConfigError("backup requires destination")
                     if not math.isfinite(args.timeout_seconds) or not 0 < args.timeout_seconds <= 900:
                         raise ConfigError("Invalid backup time budget")
-                    store.backup(args.destination, timeout_seconds=args.timeout_seconds)
-                    print(json.dumps({"status": "backup_integrity_ok"}))
+                    metrics = store.backup(
+                        args.destination,
+                        timeout_seconds=args.timeout_seconds,
+                        validation_directory=args.validation_directory,
+                        compressed_validation=args.compressed_validation,
+                        archive=args.archive_backup,
+                    )
+                    print(json.dumps({"status": "backup_integrity_ok", "backup": metrics}))
                 else:
                     from .diagnostics import snapshot as diagnostic_snapshot
 
@@ -206,9 +250,11 @@ def main() -> int:
         return 0
     except Exception as exc:
         message = str(exc) if isinstance(exc, (ConfigError, StateError)) else type(exc).__name__
-        failure = {"status": "blocked", "reason": message}
+        failure: dict[str, object] = {"status": "blocked", "reason": message}
         if isinstance(exc, IntegrityError):
             failure["failure_code"] = exc.code
+            if exc.backup_metrics is not None:
+                failure["backup"] = exc.backup_metrics
         print(json.dumps(failure), file=sys.stderr)
         return exc.exit_status if isinstance(exc, IntegrityError) else 2
 

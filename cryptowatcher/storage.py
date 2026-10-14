@@ -31,6 +31,7 @@ class IntegrityError(StateError):
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code = code
+        self.backup_metrics: dict[str, float | str] | None = None
         self.exit_status = {
             "TIME_BUDGET_EXCEEDED": 3,
             "DATABASE_CORRUPT": 4,
@@ -170,6 +171,25 @@ class Snapshot:
     settings: OwnerSettings
 
 
+def create_schema(database: sqlite3.Connection) -> None:
+    """Canonical schema for a new store or an exclusive isolated recovery candidate."""
+    database.executescript("""
+        CREATE TABLE IF NOT EXISTS owner_settings (
+            owner_id INTEGER PRIMARY KEY, revision INTEGER NOT NULL CHECK(revision>0),
+            settings_json TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS delivery_preferences (
+            chat_id INTEGER PRIMARY KEY, enabled INTEGER NOT NULL CHECK(enabled IN (0,1)));
+        CREATE TABLE IF NOT EXISTS mutes (
+            symbol TEXT PRIMARY KEY, mute_until REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS runtime (
+            key TEXT PRIMARY KEY, payload_json TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS legacy_import (
+            source_sha256 TEXT PRIMARY KEY, original_json TEXT NOT NULL,
+            backup_name TEXT NOT NULL);
+        PRAGMA user_version=1;
+    """)
+
+
 class Store:
     def __init__(self, path: Path, owner_id: int, *, readonly: bool = False) -> None:
         number(owner_id, "owner_id", integer=True)
@@ -204,21 +224,7 @@ class Store:
         if not readonly:
             self.db.execute("PRAGMA journal_mode=WAL")
             self.db.execute("PRAGMA synchronous=FULL")
-            self.db.executescript("""
-                CREATE TABLE IF NOT EXISTS owner_settings (
-                    owner_id INTEGER PRIMARY KEY, revision INTEGER NOT NULL CHECK(revision>0),
-                    settings_json TEXT NOT NULL);
-                CREATE TABLE IF NOT EXISTS delivery_preferences (
-                    chat_id INTEGER PRIMARY KEY, enabled INTEGER NOT NULL CHECK(enabled IN (0,1)));
-                CREATE TABLE IF NOT EXISTS mutes (
-                    symbol TEXT PRIMARY KEY, mute_until REAL NOT NULL);
-                CREATE TABLE IF NOT EXISTS runtime (
-                    key TEXT PRIMARY KEY, payload_json TEXT NOT NULL);
-                CREATE TABLE IF NOT EXISTS legacy_import (
-                    source_sha256 TEXT PRIMARY KEY, original_json TEXT NOT NULL,
-                    backup_name TEXT NOT NULL);
-                PRAGMA user_version=1;
-            """)
+            create_schema(self.db)
             if os.name != "nt":
                 path.chmod(0o600)
 
@@ -300,18 +306,79 @@ class Store:
         with self.db:
             self.db.execute("INSERT OR REPLACE INTO runtime VALUES (?,?)", (key, encode(payload)))
 
-    def backup(self, destination: Path, *, timeout_seconds: float = 900) -> None:
+    def backup(
+        self,
+        destination: Path,
+        *,
+        timeout_seconds: float = 900,
+        validation_directory: Path | None = None,
+        compressed_validation: bool = False,
+        archive: bool = False,
+    ) -> dict[str, float | str]:
+        if compressed_validation and validation_directory is None:
+            raise StateError("Compressed validation requires a private validation directory")
+        if archive and (not compressed_validation or validation_directory is None):
+            raise StateError("Archived backup requires compressed validation")
         if destination.exists() or destination.resolve() == self.path.resolve():
             raise StateError("Backup destination must be new")
         destination.parent.mkdir(parents=True, exist_ok=True)
+        if archive:
+            from .compressed_validation import archive_backup
+            from .validation import scratch_space
+
+            started = time.monotonic()
+            assert validation_directory is not None
+            scratch_space(validation_directory, 0)
+            try:
+                proof = archive_backup(
+                    self.path,
+                    destination,
+                    validation_directory,
+                    deadline=started + timeout_seconds,
+                )
+            except IntegrityError as exc:
+                exc.backup_metrics = {
+                    "phase": "ARCHIVE_AND_VALIDATE",
+                    "elapsed_seconds": round(time.monotonic() - started, 3),
+                    "validation_mode": "COMPRESSED_RAM",
+                }
+                raise
+            return {
+                **proof,
+                "phase": "COMPLETE",
+                "validation_mode": "COMPRESSED_RAM",
+                "elapsed_seconds": round(time.monotonic() - started, 3),
+            }
         # Exclusive creation also rejects dangling links; an existing backup is never replaced.
         handle = os.open(destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         os.close(handle)
-        deadline = time.monotonic() + timeout_seconds
+        started = time.monotonic()
+        deadline = started + timeout_seconds
+        phase = "COPY"
+        copied_at: float | None = None
+        validated_hash: str | None = None
+        validation_details: dict[str, float | str] = {}
+
+        def metrics() -> dict[str, float | str]:
+            now = time.monotonic()
+            result: dict[str, float | str] = {
+                "phase": phase,
+                "copy_seconds": round((copied_at if copied_at is not None else now) - started, 3),
+                "integrity_seconds": round(now - copied_at, 3) if copied_at is not None else 0.0,
+                "elapsed_seconds": round(now - started, 3),
+            }
+            if validation_directory is not None:
+                result["validation_mode"] = "COMPRESSED_RAM" if compressed_validation else "TMPFS"
+            if validated_hash is not None:
+                result["sha256"] = validated_hash
+            result.update(validation_details)
+            return result
 
         def progress(status: int, remaining: int, total: int) -> None:
             if time.monotonic() >= deadline:
-                raise StateError("Backup time budget exceeded; incomplete destination preserved")
+                raise IntegrityError(
+                    "TIME_BUDGET_EXCEEDED", "Backup time budget exceeded; incomplete destination preserved"
+                )
 
         try:
             with closing(sqlite3.connect(destination)) as backup:
@@ -322,11 +389,33 @@ class Store:
                     source.execute("BEGIN")
                     source.execute("SELECT owner_id FROM owner_settings").fetchone()
                     source.backup(backup, pages=256, progress=progress, sleep=0.01)
-                check_integrity(backup, deadline=deadline)
+                copied_at = time.monotonic()
+                phase = "INTEGRITY"
+                if validation_directory is None:
+                    check_integrity(backup, deadline=deadline)
+            if validation_directory is not None:
+                from .validation import validate_backup
+
+                validation = validate_backup(
+                    destination, validation_directory, deadline=deadline, compressed=compressed_validation
+                )
+                validated_hash = str(validation["sha256"])
+                if compressed_validation:
+                    validation_details = {
+                        "bytes": int(validation["bytes"]),
+                        "compressed_bytes": int(validation["compressed_bytes"]),
+                        "sqlite_version": str(validation["sqlite_version"]),
+                        "apsw_version": str(validation["apsw_version"]),
+                    }
+        except IntegrityError as exc:
+            exc.backup_metrics = metrics()
+            raise
         except sqlite3.DatabaseError as exc:
             raise StateError("Backup validation failed; incomplete destination preserved") from exc
         if os.name != "nt":
             destination.chmod(0o600)
+        phase = "COMPLETE"
+        return metrics()
 
 
 def migrate_legacy(

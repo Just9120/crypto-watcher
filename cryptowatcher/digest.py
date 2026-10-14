@@ -43,9 +43,9 @@ def aggregate(store: Store, start: int, end: int, now: int) -> dict[str, Any]:
         )
     ]
     ongoing = [
-        json.loads(row[0])
+        History(store).resolve(row[0][len(PREFIX) :], json.loads(row[1]))
         for row in store.db.execute(
-            "SELECT payload_json FROM runtime WHERE key>=? AND key<? AND json_extract(payload_json,'$.state')='ACTIVE' AND json_extract(payload_json,'$.available_at_ms')<=? ORDER BY json_extract(payload_json,'$.strength') DESC,key LIMIT 5",
+            "SELECT key,payload_json FROM runtime WHERE key>=? AND key<? AND json_extract(payload_json,'$.state')='ACTIVE' AND json_extract(payload_json,'$.available_at_ms')<=? ORDER BY json_extract(payload_json,'$.strength') DESC,key LIMIT 5",
             (PREFIX + "episode-head:", PREFIX + "episode-head:~", now),
         )
     ]

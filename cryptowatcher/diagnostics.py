@@ -35,6 +35,10 @@ def snapshot(store: Store, seconds: float = 3) -> dict[str, Any]:
         diagnostic_age_seconds=round(age, 1), diagnostic_state="FRESH" if 0 <= age <= 30 else "STALE"
     )
     return {
+        "database": {
+            "snapshot_bytes": store.db.execute("PRAGMA page_count").fetchone()[0]
+            * store.db.execute("PRAGMA page_size").fetchone()[0],
+        },
         "configuration_revision": settings.revision,
         "heartbeat": store.get_runtime("heartbeat", {}),
         "last_poll": store.get_runtime("last_poll_status", {"state": "PENDING"}),

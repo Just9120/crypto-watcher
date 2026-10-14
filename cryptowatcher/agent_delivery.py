@@ -157,9 +157,9 @@ class AgentDelivery:
             raise ValueError("Unknown event identity")
         start = PREFIX + "outcome-head:"
         outcomes = [
-            json.loads(row[0])
+            self.history.resolve(row[0][len(PREFIX) :], json.loads(row[1]))
             for row in self.store.db.execute(
-                "SELECT payload_json FROM runtime WHERE key>=? AND key<? "
+                "SELECT key,payload_json FROM runtime WHERE key>=? AND key<? "
                 "AND json_extract(payload_json,'$.event_id')=? ORDER BY key LIMIT 32",
                 (start, start + "~", event_id),
             )

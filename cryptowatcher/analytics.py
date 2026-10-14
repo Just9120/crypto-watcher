@@ -42,11 +42,11 @@ GROUPS = (
 def as_of(history: History, kind: str, key: str, cutoff_ms: int) -> dict[str, Any] | None:
     prefix = PREFIX + f"{kind}:{key}:"
     rows = history.store.db.execute(
-        "SELECT payload_json FROM runtime WHERE key>=? AND key<? ORDER BY key DESC",
+        "SELECT key,payload_json FROM runtime WHERE key>=? AND key<? ORDER BY key DESC",
         (prefix, prefix + "~"),
     )
     for row in rows:
-        record = json.loads(row[0])
+        record = history.resolve(row[0][len(PREFIX) :], json.loads(row[1]))
         if record["available_at_ms"] <= cutoff_ms:
             return record
     return None
@@ -389,7 +389,16 @@ def cohort_rows(
     for kind, name in (("outcome", "o"), ("comparison", "c")):
         if cutoff_ms is None:
             prefix = PREFIX + kind + "-head:"
-            definitions.append(f"{name} AS (SELECT payload_json FROM runtime WHERE key>=? AND key<?)")
+            if kind == "comparison":
+                definitions.append(
+                    f"{name} AS (SELECT COALESCE(v.payload_json,h.payload_json) AS payload_json "
+                    "FROM runtime h LEFT JOIN runtime v ON v.key='"
+                    + PREFIX
+                    + "' || json_extract(h.payload_json,'$.revision_key') "
+                    "WHERE h.key>=? AND h.key<?)"
+                )
+            else:
+                definitions.append(f"{name} AS (SELECT payload_json FROM runtime WHERE key>=? AND key<?)")
             args += [prefix, prefix + "~"]
         else:
             prefix = PREFIX + kind + ":"
@@ -502,13 +511,21 @@ def cohorts(
             truncated = True
             break
         records.append(row)
-    history = History(store)
-    incomplete = 0
-    for _, value in history.scan("outcome-head:"):
-        if cutoff_ms is not None:
-            value = as_of(history, "outcome", value["outcome_id"], cutoff_ms)
-        if value is not None and value["state"] != "COMPLETE":
-            incomplete += 1
+    # Summary counts need only projected state; never expand every candle window.
+    if cutoff_ms is None:
+        incomplete = store.db.execute(
+            "SELECT COUNT(*) FROM runtime WHERE key>=? AND key<? AND json_extract(payload_json,'$.state')!='COMPLETE'",
+            (PREFIX + "outcome-head:", PREFIX + "outcome-head:~"),
+        ).fetchone()[0]
+    else:
+        incomplete = store.db.execute(
+            "WITH revisions AS (SELECT json_extract(payload_json,'$.state') AS state, "
+            "ROW_NUMBER() OVER (PARTITION BY json_extract(payload_json,'$.outcome_id') "
+            "ORDER BY json_extract(payload_json,'$.revision') DESC) AS pos FROM runtime "
+            "WHERE key>=? AND key<? AND json_extract(payload_json,'$.available_at_ms')<=?) "
+            "SELECT COUNT(*) FROM revisions WHERE pos=1 AND state!='COMPLETE'",
+            (PREFIX + "outcome:", PREFIX + "outcome:~", cutoff_ms),
+        ).fetchone()[0]
     return {
         "schema": "cryptowatcher.analytics.v1",
         "groups": list(groups),

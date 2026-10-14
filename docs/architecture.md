@@ -38,7 +38,43 @@ G3 реализует outcomes/cohorts/export/retention; G4 добавит не�
 
 ## Runtime и эксплуатация
 
+History storage: immutable event/outcome/episode/comparison revisions сохраняют
+публичную семантику; их heads — identity-checked ссылки с малыми SQL projections.
+Большие settings/effective parameters/source context/enrichment snapshots хранятся
+один раз по SHA256 canonical JSON. Исходные event/outcome/comparator windows новых записей
+ссылаются на lossless zlib JSON blocks до16 candles, выровненные по UTC buckets
+при доступных start/step. Пересекающиеся полные blocks повторно не записываются.
+Каждый block и восстановленное поле проверяются по hash; повреждение/missing body
+не возвращает частичный public record. Compression и ссылки являются внутренним
+форматом: Telegram/export/analytics/agent contract получают прежние полные values.
+Legacy records читаются одновременно с compact records. Summary counts/grouping
+используют projections и не декодируют все candle windows.
+
+Изолированная историческая conversion сохраняет frozen window целиком как один
+content-addressed compressed value, без повторного разбора каждой candle.
+Одинаковые целые windows разделяют body; пересекающиеся, но разные исторические
+windows сохраняются независимо и lossless. Это внутренний вариант того же schema;
+readers поддерживают whole values и blocks вместе. Window больше decoder bound
+32MiB остаётся в bounded blocks. Live writes продолжают использовать shared blocks.
+
+Physical SQLite schema1 остаётся прежней. Старые binaries не считаются compatible
+rollback readers после compact writes. Изолированная conversion уменьшает existing
+history, сохраняет каждую public revision и exact private transport state; текущий
+runtime не конвертируется автоматически. До promotion требуется квалифицированная
+копия и reviewed stateful procedure из [delivery](runbooks/delivery.md).
+
 Image: pinned Python base digest, hash-locked dependencies, UID/GID10001, read-only root, no capabilities. `/data/sqlite` и его backups принадлежат приложению; исходный `/data/state_crypto_watcher.json` сохраняется. Health проверяет recent application heartbeat, а не внешний Bybit uptime. Market/data availability и Telegram delivery отображаются отдельно. Resource limits не назначены без измерений actual workload.
+
+Delivery validation использует отдельный resource-bounded offline container с
+private tmpfs; это не ограничение runtime. Source WAL snapshot освобождается после
+copy, full writable integrity проверяет private snapshot. CD хранит bounded lossless
+compressed pages через private VFS; SQLite получает исходные bytes, main writes
+запрещены. Hash-locked APSW применяется только в validation, application writer
+остаётся standard SQLite. Persistent backup проверяется по full integrity и SHA256
+compressed reconstruction/original до и после проверки.
+RAM/space/deadline failure останавливает pre-switch stage; history не удаляется,
+DB restore/downgrade и снижение полноты checks не выполняются. Детали allocation,
+receiver update и обязательных post-checks — в [delivery runbook](runbooks/delivery.md).
 
 Operational target, trust boundaries, artifact identity, queue и recovery описаны в [delivery runbook](runbooks/delivery.md); ownership/migration — в [state contract](state_contract.md).
 

@@ -19,8 +19,9 @@ REPO = "Just9120/crypto-watcher"
 APP = Path("/opt/crypto_watcher")
 RECEIVER = Path("/usr/local/lib/cryptowatcher/deploy_receiver.py")
 TARGET = Path("/etc/cryptowatcher/deploy-target.json")
-OLD_HASH = "aa2b1a7a51885c520d1541fe4380f2fbfd0d1d7f9d1588a314289b570d897e44"
+OLD_HASH = "9569f32c85da70fe4155b6ce60669911593b2fe3cb7b8a28d7adbddd9db57c1f"
 TARGET_HASH = "4d69f74f2cd4bbd609b6ac15667d8ff82a12f3cc42db1c2aaf17bf1bda773274"
+PERMIT = Path("/etc/cryptowatcher/new-write-permit.json")
 
 
 def require(condition: bool, message: str) -> None:
@@ -63,7 +64,15 @@ def gate(base: str, head: str, number: int) -> None:
     require(latest["status"] == "completed" and latest["conclusion"] == "success", "Required CI not passed")
 
 
-def install(base: str, head: str, number: int, expected: str, *, execute: bool = False) -> dict[str, Any]:
+def install(
+    base: str,
+    head: str,
+    number: int,
+    expected: str,
+    *,
+    execute: bool = False,
+    approve_new_writes_only: bool = False,
+) -> dict[str, Any]:
     import fcntl
 
     require(os.geteuid() == 0 and socket.gethostname() == "vmi3224957", "Wrong host/account")
@@ -121,6 +130,34 @@ def install(base: str, head: str, number: int, expected: str, *, execute: bool =
         }
         if not execute:
             return report
+        if approve_new_writes_only:
+            require(
+                number == 31 and not PERMIT.exists() and not PERMIT.is_symlink(),
+                "Permit already exists or wrong PR",
+            )
+            commit = json.loads(read_url(f"https://api.github.com/repos/{REPO}/git/commits/{head}"))
+            tree = commit["tree"]["sha"]
+            require(bool(re.fullmatch(r"[0-9a-f]{40}", tree)), "Unknown approved tree")
+            permit = {
+                "schema": "OWNER_APPROVED_NEW_WRITES_ONLY_V1",
+                "state": "ARMED",
+                "pr": number,
+                "tree_sha": tree,
+                "head": head,
+                "base": base,
+                "target_sha256": TARGET_HASH,
+                "previous_container": live["Id"],
+                "previous_image": live["Image"],
+                "previous_revision": labels["org.opencontainers.image.revision"],
+                "approval": "owner/2026-10-14/call_1ece72ffadf74d4cb986afc82314cf27",
+            }
+            with PERMIT.open("x", encoding="utf-8") as output:
+                os.chmod(PERMIT, 0o600)
+                output.write(json.dumps(permit, sort_keys=True))
+                output.flush()
+                os.fsync(output.fileno())
+            require(json.loads(PERMIT.read_text()) == permit, "Permit readback failed")
+            report.update(new_write_permit="ARMED", permit_tree=tree)
         require(
             RECEIVER.read_bytes() == old and digest(TARGET.read_bytes()) == TARGET_HASH,
             "Concurrent receiver/target change",
@@ -159,11 +196,19 @@ def main() -> int:
     parser.add_argument("--pr", type=int, required=True)
     parser.add_argument("--receiver-sha256", required=True)
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--approve-new-writes-only", action="store_true")
     args = parser.parse_args()
     try:
         print(
             json.dumps(
-                install(args.base, args.candidate, args.pr, args.receiver_sha256, execute=args.execute)
+                install(
+                    args.base,
+                    args.candidate,
+                    args.pr,
+                    args.receiver_sha256,
+                    execute=args.execute,
+                    approve_new_writes_only=args.approve_new_writes_only,
+                )
             )
         )
         return 0

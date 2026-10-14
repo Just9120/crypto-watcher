@@ -1,5 +1,40 @@
 # CryptoWatcher — state contract
 
+## Compact history representation
+
+Physical SQLite user_version остаётся1. Public immutable revisions могут содержать
+`_history_storage` / `cryptowatcher.shared-fields.v1`: content-addressed ссылки на
+полные lossless settings/context/windows; head `cryptowatcher.history-head.v1`
+содержит projection и revision_key. Public history/export/analytics/agent readers
+восстанавливают все исходные значения и numeric types, а не возвращают storage
+markers. Формулы, reference/cutoff, event identity и signed private transport bytes
+не меняются. Private namespaces не преобразуются public codec.
+
+`historyblob:v1:SHA256` идентифицирует canonical decoded JSON bytes независимо
+от compression encoding. Поддерживаются `cryptowatcher.shared-json.v1` (zlib) и
+`cryptowatcher.shared-json.v2` (один checksummed dictionary-free Zstd frame).
+V2 хранит ровно schema/bytes/zstd; bytes≤32MiB, encoded bound, frame content size,
+window≤32MiB, complete checksum/trailer, отсутствие дополнительных frames/data,
+decoded SHA256 и canonical JSON обязательны. Unknown schema и любое нарушение
+блокируют чтение; пустой state вместо исходника не создаётся.
+
+Разовая history conversion создаёт новые bodies вV2 по измеренному cost/size
+выигрышу. Existing V1/V2 bodies и остальные исходные private rows сохраняются;
+live writer по-прежнему создаётV1 и использует UTC-aligned16-candle blocks.
+Historical conversion хранит целые frozen windows как shared values, не удаляя
+исходные candles/provenance. Одинаковые decoded bytes имеют тот же key; более
+новый codec не перезаписывает existing body только ради compression encoding.
+
+Full readback проверяет каждую body row, каждый reference и logical manifests всех
+пяти таблиц. Только frozen, физически write-refusing candidate может использовать
+cache проверенных body bytes; single-value field сравнивает reference SHA с тем
+же уже проверенным body key. Window joins по-прежнему проверяют полный joined hash.
+Mutable runtime reader повторно читает актуальный DB payload перед cache reuse.
+
+Старая G5 application не является reader-compatible с compact representation.
+NONE/physical schema1 не разрешает app downgrade или restore поверх live данных.
+Поставка/promotion требует [изолированной qualification и exact-target review](runbooks/delivery.md#разовый-recovery-gate-по-идентичности-проверенных-bytes).
+
 ## Advisory agent state
 
 Logical `radar:v1:agent:*` namespaces сохраняют schema1 preference (default OFF),
@@ -117,6 +152,21 @@ Event + episode + decision + initial outbox сохраняются одной tr
 Physical schema1/NONE, один writer. `outcome-method:1` / `comparison-method:1` immutable; изменение методики без новой version блокирует работу. `outcome-job:UUID` / timestamp-length-ordered `outcome-pending:` фиксируют event revision, horizon, immutable reference и retries; `comparison-job:event` / `comparison-pending:` — отдельный bounded comparator worker. `outcome-admission` idempotently проходит прежнюю indexed history и блокирует retention до завершения. Event transaction включает initial jobs/holds до consumers. Старые snapshots без новых fields читаются agreed defaults5/15/30/60, не будущими текущими owner settings.
 
 `outcome:UUID:revision` / `outcome-head:UUID` и `comparison:UUID:revision` / head сохраняют прежние versions/results и availability timestamps. Неполные outcomes могут получить новую COMPLETE revision после recovery; завершённые results не пересчитываются автоматически. Complete result, full used inputs и `protected:source:v1:candle:` записываются атомарно. `hold:stream:job` удерживает весь pending диапазон, включая данные старше90days; bounded `retention` удаляет только unreferenced ordinary candles. Legacy JSON/backups/events/episode/outcome/comparison/settings records автоматически не удаляются.
+
+Новые event/outcome heads имеют internal schema `cryptowatcher.history-head.v1`:
+`revision_key` указывает на неизменную revision того же kind/ID, рядом сохранены
+небольшие поля для indexed selection, digest и cohort SQL. Полные settings,
+provenance и source inputs остаются в revision. `History.get/items/scan` и agent
+replay разрешают reference и возвращают прежний полный record без internal head
+fields. Missing/cross-kind/cross-ID revision либо несовпадение query projection
+вызывает диагностируемую ошибку вместо частичного record. Immutable revisions,
+causal cutoff и public event/outcome/export schema не меняются.
+
+Legacy full heads читаются в той же базе; upgrade не запускает bulk rewrite.
+Только новая revision получает compact head в той же transaction. Existing raw
+source/outcome snapshots и history автоматически не удаляются. Physical schema
+остаётся1, но старый binary после compact head writes не является совместимым
+reader: recovery требует forward-fix либо проверенную версию с этим reader.
 
 `source-context:v1:ticker|instrument:market/symbol:availableTime` содержит public values/metadata, units/source и actual observation/availability timestamps. Event и выбранные comparator windows включают полный использованный context snapshot. Historical composite без prior ticker≤5min не считается no-signal; future liquidity/noise исходного event не используются. `analytics-gap:` / due index персистентно восстанавливает referenced closed ranges без изменения live subscriptions/notification state. Conflicting existing source сохраняется и диагностируется; recovery не перезаписывает его и не создаёт historical live alerts.
 

@@ -23,6 +23,8 @@ from typing import Any
 
 APP = Path("/opt/crypto_watcher")
 TARGET = Path("/etc/cryptowatcher/deploy-target.json")
+NEW_WRITE_PERMIT = Path("/etc/cryptowatcher/new-write-permit.json")
+NEW_WRITE_POLICY = "OWNER_APPROVED_NEW_WRITES_ONLY_V1"
 MAX_BUNDLE = 1024 * 1024 * 1024
 MEMBERS = {"manifest.json", "image.tar.gz", "docker-compose.yml"}
 ACTIVE_RECORD: dict[str, Any] | None = None
@@ -58,6 +60,45 @@ def database_timeout(size: int) -> int:
     # The 4.82 GB production snapshot took 614s for full integrity with validation I/O tuning.
     # Include copy/validation margin while retaining the 900s stage cap and every safety check.
     return min(900, 180 + ((size + (1 << 30) - 1) // (1 << 30)) * 150)
+
+
+def validation_resources(size: int, available: int) -> dict[str, int]:
+    require(type(size) is int and size > 0, "Validated snapshot size unavailable")
+    require(type(available) is int and available > 0, "Host memory evidence unavailable")
+    mib = 1024 * 1024
+    # Compressed pages are capped at 3 GiB; leave 1 GiB for SQLite/interpreter/cache.
+    # Incompressible input fails inside validation; no fallback or weaker check is allowed.
+    limit = 4096 * mib
+    reserve = 1536 * mib
+    require(available >= limit + reserve, "Insufficient available RAM for full validation")
+    return {
+        "snapshot_bytes": size,
+        "scratch_bytes": 64 * mib,
+        "memory_limit_bytes": limit,
+        "host_available_bytes": available,
+        "host_reserve_bytes": reserve,
+    }
+
+
+def memory_available() -> int:
+    values = dict(line.split(":", 1) for line in Path("/proc/meminfo").read_text().splitlines())
+    return int(values["MemAvailable"].split()[0]) * 1024
+
+
+def validation_args(container_args: list[str], allocation: dict[str, int]) -> list[str]:
+    return [
+        *container_args[:-1],
+        "--memory",
+        str(allocation["memory_limit_bytes"]),
+        "--memory-swap",
+        str(allocation["memory_limit_bytes"]),
+        "--cpus",
+        "1",
+        "--tmpfs",
+        "/validation"
+        + f":rw,noexec,nosuid,nodev,size={allocation['scratch_bytes']},mode=0700,uid=10001,gid=10001",
+        container_args[-1],
+    ]
 
 
 def stop_candidate() -> None:
@@ -276,6 +317,113 @@ def main_revision() -> str:
     return revision
 
 
+def new_write_permit(revision: str) -> dict[str, Any] | None:
+    if not NEW_WRITE_PERMIT.exists():
+        require(not NEW_WRITE_PERMIT.is_symlink(), "Dangling permit")
+        return None
+    require(NEW_WRITE_PERMIT.resolve() == NEW_WRITE_PERMIT, "Symlink permit")
+    meta = NEW_WRITE_PERMIT.stat()
+    require(meta.st_uid == 0 and meta.st_mode & 0o077 == 0 and meta.st_size <= 8192, "Unsafe permit")
+    permit = json.loads(NEW_WRITE_PERMIT.read_text(encoding="utf-8"))
+    require(permit.get("schema") == NEW_WRITE_POLICY, "Unknown permit")
+    if permit.get("state") == "CONSUMED":
+        return None
+    require(permit.get("state") == "ARMED" and permit.get("pr") == 31, "Unapproved permit")
+    require(permit.get("target_sha256") == fingerprint(TARGET), "Permit target changed")
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/Just9120/crypto-watcher/git/commits/{revision}",
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "CryptoWatcher-CD"},
+    )
+    with urllib.request.urlopen(request, timeout=15) as response:
+        commit = json.load(response)
+    if commit["tree"]["sha"] != permit.get("tree_sha"):
+        return None
+    live = json.loads(run(["docker", "inspect", "crypto-watcher"]))[0]
+    require(
+        live["Id"] == permit.get("previous_container")
+        and live["Image"] == permit.get("previous_image")
+        and live["State"]["Running"]
+        and (live["Config"].get("Labels") or {}).get("org.opencontainers.image.revision")
+        == permit.get("previous_revision"),
+        "Permit runtime changed",
+    )
+    return permit
+
+
+def bounded_args(container_args: list[str], recovery: Path | None = None) -> list[str]:
+    args = [*container_args[:-1]]
+    data = str(APP / "data") + ":/data"
+    require(data in args, "Unexpected additive data mount")
+    args[args.index(data)] = data + ":ro"
+    args += [
+        "--memory",
+        "512m",
+        "--memory-swap",
+        "512m",
+        "--cpus",
+        "1",
+        "--tmpfs",
+        "/probe:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700",
+    ]
+    if recovery is not None:
+        args += ["-v", str(recovery) + ":/recovery"]
+    return [*args, container_args[-1]]
+
+
+def additive_preflight(container_args: list[str], release: Path, permit: dict[str, Any]) -> dict[str, Any]:
+    recovery = release / "config-recovery"
+    recovery.mkdir(mode=0o700)
+    os.chown(recovery, 10001, 10001)
+    # These sensitive bytes remain on the host and are never part of the response.
+    for name, source in (
+        ("original.env", APP / ".env"),
+        ("original-compose.yml", APP / "docker-compose.yml"),
+    ):
+        require(source.is_file() and source.resolve() == source, "Unexpected config source")
+        destination = recovery / name
+        with destination.open("xb") as output:
+            output.write(source.read_bytes())
+            output.flush()
+            os.fsync(output.fileno())
+        destination.chmod(0o600)
+        require(fingerprint(destination) == fingerprint(source), "Config snapshot mismatch")
+    live = json.loads(run(["docker", "inspect", "crypto-watcher"]))[0]
+    config_files = (live["Config"].get("Labels") or {}).get("com.docker.compose.project.config_files", "")
+    actual_compose = Path(config_files)
+    require(
+        actual_compose.is_file()
+        and actual_compose.resolve() == actual_compose
+        and actual_compose.is_relative_to(APP / "releases"),
+        "Unknown active Compose file",
+    )
+    actual_copy = recovery / "active-compose.yml"
+    with actual_copy.open("xb") as output:
+        output.write(actual_compose.read_bytes())
+        output.flush()
+        os.fsync(output.fileno())
+    actual_copy.chmod(0o600)
+    require(fingerprint(actual_copy) == fingerprint(actual_compose), "Active Compose snapshot mismatch")
+    result = json.loads(
+        run(
+            [
+                *bounded_args(container_args, recovery),
+                "python",
+                "-m",
+                "cryptowatcher.new_write_check",
+                "--destination",
+                "/recovery/settings.json",
+            ],
+            timeout=120,
+        )
+    )
+    require(result.get("state") == "BOUNDED_COMPATIBILITY_PASS", "Bounded compatibility failed")
+    receipt = json.loads((APP / "data/sqlite/.g1-migration.json").read_text(encoding="utf-8"))
+    require(result.get("legacy_sha256") == receipt["legacy_sha256"], "Migration identity mismatch")
+    require(fingerprint(recovery / "settings.json") == result["configuration_sha256"], "Config hash mismatch")
+    require(NEW_WRITE_PERMIT.read_bytes() == json.dumps(permit, sort_keys=True).encode(), "Permit changed")
+    return result
+
+
 def usable_poll(poll: dict[str, Any], switch_time: float) -> bool:
     return bool(
         poll.get("at", 0) >= switch_time
@@ -346,6 +494,9 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
         manifest = extract_bundle(bundle, release)
         require(manifest.get("source_sha") == revision, "Source identity mismatch")
         require(manifest.get("architecture") == target["architecture"], "Target architecture mismatch")
+        permit = new_write_permit(revision)
+        if permit is not None:
+            ACTIVE_RECORD.update(delivery_policy=NEW_WRITE_POLICY, permit_tree=permit["tree_sha"])
         identity = archive_image_identity(release / "image.tar.gz", manifest)
         record_phase("LOAD_IMAGE")
         run(["docker", "load", "-i", str(release / "image.tar.gz")], timeout=180)
@@ -393,6 +544,7 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
             f"cw-verify-{revision[:12]}-{digest[:16]}",
             "--network=none",
             "--read-only",
+            "--no-healthcheck",
             "--cap-drop=ALL",
             "--security-opt=no-new-privileges:true",
             "--env-file",
@@ -420,43 +572,13 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
         database_size = (APP / "data/sqlite/cryptowatcher.sqlite3").stat().st_size
         budget = database_timeout(database_size)
         ACTIVE_RECORD.update(database_bytes=database_size, database_timeout_seconds=budget)
-        record_phase("CHECK_STATE_INTEGRITY")
-        state = json.loads(
-            run(
-                [
-                    *container_args,
-                    "python",
-                    "-m",
-                    "cryptowatcher",
-                    "state-check",
-                    "--timeout-seconds",
-                    str(budget - 15),
-                ],
-                timeout=budget,
-            )
-        )
-        receipt = json.loads((APP / "data/sqlite/.g1-migration.json").read_text(encoding="utf-8"))
-        require(state["legacy_sha256"] == receipt["legacy_sha256"], "Migration identity mismatch")
-        backups = APP / "data/sqlite/backups"
-        require(backups.is_dir(), "Reviewed backup directory missing")
-        backup_name = f"pre-{revision}-{int(time.time())}.sqlite3"
-        require(shutil.disk_usage(APP).free > database_size + 512 * 1024 * 1024, "Insufficient backup disk")
-        ACTIVE_RECORD.update(backup=backup_name)
-        record_phase("BACKUP_AND_VALIDATE")
-        run(
-            [
-                *container_args,
-                "python",
-                "-m",
-                "cryptowatcher",
-                "backup",
-                "--timeout-seconds",
-                str(budget - 15),
-                "--destination",
-                f"/data/sqlite/backups/{backup_name}",
-            ],
-            timeout=budget,
-        )
+        if permit is not None:
+            record_phase("BOUNDED_COMPATIBILITY")
+            proof = additive_preflight(container_args, release, permit)
+            backup_name = None
+            ACTIVE_RECORD.update(bounded_validation=proof, backup=backup_name)
+        else:
+            backup_name, proof = full_backup_preflight(container_args, before, revision, budget)
         # Recheck immediately before switching. New main arriving during this operation queues next deploy.
         require(main_revision() == revision, "Candidate changed during preparation")
         previous = json.loads(run(["docker", "inspect", "crypto-watcher"]))[0]
@@ -481,6 +603,12 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
             "previous_image": previous["Image"],
             "backup": backup_name,
         }
+        if permit is None:
+            record.update(
+                backup_validation=proof,
+                state_validation_resources=ACTIVE_RECORD["state_validation_resources"],
+                backup_validation_resources=ACTIVE_RECORD["backup_validation_resources"],
+            )
         ACTIVE_RECORD.update(record, switch_started=True)
         record_phase("SWITCH")
         run(
@@ -488,6 +616,7 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
             env=environment,
             timeout=180,
         )
+        write_cutoff_ms = int(time.time() * 1000)
         deadline = time.monotonic() + 150
         diagnostics = {}
         record_phase("POST_CHECKS")
@@ -498,20 +627,52 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
                     run(["docker", "exec", "crypto-watcher", "python", "-m", "cryptowatcher", "diagnostics"])
                 )
                 poll = diagnostics["last_poll"]
-                if usable_poll(poll, record["at"]):
+                ingestion = diagnostics.get("ingestion", {})
+                if usable_poll(poll, record["at"]) and (
+                    permit is None or ingestion.get("diagnostic_state") == "FRESH"
+                ):
                     break
             time.sleep(5)
         else:
-            record["state"] = "POST_CHECK_FAILED"
-            ACTIVE_RECORD.update(record)
-            record_phase("POST_CHECKS")
+            ACTIVE_RECORD.update(state="POST_CHECK_FAILED")
             raise DeploymentError("Health post-check failed; forward-fix or reviewed recovery required")
         require(diagnostics["heartbeat"].get("revision") == revision, "Running source mismatch")
         require(
             diagnostics["configuration_revision"] >= before["configuration_revision"],
             "Settings revision regressed",
         )
-        record.update(
+        if permit is not None:
+            post = json.loads(
+                run(
+                    [
+                        *bounded_args(container_args),
+                        "python",
+                        "-m",
+                        "cryptowatcher.new_write_check",
+                        "--after-ms",
+                        str(write_cutoff_ms),
+                    ],
+                    timeout=120,
+                )
+            )
+            require(post.get("state") == "BOUNDED_COMPATIBILITY_PASS", "Additive readback failed")
+            ACTIVE_RECORD.update(
+                additive_post_checks=post, telegram_delivery=diagnostics.get("telegram_delivery", {})
+            )
+            require(
+                NEW_WRITE_PERMIT.read_bytes() == json.dumps(permit, sort_keys=True).encode(),
+                "Concurrent permit change",
+            )
+            permit.update(state="CONSUMED", delivered_revision=revision)
+            temporary = NEW_WRITE_PERMIT.with_suffix(".consumed.tmp")
+            with temporary.open("x", encoding="utf-8") as output:
+                os.chmod(temporary, 0o600)
+                output.write(json.dumps(permit, sort_keys=True))
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, NEW_WRITE_PERMIT)
+            require(json.loads(NEW_WRITE_PERMIT.read_text())["state"] == "CONSUMED", "Permit consume failed")
+        ACTIVE_RECORD.update(
             state="PASS",
             at=time.time(),
             post_checks="source/image/health/persistence/market PASS",
@@ -519,9 +680,88 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
             available=diagnostics["last_poll"].get("available"),
             requested=diagnostics["last_poll"].get("requested"),
         )
-        ACTIVE_RECORD.update(record)
         record_phase("COMPLETE")
         return dict(ACTIVE_RECORD)
+
+
+def full_backup_preflight(
+    container_args: list[str], before: dict[str, Any], revision: str, budget: int
+) -> tuple[str, dict[str, Any]]:
+    record_phase("CHECK_STATE_INTEGRITY")
+    allocation = validation_resources(before.get("database", {}).get("snapshot_bytes"), memory_available())
+    ACTIVE_RECORD["state_validation_resources"] = allocation
+    record_phase("CHECK_STATE_INTEGRITY")
+    checks = validation_args(container_args, allocation)
+    state = json.loads(
+        run(
+            [
+                *checks,
+                "python",
+                "-m",
+                "cryptowatcher",
+                "state-check",
+                "--timeout-seconds",
+                str(budget - 15),
+                "--validation-directory",
+                "/validation",
+                "--compressed-validation",
+            ],
+            timeout=budget,
+        )
+    )
+    receipt = json.loads((APP / "data/sqlite/.g1-migration.json").read_text(encoding="utf-8"))
+    require(state["legacy_sha256"] == receipt["legacy_sha256"], "Migration identity mismatch")
+    require(state.get("validation_mode") == "COMPRESSED_RAM", "Full compressed state validation missing")
+    backups = APP / "data/sqlite/backups"
+    require(backups.is_dir(), "Reviewed backup directory missing")
+    backup_name = f"pre-{revision}-{int(time.time())}.sqlite3.zst"
+    # Archived output has the same hard3GiB bound as the validation image;
+    # incompressible input fails before switch and leaves its incomplete output.
+    require(shutil.disk_usage(APP).free > 3 * 1024**3 + 512 * 1024 * 1024, "Insufficient backup disk")
+    ACTIVE_RECORD.update(backup=backup_name)
+    record_phase("BACKUP_AND_VALIDATE")
+    refreshed = json.loads(run([*container_args, "python", "-m", "cryptowatcher", "diagnostics"]))
+    allocation = validation_resources(refreshed.get("database", {}).get("snapshot_bytes"), memory_available())
+    ACTIVE_RECORD["backup_validation_resources"] = allocation
+    record_phase("BACKUP_AND_VALIDATE")
+    backup = json.loads(
+        run(
+            [
+                *validation_args(container_args, allocation),
+                "python",
+                "-m",
+                "cryptowatcher",
+                "backup",
+                "--timeout-seconds",
+                str(budget - 15),
+                "--destination",
+                f"/data/sqlite/backups/{backup_name}",
+                "--validation-directory",
+                "/validation",
+                "--compressed-validation",
+                "--archive-backup",
+            ],
+            timeout=budget,
+        )
+    )
+    proof = backup.get("backup", {})
+    require(
+        backup.get("status") == "backup_integrity_ok"
+        and proof.get("phase") == "COMPLETE"
+        and proof.get("validation_mode") == "COMPRESSED_RAM"
+        and proof.get("archive_encoding") == "ZSTD"
+        and type(proof.get("archive_bytes")) is int
+        and proof["archive_bytes"] > 0
+        and bool(re.fullmatch(r"[0-9a-f]{64}", str(proof.get("archive_sha256")))),
+        "Full persistent archive identity missing",
+    )
+    require(
+        bool(re.fullmatch(r"[0-9a-f]{64}", str(proof.get("sha256")))),
+        "Full persistent backup validation missing",
+    )
+    ACTIVE_RECORD["backup_validation"] = proof
+    record_phase("BACKUP_AND_VALIDATE")
+    return backup_name, proof
 
 
 def main() -> int:

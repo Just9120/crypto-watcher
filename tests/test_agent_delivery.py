@@ -10,6 +10,7 @@ from cryptowatcher.agent_delivery import AgentConfig, AgentDelivery
 from cryptowatcher.config import OwnerSettings
 from cryptowatcher.events import EventEngine, History
 from cryptowatcher.outcomes import OutcomeWorker
+from cryptowatcher.sources import Candle, Sources
 from cryptowatcher.storage import StateError, Store, encode
 
 from .test_events import NOW, observe, selected, window
@@ -213,6 +214,40 @@ async def test_episode_closure_and_late_outcome_keep_original_context(store):
         assert calls[-1]["historical_outcomes"][0]["completeness"] == "INCOMPLETE"
         assert calls[-1]["historical_outcomes"][0]["metrics"] == {}
         assert calls[-1]["market_observed_at"] == calls[0]["market_observed_at"]
+
+
+async def test_manual_replay_resolves_complete_outcome_heads_and_signs_original_inputs(store):
+    outcomes = OutcomeWorker(store)
+    radar = EventEngine(store, selected("price"), source_revision=SOURCE, on_event=outcomes.admit)
+    observe(radar)
+    event = radar.history.events(1)[0]
+    end = NOW + 60 * 60000
+    candles = [
+        Candle.parse([t, 102, 103, 101, 102, 1, 400], "1m", "rest", end, end) for t in range(NOW, end, 60000)
+    ]
+    Sources(store).put("spot/BTCUSDT/1m", candles)
+    outcomes.work(end)
+    expected = {v["outcome_id"]: v for _, v in radar.history.items("outcome-head:")}
+    assert len(expected) == 4 and all(v["state"] == "COMPLETE" for v in expected.values())
+    calls = []
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda r: calls.append(json.loads(r.content)) or ack(r))
+    ) as client:
+        delivery = AgentDelivery(store, client, AgentConfig.from_env(ENV))
+        delivery.enable(True)
+        delivery.replay(event["event_id"], end)
+        await delivery.work(end)
+    assert len(calls) == 1 and calls[0]["delivery_kind"] == "HISTORICAL_OUTCOME_UPDATE"
+    received = calls[0]["historical_outcomes"]
+    assert len(received) == 4
+    for value in received:
+        original = expected[value["outcome_id"]]
+        assert value["completeness"] == "COMPLETE"
+        assert (
+            value["source_window_sha256"]
+            == hashlib.sha256(encode(original["source_inputs"]).encode()).hexdigest()
+        )
+        assert value["metrics"] == original["metrics"]
 
 
 def test_atomic_callback_failure_rolls_back_all_source_episode_and_outcome_admission(store):

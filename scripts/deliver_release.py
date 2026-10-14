@@ -1,0 +1,259 @@
+"""Deliver through the fixed SSH target and persist a safe success or failure record."""
+
+import argparse
+import hashlib
+import json
+import re
+import subprocess
+from datetime import datetime, timezone
+from pathlib import Path
+
+PHASES = {
+    "RECEIVE_ARTIFACT",
+    "VERIFY_ARTIFACT",
+    "LOAD_IMAGE",
+    "CHECK_CONFIG",
+    "READ_DIAGNOSTICS",
+    "CHECK_STATE_INTEGRITY",
+    "BACKUP_AND_VALIDATE",
+    "BOUNDED_COMPATIBILITY",
+    "SWITCH",
+    "POST_CHECKS",
+    "UNSET",
+}
+SUCCESS_FIELDS = {
+    "state",
+    "source_sha",
+    "image_id",
+    "build_image_id",
+    "image_config_digest",
+    "image_manifest_digest",
+    "bundle_sha256",
+    "build_run",
+    "at",
+    "previous_image",
+    "backup",
+    "switch_started",
+    "post_checks",
+    "data_state",
+    "available",
+    "requested",
+    "phase",
+    "phase_at",
+    "database_bytes",
+    "database_timeout_seconds",
+    "candidate_name",
+    "delivery_policy",
+    "permit_tree",
+}
+
+
+def parsed_record(value: bytes) -> dict:
+    if len(value) > 65536:
+        return {}
+    try:
+        result = json.loads(value)
+    except (ValueError, UnicodeError):
+        return {}
+    return result if isinstance(result, dict) else {}
+
+
+def delivery_result(result, *, revision: str, digest: str, build_run: int) -> tuple[dict, int]:
+    success = parsed_record(result.stdout)
+    proof = success.get("backup_validation")
+    proof = proof if isinstance(proof, dict) else {}
+    bounded = success.get("bounded_validation", {})
+    post = success.get("additive_post_checks", {})
+    additive = (
+        success.get("delivery_policy") == "OWNER_APPROVED_NEW_WRITES_ONLY_V1"
+        and bool(re.fullmatch(r"[0-9a-f]{40}", str(success.get("permit_tree"))))
+        and isinstance(bounded, dict)
+        and isinstance(post, dict)
+        and all(
+            p.get("state") == "BOUNDED_COMPATIBILITY_PASS"
+            and p.get("fixture_write_restart") == "PASS"
+            and p.get("source_readonly") is True
+            and p.get("full_history_integrity") == "NOT_RUN_OWNER_EXCEPTION"
+            and p.get("full_history_backup") == "FULL_HISTORY_BACKUP_NOT_RUN_OWNER_EXCEPTION"
+            and bool(re.fullmatch(r"[0-9a-f]{64}", str(p.get("configuration_sha256"))))
+            for p in (bounded, post)
+        )
+    )
+    full_backup = (
+        proof.get("phase") == "COMPLETE"
+        and proof.get("validation_mode") == "COMPRESSED_RAM"
+        and proof.get("archive_encoding") == "ZSTD"
+        and type(proof.get("archive_bytes")) is int
+        and proof["archive_bytes"] > 0
+        and re.fullmatch(r"[0-9a-f]{64}", str(proof.get("archive_sha256")))
+        and re.fullmatch(r"[0-9a-f]{64}", str(proof.get("sha256")))
+    )
+    if (
+        result.returncode == 0
+        and success.get("state") == "PASS"
+        and success.get("source_sha") == revision
+        and success.get("bundle_sha256") == digest
+        and success.get("build_run") == build_run
+        and success.get("post_checks") == "source/image/health/persistence/market PASS"
+        and success.get("phase") == "COMPLETE"
+        and success.get("image_id")
+        in (success.get("image_config_digest"), success.get("image_manifest_digest"))
+        and re.fullmatch(r"sha256:[0-9a-f]{64}", str(success.get("image_id")))
+        and (full_backup or additive)
+    ):
+        record = {key: value for key, value in success.items() if key in SUCCESS_FIELDS}
+        if additive:
+            fields = {
+                "state",
+                "full_history_integrity",
+                "full_history_backup",
+                "configuration_sha256",
+                "configuration_bytes",
+                "configuration_revision",
+                "sampled_public_records",
+                "fixture_write_restart",
+                "recent_compact_events",
+                "new_write_status",
+                "source_readonly",
+            }
+            record["bounded_validation"] = {k: v for k, v in bounded.items() if k in fields}
+            record["additive_post_checks"] = {k: v for k, v in post.items() if k in fields}
+            return record, 0
+        record["backup_validation"] = {
+            "phase": "COMPLETE",
+            "validation_mode": "COMPRESSED_RAM",
+            "sha256": proof["sha256"],
+            "archive_encoding": "ZSTD",
+            "archive_bytes": proof["archive_bytes"],
+            "archive_sha256": proof["archive_sha256"],
+        }
+        for key in ("bytes", "compressed_bytes"):
+            if type(proof.get(key)) is int and proof[key] > 0:
+                record["backup_validation"][key] = proof[key]
+        for key in ("sqlite_version", "apsw_version"):
+            if re.fullmatch(r"[0-9.]{1,32}", str(proof.get(key))):
+                record["backup_validation"][key] = proof[key]
+        for name in ("state_validation_resources", "backup_validation_resources"):
+            resource = success.get(name)
+            if isinstance(resource, dict):
+                record[name] = {
+                    key: value
+                    for key, value in resource.items()
+                    if key
+                    in {
+                        "snapshot_bytes",
+                        "scratch_bytes",
+                        "memory_limit_bytes",
+                        "host_available_bytes",
+                        "host_reserve_bytes",
+                    }
+                    and type(value) is int
+                    and value > 0
+                }
+        return record, 0
+    failure = parsed_record(result.stderr)
+    if failure.get("state") != "BLOCKED":
+        failure = {}
+    phase = failure.get("failure_phase", "UNSET")
+    phase = phase if isinstance(phase, str) and phase in PHASES else "UNSET"
+    remote_exit = re.fullmatch(r"Operation failed: docker exit ([0-9]{1,3})", str(failure.get("reason")))
+    code = (
+        {
+            "3": "TIME_BUDGET_EXCEEDED",
+            "4": "DATABASE_CORRUPT",
+            "5": "INTERRUPTED",
+            "6": "IO_ERROR",
+            "7": "DATABASE_ERROR",
+        }.get(remote_exit[1], "REMOTE_OPERATION_FAILED")
+        if remote_exit
+        else "DELIVERY_UNCONFIRMED"
+    )
+    return {
+        "state": "BLOCKED",
+        "attempted_source_sha": revision,
+        "bundle_sha256": digest,
+        "build_run": build_run,
+        "failure_phase": phase,
+        "failure_code": code,
+        "ssh_exit_status": result.returncode,
+        "runtime_state": "UNCONFIRMED",
+        "at_utc": datetime.now(timezone.utc).isoformat(),
+    }, 1
+
+
+def deliver(release: Path, ssh_directory: Path, revision: str, build_run: int) -> int:
+    output = release / "deployment.json"
+    identity = {
+        "schema": "cryptowatcher.delivery-record.v1",
+        "attempted_source_sha": revision if re.fullmatch(r"[0-9a-f]{40}", revision) else "UNSET",
+        "build_run": build_run if type(build_run) is int and build_run > 0 else None,
+        "target": "production / Contabo 167.86.68.98 / crypto_watcher",
+        "at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    # Preserve earlier records: a second attempt requires fresh artifact identity and review.
+    with output.open("x", encoding="utf-8") as record:
+        record.write(json.dumps({**identity, "state": "UNCONFIRMED", "runtime_state": "UNCONFIRMED"}) + "\n")
+        record.flush()
+        try:
+            if not re.fullmatch(r"[0-9a-f]{40}", revision) or type(build_run) is not int or build_run <= 0:
+                raise ValueError("Invalid identity")
+            bundle = release / "bundle.tar"
+            with bundle.open("rb") as content:
+                digest = hashlib.file_digest(content, "sha256").hexdigest()
+            if (release / "bundle.sha256").read_text().strip() != digest:
+                raise ValueError("Invalid bundle")
+            manifest = json.loads((release / "manifest.json").read_text())
+            if manifest.get("source_sha") != revision or manifest.get("build_run") != build_run:
+                raise ValueError("Invalid build identity")
+            command = [
+                "ssh",
+                "-T",
+                "-i",
+                str(ssh_directory / "key"),
+                "-o",
+                "IdentitiesOnly=yes",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "StrictHostKeyChecking=yes",
+                "-o",
+                "UserKnownHostsFile=" + str(ssh_directory / "known_hosts"),
+                "-o",
+                "ConnectTimeout=15",
+                "-o",
+                "ServerAliveInterval=15",
+                "-o",
+                "ServerAliveCountMax=4",
+                "root@167.86.68.98",
+                f"cryptowatcher-deploy {revision} {digest} {bundle.stat().st_size}",
+            ]
+            with bundle.open("rb") as stream:
+                result = subprocess.run(command, stdin=stream, capture_output=True, check=False)
+            payload, exit_status = delivery_result(
+                result, revision=revision, digest=digest, build_run=build_run
+            )
+        except Exception:
+            # Neither local exception text nor raw SSH stderr belongs in an artifact or log.
+            payload = {"state": "BLOCKED", "failure_code": "DELIVERY_PREPARATION_UNCONFIRMED"}
+            exit_status = 1
+        payload = {**identity, **payload}
+        record.seek(0)
+        record.write(json.dumps(payload, sort_keys=True) + "\n")
+        record.truncate()
+        record.flush()
+        print(json.dumps(payload, sort_keys=True))
+    return exit_status
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("revision")
+    parser.add_argument("build_run", type=int)
+    parser.add_argument("--release", type=Path, default=Path("release"))
+    parser.add_argument("--ssh-directory", type=Path, required=True)
+    args = parser.parse_args()
+    return deliver(args.release, args.ssh_directory, args.revision, args.build_run)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

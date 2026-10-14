@@ -64,6 +64,7 @@ jobs:
         if: vars.DEPLOY_ENABLED == 'true'
         env:
           REVISION: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
           SSH_KEY: ${{ secrets.CW_DEPLOY_SSH_KEY }}
           KNOWN_HOSTS: ${{ secrets.CW_SSH_KNOWN_HOSTS }}
         run: |
@@ -73,10 +74,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/cw-ssh"
           printf '%s\n' "$SSH_KEY" > "$RUNNER_TEMP/cw-ssh/key"
           printf '%s\n' "$KNOWN_HOSTS" > "$RUNNER_TEMP/cw-ssh/known_hosts"
-          DIGEST=$(cat release/bundle.sha256)
-          SIZE=$(wc -c < release/bundle.tar)
-          ssh -T -i "$RUNNER_TEMP/cw-ssh/key" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$RUNNER_TEMP/cw-ssh/known_hosts" -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 root@167.86.68.98 "cryptowatcher-deploy $REVISION $DIGEST $SIZE" < release/bundle.tar > release/deployment.json
-          cat release/deployment.json
+          python scripts/deliver_release.py "$REVISION" "$RUN_ID" --ssh-directory "$RUNNER_TEMP/cw-ssh"
       - name: First delivery gate
         if: vars.DEPLOY_ENABLED != 'true'
         run: echo 'Artifact prepared; production delivery PENDING explicit first-migration gate.'
