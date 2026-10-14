@@ -14,7 +14,7 @@ from .detector_config import FAMILIES, effective_parameters
 from .detectors import FORMULAS, UNITS, VERSIONS, Detection, DetectorUnavailable, atr14, evaluate, freshness
 from .history_codec import Codec
 from .sources import Candle
-from .storage import StateError, Store, encode
+from .storage import RUNTIME_UPSERT, StateError, Store, encode
 
 PREFIX = "radar:v1:"
 HEAD_SCHEMA = "cryptowatcher.history-head.v1"
@@ -114,7 +114,7 @@ class History:
 
     def put(self, key: str, value: Any) -> None:
         # Transaction is owned by the engine/delivery operation, never commit nested writes.
-        self.store.db.execute("INSERT OR REPLACE INTO runtime VALUES (?,?)", (PREFIX + key, encode(value)))
+        self.store.db.execute(RUNTIME_UPSERT, (PREFIX + key, encode(value)))
 
     def delete(self, key: str) -> None:
         self.store.db.execute("DELETE FROM runtime WHERE key=?", (PREFIX + key,))

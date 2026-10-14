@@ -11,6 +11,48 @@ from cryptowatcher.storage import RevisionConflict, StateError, Store, migrate_l
 OWNER = 233382575
 
 
+@pytest.mark.parametrize("history_writer", [False, True])
+def test_runtime_replay_skips_writes_and_changed_payload_keeps_row_identity(store, history_writer):
+    from cryptowatcher.events import PREFIX, History
+
+    history = History(store)
+    key = "fixture:pending-delivery"
+    sql_key = PREFIX + key if history_writer else key
+
+    def write(value):
+        with store.db:
+            if history_writer:
+                history.put(key, value)
+            else:
+                store.put_runtime(key, value)
+
+    write({"value": 1, "text": "история"})
+    rowid = store.db.execute("SELECT rowid FROM runtime WHERE key=?", (sql_key,)).fetchone()[0]
+    changes = store.db.total_changes
+    wal = Path(str(store.path) + "-wal")
+    wal_size = wal.stat().st_size
+    for _ in range(250):
+        write({"text": "история", "value": 1})
+    assert store.db.total_changes == changes
+    assert wal.stat().st_size == wal_size
+    write({"value": 1.0, "text": "история"})
+    assert store.db.total_changes == changes + 1
+    assert store.db.execute("SELECT rowid FROM runtime WHERE key=?", (sql_key,)).fetchone()[0] == rowid
+    with pytest.raises(RuntimeError, match="rollback"):
+        with store.db:
+            history.put("fixture:rollback", {"new": True})
+            if history_writer:
+                history.put(key, {"value": 2})
+            else:
+                # The caller owns this transaction; exercise the same live SQL without a nested commit.
+                from cryptowatcher.storage import RUNTIME_UPSERT, encode
+
+                store.db.execute(RUNTIME_UPSERT, (key, encode({"value": 2})))
+            raise RuntimeError("rollback")
+    assert store.get_runtime(sql_key) == {"value": 1.0, "text": "история"}
+    assert store.get_runtime(PREFIX + "fixture:rollback") is None
+
+
 def migration(tmp_path: Path, settings=None, *, payload=None):
     source = tmp_path / "legacy.json"
     raw = payload or {

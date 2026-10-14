@@ -2,6 +2,13 @@
 
 ## Compact history representation
 
+Mutable runtime обновляется на месте по existing key; byte-identical canonical
+payload не вызывает повторной записи. Source recovery сохраняет ключ свечи и
+обновляет её значения/provenance в прежней transaction. Rowid — внутренний
+physical identifier, не observation/update time и не public event identity.
+Изменение write strategy не меняет schema, encoding, retained history или
+reader/rollback compatibility с существующим compact-aware runtime.
+
 Physical SQLite user_version остаётся1. Public immutable revisions могут содержать
 `_history_storage` / `cryptowatcher.shared-fields.v1`: content-addressed ссылки на
 полные lossless settings/context/windows; head `cryptowatcher.history-head.v1`

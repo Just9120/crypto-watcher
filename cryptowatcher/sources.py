@@ -12,7 +12,7 @@ from typing import Any
 
 from .config import TIMEFRAMES
 from .market import MarketError, finite
-from .storage import Store, encode
+from .storage import RUNTIME_UPSERT, Store, encode
 
 WINDOW_SIZE = 256
 
@@ -115,7 +115,7 @@ class Sources:
             writes.append((self.prefix(stream) + f"{candle.start:016d}", encode(asdict(candle))))
         # Save before exposing to the detector/Telegram consumer.
         with self.store.db:
-            self.store.db.executemany("INSERT OR REPLACE INTO runtime VALUES (?,?)", writes)
+            self.store.db.executemany(RUNTIME_UPSERT, writes)
         for candle in candles:
             existing = window.get(candle.start)
             if existing is None or existing.row() != candle.row():
