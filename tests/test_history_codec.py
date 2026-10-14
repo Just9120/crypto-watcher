@@ -1,5 +1,6 @@
 import base64
 import json
+from contextlib import closing
 
 import pytest
 import zstandard
@@ -154,6 +155,53 @@ def test_overlapping_windows_and_revisions_share_bodies_and_keep_public_types(st
     ).fetchone()[0]
     assert total < (len(encode(first)) + len(encode(second))) * 0.5
     assert MARKER not in history.get("event-head:one")
+
+
+def test_new_writes_restart_on_legacy_database_without_rebuild(store):
+    """New producers share snapshots while retaining old bytes on the same DB."""
+    from cryptowatcher.storage import Store
+
+    history = History(store)
+    legacy = large_record("event", "legacy")
+    private_bytes = '{ "body": "unchanged private transport", "revision": 1.00 }'
+    with store.db:
+        history.put("event:legacy:0000000001", legacy)
+        history.put("event-head:legacy", legacy)
+        store.db.execute("INSERT INTO runtime VALUES (?,?)", ("private-transport", private_bytes))
+    preserved_keys = (PREFIX + "event:legacy:0000000001", PREFIX + "event-head:legacy", "private-transport")
+    before = dict(
+        store.db.execute("SELECT key,payload_json FROM runtime WHERE key IN (?,?,?)", preserved_keys)
+    )
+    settings_before = store.snapshot()
+    schema_before = store.db.execute("PRAGMA user_version").fetchone()[0]
+    body_count = []
+    for name in ("new-one", "new-two"):
+        with store.db:
+            for kind in ("event", "outcome"):
+                history.version(kind, large_record(kind, name))
+        body_count.append(
+            store.db.execute("SELECT COUNT(*) FROM runtime WHERE key LIKE 'historyblob:v1:%'").fetchone()[0]
+        )
+    assert body_count[0] > 0 and body_count[0] == body_count[1]
+    with store.db:
+        history.version("event", large_record("event", "legacy", revision=2))
+    # Only the mutable legacy head advances; the historical revision and private
+    # serialized request remain exact, without converting any prior record.
+    assert store.get_runtime(PREFIX + "event-head:legacy")["schema"] == HEAD_SCHEMA
+    assert dict(
+        store.db.execute(
+            "SELECT key,payload_json FROM runtime WHERE key IN (?,?)", (preserved_keys[0], preserved_keys[2])
+        )
+    ) == {key: before[key] for key in (preserved_keys[0], preserved_keys[2])}
+    with closing(Store(store.path, store.owner_id, readonly=True)) as reopened:
+        reader = History(reopened)
+        assert reader.get("event:legacy:0000000001") == legacy
+        assert reader.get("event-head:legacy") == large_record("event", "legacy", revision=2)
+        for name in ("new-one", "new-two"):
+            for kind in ("event", "outcome"):
+                assert reader.get(f"{kind}-head:{name}") == large_record(kind, name)
+        assert reopened.snapshot() == settings_before
+        assert reopened.db.execute("PRAGMA user_version").fetchone()[0] == schema_before
 
 
 @pytest.mark.parametrize("kind", ["episode", "comparison"])
