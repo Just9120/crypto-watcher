@@ -37,6 +37,17 @@ Snapshot: 2026-10-10, проверка около 10:00–10:15 Europe/Moscow; `
 
 ## Current Goal — полный scope CryptoWatcher (IMPLEMENT)
 
+Владелец разрешил разовую code-only поставку PR35 (reply
+call_ad7a2863d9c8418baf778d671670d3ca, «Разрешаю разовую поставку PR35»).
+Exact scoped receiver/bootstrap/tests требуют fresh CI final reviewed tree.
+Original ARMED failed permit34 и receipt34 сохраняются побайтно/private;
+новый root0600 permit35 связан с exact tree/target/current predecessor23bb.
+Только для этой поставки используется approved bounded source-readonly config/compact
+proof вместо full history scan/backup; отсутствие fresh whole-history recovery принято.
+Полные ACK, fresh both-market4TF, CI/image/host/lock/health/private readback обязательны;
+deadline150s, conversion900s/CPU1/RAM4GiB и ordinary backup/CD policy сохраняются.
+DB cleanup/conversion/replacement не входят; Scope58 AC, по коду54/58, Goal не DONE.
+
 Latest delivery: PR34 merged23bb023e, required CI38613962526/ci-required116026604698 PASS;
 automatic CD38615205711 переключил code image, но FAILED вPOST_CHECKS. Primary record
 `23bb023e3872d5791fb270745635da1048dce682-917596cd661973ee/deployment.json`
