@@ -43,6 +43,7 @@ jobs:
       - run: python -m pip install --require-hashes -r requirements-dev.txt
       # Reuse is not claimed: this validates the exact merged inputs before trusted build.
       - run: uv pip check --python "$(command -v python)"
+      - run: python scripts/build_native.py
       - run: python scripts/checks.py all
       - env:
           REVISION: ${{ github.sha }}

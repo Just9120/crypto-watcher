@@ -37,6 +37,17 @@ Snapshot: 2026-10-10, проверка около 10:00–10:15 Europe/Moscow; `
 
 ## Current Goal — полный scope CryptoWatcher (IMPLEMENT)
 
+14Oct delivery recovery checkpoint: PR31 merged `44a0a22`, required CI38524296127
+PASS (suite/native/image). Root receiver57814380… и PR31 tree-bound permit
+установлены/readback PASS, production G5afd107 сохранён. Release38524817473
+остановился на pre-build tests: release workflow не собирал required native
+helpers до suite; switch/artifact delivery НЕ начинались. Necessary hotfix
+branch `codex/release-native-helper-20261014`, base44a0a22: тот же native build
+step, что в PR CI, до release tests. Runtime код, DB формат, settings и approved
+exception не меняются. После latest CI проверить diff only release workflow/docs,
+перепривязать pending one-time permit к exact hotfix tree с primary evidence,
+merge и дождаться automatic CD/post-checks. Полная compaction/cleanup не запускается.
+
 2026-10-11 владелец явно расширил Goal до всего согласованного проекта и поручил непрерывную реализацию, с переносом внешних blockers в конец. Scope: все58 исходных AC с утверждёнными уточнениями и dispositions полного реестра findings. G1/G2A/G2B/G3/G4/G5 — последовательные поставляемые этапы общей Goal по уже утверждённому PR разбиению; G6 — финальный полный AUDIT и audit docs PR. Отдельное повторное разрешение перехода между этапами не требуется. Встроенная active Goal сохраняется: её objective уже включает продолжение approved roadmap после G1.
 
 Общий DoD: весь agreed scope реализован и проверен, latest required CI/review и applicable CD всех runtime PR подтверждены, все findings исправлены либо получили обоснованное approved disposition; final audit проверяет requirements↔code↔runtime Evidence и заново рассчитывает готовность. Неизвестный результат или блокер не считается READY/DONE. Повтор первого JSON import, legacy rollback, restore поверх live data, ослабление auth/CI/host checks и торговая активация в это поручение не входят.
