@@ -16,6 +16,7 @@ PHASES = {
     "READ_DIAGNOSTICS",
     "CHECK_STATE_INTEGRITY",
     "BACKUP_AND_VALIDATE",
+    "BOUNDED_COMPATIBILITY",
     "SWITCH",
     "POST_CHECKS",
     "UNSET",
@@ -42,6 +43,8 @@ SUCCESS_FIELDS = {
     "database_bytes",
     "database_timeout_seconds",
     "candidate_name",
+    "delivery_policy",
+    "permit_tree",
 }
 
 
@@ -59,6 +62,32 @@ def delivery_result(result, *, revision: str, digest: str, build_run: int) -> tu
     success = parsed_record(result.stdout)
     proof = success.get("backup_validation")
     proof = proof if isinstance(proof, dict) else {}
+    bounded = success.get("bounded_validation", {})
+    post = success.get("additive_post_checks", {})
+    additive = (
+        success.get("delivery_policy") == "OWNER_APPROVED_NEW_WRITES_ONLY_V1"
+        and bool(re.fullmatch(r"[0-9a-f]{40}", str(success.get("permit_tree"))))
+        and isinstance(bounded, dict)
+        and isinstance(post, dict)
+        and all(
+            p.get("state") == "BOUNDED_COMPATIBILITY_PASS"
+            and p.get("fixture_write_restart") == "PASS"
+            and p.get("source_readonly") is True
+            and p.get("full_history_integrity") == "NOT_RUN_OWNER_EXCEPTION"
+            and p.get("full_history_backup") == "FULL_HISTORY_BACKUP_NOT_RUN_OWNER_EXCEPTION"
+            and bool(re.fullmatch(r"[0-9a-f]{64}", str(p.get("configuration_sha256"))))
+            for p in (bounded, post)
+        )
+    )
+    full_backup = (
+        proof.get("phase") == "COMPLETE"
+        and proof.get("validation_mode") == "COMPRESSED_RAM"
+        and proof.get("archive_encoding") == "ZSTD"
+        and type(proof.get("archive_bytes")) is int
+        and proof["archive_bytes"] > 0
+        and re.fullmatch(r"[0-9a-f]{64}", str(proof.get("archive_sha256")))
+        and re.fullmatch(r"[0-9a-f]{64}", str(proof.get("sha256")))
+    )
     if (
         result.returncode == 0
         and success.get("state") == "PASS"
@@ -70,15 +99,26 @@ def delivery_result(result, *, revision: str, digest: str, build_run: int) -> tu
         and success.get("image_id")
         in (success.get("image_config_digest"), success.get("image_manifest_digest"))
         and re.fullmatch(r"sha256:[0-9a-f]{64}", str(success.get("image_id")))
-        and proof.get("phase") == "COMPLETE"
-        and proof.get("validation_mode") == "COMPRESSED_RAM"
-        and proof.get("archive_encoding") == "ZSTD"
-        and type(proof.get("archive_bytes")) is int
-        and proof["archive_bytes"] > 0
-        and re.fullmatch(r"[0-9a-f]{64}", str(proof.get("archive_sha256")))
-        and re.fullmatch(r"[0-9a-f]{64}", str(proof.get("sha256")))
+        and (full_backup or additive)
     ):
         record = {key: value for key, value in success.items() if key in SUCCESS_FIELDS}
+        if additive:
+            fields = {
+                "state",
+                "full_history_integrity",
+                "full_history_backup",
+                "configuration_sha256",
+                "configuration_bytes",
+                "configuration_revision",
+                "sampled_public_records",
+                "fixture_write_restart",
+                "recent_compact_events",
+                "new_write_status",
+                "source_readonly",
+            }
+            record["bounded_validation"] = {k: v for k, v in bounded.items() if k in fields}
+            record["additive_post_checks"] = {k: v for k, v in post.items() if k in fields}
+            return record, 0
         record["backup_validation"] = {
             "phase": "COMPLETE",
             "validation_mode": "COMPRESSED_RAM",

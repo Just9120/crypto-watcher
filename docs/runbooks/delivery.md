@@ -72,6 +72,39 @@ Bootstrap берёт existing target lock, сохраняет backup `authorized
 
 ## Routine CD: schema1 / NONE
 
+### Разовая owner-approved поставка compact new writes
+
+Owner decision14Oct: PR31 new-write fix поставляется на ту же SQLite отдельно
+от уменьшения накопленной истории. [Operator update](../../scripts/update_cd_receiver.py)
+при latest required CI/PREFLIGHT и `--execute --approve-new-writes-only` создаёт
+root0600 `/etc/cryptowatcher/new-write-permit.json`: exact approved PR31 Git tree,
+previous container/image/revision и hash действующего target. Receiver сверяет
+tree через primary GitHub commit record и проверяет previous runtime; artifact
+или environment variable не могут включить exception. Permit CONSUMED после
+successful post-checks; отсутствующий, consumed или другой tree использует
+обычные полные source/persistent-backup gates ниже.
+
+Только matching permit заменяет полные scans/history backup ограниченной
+[проверкой](../../cryptowatcher/new_write_check.py)120s/CPU1/512MiB/no swap.
+Source mount read-only; WAL snapshot/schema/owner/migration/config identity,
+bounded sampled legacy/compact readback, private owner/settings/preferences/mutes
+snapshot с restore rehearsal и fixture write/restart. Host env и active/checkout
+Compose сохраняются в private release/config-recovery, secrets не экспортируются.
+DB не конвертируется/заменяется/очищается; lifecycle alerts и settings сохраняются.
+Post-checks требуют exact image/source, health, fresh ingestion/config и bounded
+history/new compact event readback; отсутствие fresh event фиксируется отдельно,
+fixture write/restart остаётся обязательным. Full integrity/backup имеют явные
+NOT_RUN_OWNER_EXCEPTION/FULL_HISTORY_BACKUP_NOT_RUN_OWNER_EXCEPTION, не PASS.
+
+Нового полного recovery snapshot всей текущей history у этой операции нет;
+старый qualified archive покрывает только своё прежнее состояние. После compact
+writes G5 reader не совместим: automatic rollback на него/DB restore запрещены;
+при post-check failure остановить продвижение и применить compatible forward-fix.
+Все остальные target/SSH/CI/artifact/lock/eligibility gates, обычные backup/CD
+defaults и900s/CPU1/RAM4GiB предел отдельной конвертации сохраняются. Permit и
+deployment record сохраняются для readback; повтор после ambiguous result требует
+сначала проверки state, никакого blind retry. Разовый rollout не разрешает cleanup.
+
 ### Полная проверка многогигабайтной SQLite
 
 Source и persistent backup остаются обязательными full integrity gates до switch.

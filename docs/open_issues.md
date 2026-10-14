@@ -54,12 +54,25 @@ Owner steering2026-10-14: сначала поставить через CD исп
 отдельно. Current-dataset conversion больше не является prerequisite проверки
 new-write runtime кода. При этом действующий routine CD требует full source и
 persistent backup до switch; автоматического исключения из этих gates нет.
-Предложена конкретная one-time delivery exception, owner approval PENDING:
+Разрешена конкретная one-time delivery exception, owner approval14Oct:
 scope-bound permit, bounded legacy/compact readback и маленький private config
 snapshot вместо full-history scan/backup; ordinary defaults не меняются.
 У этой операции не будет нового полного backup актуальной history; после compact
 writes прежний G5 reader несовместим, recovery только compatible forward-fix.
-До разрешения policy exception и applicable CI/CD поставка не выполняется.
+Owner reply call_1ece72ffadf74d4cb986afc82314cf27: «Разрешаю разовую поставку по
+процедуре». Точная реализация: root-owned tree/previous-runtime/target permit в
+[receiver](../scripts/deploy_receiver.py), выдаётся reviewed
+[operator update](../scripts/update_cd_receiver.py) с explicit approval flag;
+[bounded checker](../cryptowatcher/new_write_check.py) имеет source read-only,
+private config snapshot/restore и disposable legacy/compact write/restart.
+Permit consumed после PASS; missing/other-tree/consumed => обычный full-backup
+flow. Full-history integrity/backup явно NOT_RUN_OWNER_EXCEPTION, не PASS.
+Local53 gate/probe/capture/receiver regressions и quality PASS. Linux93 runtime/
+new-gate tests PASS; bounded current source sample32 records/write-restart PASS,
+config-recovery payload38,528bytes/revision2 (read-only, fixture-only writes).
+Primary probe/gate record `new-write-probe-gate-linux.jsonl` вне repository.
+Required latest
+CI и actual CD/source/health/ingestion/new-write readback ещё PENDING.
 Подробный review и measurements остаются вне repository.
 
 New-write-only regression подтверждает mixed legacy/compact write/restart на той
@@ -1314,6 +1327,13 @@ canonical reconstruction8.813s cumulative, body loading4.219s cumulative.
 Full/current conversion, production switch, PR31 merge/CD, consumer activation
 и final G6 AUDIT остаются незавершёнными; scope58/progress54/58 сохраняются.
 
-Следующий шаг по owner steering14Oct: сначала new-write-only CD без conversion накопленной DB. Legacy/compact write/restart qualified; latest PR CI и delivery gates REQUIRED. Concrete one-time exception из полного source/history backup flow ждёт owner approval; без него receiver/gates не меняются. До решения не выполнять conversion, production replacement или pending cleanup четырёх файлов. Old-data compaction остаётся отдельным этапом.
+Следующий шаг по owner steering14Oct: сначала new-write-only CD без conversion
+накопленной DB. Legacy/compact write/restart qualified; latest PR CI и delivery
+gates REQUIRED. Owner разрешил точную one-time exception из полного source/history
+backup flow; реализация проверена локально. Довести PR31 до latest CI, gated
+operator receiver+permit update, merge и automatic CD; проверить exact source/image,
+health/config/ingestion и compact writes. Не выполнять conversion, production
+replacement или pending cleanup четырёх файлов. Old-data compaction остаётся
+отдельным этапом; scope58/progress54/58 сохраняются.
 
 Terminal whole b849dbe не повторять. One-pass canonical packing qualified на bounded cohort/fixtures; fresh capacity и exact cleanup review нужны перед возможным full qualification. Новый whole trial требует fresh resource/concurrency preflight и measured code/artifact identity. Fresh current dataset остаётся отдельной required qualification. Не повторять terminal failed whole trial без нового основания. Проверить конкретный exact-byte restore/proof-reuse proposal на corruption/bounds/races и actual historical archive; owner policy review14Oct разрешил только описанный recovery gate; source/candidate и routine CD gates остаются прежними. Fresh current qualification остаётся отдельным required результатом. Source compression prototype qualified258.407s на protected historical archive; canonical code/defaults не менялись, whole fit ещё не доказан. Candidate verification отдельно от copy PASS391.133s для protected historical artifact; whole current conversion≤900s остаётся REQUIRED. Native event-window block experiment отклонён по cost/size evidence; не повторять unchanged whole pipeline и не ослаблять gates. Разрешённое exact-byte recovery reuse требует canonical regression qualification; оно не закрывает source/candidate timeouts. Source-release/manifest correction qualified53 local/139 Linux tests, но actual whole fit остаётся неподтверждённым. Новый full trial требует fresh disk/resources preflight; newly generated duplicate outputs не удалять без конкретной reviewed authorization, original gzip и старый qualified candidate сохраняются. Только после full qualification подготовить review точного production switch и applicable receiver/merge/CD gates. Затем завершить qualified consumer activation/signed historical smoke и G6 full audit/docs PR. Полный scope58 AC и все findings сохраняются; по коду54/58, audit percentage не пересчитывался. До этого Goal DoD не достигнут. Primary detailed logs/receipts остаются вне repository; user state и другие VPS проекты сохраняются.
