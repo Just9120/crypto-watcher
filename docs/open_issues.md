@@ -78,6 +78,17 @@ container; production не mounted/paused. Optimized current path выбирае
 native projection/VFS и bounded source128MiB/writer≤512MiB caches; все full
 source/candidate/recovery gates сохранены. Historical result и current dataset
 fit не предполагать до primary receipt.
+Дополнение: compact candle fields сохраняют11 исходных values/units/timestamps
+без дублирования names. Source/outcome parity, exact canonical bytes и отказ для
+неизвестного layout проверены. Linux `framed-candle-linux-19yauuwj/receipt.json`
+PASS включает borrowed native map после trim, full CHECK, recovery и atomic
+qualification receipt. Historical engine вернул полную candidate qualification
+за~635s/2,154,967,040bytes, но operator report сломался при duplicate elapsed_seconds
+и ошибочно записал UNQUALIFIED; этот receipt не объявлять успешной поставкой.
+Исправлен reporting и добавлена primary qualification запись внутри общего deadline.
+Current33,682,788,352bytes read-only snapshot qualification начата в
+`framed-current-jj7s59n9`: CPU1/RAM4GiB/no swap/whole900s, no pause/replacement.
+Outcome current proof и promotion PENDING; owner state/alert runtime сохраняются.
 
 
 

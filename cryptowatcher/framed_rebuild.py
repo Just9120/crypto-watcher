@@ -10,6 +10,7 @@ import shutil
 import sqlite3
 import time
 from collections.abc import Iterator
+from contextlib import closing
 from pathlib import Path
 from typing import Any, Literal
 
@@ -28,8 +29,7 @@ from .history_rebuild import (
     release_source_cache,
 )
 from .native_history import Accelerator, load
-from .record_codec import MARKER as RECORD_MARKER
-from .record_codec import pack, unpack_bytes
+from .record_codec import pack, pack_candle, sql_payload
 from .storage import (
     COMPRESSED_RECORD_VERSION,
     RECORD_FORMAT,
@@ -38,15 +38,12 @@ from .storage import (
     check_integrity,
     create_schema,
     encode,
+    known_record_format,
 )
 
 
 def original_payload(payload: str) -> str:
-    if RECORD_MARKER not in payload:
-        return payload
-    value = json.loads(payload)
-    raw = unpack_bytes(value)
-    return payload if raw is None else raw.decode("utf-8")
+    return sql_payload(payload)
 
 
 def metadata(db: Any, payload: str, kind: str, accelerator: Accelerator | None = None) -> dict[str, Any]:
@@ -121,7 +118,7 @@ def copy_validated(
         "SELECT payload_json FROM runtime WHERE key=?", (RECORD_FORMAT_KEY,)
     ).fetchone()
     if source_version == COMPRESSED_RECORD_VERSION and (
-        declaration is None or declaration[0] != encode(RECORD_FORMAT)
+        declaration is None or not known_record_format(declaration[0])
     ):
         raise StateError("Unknown source record format")
     if source_version == 1 and declaration is not None:
@@ -160,8 +157,10 @@ def copy_validated(
     counts: dict[str, int] = {}
     runtime_counts: dict[str, int] = {}
     runtime_payload_chars: dict[str, int] = {}
-    framed = heads = 0
-    with sqlite3.connect(destination) as target:
+    framed = heads = candles = 0
+    with closing(sqlite3.connect(destination)) as target:
+        if os.name != "nt":
+            destination.chmod(0o600)
         create_schema(target)
         target.execute("PRAGMA journal_mode=DELETE")
         target.execute("PRAGMA synchronous=FULL")
@@ -179,7 +178,7 @@ def copy_validated(
             count = 0
 
             def rows() -> Iterator[tuple[Any, ...]]:
-                nonlocal count, framed, heads
+                nonlocal count, framed, heads, candles
                 for row in source.execute(f"SELECT * FROM {name} ORDER BY rowid"):
                     guard(deadline)
                     if count % 1000 == 0 and shutil.disk_usage(destination.parent).free < 1536 * 1024**2:
@@ -211,6 +210,11 @@ def copy_validated(
                             target.execute("INSERT INTO changed_heads VALUES(?)", (key,))
                             heads += 1
                         kind = key.removeprefix(PREFIX).partition(":")[0]
+                        if key.startswith("source:v1:candle:"):
+                            compact = pack_candle(original)
+                            if len(compact.encode()) < len(original.encode()):
+                                rewritten = compact
+                                candles += 1
                         if key.startswith(BLOB_PREFIX):
                             codec.validate_raw(key[len(BLOB_PREFIX) :], payload)
                         elif key.startswith(PREFIX) and kind in HEAD_FIELDS:
@@ -239,7 +243,7 @@ def copy_validated(
 
             target.executemany(f"INSERT INTO {name} VALUES ({','.join('?' for _ in columns)})", rows())
             counts[name] = count
-        if framed or source_version == COMPRESSED_RECORD_VERSION:
+        if framed or candles or source_version == COMPRESSED_RECORD_VERSION:
             target.execute("INSERT INTO runtime VALUES (?,?)", (RECORD_FORMAT_KEY, encode(RECORD_FORMAT)))
             target.execute(f"PRAGMA user_version={COMPRESSED_RECORD_VERSION}")
         target.commit()
@@ -286,6 +290,12 @@ def copy_validated(
             if checked != counts[name] or actual.digest() != expected[name].digest():
                 raise StateError("Complete source/candidate manifest mismatch")
     guard(deadline)
+    candidate_digest = hashlib.sha256()
+    with destination.open("rb") as encoded_candidate:
+        for chunk in iter(lambda: encoded_candidate.read(1024 * 1024), b""):
+            guard(deadline)
+            candidate_digest.update(chunk)
+    guard(deadline)
     return {
         "state": "CANDIDATE_ROWS_VERIFIED",
         "counts": counts,
@@ -293,7 +303,9 @@ def copy_validated(
         "runtime_payload_chars": runtime_payload_chars,
         "framed_records": framed,
         "collapsed_heads": heads,
+        "compact_candles": candles,
         "candidate_bytes": destination.stat().st_size,
+        "candidate_sha256": candidate_digest.hexdigest(),
         "source_schema_integrity": "CALLER_REQUIRED",
         "source_history_deleted": 0,
     }
@@ -323,7 +335,13 @@ def build_candidate(
     backing = directory / "source.frames"
     if any(
         path.exists()
-        for path in (candidate, backing, directory / "source.index", directory / "source.recovery.json")
+        for path in (
+            candidate,
+            backing,
+            directory / "source.index",
+            directory / "source.recovery.json",
+            directory / "qualification.json",
+        )
     ):
         raise StateError("Fresh qualification directory required")
     if type(encoded_limit) is not int or type(maximum) is not int or min(encoded_limit, maximum) <= 0:
@@ -367,6 +385,13 @@ def build_candidate(
         production_replacement=False,
         snapshot_not_current_state_after_capture=True,
     )
+    receipt = directory / "qualification.json"
+    with receipt.open("x", encoding="utf-8") as output:
+        os.chmod(receipt, 0o600)
+        output.write(encode(report))
+        output.flush()
+        os.fsync(output.fileno())
+    guard(deadline)
     return report
 
 
@@ -410,12 +435,6 @@ def main() -> int:
             flush=True,
         )
         return 3
-    receipt = args.directory / "qualification.json"
-    with receipt.open("x", encoding="utf-8") as output:
-        os.chmod(receipt, 0o600)
-        output.write(encode(result))
-        output.flush()
-        os.fsync(output.fileno())
     print(encode(result), flush=True)
     return 0
 

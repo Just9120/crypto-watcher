@@ -16,13 +16,43 @@ MARKER = "_history_record_storage"
 SCHEMA = "cryptowatcher.compressed-record.v1"
 MAX_BYTES = 32 * 1024 * 1024
 FIELDS = {"schema", "bytes", "sha256", "zstd"}
+CANDLE_MARKER = "_cw_candle_v1"
+CANDLE_FIELDS = (
+    "close",
+    "high",
+    "low",
+    "open",
+    "received_ms",
+    "server_ms",
+    "source",
+    "start",
+    "step",
+    "turnover",
+    "volume",
+)
+
+
+def pack_candle(payload: str) -> str:
+    """Elide fixed candle field names only for an exactly canonical known object."""
+    value = json.loads(payload)
+    if not isinstance(value, dict) or set(value) != set(CANDLE_FIELDS):
+        return payload
+    if encode(value) != payload:
+        return payload
+    return encode({CANDLE_MARKER: [value[name] for name in CANDLE_FIELDS]})
 
 
 def sql_payload(payload: Any) -> Any:
     """Expose original JSON to the existing SQLite history filters and aggregates."""
-    if not isinstance(payload, str) or MARKER not in payload:
+    if not isinstance(payload, str) or (MARKER not in payload and CANDLE_MARKER not in payload):
         return payload
-    raw = unpack_bytes(json.loads(payload))
+    value = json.loads(payload)
+    if isinstance(value, dict) and CANDLE_MARKER in value:
+        data = value[CANDLE_MARKER]
+        if set(value) != {CANDLE_MARKER} or not isinstance(data, list) or len(data) != len(CANDLE_FIELDS):
+            raise StateError("Invalid compact candle record")
+        return encode(dict(zip(CANDLE_FIELDS, data, strict=True)))
+    raw = unpack_bytes(value)
     return payload if raw is None else raw.decode("utf-8")
 
 

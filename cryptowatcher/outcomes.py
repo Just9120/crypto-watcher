@@ -10,6 +10,7 @@ from typing import Any, Callable
 
 from .config import OwnerSettings
 from .events import PREFIX, History, identity
+from .record_codec import sql_payload
 from .sources import Candle, Sources
 from .storage import StateError, Store, encode
 
@@ -35,7 +36,7 @@ def read_candles(store: Store, stream: str, start: int, end: int) -> list[Candle
     )
     result = []
     for row in rows:
-        candle = Candle(**json.loads(row[0]))
+        candle = Candle(**json.loads(sql_payload(row[0])))
         if candle != Candle.parse(
             candle.row(), stream.rsplit("/", 1)[1], candle.source, candle.received_ms, candle.server_ms
         ):
@@ -368,7 +369,7 @@ class Retention:
         with self.store.db:
             for row in rows:
                 state["cursor"] = row[0]
-                candle = Candle(**json.loads(row[1]))
+                candle = Candle(**json.loads(sql_payload(row[1])))
                 if candle.end >= now_ms - 90 * DAY or self.history.get("protected:" + row[0]):
                     continue
                 stream = row[0][len(prefix) :].rsplit(":", 1)[0]

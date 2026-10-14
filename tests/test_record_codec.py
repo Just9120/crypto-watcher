@@ -156,3 +156,20 @@ def test_unknown_version_two_metadata_refuses_before_mutation(store, metadata):
     with pytest.raises(StateError, match="Unsupported database schema"):
         Store(path, 233382575)
     assert hashlib.sha256(path.read_bytes()).hexdigest() == before
+
+
+def test_compact_candle_exact_types_unknown_fields_and_corruption():
+    from cryptowatcher.record_codec import CANDLE_FIELDS, CANDLE_MARKER, pack_candle, sql_payload
+    from cryptowatcher.storage import encode
+
+    value = {name: i for i, name in enumerate(CANDLE_FIELDS)}
+    value.update(close=1.0, volume=-0.0, source="rest", turnover=5e-324, received_ms=2**100)
+    raw = encode(value)
+    packed = pack_candle(raw)
+    assert sql_payload(packed) == raw
+    assert type(json.loads(sql_payload(packed))["close"]) is float
+    assert pack_candle(encode({**value, "future_field": True})) == encode({**value, "future_field": True})
+    noncanonical = json.dumps(value)
+    assert pack_candle(noncanonical) == noncanonical
+    with pytest.raises(StateError):
+        sql_payload(encode({CANDLE_MARKER: [1]}))

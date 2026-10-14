@@ -10,6 +10,15 @@ JSON сохраняется lossless; content size/window/checksum/strict single
 закрывает доступ, version2 сохраняется при restart. Старый version1-only reader
 не является допустимым rollback после такой migration. Current production ещё
 schema1: запись framed records/promotion не выполнялась.
+Known format declaration дополнительно поддерживает `cryptowatcher.compact-candle.v1`.
+Для exact canonical source candle с фиксированными11 fields используется
+`_cw_candle_v1` array в стабильном порядке; original JSON восстанавливается
+побайтно. Unknown fields/noncanonical rows остаются прежними. Store/Sources/
+outcome readers и SQL scalar раскрывают array, live source writer сохраняет
+обычный совместимый JSON. Manifest каждого runtime row проверяет exact original
+bytes; compiler не округляет числа и не теряет receipt/server/source provenance.
+Исходная известная frame-only declaration version2 также читается; future/unknown
+declarations отвергаются. Production macro/promotion пока не выполнялись.
 SQLite history filters/analytics/export используют `cw_record_json`, registered
 на каждом Store connection, включая read-only export. Scalar возвращает exact
 original JSON для framed records; обычные/shared-field записи не меняет. Поэтому

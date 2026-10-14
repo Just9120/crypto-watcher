@@ -246,3 +246,45 @@ def test_framed_history_keeps_filtered_export_cohorts_and_causal_cutoff(tmp_path
     for records in (before_export, after_export):
         records[0].pop("snapshot_at_ms")
     assert after_export == before_export
+
+
+def test_compact_candles_preserve_source_windows_and_future_outcome_rows(tmp_path):
+    from dataclasses import asdict
+
+    from cryptowatcher.outcomes import read_candles
+    from cryptowatcher.sources import Candle, Sources
+    from cryptowatcher.storage import encode
+
+    source, target = tmp_path / "source.sqlite3", tmp_path / "target.sqlite3"
+    start = 1800000000000
+    candles = [
+        Candle.parse(
+            [start + i * 60000, 100, 102, 99, 101, 1, 400],
+            "1m",
+            "rest",
+            start + (i + 1) * 60000,
+            start + (i + 1) * 60000,
+        )
+        for i in range(64)
+    ]
+    with closing(Store(source, 233382575)) as store:
+        store.initialize(OwnerSettings())
+        sources = Sources(store)
+        sources.put("spot/BTCUSDT/1m", candles)
+        before = sources.rows("spot/BTCUSDT/1m", 64)
+        raw = {row[0]: row[1] for row in store.db.execute("SELECT key,payload_json FROM runtime")}
+    with closing(sqlite3.connect(source.as_uri() + "?mode=ro", uri=True)) as db:
+        db.execute("PRAGMA query_only=ON")
+        report = copy_validated(db, target, owner=233382575, maximum=1024**2, deadline=time.monotonic() + 15)
+    assert report["compact_candles"] == 64
+    assert target.stat().st_size < source.stat().st_size
+    with closing(Store(target, 233382575)) as store:
+        sources = Sources(store)
+        assert sources.rows("spot/BTCUSDT/1m", 64) == before
+        assert read_candles(store, "spot/BTCUSDT/1m", start, start + 64 * 60000) == candles
+        for candle in candles:
+            key = Sources.prefix("spot/BTCUSDT/1m") + f"{candle.start:016d}"
+            assert store.get_runtime(key) == asdict(candle)
+            assert encode(store.get_runtime(key)) == raw[key]
+        sources.put("spot/BTCUSDT/1m", candles, live=True)
+        assert sources.rows("spot/BTCUSDT/1m", 64) == before

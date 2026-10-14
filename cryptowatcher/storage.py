@@ -18,7 +18,14 @@ from .config import ConfigError, OwnerSettings, instrument_key, normalize_pair, 
 SCHEMA_VERSION = 1
 COMPRESSED_RECORD_VERSION = 2
 RECORD_FORMAT_KEY = "historyrecord:format:v1"
-RECORD_FORMAT = {"schema": "cryptowatcher.compressed-record.v1", "physical_schema": 1}
+LEGACY_RECORD_FORMAT = {"schema": "cryptowatcher.compressed-record.v1", "physical_schema": 1}
+RECORD_FORMAT = {**LEGACY_RECORD_FORMAT, "candle_schema": "cryptowatcher.compact-candle.v1"}
+
+
+def known_record_format(payload: str) -> bool:
+    return payload in (encode(RECORD_FORMAT), encode(LEGACY_RECORD_FORMAT))
+
+
 RUNTIME_UPSERT = """
 INSERT INTO runtime (key, payload_json) VALUES (?, ?)
 ON CONFLICT(key) DO UPDATE SET payload_json=excluded.payload_json
@@ -215,7 +222,7 @@ class Store:
                     marker = probe.execute(
                         "SELECT payload_json FROM runtime WHERE key=?", (RECORD_FORMAT_KEY,)
                     ).fetchone()
-                    if marker is None or marker[0] != encode(RECORD_FORMAT):
+                    if marker is None or not known_record_format(marker[0]):
                         raise StateError("Unsupported database schema; database preserved")
                 elif version != SCHEMA_VERSION:
                     raise StateError("Unsupported database schema; database preserved")
@@ -322,7 +329,9 @@ class Store:
 
     def get_runtime(self, key: str, default: Any = None) -> Any:
         row = self.db.execute("SELECT payload_json FROM runtime WHERE key=?", (key,)).fetchone()
-        return json.loads(row[0]) if row else default
+        from .record_codec import sql_payload
+
+        return json.loads(sql_payload(row[0])) if row else default
 
     def put_runtime(self, key: str, payload: Any) -> None:
         with self.db:

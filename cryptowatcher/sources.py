@@ -12,6 +12,7 @@ from typing import Any
 
 from .config import TIMEFRAMES
 from .market import MarketError, finite
+from .record_codec import sql_payload
 from .storage import RUNTIME_UPSERT, Store, encode
 
 WINDOW_SIZE = 256
@@ -79,7 +80,7 @@ class Sources:
         window: dict[int, Candle] = {}
         try:
             for row in rows:
-                candle = Candle(**json.loads(row[0]))
+                candle = Candle(**json.loads(sql_payload(row[0])))
                 validated = Candle.parse(
                     candle.row(),
                     stream.rsplit("/", 1)[1],
