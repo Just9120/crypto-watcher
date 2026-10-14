@@ -9,6 +9,16 @@ physical identifier, не observation/update time и не public event identity.
 Изменение write strategy не меняет schema, encoding, retained history или
 reader/rollback compatibility с существующим compact-aware runtime.
 
+Во время первоначальной WebSocket subscription phase closed observations временно
+буферизуются отдельно от ACK: максимум128 сообщений/2MiB raw bytes на session.
+После полного ACK они проходят прежние validation/persistence/detector paths
+с исходным network receipt time; freshness остаётся от market observation time.
+Replay уступает event loop между сообщениями, buffer освобождается после обработки.
+Overflow блокирует affected stream и запускает priority REST recovery; historical
+recovery не создаёт live alert. До ACK/rejection buffer не пишет candles/events.
+Это bounded transient ingestion state, не durable consumer outbox и не history;
+restart восстанавливает пропуски существующим source recovery.
+
 Physical SQLite user_version остаётся1. Public immutable revisions могут содержать
 `_history_storage` / `cryptowatcher.shared-fields.v1`: content-addressed ссылки на
 полные lossless settings/context/windows; head `cryptowatcher.history-head.v1`

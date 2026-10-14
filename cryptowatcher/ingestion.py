@@ -20,6 +20,9 @@ from .sources import WINDOW_SIZE, Candle, Sources
 from .storage import RUNTIME_UPSERT, Store, encode
 from .universe import CLASSIFICATION_VERSION, Instrument, active_instruments, discover
 
+SUBSCRIPTION_BUFFER_MESSAGES = 128
+SUBSCRIPTION_BUFFER_BYTES = 2 * 1024 * 1024
+
 
 def topic(stream: str) -> str:
     _, symbol, tf = stream.split("/")
@@ -448,7 +451,14 @@ class BybitRadar(BybitREST):
                 if stream in self._history:
                     self.request_recovery(stream, 20)
 
-    def accept_message(self, market: str, message: dict[str, Any], allowed: set[str]) -> None:
+    def accept_message(
+        self,
+        market: str,
+        message: dict[str, Any],
+        allowed: set[str],
+        *,
+        received_ms: int | None = None,
+    ) -> None:
         parts = str(message.get("topic", "")).split(".")
         if len(parts) != 3 or parts[0] != "kline":
             return
@@ -475,7 +485,7 @@ class BybitRadar(BybitREST):
                     ],
                     tf,
                     "websocket",
-                    int(time.time() * 1000),
+                    int(time.time() * 1000) if received_ms is None else received_ms,
                     int(message["ts"]),
                 )
                 if int(finite(row["end"])) != candle.end - 1:
@@ -543,6 +553,8 @@ class BybitRadar(BybitREST):
                             ) and stream not in self._pending:
                                 self.request_recovery(stream, 0)
                         batch_size = 10 if market == "spot" else 100
+                        deferred: list[tuple[dict[str, Any], int]] = []
+                        deferred_bytes = 0
                         for offset in range(0, len(streams), batch_size):
                             batch = streams[offset : offset + batch_size]
                             request_id = f"cw{offset}"
@@ -560,8 +572,32 @@ class BybitRadar(BybitREST):
                                 raw = await asyncio.wait_for(
                                     websocket.recv(), max(0.01, deadline - time.monotonic())
                                 )
+                                received_ms = int(time.time() * 1000)
                                 message = json.loads(raw)
-                                self.accept_message(market, message, allowed)
+                                # Subscription responses must not wait for cold source
+                                # reads, detector persistence or historical processing.
+                                parts = str(message.get("topic", "")).split(".")
+                                if len(parts) == 3 and parts[0] == "kline":
+                                    stream = f"{market}/{parts[2]}/{parts[1]}m"
+                                    if stream in allowed and stream in self.streams:
+                                        self.observe_clock(message["ts"])
+                                        if any(row.get("confirm") is True for row in message.get("data", [])):
+                                            size = (
+                                                len(raw.encode("utf-8")) if isinstance(raw, str) else len(raw)
+                                            )
+                                            if (
+                                                len(deferred) >= SUBSCRIPTION_BUFFER_MESSAGES
+                                                or deferred_bytes + size > SUBSCRIPTION_BUFFER_BYTES
+                                            ):
+                                                self.sources.blocked[stream] = "subscription_buffer_overflow"
+                                                self.sources.live.pop(stream, None)
+                                                self.request_recovery(stream, 0)
+                                                self.connections[name]["buffer_overflows"] = (
+                                                    self.connections[name].get("buffer_overflows", 0) + 1
+                                                )
+                                            else:
+                                                deferred.append((message, received_ms))
+                                                deferred_bytes += size
                                 if message.get("op") == "subscribe" and message.get("req_id") == request_id:
                                     if message.get("success") is not True:
                                         raise MarketError("subscription_rejected")
@@ -569,9 +605,14 @@ class BybitRadar(BybitREST):
                                     break
                         self.connections[name]["state"] = "CONNECTED"
                         backoff = 1.0
+                        for message, received_ms in deferred:
+                            self.accept_message(market, message, allowed, received_ms=received_ms)
+                            await asyncio.sleep(0)
+                        deferred.clear()
                         while True:
                             raw = await asyncio.wait_for(websocket.recv(), 65)
-                            self.accept_message(market, json.loads(raw), allowed)
+                            received_ms = int(time.time() * 1000)
+                            self.accept_message(market, json.loads(raw), allowed, received_ms=received_ms)
                             self.connections[name]["last_received_ms"] = int(time.time() * 1000)
                     finally:
                         ping.cancel()

@@ -37,6 +37,34 @@ Snapshot: 2026-10-10, проверка около 10:00–10:15 Europe/Moscow; `
 
 ## Current Goal — полный scope CryptoWatcher (IMPLEMENT)
 
+Latest delivery: PR34 merged23bb023e, required CI38613962526/ci-required116026604698 PASS;
+automatic CD38615205711 переключил code image, но FAILED вPOST_CHECKS. Primary record
+`23bb023e3872d5791fb270745635da1048dce682-917596cd661973ee/deployment.json`
+остаётсяPOST_CHECK_FAILED, permit34 ARMED, не переиспользуется. Runtime18:34UTC
+running/healthy/source23bb023e/imagec7af20a7, private revision3/hash unchanged;
+ingestionFRESH, linear fullyCONNECTED, Spot300/348 ACK и pollWARMING.
+No history cleanup/replacement, deadline не расширен. Поставка не объявленаPASS.
+Necessary hotfix наbranch `codex/subscribe-before-candle-work-20261014`, base23bb023e:
+отделить subscription ACK phase от дорогой обработки closed candles с bounded buffer,
+receipt timestamps, явным overflow→gap recovery и yield между replay observations.
+Полнота ACK и existing delivery_ready/freshness остаются обязательными. Non-goals:
+увеличение startup/CD deadline, отключение analytics, удаление/перезапись истории,
+изменение formula/settings/schema/retention/REST budget. Validation Plan: REQUIRED
+local real subscribe-before-observation ordering, buffer overflow/recovery, restart,
+duplicate/stale/gap/closed-candle и provenance scenarios, canonical quality,
+fresh required CI; actual applicable CD gate ещё не разрешён для нового tree.
+
+Hotfix local validation:33 ingestion/source scenarios и canonical quality PASS,
+включая all-ACK-before-candle-work, preserved receipt, stale replay, оба buffer limits,
+overflow→blocked/priority recovery, rejected subscription без candle writes;
+old duplicate/gap/out-of-order/provenance cases сохранены. Late readback18:47:46UTC:
+same source23bb023e/container1f111ab7 running/healthy, no restart/OOM, обе subscriptions
+CONNECTED, ingestionFRESH, bootstrap/recovery_pending0, real Telegram DELIVERED
+после переключения, owner3 и poll1155/1156 (однаzero-baseline ошибка).
+Это подтверждение восстановившегося runtime, не исправление failed CD38615205711.
+Новый startup code требует fresh PR CI и отдельный exact delivery gate; ничего на
+VPS этим hotfix пока не менялось, old history shrink/full900s proof остаютсяPENDING.
+
 Владелец разрешил разовую code-only поставку PR34 (reply
 call_857acc1269ee48b9a32326f98d8651e7, «Разрешаю разовую поставку PR34»).
 Этап возобновлён: exact scoped receiver/bootstrap/tests → fresh CI → gated install
