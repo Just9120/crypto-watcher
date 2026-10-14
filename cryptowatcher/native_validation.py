@@ -91,6 +91,8 @@ class NativeVFS:
         if self.lib.cwcvfs_destroy(self.pointer) != apsw.SQLITE_OK:
             raise QualificationError("NATIVE_VFS_HANDLES_OPEN")
         self.pointer = None
+        # The native context has released its borrowed data pointer.
+        del self.borrow
 
     def stats(self) -> dict[str, Any]:
         from .compressed_validation import QualificationError

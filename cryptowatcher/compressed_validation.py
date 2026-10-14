@@ -6,6 +6,8 @@ import gzip
 import hashlib
 import mmap
 import os
+import re
+import shutil
 import stat
 import sys
 import tempfile
@@ -46,11 +48,48 @@ def budget(deadline: float) -> None:
         raise QualificationError("TIME_BUDGET_EXCEEDED")
 
 
+def disk_backing(path: Path) -> bool:
+    if sys.platform == "win32":
+        return True
+    if sys.platform != "linux":
+        return False
+    mounts: list[tuple[int, str]] = []
+    for line in Path("/proc/self/mountinfo").read_text().splitlines():
+        left, right = line.split(" - ", 1)
+        mount = re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), left.split()[4])
+        if str(path) == mount or str(path).startswith(mount.rstrip("/") + "/"):
+            mounts.append((len(mount), right.split()[0]))
+    return bool(mounts) and max(mounts)[1] in {"ext4", "xfs", "btrfs", "overlay", "zfs"}
+
+
 class _FrameArena:
     """Keep compressed frames out of the interleaved Python allocation heap."""
 
-    def __init__(self, limit: int) -> None:
-        self.data = mmap.mmap(-1, limit)
+    def __init__(self, limit: int, backing: Path | None = None) -> None:
+        self.backing = backing
+        self.next_space_check = 0
+        if backing is None:
+            self.data = mmap.mmap(-1, limit)
+        else:
+            if any(p.is_symlink() for p in (backing, *backing.parents)):
+                raise QualificationError("BACKING_PATH_REFUSED")
+            if backing.resolve() != backing or not disk_backing(backing):
+                raise QualificationError("DISK_BACKING_REQUIRED")
+            metadata = backing.parent.stat()
+            if os.name == "posix" and (
+                metadata.st_uid != os.getuid() or stat.S_IMODE(metadata.st_mode) & 0o077
+            ):
+                raise QualificationError("PRIVATE_BACKING_DIRECTORY_REQUIRED")
+            if shutil.disk_usage(backing.parent).free < limit + 1536 * 1024**2:
+                raise QualificationError("DISK_RESERVE_EXHAUSTED")
+            descriptor = os.open(
+                backing, os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600
+            )
+            try:
+                os.ftruncate(descriptor, limit)
+                self.data = mmap.mmap(descriptor, limit, access=mmap.ACCESS_WRITE)
+            finally:
+                os.close(descriptor)
         self.limit = limit
         self.end = 0
         self.offsets = array("Q")
@@ -75,6 +114,10 @@ class _FrameArena:
 
     def __setitem__(self, index: int, value: bytes) -> None:
         length = len(value)
+        if self.backing is not None and self.end >= self.next_space_check:
+            if shutil.disk_usage(self.backing.parent).free < self.limit - self.end + 1536 * 1024**2:
+                raise QualificationError("DISK_RESERVE_EXHAUSTED")
+            self.next_space_check = self.end + 64 * 1024**2
         if length <= self.capacities[index]:
             offset = self.offsets[index]
         else:
@@ -103,6 +146,16 @@ class _FrameArena:
             self.end = offset
         return value
 
+    def flush_private(self) -> None:
+        if self.backing is not None:
+            self.data.flush()
+            # Drop only the owned scratch mapping, never production file caches.
+            if hasattr(self.data, "madvise") and hasattr(mmap, "MADV_DONTNEED"):
+                self.data.madvise(mmap.MADV_DONTNEED)
+
+    def close(self) -> None:
+        self.data.close()
+
 
 class Image:
     def __init__(
@@ -113,8 +166,9 @@ class Image:
         deadline: float,
         progress: Any = lambda **kw: None,
         archive_encoding: Literal["GZIP", "ZSTD"] | None = None,
+        backing: Path | None = None,
     ) -> None:
-        self.blocks = _FrameArena(limit)
+        self.blocks = _FrameArena(limit, backing)
         self.size = 0
         self.retained = 0
         self.deadline = deadline
@@ -153,6 +207,7 @@ class Image:
         if archive_encoding is None and self.size != self.before.st_size:
             raise QualificationError("SOURCE_CHANGED")
         self.sha256 = self.hash.hexdigest()
+        self.blocks.flush_private()
         if self.reconstructed_hash() != self.sha256:
             raise QualificationError("BYTE_IDENTITY_MISMATCH")
 
@@ -226,6 +281,8 @@ class Image:
             self.set_block(index, bytes(value))
         self.write_cache.clear()
         self.mutable = False
+        self.blocks.flush_private()
+        budget(self.deadline)
 
     def truncate(self, size: int) -> None:
         budget(self.deadline)
@@ -390,7 +447,11 @@ def configure_cache(db: apsw.Connection, image: Image) -> int:
     budget(image.deadline)
     if image.mutable:
         raise QualificationError("FROZEN_IMAGE_REQUIRED")
-    image_bytes = image.retained + sys.getsizeof(image.blocks)
+    image_bytes = sys.getsizeof(image.blocks)
+    if getattr(image.blocks, "backing", None) is None:
+        image_bytes += image.retained
+    else:
+        image.blocks.flush_private()
     cache_bytes = min(
         MAX_SQLITE_CACHE_BYTES, VALIDATION_MEMORY_BYTES - image_bytes - VALIDATION_OVERHEAD_BYTES
     )
@@ -490,10 +551,21 @@ def classified_errors(deadline: float) -> Iterator[None]:
 
 @contextmanager
 def snapshot_image(
-    path: Path, directory: Path, *, deadline: float
+    path: Path,
+    directory: Path,
+    *,
+    deadline: float,
+    backing: Path | None = None,
+    encoded_limit: int | None = None,
 ) -> Iterator[tuple[apsw.Connection, Image]]:
     """Pinned online backup, full writable validation, then metadata from that same image."""
-    image = Image(None, limit=MAX_COMPRESSED_BYTES, deadline=deadline)
+    if encoded_limit is None:
+        encoded_limit = MAX_COMPRESSED_BYTES
+    if backing is None and encoded_limit != MAX_COMPRESSED_BYTES:
+        raise QualificationError("DEFAULT_MEMORY_LIMIT_REQUIRED")
+    if type(encoded_limit) is not int or encoded_limit <= 0:
+        raise QualificationError("INVALID_ENCODED_LIMIT")
+    image = Image(None, limit=encoded_limit, deadline=deadline, backing=backing)
     with (
         classified_errors(deadline),
         tempfile.TemporaryDirectory(prefix="cw-cvfs-live-", dir=directory) as work,
@@ -543,6 +615,8 @@ def snapshot_image(
             if destination is not None:
                 destination.close()
             vfs.unregister()
+            if backing is not None:
+                image.blocks.close()
 
 
 @contextmanager

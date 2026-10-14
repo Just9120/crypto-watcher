@@ -37,6 +37,31 @@ Snapshot: 2026-10-10, проверка около 10:00–10:15 Europe/Moscow; `
 
 ## Current Goal — полный scope CryptoWatcher (IMPLEMENT)
 
+15Oct owner поручил уменьшить накопленную БД, сохранив useful history и работу
+алертов; общий предел whole conversion900s не меняется. Baseline2efd9093/PR35
+и automaticCD38625409154 PASS. Текущий storage sub-scope: lossless compression
+старых immutable records и быстрый проверяемый converter без повторной сборки
+больших JSON windows; disk-backed compressed snapshot для обязательной полной
+проверки при memory cap4GiB. Branch `codex/compact-history-records-20261015`,
+base2efd9093d9639f767f2a0df697bfd060c2ce47e0. Scope58/code54; не DONE.
+Validation REQUIRED: frame bounds/hash/checksum/corruption и exact numeric/value
+roundtrip; legacy/compact/new reads, heads/export/outcomes/consumer contracts;
+disk snapshot byte identity, full CHECK/negative controls, owner/private equality;
+current whole source/candidate/recovery proof≤900s/CPU1/RAM4GiB и reviewed
+exact-target promotion, required PR CI и applicable CD. Уменьшение physical файла
+не объявляется по reusable pages или маленькому fixture. Source32GB не изменена.
+Read-only prototypes не подтвердили whole fit: лучший sequential preview120064
+heads за180.341s,644852915 redundant bytes только в проверенной выборке; prefetch
+отклонён за лишний I/O без gain, probe остановлен/removed, bot healthy/unchanged.
+Новый алгоритм ещё не qualified. Gates/retention/формулы/settings не ослабляются.
+Local components validation:134 tests PASS, canonical quality PASS; Linux pinned
+native VFS synthetic fixture `record-disk-linux-jp_zkzk0/receipt.json` PASS:
+exact bytes/types, four-family history/head compatibility, disk-backed full
+integrity/read-only, damaged CHECK refusal. Production unchanged; converter and
+current whole900s qualification still PENDING. No new PR/CI/CD dispatched.
+
+
+
 Владелец разрешил разовую code-only поставку PR35 (reply
 call_ad7a2863d9c8418baf778d671670d3ca, «Разрешаю разовую поставку PR35»).
 Exact scoped receiver/bootstrap/tests требуют fresh CI final reviewed tree.

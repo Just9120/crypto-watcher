@@ -16,6 +16,9 @@ from typing import Any
 from .config import ConfigError, OwnerSettings, instrument_key, normalize_pair, number
 
 SCHEMA_VERSION = 1
+COMPRESSED_RECORD_VERSION = 2
+RECORD_FORMAT_KEY = "historyrecord:format:v1"
+RECORD_FORMAT = {"schema": "cryptowatcher.compressed-record.v1", "physical_schema": 1}
 RUNTIME_UPSERT = """
 INSERT INTO runtime (key, payload_json) VALUES (?, ?)
 ON CONFLICT(key) DO UPDATE SET payload_json=excluded.payload_json
@@ -176,8 +179,10 @@ class Snapshot:
     settings: OwnerSettings
 
 
-def create_schema(database: sqlite3.Connection) -> None:
+def create_schema(database: sqlite3.Connection, *, version: int = SCHEMA_VERSION) -> None:
     """Canonical schema for a new store or an exclusive isolated recovery candidate."""
+    if version not in (SCHEMA_VERSION, COMPRESSED_RECORD_VERSION):
+        raise StateError("Unsupported database schema; database preserved")
     database.executescript("""
         CREATE TABLE IF NOT EXISTS owner_settings (
             owner_id INTEGER PRIMARY KEY, revision INTEGER NOT NULL CHECK(revision>0),
@@ -191,8 +196,8 @@ def create_schema(database: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS legacy_import (
             source_sha256 TEXT PRIMARY KEY, original_json TEXT NOT NULL,
             backup_name TEXT NOT NULL);
-        PRAGMA user_version=1;
     """)
+    database.execute(f"PRAGMA user_version={version}")
 
 
 class Store:
@@ -201,11 +206,18 @@ class Store:
         self.path = path
         self.owner_id = owner_id
         self.readonly = readonly
+        version = SCHEMA_VERSION
         if path.exists():
             probe = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
             try:
                 version = probe.execute("PRAGMA user_version").fetchone()[0]
-                if version != SCHEMA_VERSION:
+                if version == COMPRESSED_RECORD_VERSION:
+                    marker = probe.execute(
+                        "SELECT payload_json FROM runtime WHERE key=?", (RECORD_FORMAT_KEY,)
+                    ).fetchone()
+                    if marker is None or marker[0] != encode(RECORD_FORMAT):
+                        raise StateError("Unsupported database schema; database preserved")
+                elif version != SCHEMA_VERSION:
                     raise StateError("Unsupported database schema; database preserved")
                 binding = probe.execute("SELECT owner_id FROM owner_settings").fetchone()
                 if binding is not None and binding[0] != owner_id:
@@ -229,7 +241,7 @@ class Store:
         if not readonly:
             self.db.execute("PRAGMA journal_mode=WAL")
             self.db.execute("PRAGMA synchronous=FULL")
-            create_schema(self.db)
+            create_schema(self.db, version=version)
             if os.name != "nt":
                 path.chmod(0o600)
 

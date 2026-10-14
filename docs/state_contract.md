@@ -1,5 +1,22 @@
 # CryptoWatcher — state contract
 
+Подготовка15Oct: reader дополнительно поддерживает exact-byte envelopes
+`_history_record_storage` / `cryptowatcher.compressed-record.v1`. Original UTF-8
+JSON сохраняется lossless; content size/window/checksum/strict single Zstd frame
+и SHA256 проверяются до decode. Public values, timestamps и numeric types не
+меняются; live writer продолжает существующий shared-fields format. Candidate
+с такими historical records имеет SQLite user_version2 и exact format declaration
+`historyrecord:format:v1`; version1 остаётся default. Unknown declaration/version
+закрывает доступ, version2 сохраняется при restart. Старый version1-only reader
+не является допустимым rollback после такой migration. Current production ещё
+schema1: запись framed records/promotion не выполнялась.
+
+Disk-backed validation — explicit isolated option: owned private disk file,
+encoded allocation bound,1.5GiB reserve и отказ для tmpfs/unknown filesystem.
+Default compressed-RAM limit3GiB и общий runtime validation cap4GiB не меняются.
+Все full integrity/CHECK и source/candidate/recovery proofs остаются обязательными.
+Это подготовленные primitives; whole current conversion≤900s ещё не qualified.
+
 ## Compact history representation
 
 Mutable runtime обновляется на месте по existing key; byte-identical canonical

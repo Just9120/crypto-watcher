@@ -14,6 +14,8 @@ from typing import Any
 
 import zstandard
 
+from .record_codec import MARKER as RECORD_MARKER
+from .record_codec import unpack_bytes
 from .storage import StateError, encode
 
 MARKER = "_history_storage"
@@ -54,7 +56,20 @@ class Codec:
 
     def read(self, payload: str) -> Any:
         value = json.loads(payload)
-        return self.unpack(value) if MARKER in payload else value
+        return self.unpack(value) if MARKER in payload or RECORD_MARKER in payload else value
+
+    @staticmethod
+    def record_value(value: Any) -> Any:
+        raw = unpack_bytes(value)
+        if raw is None:
+            return value
+        try:
+            restored = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeError) as error:
+            raise StateError("Invalid compressed record JSON") from error
+        if not isinstance(restored, dict) or RECORD_MARKER in restored:
+            raise StateError("Invalid compressed record object")
+        return restored
 
     def save(self, value: Any) -> str:
         return self.save_bytes(encode(value).encode())
@@ -237,7 +252,7 @@ class Codec:
 
     def pack_canonical(self, payload: str) -> Any:
         """Pack producer-canonical legacy JSON without materializing large windows."""
-        if MARKER in payload:
+        if MARKER in payload or RECORD_MARKER in payload:
             return self.pack(self.read(payload))
         result: dict[str, Any] = {}
         references = {}
@@ -277,6 +292,7 @@ class Codec:
         replacements: list[tuple[bytes, bytes]] = []
 
         def prepare(item: Any) -> Any:
+            item = self.record_value(item)
             if isinstance(item, list):
                 return [prepare(part) for part in item]
             if not isinstance(item, dict):
@@ -334,7 +350,7 @@ class Codec:
             return [self.pack(item) for item in value]
         if not isinstance(value, dict):
             return value
-        if MARKER in value:
+        if MARKER in value or RECORD_MARKER in value:
             raise StateError("Reserved history storage marker")
         result: dict[str, Any] = {}
         references = {}
@@ -380,6 +396,7 @@ class Codec:
         return result
 
     def unpack(self, value: Any) -> Any:
+        value = self.record_value(value)
         if isinstance(value, list):
             return [self.unpack(item) for item in value]
         if not isinstance(value, dict):
