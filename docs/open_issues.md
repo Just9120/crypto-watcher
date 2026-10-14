@@ -88,7 +88,15 @@ qualification receipt. Historical engine вернул полную candidate qua
 Исправлен reporting и добавлена primary qualification запись внутри общего deadline.
 Current33,682,788,352bytes read-only snapshot qualification начата в
 `framed-current-jj7s59n9`: CPU1/RAM4GiB/no swap/whole900s, no pause/replacement.
-Outcome current proof и promotion PENDING; owner state/alert runtime сохраняются.
+Current trial завершён UNQUALIFIED при900.652s: capture/freeze/hash33,720,209,408
+bytes завершились только872.523s, full source scan не закончился до deadline.
+Candidate отсутствует; source inode/container unchanged и healthy. Raw error
+DATABASE_CORRUPT был misclassification VFS deadline, не доказанной corruption;
+priority deadline classification исправлена/regression PASS. Current whole fit
+и actual physical shrink остаются PENDING. Следующий вариант — прямой closed-file
+capture с теми же full gates/общим900s и reserve для restore. Linux
+closed-source-linux-e_dyhshs/receipt.json PASS; production stop/cleanup/promotion
+ещё не выполнены. По коду54/58 AC текущей Goal, процент не пересчитывался.
 
 
 

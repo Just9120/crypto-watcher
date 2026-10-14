@@ -99,3 +99,22 @@ def test_disk_arena_refuses_insufficient_space_before_creation(tmp_path, monkeyp
     with pytest.raises(cv.QualificationError, match="DISK_RESERVE_EXHAUSTED"):
         cv.Image(None, limit=1024, deadline=time.monotonic() + 5, backing=backing)
     assert not backing.exists()
+
+
+def test_deadline_diagnostic_never_claims_completed_corruption_scan(monkeypatch):
+    now = [0.0]
+
+    class Database:
+        def set_progress_handler(self, *args):
+            pass
+
+        def execute(self, sql):
+            if sql == "PRAGMA integrity_check":
+                now[0] = 6.0
+                return [("bounded VFS read stopped",)]
+            return []
+
+    monkeypatch.setattr(cv.time, "monotonic", lambda: now[0])
+    with pytest.raises(cv.QualificationError) as error:
+        cv.full_check(Database(), 5.0)
+    assert error.value.code == "TIME_BUDGET_EXCEEDED"

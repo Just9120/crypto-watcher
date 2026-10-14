@@ -549,9 +549,12 @@ def full_check(db: apsw.Connection, deadline: float) -> None:
     try:
         db.execute("PRAGMA mmap_size=0")
         db.execute("PRAGMA ignore_check_constraints=OFF")
-        if list(db.execute("PRAGMA integrity_check")) != [("ok",)]:
-            raise QualificationError("DATABASE_CORRUPT")
+        rows = list(db.execute("PRAGMA integrity_check"))
+        # A bounded native VFS can return an I/O diagnostic when its deadline
+        # expires. An incomplete scan is not evidence of database corruption.
         budget(deadline)
+        if rows != [("ok",)]:
+            raise QualificationError("DATABASE_CORRUPT")
     finally:
         db.set_progress_handler(None, 0)
 
@@ -651,7 +654,7 @@ def archived_image(
     deadline: float,
     backing: Path,
     encoded_limit: int,
-    encoding: Literal["GZIP", "ZSTD"],
+    encoding: Literal["GZIP", "ZSTD"] | None,
     progress: Any = lambda **kw: None,
 ) -> Iterator[tuple[apsw.Connection, Image]]:
     """Full-check a closed archive and keep its exact decoded image pinned."""

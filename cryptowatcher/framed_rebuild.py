@@ -320,6 +320,7 @@ def build_candidate(
     maximum: int,
     seconds: float = 900,
     archive_encoding: Literal["GZIP", "ZSTD"] | None = None,
+    closed_source: bool = False,
     progress: Any = lambda **kw: None,
 ) -> dict[str, Any]:
     """One bounded read-only qualification; never replaces or edits production."""
@@ -359,7 +360,7 @@ def build_candidate(
             encoded_limit=encoded_limit,
             progress=progress,
         )
-        if archive_encoding is None
+        if archive_encoding is None and not closed_source
         else archived_image(
             source,
             directory,
@@ -406,6 +407,7 @@ def main() -> int:
     parser.add_argument("--candidate-max-bytes", type=int, required=True)
     parser.add_argument("--seconds", type=float, default=900)
     parser.add_argument("--archive-encoding", choices=("GZIP", "ZSTD"))
+    parser.add_argument("--closed-source", action="store_true")
     args = parser.parse_args()
     last = time.monotonic()
 
@@ -425,6 +427,7 @@ def main() -> int:
             maximum=args.candidate_max_bytes,
             seconds=args.seconds,
             archive_encoding=args.archive_encoding,
+            closed_source=args.closed_source,
             progress=progress,
         )
     except (StateError, OSError, ValueError, sqlite3.Error) as error:

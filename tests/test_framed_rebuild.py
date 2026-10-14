@@ -288,3 +288,42 @@ def test_compact_candles_preserve_source_windows_and_future_outcome_rows(tmp_pat
             assert encode(store.get_runtime(key)) == raw[key]
         sources.put("spot/BTCUSDT/1m", candles, live=True)
         assert sources.rows("spot/BTCUSDT/1m", 64) == before
+
+
+def test_closed_file_qualification_checks_bytes_and_never_ignores_sidecars(tmp_path):
+    from cryptowatcher.compressed_validation import QualificationError, disk_backing
+
+    source = (tmp_path / "source.sqlite3").resolve()
+    source_history(source)
+    work = (tmp_path / "work").resolve()
+    work.mkdir(mode=448)
+    if not disk_backing(work / "source.frames"):
+        pytest.skip("Qualification requires a disk filesystem")
+    original = hashlib.sha256(source.read_bytes()).hexdigest()
+    report = build_candidate(
+        source,
+        work,
+        owner=233382575,
+        encoded_limit=8 * 1024**2,
+        maximum=8 * 1024**2,
+        seconds=30,
+        closed_source=True,
+    )
+    assert report["recovery"]["raw_sha256"] == original
+    assert report["candidate_sha256"] == hashlib.sha256((work / "candidate.sqlite3").read_bytes()).hexdigest()
+    assert (work / "qualification.json").is_file()
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == original
+    busy = (tmp_path / "busy").resolve()
+    busy.mkdir(mode=448)
+    source.with_name(source.name + "-wal").write_bytes(b"writer sidecar")
+    with pytest.raises(QualificationError):
+        build_candidate(
+            source,
+            busy,
+            owner=233382575,
+            encoded_limit=8 * 1024**2,
+            maximum=8 * 1024**2,
+            seconds=30,
+            closed_source=True,
+        )
+    assert not (busy / "candidate.sqlite3").exists()
