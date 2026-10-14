@@ -328,7 +328,12 @@ def new_write_permit(revision: str) -> dict[str, Any] | None:
     require(permit.get("schema") == NEW_WRITE_POLICY, "Unknown permit")
     if permit.get("state") == "CONSUMED":
         return None
-    require(permit.get("state") == "ARMED" and permit.get("pr") == 31, "Unapproved permit")
+    require(permit.get("state") == "ARMED" and permit.get("pr") in (31, 33), "Unapproved permit")
+    if permit.get("pr") == 33:
+        require(
+            permit.get("previous_revision") == "047c66e5bb9ef5b9c0650ef91d2e5b92275072c4",
+            "Unreviewed compatibility baseline",
+        )
     require(permit.get("target_sha256") == fingerprint(TARGET), "Permit target changed")
     request = urllib.request.Request(
         f"https://api.github.com/repos/Just9120/crypto-watcher/git/commits/{revision}",

@@ -51,7 +51,8 @@ def test_post_probe_rejects_full_head_after_switch_and_accepts_compact(store, tm
     assert result["new_write_status"] == "PASS" and result["recent_compact_events"] == 1
 
 
-def test_permit_is_root_scoped_tree_bound_and_does_not_change_default(tmp_path, monkeypatch):
+@pytest.mark.parametrize("pr", [31, 33])
+def test_permit_is_root_scoped_tree_bound_and_does_not_change_default(tmp_path, monkeypatch, pr):
     permit_path = tmp_path / "permit.json"
     target = tmp_path / "target.json"
     target.write_text("{}")
@@ -61,12 +62,12 @@ def test_permit_is_root_scoped_tree_bound_and_does_not_change_default(tmp_path, 
     permit = {
         "schema": receiver.NEW_WRITE_POLICY,
         "state": "ARMED",
-        "pr": 31,
+        "pr": pr,
         "tree_sha": "a" * 40,
         "target_sha256": receiver.fingerprint(target),
         "previous_container": "same",
         "previous_image": IMAGE,
-        "previous_revision": REVISION,
+        "previous_revision": ("047c66e5bb9ef5b9c0650ef91d2e5b92275072c4" if pr == 33 else REVISION),
     }
     permit_path.write_text(json.dumps(permit, sort_keys=True))
     permit_path.chmod(0o600)
@@ -96,10 +97,22 @@ def test_permit_is_root_scoped_tree_bound_and_does_not_change_default(tmp_path, 
         "Id": "same",
         "Image": IMAGE,
         "State": {"Running": True},
-        "Config": {"Labels": {"org.opencontainers.image.revision": REVISION}},
+        "Config": {"Labels": {"org.opencontainers.image.revision": permit["previous_revision"]}},
     }
     monkeypatch.setattr(receiver, "run", lambda *a, **k: json.dumps([live]))
     assert receiver.new_write_permit(REVISION) == permit
+    if pr == 33:
+        permit["previous_revision"] = REVISION
+        permit_path.write_text(json.dumps(permit))
+        with pytest.raises(receiver.DeploymentError, match="compatibility baseline"):
+            receiver.new_write_permit(REVISION)
+        permit["previous_revision"] = "047c66e5bb9ef5b9c0650ef91d2e5b92275072c4"
+    permit["pr"] = 34
+    permit_path.write_text(json.dumps(permit))
+    with pytest.raises(receiver.DeploymentError, match="Unapproved permit"):
+        receiver.new_write_permit(REVISION)
+    permit["pr"] = pr
+    permit_path.write_text(json.dumps(permit))
     live["Id"] = "other"
     with pytest.raises(receiver.DeploymentError, match="runtime"):
         receiver.new_write_permit(REVISION)
