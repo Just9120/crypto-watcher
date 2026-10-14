@@ -97,6 +97,16 @@ priority deadline classification исправлена/regression PASS. Current w
 capture с теми же full gates/общим900s и reserve для restore. Linux
 closed-source-linux-e_dyhshs/receipt.json PASS; production stop/cleanup/promotion
 ещё не выполнены. По коду54/58 AC текущей Goal, процент не пересчитывался.
+Maintenance preparation дополнена controller/adapter: один deadline со150s
+restore reserve, same-unit recovery даже при lost stop ACK/worker failure,
+исчерпании срока и cleanup failure; failed post-check никогда не PASS.
+31 targeted controller/adapter tests и canonical quality PASS. Typed systemd
+InvocationID/RuntimeMaxUSec/ExecStopPost bind проверяет exact restore argv;
+worker code bundle/hash и fresh disk/RAM admission до stop обязательны.
+Изолированный Linux `watchdog-control-xseglams/receipt.json` PASS подтверждает
+вызов independent recovery hook при deadline и SIGKILL parent; production unit
+в fixture не участвовала. Production maintenance/cleanup остаются PENDING
+owner reply к ранее заданному вопросу; новых больших scans/CI/CD не запущено.
 
 
 

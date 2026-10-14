@@ -504,3 +504,32 @@ Promotion требует текущего complete source (без потери w
 конкретной reviewed процедуры, сохранённого recovery и runtime post-checks.
 Текущий status: preparation/local/Linux fixtures; current whole900s и promotion
 PENDING. Перенос исторического owner1 snapshot поверх current owner3 запрещён.
+
+
+### Управление одной closed-source qualification
+
+`scripts/closed_source_maintenance.py` — operator-only adapter,
+`cryptowatcher.maintenance.qualify_closed` — controller. Перед `--execute`
+требуются owner authorization, exact source/image/container, host/account,
+root-owned operation manifest, private fresh scratch, сохранённая working DB и
+existing target lock. Code bundle проверяется по каждому module hash. Без
+managed watchdog execution отвергается; bootstrap watchdog не является
+поставкой приложения и не меняет runtime configuration.
+
+Managed unit использует whole RuntimeMaxSec900 и exact `ExecStopPost` argv для
+того же runner с `--restore-only`. Проверка через typed D-Bus подтверждает
+InvocationID,900000000 microseconds и единственный обязательный restore command,
+а не наличие похожего текста в описании unit. Source worker получает оставшийся
+срок после stop/checkpoint с резервом150s для возврата. CPU1/RAM4GiB/no-swap
+остаются обязательными. Даже при adapter overrun выполняется bounded emergency
+start; превышение900s не может стать successful qualification.
+
+Restore удаляет только принадлежащие этому operation временные worker containers,
+идентифицирует тот же исходный CryptoWatcher и запускает его. Код не заменяет DB,
+не восстанавливает backup поверх live data и не запускает другой image. PASS
+требует health, сохранённого private state, fresh ingestion после restart,
+полного ACK Spot/Linear и всех четырёх TF. Market alert не форсируется: наличие
+нового рыночного trigger не гарантируется коротким smoke. Partial/unconfirmed
+post-check оставляет operation незавершённой. SIGKILL recovery hook проверен
+отдельно на disposable units; сам production restore подтвердится только
+после разрешённой операции на exact target.
