@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import re
 from typing import Any
 
@@ -15,6 +16,14 @@ MARKER = "_history_record_storage"
 SCHEMA = "cryptowatcher.compressed-record.v1"
 MAX_BYTES = 32 * 1024 * 1024
 FIELDS = {"schema", "bytes", "sha256", "zstd"}
+
+
+def sql_payload(payload: Any) -> Any:
+    """Expose original JSON to the existing SQLite history filters and aggregates."""
+    if not isinstance(payload, str) or MARKER not in payload:
+        return payload
+    raw = unpack_bytes(json.loads(payload))
+    return payload if raw is None else raw.decode("utf-8")
 
 
 def pack(payload: str) -> str:

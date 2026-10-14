@@ -461,3 +461,46 @@ G2B reader после новых owner settings не rollback-compatible. Forwar
 NONE/schema1: logical mapping/OI/context/methodology records входят в existing all-row backup; physical DDL и JSON re-import отсутствуют. Owner enrichment первоначально OFF, existing numeric/delivery settings сохраняются. Required post-checks прежние: exact merged source/image/config, backup, health/persistence, both-market/4TF readiness. Optional enrichment failure не блокирует deterministic core health; enabled/worker/mapping/errors видны в Telegram и read-only CLI diagnostics. Малый N/no historical context не считается отсутствием реализации.
 
 Owner ad-hoc `/derivatives spot/BTC`, `/compare`, `/enrichment` status рекомендованы; включение enrichment/ожидание реального signal не обязательны. Автоматический CD доставляет stage без ручного переноса файлов. После owner записи enrichment field G3 image не rollback-compatible; forward-fix/verified compatible G5, без downgrade/restore поверх live DB. Actual capacity/public metrics freshness требуют соответствующих measurements, не выводятся из workflow configuration.
+
+
+## Изолированная lossless-конвертация накопленной history (подготовка)
+
+Новый `cryptowatcher.framed_rebuild` создаёт только отдельный candidate. Обычные
+backup/CD gates, CPU1/RAM4GiB/no-swap и общий предел900s не меняются. Рабочая БД
+этой командой не заменяется, бот не останавливается. Запускать в согласованном
+изолированном контейнере с private disk-backed scratch и read-only source mount;
+prod secrets/network не нужны. Размеры задаются явно по свежему disk admission.
+Commands выполняются из repository root/image, paths — absolute:
+
+```bash
+python -m cryptowatcher.framed_rebuild SOURCE PRIVATE_WORK \
+  --owner 233382575 --encoded-max-bytes ENCODED_BOUND \
+  --candidate-max-bytes CANDIDATE_BOUND --seconds 900
+# Для закрытого recovery archive дополнительно --archive-encoding GZIP либо ZSTD.
+```
+
+Один deadline покрывает capture, full source integrity/CHECK, complete copy,
+full candidate integrity, all-row manifests/private equality и независимый
+recovery decode. Старые immutable JSON сжимаются побайтно; eligible full heads
+становятся проверенными pointers только при exact equality с revision. Все
+исходные события/revisions/outcomes/comparators сохраняются. Unknown schemas,
+missing/conflicting revisions, damaged references, disk/memory/time exhaustion
+оставляют candidate UNQUALIFIED. PASS маленького fixture или historical snapshot
+не подтверждает current production dataset. Qualification receipt содержит
+snapshot scope: новые live writes после capture в candidate отсутствуют.
+
+Recovery состоит из `source.frames`, `source.index`, `source.recovery.json`.
+Private frozen blocks имеют checksum и strict frame bounds; manifest фиксирует
+encoded/index/decoded SHA256 и sizes. Независимый decoder проверяет все bytes,
+путь, descriptor и file identities; отдельный `frame_archive.restore` создаёт
+exclusive raw file с теми же decoded bytes. Это самостоятельный новый формат,
+не подмена обычного backup. Full source integrity остаётся отдельным обязательным
+основанием qualification; recovery byte proof не заявляет второй SQL scan.
+Partial files не являются recovery proof. Raw restore не перезаписывает живую БД.
+
+Reader должен быть поставлен до candidate с user_version2. Exact declaration
+обязательна; schema1-only image не допускается для rollback после migration.
+Promotion требует текущего complete source (без потери writes после capture),
+конкретной reviewed процедуры, сохранённого recovery и runtime post-checks.
+Текущий status: preparation/local/Linux fixtures; current whole900s и promotion
+PENDING. Перенос исторического owner1 snapshot поверх current owner3 запрещён.

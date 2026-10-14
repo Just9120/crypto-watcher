@@ -235,6 +235,11 @@ class Store:
             uri=readonly,
             timeout=5,
         )
+        # Only unwrap exact-byte historical frames. Shared-field resolution still
+        # belongs to History, and ordinary runtime/config JSON remains untouched.
+        from .record_codec import sql_payload
+
+        self.db.create_function("cw_record_json", 1, sql_payload, deterministic=True)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA busy_timeout=5000")

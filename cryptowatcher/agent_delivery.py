@@ -160,7 +160,7 @@ class AgentDelivery:
             self.history.resolve(row[0][len(PREFIX) :], json.loads(row[1]))
             for row in self.store.db.execute(
                 "SELECT key,payload_json FROM runtime WHERE key>=? AND key<? "
-                "AND json_extract(payload_json,'$.event_id')=? ORDER BY key LIMIT 32",
+                "AND json_extract(cw_record_json(payload_json),'$.event_id')=? ORDER BY key LIMIT 32",
                 (start, start + "~", event_id),
             )
         ]
@@ -426,8 +426,8 @@ class AgentDelivery:
         start = PREFIX + "agent:outbox:"
         counts = dict(
             self.store.db.execute(
-                "SELECT json_extract(payload_json,'$.state'),COUNT(*) FROM runtime WHERE key>=? AND key<? "
-                "GROUP BY json_extract(payload_json,'$.state')",
+                "SELECT json_extract(cw_record_json(payload_json),'$.state'),COUNT(*) FROM runtime WHERE key>=? AND key<? "
+                "GROUP BY json_extract(cw_record_json(payload_json),'$.state')",
                 (start, start + "~"),
             )
         )

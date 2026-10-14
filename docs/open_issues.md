@@ -66,6 +66,18 @@ and independently decoded recovery with encoded/decoded hashes. Linux synthetic
 whole-path control `framed-whole-linux-6g9xgerh/receipt.json` PASS; this is not the
 current32GB dataset or promotion proof. Historical/current large qualification,
 operator recovery/promotion and applicable CI/CD still PENDING.
+Follow-up:193 targeted storage/history/export/analytics/agent tests PASS,2 Linux
+native skips локально; canonical quality PASS. Exact raw restore и complete
+filtered NDJSON/cohorts/cutoff before/after conversion fixtures PASS. Linux
+`framed-final-linux-34327q4d/receipt.json` PASS (native VFS/projection, SQL frame
+read, four-family compatibility/full CHECK negative control/whole fixture). Первый historical5.42GB trial `_scjzkra` UNQUALIFIED:900s истекли до полного
+readback/recovery; source archive/bot сохранены. Исправлены выбранный native VFS
+path и writer cache; повтор проверяет изменённый алгоритм. Historical read-only
+qualification идёт в отдельном private
+container; production не mounted/paused. Optimized current path выбирает pinned
+native projection/VFS и bounded source128MiB/writer≤512MiB caches; все full
+source/candidate/recovery gates сохранены. Historical result и current dataset
+fit не предполагать до primary receipt.
 
 
 

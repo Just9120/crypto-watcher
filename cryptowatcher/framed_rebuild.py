@@ -2,22 +2,32 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
+import os
 import shutil
 import sqlite3
 import time
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from .compressed_validation import snapshot_image
+from .compressed_validation import archived_image, snapshot_image
 from .events import HEAD_FIELDS, HEAD_SCHEMA, PREFIX, History
 from .frame_archive import save_index
 from .frame_archive import verify as verify_recovery
 from .history_codec import BLOB_PREFIX, MARKER, MAX_BYTES
-from .history_rebuild import TABLES, _CopyCodec, feed, guard, head_record
-from .native_history import load
+from .history_rebuild import (
+    TABLES,
+    _CopyCodec,
+    configure_copy_cache,
+    feed,
+    guard,
+    head_record,
+    release_source_cache,
+)
+from .native_history import Accelerator, load
 from .record_codec import MARKER as RECORD_MARKER
 from .record_codec import pack, unpack_bytes
 from .storage import (
@@ -39,7 +49,14 @@ def original_payload(payload: str) -> str:
     return payload if raw is None else raw.decode("utf-8")
 
 
-def metadata(db: Any, payload: str, kind: str) -> dict[str, Any]:
+def metadata(db: Any, payload: str, kind: str, accelerator: Accelerator | None = None) -> dict[str, Any]:
+    if accelerator is not None:
+        result = accelerator.head_metadata(payload, kind)
+        if result.get("schema") == HEAD_SCHEMA:
+            result["revision_key"] = db.execute(
+                "SELECT json_extract(?,'$.revision_key')", (payload,)
+            ).fetchone()[0]
+        return result
     fields = (*HEAD_FIELDS[kind], "schema", "revision_key")
     marks = ",".join("?" for _ in fields)
     if db.execute("SELECT json_valid(?) AND json_type(?)='object'", (payload, payload)).fetchone()[0] != 1:
@@ -53,11 +70,13 @@ def metadata(db: Any, payload: str, kind: str) -> dict[str, Any]:
     return {name: json.loads(raw) for name, raw in rows}
 
 
-def collapsed_head(source: Any, key: str, payload: str) -> tuple[str, bool]:
+def collapsed_head(
+    source: Any, key: str, payload: str, accelerator: Accelerator | None = None
+) -> tuple[str, bool]:
     kind, _, identifier = key.removeprefix(PREFIX).partition("-head:")
     if not key.startswith(PREFIX) or kind not in HEAD_FIELDS or not identifier:
         return payload, False
-    values = metadata(source, payload, kind)
+    values = metadata(source, payload, kind, accelerator)
     version = values.get("revision")
     if type(version) is not int or version < 1 or values.get(kind + "_id") != identifier:
         raise StateError("Invalid legacy head identity")
@@ -67,7 +86,7 @@ def collapsed_head(source: Any, key: str, payload: str) -> tuple[str, bool]:
         raise StateError("Legacy head revision missing")
     if values.get("schema") == HEAD_SCHEMA:
         original = original_payload(row[0])
-        projection = metadata(source, original, kind)
+        projection = metadata(source, original, kind, accelerator)
         if (
             values.get("revision_key") != reference
             or projection.get("schema") == HEAD_SCHEMA
@@ -85,7 +104,13 @@ def collapsed_head(source: Any, key: str, payload: str) -> tuple[str, bool]:
 
 
 def copy_validated(
-    source: Any, destination: Path, *, owner: int, maximum: int, deadline: float
+    source: Any,
+    destination: Path,
+    *,
+    owner: int,
+    maximum: int,
+    deadline: float,
+    progress: Any = lambda **kw: None,
 ) -> dict[str, Any]:
     """Internal copy stage. The caller must keep its full-checked snapshot frozen."""
     guard(deadline)
@@ -127,14 +152,22 @@ def copy_validated(
             raise StateError("Source constraints or collation refused")
     accelerator = load("auto")
     codec = _CopyCodec(source, accelerator)
+    # Full source integrity is already complete. Keep its lookup cache bounded
+    # while allowing the private writer to retain index pages during bulk copy.
+    source.execute("PRAGMA cache_size=-131072")
+    release_source_cache(source, deadline)
     expected = {name: hashlib.sha256() for name in TABLES}
     counts: dict[str, int] = {}
+    runtime_counts: dict[str, int] = {}
+    runtime_payload_chars: dict[str, int] = {}
     framed = heads = 0
     with sqlite3.connect(destination) as target:
         create_schema(target)
         target.execute("PRAGMA journal_mode=DELETE")
         target.execute("PRAGMA synchronous=FULL")
         target.execute("PRAGMA temp_store=MEMORY")
+        writer_cache_kib = min(configure_copy_cache(target, deadline), 512 * 1024)
+        target.execute(f"PRAGMA cache_size=-{writer_cache_kib}")
         page_size = target.execute("PRAGMA page_size").fetchone()[0]
         if (
             target.execute(f"PRAGMA max_page_count={maximum // page_size}").fetchone()[0] * page_size
@@ -159,8 +192,21 @@ def copy_validated(
                         if not isinstance(key, str) or not isinstance(payload, str):
                             raise StateError("Runtime record types refused")
                         original = original_payload(payload)
+                        namespace = (
+                            "history-body"
+                            if key.startswith(BLOB_PREFIX)
+                            else "history:" + key.removeprefix(PREFIX).partition(":")[0]
+                            if key.startswith(PREFIX)
+                            else "source-candle"
+                            if key.startswith("source:v1:candle:")
+                            else "other-runtime"
+                        )
+                        runtime_counts[namespace] = runtime_counts.get(namespace, 0) + 1
+                        runtime_payload_chars[namespace] = runtime_payload_chars.get(namespace, 0) + len(
+                            payload
+                        )
                         feed(expected[name], (key, original))
-                        rewritten, changed = collapsed_head(source, key, original)
+                        rewritten, changed = collapsed_head(source, key, original, accelerator)
                         if changed:
                             target.execute("INSERT INTO changed_heads VALUES(?)", (key,))
                             heads += 1
@@ -168,7 +214,7 @@ def copy_validated(
                         if key.startswith(BLOB_PREFIX):
                             codec.validate_raw(key[len(BLOB_PREFIX) :], payload)
                         elif key.startswith(PREFIX) and kind in HEAD_FIELDS:
-                            values_meta = metadata(source, original, kind)
+                            values_meta = metadata(source, original, kind, accelerator)
                             revision = values_meta.get("revision")
                             if (
                                 type(revision) is not int
@@ -187,6 +233,8 @@ def copy_validated(
                     else:
                         feed(expected[name], values)
                     count += 1
+                    if count % 10000 == 0:
+                        progress(phase="COPY", table=name, rows=count)
                     yield values
 
             target.executemany(f"INSERT INTO {name} VALUES ({','.join('?' for _ in columns)})", rows())
@@ -195,6 +243,8 @@ def copy_validated(
             target.execute("INSERT INTO runtime VALUES (?,?)", (RECORD_FORMAT_KEY, encode(RECORD_FORMAT)))
             target.execute(f"PRAGMA user_version={COMPRESSED_RECORD_VERSION}")
         target.commit()
+        release_source_cache(source, deadline)
+        progress(phase="CANDIDATE_FULL_INTEGRITY", bytes=destination.stat().st_size)
         check_integrity(target, deadline=deadline)
         for name in TABLES:
             actual = hashlib.sha256()
@@ -222,7 +272,7 @@ def copy_validated(
                             raise StateError("Candidate head revision missing")
                         restored = original_payload(record[0])
                         kind, _, identifier = key.removeprefix(PREFIX).partition("-head:")
-                        projection = metadata(target, restored, kind)
+                        projection = metadata(target, restored, kind, accelerator)
                         if (
                             projection.get(kind + "_id") != identifier
                             or encode(History._head(kind, projection, reference)) != payload
@@ -231,12 +281,16 @@ def copy_validated(
                     values = (key, restored)
                 feed(actual, values)
                 checked += 1
+                if checked % 10000 == 0:
+                    progress(phase="CANDIDATE_READBACK", table=name, rows=checked)
             if checked != counts[name] or actual.digest() != expected[name].digest():
                 raise StateError("Complete source/candidate manifest mismatch")
     guard(deadline)
     return {
         "state": "CANDIDATE_ROWS_VERIFIED",
         "counts": counts,
+        "runtime_counts": runtime_counts,
+        "runtime_payload_chars": runtime_payload_chars,
         "framed_records": framed,
         "collapsed_heads": heads,
         "candidate_bytes": destination.stat().st_size,
@@ -253,6 +307,8 @@ def build_candidate(
     encoded_limit: int,
     maximum: int,
     seconds: float = 900,
+    archive_encoding: Literal["GZIP", "ZSTD"] | None = None,
+    progress: Any = lambda **kw: None,
 ) -> dict[str, Any]:
     """One bounded read-only qualification; never replaces or edits production."""
     started = time.monotonic()
@@ -274,10 +330,33 @@ def build_candidate(
         raise StateError("Explicit allocation bounds required")
     if shutil.disk_usage(directory).free < encoded_limit + maximum + 1536 * 1024**2:
         raise StateError("Disk reserve exhausted; source preserved")
-    with snapshot_image(
-        source, directory, deadline=deadline, backing=backing, encoded_limit=encoded_limit
-    ) as (validated, image):
-        report = copy_validated(validated, candidate, owner=owner, maximum=maximum, deadline=deadline)
+    if archive_encoding not in (None, "GZIP", "ZSTD"):
+        raise StateError("Explicit archive encoding required")
+    capture = (
+        snapshot_image(
+            source,
+            directory,
+            deadline=deadline,
+            backing=backing,
+            encoded_limit=encoded_limit,
+            progress=progress,
+        )
+        if archive_encoding is None
+        else archived_image(
+            source,
+            directory,
+            deadline=deadline,
+            backing=backing,
+            encoded_limit=encoded_limit,
+            encoding=archive_encoding,
+            progress=progress,
+        )
+    )
+    with capture as (validated, image):
+        report = copy_validated(
+            validated, candidate, owner=owner, maximum=maximum, deadline=deadline, progress=progress
+        )
+        progress(phase="RECOVERY_VERIFY", bytes=image.size)
         descriptor = save_index(image, directory, deadline=deadline)
         recovery = verify_recovery(descriptor, deadline=deadline)
         report.update(source_full_integrity="PASS", recovery=recovery, recovery_descriptor=str(descriptor))
@@ -289,3 +368,57 @@ def build_candidate(
         snapshot_not_current_state_after_capture=True,
     )
     return report
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Qualify a smaller private history copy; never replace production"
+    )
+    parser.add_argument("source", type=Path)
+    parser.add_argument("directory", type=Path)
+    parser.add_argument("--owner", type=int, required=True)
+    parser.add_argument("--encoded-max-bytes", type=int, required=True)
+    parser.add_argument("--candidate-max-bytes", type=int, required=True)
+    parser.add_argument("--seconds", type=float, default=900)
+    parser.add_argument("--archive-encoding", choices=("GZIP", "ZSTD"))
+    args = parser.parse_args()
+    last = time.monotonic()
+
+    def progress(**fields: Any) -> None:
+        nonlocal last
+        current = time.monotonic()
+        if current - last >= 20:
+            print(encode({"kind": "qualification_progress", **fields}), flush=True)
+            last = current
+
+    try:
+        result = build_candidate(
+            args.source.resolve(),
+            args.directory.resolve(),
+            owner=args.owner,
+            encoded_limit=args.encoded_max_bytes,
+            maximum=args.candidate_max_bytes,
+            seconds=args.seconds,
+            archive_encoding=args.archive_encoding,
+            progress=progress,
+        )
+    except (StateError, OSError, ValueError, sqlite3.Error) as error:
+        from .history_rebuild import refusal_code
+
+        print(
+            encode({"state": "UNQUALIFIED", "reason": refusal_code(error), "production_replacement": False}),
+            flush=True,
+        )
+        return 3
+    receipt = args.directory / "qualification.json"
+    with receipt.open("x", encoding="utf-8") as output:
+        os.chmod(receipt, 0o600)
+        output.write(encode(result))
+        output.flush()
+        os.fsync(output.fileno())
+    print(encode(result), flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

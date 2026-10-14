@@ -88,6 +88,8 @@ class _FrameArena:
             try:
                 os.ftruncate(descriptor, limit)
                 self.data = mmap.mmap(descriptor, limit, access=mmap.ACCESS_WRITE)
+                opened = os.fstat(descriptor)
+                self.backing_identity = (opened.st_dev, opened.st_ino)
             finally:
                 os.close(descriptor)
         self.limit = limit
@@ -155,6 +157,25 @@ class _FrameArena:
 
     def close(self) -> None:
         self.data.close()
+
+    def seal_private(self) -> None:
+        """Persist just the frozen arena extent, without touching any source file."""
+        if self.backing is None:
+            raise QualificationError("DISK_BACKING_REQUIRED")
+        self.flush_private()
+        # Windows prohibits truncating a mapped file; retaining the sparse tail
+        # is lossless and remains covered by the encoded-file hash there.
+        if os.name == "nt":
+            return
+        descriptor = os.open(self.backing, os.O_RDWR | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            opened = os.fstat(descriptor)
+            if (opened.st_dev, opened.st_ino) != self.backing_identity:
+                raise QualificationError("BACKING_PATH_REFUSED")
+            os.ftruncate(descriptor, self.end)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
 
 class Image:
@@ -557,6 +578,7 @@ def snapshot_image(
     deadline: float,
     backing: Path | None = None,
     encoded_limit: int | None = None,
+    progress: Any = lambda **kw: None,
 ) -> Iterator[tuple[apsw.Connection, Image]]:
     """Pinned online backup, full writable validation, then metadata from that same image."""
     if encoded_limit is None:
@@ -590,6 +612,7 @@ def snapshot_image(
                 while not backup.done:
                     budget(deadline)
                     backup.step(256)
+                    progress(phase="CAPTURE", bytes=image.size)
             source.close()
             source = None
             destination.close()
@@ -603,6 +626,7 @@ def snapshot_image(
             )
             configure_cache(destination, image)
             destination.execute("PRAGMA query_only=ON")
+            progress(phase="SOURCE_FULL_INTEGRITY", bytes=image.size)
             full_check(destination, deadline)
             yield destination, image
             destination.close()
@@ -617,6 +641,53 @@ def snapshot_image(
             vfs.unregister()
             if backing is not None:
                 image.blocks.close()
+
+
+@contextmanager
+def archived_image(
+    path: Path,
+    directory: Path,
+    *,
+    deadline: float,
+    backing: Path,
+    encoded_limit: int,
+    encoding: Literal["GZIP", "ZSTD"],
+    progress: Any = lambda **kw: None,
+) -> Iterator[tuple[apsw.Connection, Image]]:
+    """Full-check a closed archive and keep its exact decoded image pinned."""
+    image = Image(
+        path,
+        limit=encoded_limit,
+        deadline=deadline,
+        backing=backing,
+        archive_encoding=encoding,
+        progress=progress,
+    )
+    try:
+        with (
+            classified_errors(deadline),
+            tempfile.TemporaryDirectory(prefix="cw-cvfs-archive-", dir=directory) as work,
+        ):
+            sentinel = Path(work) / "sentinel.sqlite3"
+            sentinel.touch(mode=0o600)
+            vfs = frozen_vfs(image, sentinel)
+            db = None
+            try:
+                db = apsw.Connection(str(sentinel.resolve()), flags=apsw.SQLITE_OPEN_READWRITE, vfs=vfs.name)
+                db.execute("PRAGMA query_only=ON")
+                configure_cache(db, image)
+                progress(phase="SOURCE_FULL_INTEGRITY", bytes=image.size)
+                full_check(db, deadline)
+                yield db, image
+            finally:
+                if db is not None:
+                    db.close()
+                vfs.unregister()
+            image.assert_source_unchanged()
+            if image.reconstructed_hash() != image.sha256:
+                raise QualificationError("BYTE_IDENTITY_MISMATCH")
+    finally:
+        image.blocks.close()
 
 
 @contextmanager

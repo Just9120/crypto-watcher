@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
+import shutil
 import struct
 from collections.abc import Iterator
 from pathlib import Path
@@ -23,6 +25,7 @@ def save_index(image: Image, directory: Path, *, deadline: float) -> Path:
     budget(deadline)
     if image.mutable or image.blocks.backing is None:
         raise StateError("Frozen disk snapshot required")
+    image.blocks.seal_private()
     index = directory / "source.index"
     descriptor = directory / "source.recovery.json"
     if index.exists() or descriptor.exists():
@@ -64,11 +67,25 @@ def save_index(image: Image, directory: Path, *, deadline: float) -> Path:
     return descriptor
 
 
+def manifest(descriptor: Path) -> dict[str, Any]:
+    if (
+        any(p.is_symlink() for p in (descriptor, *descriptor.parents))
+        or descriptor.resolve() != descriptor
+        or not descriptor.is_file()
+        or descriptor.stat().st_size > 65536
+    ):
+        raise StateError("Recovery path refused")
+    try:
+        record = json.loads(descriptor.read_text(encoding="utf-8"))
+    except (ValueError, UnicodeError) as error:
+        raise StateError("Recovery schema refused") from error
+    return record
+
+
 def decoded_blocks(descriptor: Path, *, deadline: float) -> Iterator[bytes]:
     budget(deadline)
-    if descriptor.is_symlink() or descriptor.resolve() != descriptor:
-        raise StateError("Recovery path refused")
-    record = json.loads(descriptor.read_text(encoding="utf-8"))
+    record = manifest(descriptor)
+    descriptor_bytes = descriptor.read_bytes()
     fields = {
         "schema",
         "data",
@@ -93,19 +110,33 @@ def decoded_blocks(descriptor: Path, *, deadline: float) -> Iterator[bytes]:
         or count != (size + BLOCK - 1) // BLOCK
         or type(extent) is not int
         or extent < 0
+        or type(record["data_bytes"]) is not int
+        or record["data_bytes"] < 0
+        or type(record["block_bytes"]) is not int
         or record["block_bytes"] != BLOCK
+        or record["source_full_integrity"] != "CALLER_REQUIRED"
+        or any(
+            not isinstance(record[k], str) or re.fullmatch(r"[a-f0-9]{64}", record[k]) is None
+            for k in ("data_sha256", "index_sha256", "raw_sha256")
+        )
     ):
         raise StateError("Recovery bounds refused")
     paths = []
     for field in ("data", "index"):
         name = record[field]
-        if not isinstance(name, str) or not name or Path(name).name != name:
+        if not isinstance(name, str) or not name or name in (".", "..") or Path(name).name != name:
             raise StateError("Recovery filename refused")
         path = descriptor.parent / name
         if path.is_symlink() or path.resolve() != path or not path.is_file():
             raise StateError("Recovery path refused")
         paths.append(path)
     data_path, index_path = paths
+
+    def identity(path: Path) -> tuple[int, int, int, int]:
+        value = path.stat()
+        return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns
+
+    originals = [identity(path) for path in paths]
     if (
         data_path.stat().st_size != record["data_bytes"]
         or record["data_bytes"] < extent
@@ -151,21 +182,71 @@ def decoded_blocks(descriptor: Path, *, deadline: float) -> Iterator[bytes]:
             yield raw[:expected]
     if digest.hexdigest() != record["index_sha256"]:
         raise StateError("Recovery index identity mismatch")
+    if descriptor.read_bytes() != descriptor_bytes or [identity(path) for path in paths] != originals:
+        raise StateError("Recovery files changed")
 
 
 def verify(descriptor: Path, *, deadline: float) -> dict[str, Any]:
+    original = descriptor.read_bytes()
     digest = hashlib.sha256()
     size = 0
     for block in decoded_blocks(descriptor, deadline=deadline):
         digest.update(block)
         size += len(block)
-    record = json.loads(descriptor.read_text(encoding="utf-8"))
+    record = manifest(descriptor)
+    if descriptor.read_bytes() != original:
+        raise StateError("Recovery files changed")
     if size != record["raw_bytes"] or digest.hexdigest() != record["raw_sha256"]:
         raise StateError("Recovery byte identity mismatch")
     budget(deadline)
     return {
         "state": "RECOVERY_BYTES_VERIFIED",
         "raw_bytes": size,
+        "raw_sha256": digest.hexdigest(),
+        "source_full_integrity": "CALLER_REQUIRED",
+    }
+
+
+def restore(descriptor: Path, destination: Path, *, maximum: int, deadline: float) -> dict[str, Any]:
+    """Recover every raw byte to an exclusive private file, without overwriting state."""
+    budget(deadline)
+    if (
+        type(maximum) is not int
+        or maximum <= 0
+        or destination.resolve() != destination
+        or any(p.is_symlink() for p in (destination, *destination.parents))
+        or destination.exists()
+    ):
+        raise StateError("Exclusive recovery destination required")
+    record = manifest(descriptor)
+    original = descriptor.read_bytes()
+    if type(record.get("raw_bytes")) is not int or not 0 <= record["raw_bytes"] <= maximum:
+        raise StateError("Recovery capacity refused")
+    if shutil.disk_usage(destination.parent).free < record["raw_bytes"] + 1536 * 1024**2:
+        raise StateError("Recovery disk reserve exhausted")
+    total = 0
+    digest = hashlib.sha256()
+    with destination.open("xb") as output:
+        os.chmod(destination, 0o600)
+        for raw in decoded_blocks(descriptor, deadline=deadline):
+            budget(deadline)
+            total += len(raw)
+            if total > maximum:
+                raise StateError("Recovery capacity refused")
+            output.write(raw)
+            digest.update(raw)
+        output.flush()
+        os.fsync(output.fileno())
+    if (
+        descriptor.read_bytes() != original
+        or total != record["raw_bytes"]
+        or digest.hexdigest() != record["raw_sha256"]
+    ):
+        raise StateError("Recovery byte identity mismatch")
+    budget(deadline)
+    return {
+        "state": "RECOVERY_FILE_VERIFIED",
+        "raw_bytes": total,
         "raw_sha256": digest.hexdigest(),
         "source_full_integrity": "CALLER_REQUIRED",
     }

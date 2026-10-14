@@ -41,8 +41,8 @@ def event_selection(selection: Selection) -> tuple[str, list[Any]]:
     terms = [
         "key>=?",
         "key<?",
-        "json_extract(payload_json,'$.market_observation_ms')>=?",
-        "json_extract(payload_json,'$.market_observation_ms')<?",
+        "json_extract(cw_record_json(payload_json),'$.market_observation_ms')>=?",
+        "json_extract(cw_record_json(payload_json),'$.market_observation_ms')<?",
     ]
     args: list[Any] = [PREFIX + "event-head:", PREFIX + "event-head:~", selection.start_ms, selection.end_ms]
     for name, value in (
@@ -51,7 +51,7 @@ def event_selection(selection: Selection) -> tuple[str, list[Any]]:
         ("market_type", selection.market),
     ):
         if value is not None:
-            terms.append(f"json_extract(payload_json,'$.{name}')=?")
+            terms.append(f"json_extract(cw_record_json(payload_json),'$.{name}')=?")
             args.append(value)
     return "WITH selected AS (SELECT payload_json FROM runtime WHERE " + " AND ".join(terms) + ") ", args
 
@@ -86,10 +86,10 @@ def ndjson(store: Store, selection: Selection) -> Iterator[str]:
         )
         counts: dict[str, int] = {}
         relations = {
-            "event": "json_extract(r.payload_json,'$.event_id') IN (SELECT json_extract(payload_json,'$.event_id') FROM selected)",
-            "episode": "json_extract(r.payload_json,'$.episode_id') IN (SELECT json_extract(payload_json,'$.episode_id') FROM selected)",
-            "outcome": "json_extract(r.payload_json,'$.event_id') IN (SELECT json_extract(payload_json,'$.event_id') FROM selected)",
-            "comparison": "json_extract(r.payload_json,'$.event_id') IN (SELECT json_extract(payload_json,'$.event_id') FROM selected)",
+            "event": "json_extract(cw_record_json(r.payload_json),'$.event_id') IN (SELECT json_extract(cw_record_json(payload_json),'$.event_id') FROM selected)",
+            "episode": "json_extract(cw_record_json(r.payload_json),'$.episode_id') IN (SELECT json_extract(cw_record_json(payload_json),'$.episode_id') FROM selected)",
+            "outcome": "json_extract(cw_record_json(r.payload_json),'$.event_id') IN (SELECT json_extract(cw_record_json(payload_json),'$.event_id') FROM selected)",
+            "comparison": "json_extract(cw_record_json(r.payload_json),'$.event_id') IN (SELECT json_extract(cw_record_json(payload_json),'$.event_id') FROM selected)",
         }
         for kind, relation in relations.items():
             start = PREFIX + kind + ":"
@@ -107,8 +107,8 @@ def ndjson(store: Store, selection: Selection) -> Iterator[str]:
         # Historical settings are frozen in every selected revision; export them independently too.
         rows = store.db.execute(
             cte
-            + "SELECT DISTINCT json_extract(r.payload_json,'$.settings_revision'), json_extract(r.payload_json,'$.settings_snapshot'), "
-            + f"json_extract(r.payload_json,'$.{MARKER}.fields.settings_snapshot') "
+            + "SELECT DISTINCT json_extract(cw_record_json(r.payload_json),'$.settings_revision'), json_extract(cw_record_json(r.payload_json),'$.settings_snapshot'), "
+            + f"json_extract(cw_record_json(r.payload_json),'$.{MARKER}.fields.settings_snapshot') "
             + "FROM runtime r WHERE r.key>=? AND r.key<? AND "
             + relations["event"]
             + " ORDER BY 1,2,3",

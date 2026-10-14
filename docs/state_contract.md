@@ -10,6 +10,13 @@ JSON сохраняется lossless; content size/window/checksum/strict single
 закрывает доступ, version2 сохраняется при restart. Старый version1-only reader
 не является допустимым rollback после такой migration. Current production ещё
 schema1: запись framed records/promotion не выполнялась.
+SQLite history filters/analytics/export используют `cw_record_json`, registered
+на каждом Store connection, включая read-only export. Scalar возвращает exact
+original JSON для framed records; обычные/shared-field записи не меняет. Поэтому
+period/version/market filters, causal cutoff, revisions, cohort/comparator samples
+и settings export продолжают видеть прежние данные. Коррупция frame прекращает
+query. Compatibility fixture сверяет complete filtered NDJSON и cohorts before/after
+conversion, включая ранний и поздний cutoff; private transport fields исключены.
 
 Disk-backed validation — explicit isolated option: owned private disk file,
 encoded allocation bound,1.5GiB reserve и отказ для tmpfs/unknown filesystem.
