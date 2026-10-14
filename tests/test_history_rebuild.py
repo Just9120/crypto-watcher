@@ -387,6 +387,101 @@ def closed_backup(tmp_path, *, conflict=None):
     return path, hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def test_rebuild_preserves_shared_window_blocks_and_exact_compact_revisions(tmp_path):
+    from cryptowatcher.history_codec import BLOB_PREFIX, MARKER
+
+    source = tmp_path / "shared-source.sqlite3"
+    with closing(Store(source, 233382575)) as store:
+        store.initialize(OwnerSettings())
+        history = History(store)
+        for i in range(3):
+            value = record("event", f"shared-{i}")
+            value["source_inputs"] = [
+                {"start": n * 60_000, "step": 60_000, "close": 10 + n / 100}
+                for n in range(i * 16, i * 16 + 32)
+            ]
+            with store.db:
+                history.version("event", value)
+        before = dict(store.db.execute("SELECT key,payload_json FROM runtime"))
+        revisions = {key: payload for key, payload in before.items() if key.startswith(PREFIX + "event:")}
+        assert all(MARKER in json.loads(payload) for payload in revisions.values())
+        bodies = {key: payload for key, payload in before.items() if key.startswith(BLOB_PREFIX)}
+        assert len(bodies) < 6  # Adjacent windows share their sixteen-candle blocks.
+        store.db.execute("PRAGMA journal_mode=DELETE")
+
+    expected = hashlib.sha256(source.read_bytes()).hexdigest()
+    candidate = tmp_path / "shared-candidate.sqlite3"
+    result = rebuild(source, candidate, 233382575, expected, time.monotonic() + 10, backend="python")
+    assert result["shared_bodies_added"] == 0
+    with closing(Store(candidate, 233382575, readonly=True)) as restored:
+        after = dict(restored.db.execute("SELECT key,payload_json FROM runtime"))
+        assert {key: after[key] for key in revisions} == revisions
+        assert {key: after[key] for key in bodies} == bodies
+        for i in range(3):
+            assert History(restored).get(f"event-head:shared-{i}")["source_inputs"] == [
+                {"start": n * 60_000, "step": 60_000, "close": 10 + n / 100}
+                for n in range(i * 16, i * 16 + 32)
+            ]
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == expected
+
+
+def test_storage_marker_in_plain_text_does_not_skip_legacy_compaction(tmp_path):
+    from cryptowatcher.history_codec import MARKER
+
+    source = tmp_path / "marker-text.sqlite3"
+    with closing(Store(source, 233382575)) as store:
+        store.initialize(OwnerSettings())
+        history = History(store)
+        value = {**record("event", "marker-text"), "explanation": "literal " + MARKER}
+        with store.db:
+            history.put("event:marker-text:0000000001", value)
+            history.put("event-head:marker-text", value)
+        store.db.execute("PRAGMA journal_mode=DELETE")
+    candidate = tmp_path / "marker-text-candidate.sqlite3"
+    result = rebuild(
+        source,
+        candidate,
+        233382575,
+        hashlib.sha256(source.read_bytes()).hexdigest(),
+        time.monotonic() + 10,
+        backend="python",
+    )
+    assert result["shared_bodies_added"] > 0
+    with closing(Store(candidate, 233382575, readonly=True)) as restored:
+        assert History(restored).get("event-head:marker-text") == value
+
+
+@pytest.mark.parametrize("fault", ["missing_reference", "conflicting_projection"])
+def test_preserving_compact_revisions_still_rejects_invalid_shared_graph(tmp_path, fault):
+    from cryptowatcher.history_codec import MARKER
+
+    source = tmp_path / "invalid-shared-source.sqlite3"
+    with closing(Store(source, 233382575)) as store:
+        store.initialize(OwnerSettings())
+        history = History(store)
+        with store.db:
+            history.version("event", record("event", "invalid-shared"))
+            key = "event:invalid-shared:0000000001"
+            packed = store.get_runtime(PREFIX + key)
+            if fault == "missing_reference":
+                packed[MARKER]["fields"]["source_inputs"]["ids"] = ["f" * 64]
+            else:
+                packed["source_inputs"] = []
+            history.put(key, packed)
+        store.db.execute("PRAGMA journal_mode=DELETE")
+    before = source.read_bytes()
+    with pytest.raises(StateError, match="Missing shared snapshot|Conflicting shared field projection"):
+        rebuild(
+            source,
+            tmp_path / "invalid-shared-candidate.sqlite3",
+            233382575,
+            hashlib.sha256(before).hexdigest(),
+            time.monotonic() + 10,
+            backend="python",
+        )
+    assert source.read_bytes() == before
+
+
 def test_copy_can_release_source_before_full_candidate_validation(tmp_path, monkeypatch):
     from cryptowatcher import history_rebuild
 

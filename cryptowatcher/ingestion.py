@@ -17,7 +17,7 @@ from .detector_config import effective_parameters
 from .market import BybitREST, MarketError, RadarResult, evaluate_composite, finite
 from .source_context import save
 from .sources import WINDOW_SIZE, Candle, Sources
-from .storage import Store, encode
+from .storage import RUNTIME_UPSERT, Store, encode
 from .universe import CLASSIFICATION_VERSION, Instrument, active_instruments, discover
 
 
@@ -156,7 +156,7 @@ class BybitRadar(BybitREST):
                         for key, reason in quarantine.items()
                     ]
                     with self.store.db:
-                        self.store.db.executemany("INSERT OR REPLACE INTO runtime VALUES (?,?)", records)
+                        self.store.db.executemany(RUNTIME_UPSERT, records)
                         for key, value in instruments.items():
                             save(
                                 self.store,

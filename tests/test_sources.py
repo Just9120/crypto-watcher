@@ -14,6 +14,19 @@ def candle(index, close=100, tf="1m"):
     )
 
 
+def test_recovery_correction_updates_existing_source_without_reinserting_row(store):
+    sources = Sources(store)
+    stream = "spot/BTCUSDT/1m"
+    sources.put(stream, [candle(1)], recovery=True)
+    key = Sources.prefix(stream) + f"{STEP:016d}"
+    rowid = store.db.execute("SELECT rowid FROM runtime WHERE key=?", (key,)).fetchone()[0]
+    sources.put(stream, [candle(1, close=101)], recovery=True)
+    assert store.db.execute("SELECT rowid FROM runtime WHERE key=?", (key,)).fetchone()[0] == rowid
+    assert store.get_runtime(key)["close"] == 101
+    assert sources.rows(stream, 1)[0][4] == 101
+    assert not sources.live
+
+
 def test_market_tf_identity_restart_backup_and_no_historical_live(store, tmp_path):
     sources = Sources(store)
     for stream in ("spot/BTCUSDT/1m", "linear/BTCUSDT/1m", "spot/BTCUSDT/3m"):

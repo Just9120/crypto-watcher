@@ -16,6 +16,11 @@ from typing import Any
 from .config import ConfigError, OwnerSettings, instrument_key, normalize_pair, number
 
 SCHEMA_VERSION = 1
+RUNTIME_UPSERT = """
+INSERT INTO runtime (key, payload_json) VALUES (?, ?)
+ON CONFLICT(key) DO UPDATE SET payload_json=excluded.payload_json
+WHERE runtime.payload_json <> excluded.payload_json
+"""
 VALIDATION_CACHE_KIB = 131072
 VALIDATION_MMAP_BYTES = 2147483648
 VALIDATION_PROGRESS_STEPS = 10000
@@ -304,7 +309,7 @@ class Store:
 
     def put_runtime(self, key: str, payload: Any) -> None:
         with self.db:
-            self.db.execute("INSERT OR REPLACE INTO runtime VALUES (?,?)", (key, encode(payload)))
+            self.db.execute(RUNTIME_UPSERT, (key, encode(payload)))
 
     def backup(
         self,

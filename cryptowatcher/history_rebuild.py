@@ -699,13 +699,19 @@ def copy_snapshot(
                             kind, _, _ = values[0].removeprefix(PREFIX).partition(":")
                             logical = (values[0], source_public) if source_public is not None else values
                             if values[0].startswith(PREFIX) and kind in HEAD_FIELDS:
+                                stored = json.loads(payload) if MARKER in payload else None
                                 normalized = (
-                                    source_codec.canonical_json(json.loads(payload)).decode()
-                                    if MARKER in payload
+                                    source_codec.canonical_json(stored).decode()
+                                    if stored is not None
                                     else payload
                                 )
                                 logical = (values[0], normalized)
-                                payload = candidate_codec.pack_payload(normalized)
+                                # Existing references retain their original window blocks.
+                                # Flattening and repacking would add a separate full-window
+                                # body for every overlapping live window. Full source/public
+                                # manifests and candidate body/reference checks still run.
+                                if not (isinstance(stored, dict) and MARKER in stored):
+                                    payload = candidate_codec.pack_payload(normalized)
                             if not values[0].startswith(BLOB_PREFIX):
                                 feed(manifests[table], logical)
                             values = (values[0], payload)

@@ -394,7 +394,11 @@ outputs сохраняются UNQUALIFIED, запуск не продолжае
 
 `ISOLATED_CONVERSION_PASS` подтверждает только данную копию; результат сохраняет
 `promotion_eligible=false`, `production_migration=NOT_RUN`. Gate не разрешает
-остановку/замену production DB и не превращает предыдущий timeout в PASS. Fit
+остановку/замену production DB и не превращает предыдущий timeout в PASS.
+Уже compact revisions сохраняют исходные references и shared window blocks;
+повторная упаковка полных окон не выполняется. Source logical manifests и full
+candidate body/reference checks остаются обязательными для всех записей.
+ Fit
 актуальной базы требует собственного whole qualification; small fixtures и
 отдельная проверка historical archive этого не доказывают.
 
