@@ -59,6 +59,14 @@ native VFS synthetic fixture `record-disk-linux-jp_zkzk0/receipt.json` PASS:
 exact bytes/types, four-family history/head compatibility, disk-backed full
 integrity/read-only, damaged CHECK refusal. Production unchanged; converter and
 current whole900s qualification still PENDING. No new PR/CI/CD dispatched.
+Integrated private-candidate pipeline prepared: one absolute≤900s deadline, full
+frozen source integrity, exact stored-value manifests/all-row readback, old-head
+revision/projection checks, framed immutable records, full candidate integrity
+and independently decoded recovery with encoded/decoded hashes. Linux synthetic
+whole-path control `framed-whole-linux-6g9xgerh/receipt.json` PASS; this is not the
+current32GB dataset or promotion proof. Historical/current large qualification,
+operator recovery/promotion and applicable CI/CD still PENDING.
+
 
 
 
