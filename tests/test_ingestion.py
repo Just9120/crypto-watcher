@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from cryptowatcher import ingestion
 from cryptowatcher.bot import Controller
 from cryptowatcher.config import TIMEFRAMES, OwnerSettings
 from cryptowatcher.events import History
@@ -204,6 +205,106 @@ async def test_acknowledged_resubscribe_after_rejection_and_bounded_batches(rada
         await asyncio.gather(task, return_exceptions=True)
         await radar.close()
     assert sockets[1].closed
+
+
+@pytest.mark.parametrize("delayed", [False, True])
+async def test_all_subscription_ack_precede_candle_work_and_receipt_survives(radar, monkeypatch, delayed):
+    streams = [f"spot/C{i}USDT/1m" for i in range(21)]
+    radar.streams.update(streams)
+    receipt = NOW + 60_007
+    monkeypatch.setattr(ingestion.time, "time", lambda: receipt / 1000)
+
+    class BeforeAck(Socket):
+        async def send(self, raw):
+            payload = json.loads(raw)
+            if payload["op"] == "subscribe":
+                for candle_topic in payload["args"]:
+                    symbol = candle_topic.rsplit(".", 1)[1]
+                    await self.messages.put(json.dumps(message(symbol=symbol)))
+                if delayed and payload["req_id"] == "cw20":
+                    radar.observe_clock(NOW + 4 * 60_000)
+            await super().send(raw)
+
+    socket = BeforeAck()
+    radar.connector = lambda *args, **kwargs: socket
+    original = radar.accept_message
+    seen = []
+
+    def observe(market, payload, allowed, **kwargs):
+        assert radar.connections["spot:0"]["acknowledged"] == len(streams)
+        assert radar.connections["spot:0"]["state"] == "CONNECTED"
+        original(market, payload, allowed, **kwargs)
+        seen.append(payload)
+
+    monkeypatch.setattr(radar, "accept_message", observe)
+    task = asyncio.create_task(radar._session("spot:0", "spot", streams))
+    try:
+        await wait_condition(lambda: len(seen) == len(streams))
+        for stream in streams:
+            assert radar.sources.windows[stream][NOW].received_ms == receipt
+            assert (stream in radar.sources.live) is not delayed
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await radar.close()
+
+
+@pytest.mark.parametrize("bound", ["messages", "bytes"])
+async def test_subscription_buffer_overflow_blocks_signal_and_requests_recovery(radar, monkeypatch, bound):
+    if bound == "messages":
+        monkeypatch.setattr(ingestion, "SUBSCRIPTION_BUFFER_MESSAGES", 1)
+    else:
+        monkeypatch.setattr(ingestion, "SUBSCRIPTION_BUFFER_BYTES", 1)
+    stream = "spot/BTCUSDT/1m"
+
+    class FloodBeforeAck(Socket):
+        async def send(self, raw):
+            if json.loads(raw)["op"] == "subscribe":
+                for _ in range(3):
+                    await self.messages.put(json.dumps(message()))
+            await super().send(raw)
+
+    socket = FloodBeforeAck()
+    radar.connector = lambda *args, **kwargs: socket
+    radar.on_observation = Mock()
+    task = asyncio.create_task(radar._session("spot:0", "spot", [stream]))
+    try:
+        await wait_condition(lambda: radar.connections.get("spot:0", {}).get("state") == "CONNECTED")
+        assert radar.connections["spot:0"]["acknowledged"] == 1
+        assert radar.connections["spot:0"]["buffer_overflows"] >= 2
+        assert radar.sources.blocked[stream] == "subscription_buffer_overflow"
+        assert radar._pending[stream][0] == 0
+        radar.on_observation.assert_not_called()
+        radar._get = AsyncMock(return_value={"time": NOW, "result": {"list": history()}})
+        await radar.backfill(stream)
+        assert stream not in radar.sources.blocked and stream not in radar.sources.live
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await radar.close()
+
+
+async def test_rejected_subscription_discards_buffer_before_any_candle_write(radar):
+    class RejectWithData(Socket):
+        async def send(self, raw):
+            if json.loads(raw)["op"] == "subscribe":
+                await self.messages.put(json.dumps(message()))
+            await super().send(raw)
+
+    socket = RejectWithData(rejected=True)
+    radar.connector = lambda *args, **kwargs: socket
+    stream = "spot/BTCUSDT/1m"
+    before = {k: v.row() for k, v in radar.sources.windows[stream].items()}
+    task = asyncio.create_task(radar._session("spot:0", "spot", [stream]))
+    try:
+        await wait_condition(lambda: radar.connections.get("spot:0", {}).get("state") == "RECONNECTING")
+        assert radar.connections["spot:0"]["acknowledged"] == 0
+        assert {k: v.row() for k, v in radar.sources.windows[stream].items()} == before
+        assert radar.store.get_runtime(radar.sources.prefix(stream) + f"{NOW:016d}") is None
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await radar.close()
 
 
 async def test_delivery_requires_both_metadata_all_ack_and_each_tf(radar):

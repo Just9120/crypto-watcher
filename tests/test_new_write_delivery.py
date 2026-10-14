@@ -51,7 +51,7 @@ def test_post_probe_rejects_full_head_after_switch_and_accepts_compact(store, tm
     assert result["new_write_status"] == "PASS" and result["recent_compact_events"] == 1
 
 
-@pytest.mark.parametrize("pr", [31, 33, 34])
+@pytest.mark.parametrize("pr", [31, 33, 34, 35])
 def test_permit_is_root_scoped_tree_bound_and_does_not_change_default(tmp_path, monkeypatch, pr):
     permit_path = tmp_path / "permit.json"
     target = tmp_path / "target.json"
@@ -62,6 +62,7 @@ def test_permit_is_root_scoped_tree_bound_and_does_not_change_default(tmp_path, 
     baseline = {
         33: "047c66e5bb9ef5b9c0650ef91d2e5b92275072c4",
         34: "ef5daeb08a253c4062beed375f90f3b6628843a2",
+        35: "23bb023e3872d5791fb270745635da1048dce682",
     }.get(pr, REVISION)
     permit = {
         "schema": receiver.NEW_WRITE_POLICY,
@@ -105,13 +106,13 @@ def test_permit_is_root_scoped_tree_bound_and_does_not_change_default(tmp_path, 
     }
     monkeypatch.setattr(receiver, "run", lambda *a, **k: json.dumps([live]))
     assert receiver.new_write_permit(REVISION) == permit
-    if pr in (33, 34):
+    if pr in (33, 34, 35):
         permit["previous_revision"] = REVISION
         permit_path.write_text(json.dumps(permit))
         with pytest.raises(receiver.DeploymentError, match="compatibility baseline"):
             receiver.new_write_permit(REVISION)
         permit["previous_revision"] = baseline
-    permit["pr"] = 35
+    permit["pr"] = 36
     permit_path.write_text(json.dumps(permit))
     with pytest.raises(receiver.DeploymentError, match="Unapproved permit"):
         receiver.new_write_permit(REVISION)

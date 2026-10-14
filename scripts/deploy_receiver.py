@@ -328,7 +328,7 @@ def new_write_permit(revision: str) -> dict[str, Any] | None:
     require(permit.get("schema") == NEW_WRITE_POLICY, "Unknown permit")
     if permit.get("state") == "CONSUMED":
         return None
-    require(permit.get("state") == "ARMED" and permit.get("pr") in (31, 33, 34), "Unapproved permit")
+    require(permit.get("state") == "ARMED" and permit.get("pr") in (31, 33, 34, 35), "Unapproved permit")
     if permit.get("pr") == 33:
         require(
             permit.get("previous_revision") == "047c66e5bb9ef5b9c0650ef91d2e5b92275072c4",
@@ -337,6 +337,11 @@ def new_write_permit(revision: str) -> dict[str, Any] | None:
     if permit.get("pr") == 34:
         require(
             permit.get("previous_revision") == "ef5daeb08a253c4062beed375f90f3b6628843a2",
+            "Unreviewed compatibility baseline",
+        )
+    if permit.get("pr") == 35:
+        require(
+            permit.get("previous_revision") == "23bb023e3872d5791fb270745635da1048dce682",
             "Unreviewed compatibility baseline",
         )
     require(permit.get("target_sha256") == fingerprint(TARGET), "Permit target changed")
