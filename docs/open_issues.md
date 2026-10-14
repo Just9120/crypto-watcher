@@ -37,16 +37,24 @@ Snapshot: 2026-10-10, проверка около 10:00–10:15 Europe/Moscow; `
 
 ## Current Goal — полный scope CryptoWatcher (IMPLEMENT)
 
-14Oct delivery recovery checkpoint: PR31 merged `44a0a22`, required CI38524296127
-PASS (suite/native/image). Root receiver57814380… и PR31 tree-bound permit
-установлены/readback PASS, production G5afd107 сохранён. Release38524817473
-остановился на pre-build tests: release workflow не собирал required native
-helpers до suite; switch/artifact delivery НЕ начинались. Necessary hotfix
-branch `codex/release-native-helper-20261014`, base44a0a22: тот же native build
-step, что в PR CI, до release tests. Runtime код, DB формат, settings и approved
-exception не меняются. После latest CI проверить diff only release workflow/docs,
-перепривязать pending one-time permit к exact hotfix tree с primary evidence,
-merge и дождаться automatic CD/post-checks. Полная compaction/cleanup не запускается.
+Текущий blocker: для следующей поставки нужен ответ владельца на разовый gate PR34;
+согласие PR33 не переносится на другой reviewed tree/runtime. Подготовка завершена,
+новый root permit не установлен. Scope всей Goal58 AC сохранён, по коду54/58;
+готовность в процентах не пересчитывалась. Goal не DONE; blocked audit подтвердил
+тот же unanswered gate в трёх последовательных Goal-turns, текущий этапBLOCKED.
+
+Проверенный origin/mainef5daeb0 содержит PR33. CI38603388275 PASS;
+CD38604004891 переключил code image, но FAILED вPOST_CHECKS, не переименован вPASS.
+Поздний readback подтверждает healthy/fresh оба рынка/4TF и сохранность private config,
+16 новых compact events; primary linked proof указан в latest checkpoint ниже.
+Исправление cold startup PR34/head5f219f6c готово, CI38607037711 PASS, draft/open.
+Branch `codex/responsive-ingestion-startup-20261014`, baseef5daeb0; локальные docs
+checkpoint commits после опубликованного head сохраняются для следующего batch push.
+История не очищена/не заменена; full900s current conversion и physical shrink не
+qualified. Consumer credential/TOTP явно отложен владельцем; activation не выполнена.
+Следующий шаг после gate approval: scoped receiver/bootstrap/tests, один grouped push
+со свежим required CI, exact new permit с сохранением failed PR33 receipt, merge/CD.
+Старые PR31/PR32 records ниже — history, не инструкция повторной поставки.
 
 2026-10-11 владелец явно расширил Goal до всего согласованного проекта и поручил непрерывную реализацию, с переносом внешних blockers в конец. Scope: все58 исходных AC с утверждёнными уточнениями и dispositions полного реестра findings. G1/G2A/G2B/G3/G4/G5 — последовательные поставляемые этапы общей Goal по уже утверждённому PR разбиению; G6 — финальный полный AUDIT и audit docs PR. Отдельное повторное разрешение перехода между этапами не требуется. Встроенная active Goal сохраняется: её objective уже включает продолжение approved roadmap после G1.
 
