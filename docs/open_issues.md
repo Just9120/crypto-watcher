@@ -37,22 +37,25 @@ Snapshot: 2026-10-10, проверка около 10:00–10:15 Europe/Moscow; `
 
 ## Current Goal — полный scope CryptoWatcher (IMPLEMENT)
 
-Текущий blocker: для следующей поставки нужен ответ владельца на разовый gate PR34;
-согласие PR33 не переносится на другой reviewed tree/runtime. Подготовка завершена,
-новый root permit не установлен. Scope всей Goal58 AC сохранён, по коду54/58;
-готовность в процентах не пересчитывалась. Goal не DONE; blocked audit подтвердил
-тот же unanswered gate в трёх последовательных Goal-turns, текущий этапBLOCKED.
+Владелец разрешил разовую code-only поставку PR34 (reply
+call_857acc1269ee48b9a32326f98d8651e7, «Разрешаю разовую поставку PR34»).
+Этап возобновлён: exact scoped receiver/bootstrap/tests → fresh CI → gated install
+нового root0600 permit → merge/automatic CD. Новый permit связан с final reviewed
+tree и actual predecessor runtimeef5; исходные ARMED permit33 и failed receipt
+сохраняются, не выдаются за consumed/success. Scope всей Goal58 AC сохранён,
+по коду54/58; готовность в процентах не пересчитывалась. Goal не DONE.
 
 Проверенный origin/mainef5daeb0 содержит PR33. CI38603388275 PASS;
 CD38604004891 переключил code image, но FAILED вPOST_CHECKS, не переименован вPASS.
 Поздний readback подтверждает healthy/fresh оба рынка/4TF и сохранность private config,
 16 новых compact events; primary linked proof указан в latest checkpoint ниже.
-Исправление cold startup PR34/head5f219f6c готово, CI38607037711 PASS, draft/open.
+Исправление cold startup PR34/head5f219f6c готово, CI38607037711 PASS, draft/open;
+approved gate меняет code head и требует свежий required CI до merge.
 Branch `codex/responsive-ingestion-startup-20261014`, baseef5daeb0; локальные docs
 checkpoint commits после опубликованного head сохраняются для следующего batch push.
 История не очищена/не заменена; full900s current conversion и physical shrink не
 qualified. Consumer credential/TOTP явно отложен владельцем; activation не выполнена.
-Следующий шаг после gate approval: scoped receiver/bootstrap/tests, один grouped push
+Следующий шаг: scoped receiver/bootstrap/tests, один grouped push
 со свежим required CI, exact new permit с сохранением failed PR33 receipt, merge/CD.
 Старые PR31/PR32 records ниже — history, не инструкция повторной поставки.
 
@@ -1361,6 +1364,8 @@ Validation Plan дополнение: REQUIRED local PR31/PR33 permit binding и
 Необходимый hotfix F22/F27 вbranch `codex/responsive-ingestion-startup-20261014`, baseef5daeb0: subscriptions запускаются без eager загрузки всех source windows; bounded persisted window читается существующим recovery/closed-candle path по мере необходимости. Snapshot не вызывает глобальную lazy загрузку: отсутствующий window диагностируетсяbootstrap_pending и не участвует в signal; историческая recovery не становитсяlive. Diagnostics показываютbootstrap_pending_streams. Retention/schema/settings/formulas/REST budget не меняются. Non-goals: очистка/конвертация DB, расширение startup/CD deadline или изменение full backup gates. Validation Plan: REQUIRED local ingestion/source restart/recovery/gap/no-historical-live и snapshot readiness regressions, canonical quality, fresh full PR CI; REQUIRED delivery после отдельного точного разрешения applicable gate — immutable artifact, bounded readonly config/compact checks, actual health/fresh both-market4TF/readiness. Local28 targeted tests/quality PASS. Точный новый code-only gate ещё не согласован: approval PR33 не переносится на другой reviewed tree/PR. Переключать/redeploy вслепую нельзя.
 
 PR34 published head5f219f6c/tree4d50d21e, required CI38607037711/ci-required116001650951 SUCCESS; draft/open, production gate approvalPENDING. Независимая проверка оптимизации старого cleanup не изменила approved procedure: fused head/revision readback сохранил все checks,16 Windows/Linux corruption/deadline/rollback/recovery scenarios PASS. Paired captured2000-event fixture на production imageef5: fused2.052/2.046s против прежнегоbatched1.896/1.801s; вариант отклонён как не ускоряющий эту выборку. Первичный isolated receipt `head-fused-readback-profile-7zm6kztu/profile.json`; working DB не монтировалась, original captured input hash и live container unchanged/healthy. Whole900s cleanup/conversion fit этим sample не доказан; новый full scan и production cleanup не запускались. До отдельного gate decision продолжается сохранение текущего работающего runtime; failed CD33 и его ARMED permit не переиспользуются.
+
+**Решение для PR34 принято:** reply call_857acc1269ee48b9a32326f98d8651e7 разрешает exact prepared one-time code-only gate. Только для этой поставки full history scan/backup заменяется existing bounded source-readonly compatibility и private config recovery/readback; риск отсутствия fresh whole-history recovery принят. Deadline150s, conversion900s/CPU1/RAM4GiB, all CI/image/host/target-lock/health/fresh ingestion/compact post-checks и ordinary backup/CD policy сохраняются. DB cleanup/conversion/replacement не выполняются, current history/source/private settings сохраняются. Старый failed permit33 архивируется побайтно с failed deployment evidence; новый permit34 root0600 tree/target/current ef5 container+image bound. Consume только после всех PASS; failure/ambiguity сначала inspect primary/runtime и exact compatible recovery без DB downgrade/restore. Validation Plan: REQUIRED local scoped permit31/33/34 guards, bootstrap pin/tampering/recovery и ingestion/source tests; canonical quality; fresh required CI final head. REQUIRED installation exact approved receiver diff+hash, private predecessor receipt copies/readback, fresh main/PR/CI gate и exclusive lock. REQUIRED CD ожидаемой merge revision/artifact, private config equality, both-market4TF fresh polling/readiness и compact post-check; исключение не отменяет mandatory checks. Следующий шаг — grouped policy/checkpoint push и эти gates; финальные full conversion/consumer activation/G6 остаются незавершёнными.
 
 Короткий runtime snapshot14Oct15:36UTC: SQLite31,987,564,544bytes, freelist0; это реальные allocated pages, не доказательство размера duplicates по всем namespaces. Metadata-only sample последних10,000 runtime rows15:38UTC подтверждает small new heads (event≤460/outcome≤580/episode≤400/comparison≤295bytes); размеры values/full growth этим sample не экстраполируются. Old history cleanup/physical shrink и current complete recovery остаются незавершёнными. По коду54/58 AC текущей Goal; процент не пересчитывался.
 
