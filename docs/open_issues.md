@@ -156,6 +156,16 @@ operator/review/target/approval records находятся вне tracked files.
 Следующий local90min run ожидает explicit owner decision; прежний не повторять.
 Повторный полный scan без нового основания не запускать.
 
+Independent local preparation: metadata projection ABBA на128 retained records/
+367,044payload bytes дал лишь около8% улучшения узкого участка; в основной код
+не перенесён и whole fit не доказывает. Linux-only memory admission на Windows
+выбирал fallback writer256MiB. Operator PSAPI readback/control PASS: фактическая
+process memory34.7MB, bounded writer512MiB, synthetic values unchanged и over-budget
+refusal; общий hard process4GiB/CPU1 сохранён. Это исправление accounting только
+подготовленного local operator, не production change или доказательство скорости.
+Новый operator без owner approval отказал до создания новой папки (control PASS);
+launcher/exact diff подготовлены, большой новый run не запущен.
+
 Read-only retained input — `adaptive-batch-qualification-ytc_om2q/work/`:
 descriptorSHA256def55554dd2e67f4be44f5ec0eb3005b7b70c477510311fd6cdde5090c13cd3f,
 encoded data46b168bf…/index8d602bec…, raw35,553,550,336bytes/SHA25624314f94….
