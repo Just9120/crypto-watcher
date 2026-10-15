@@ -299,6 +299,7 @@ def test_compact_candles_preserve_source_windows_and_future_outcome_rows(tmp_pat
         sources.put("spot/BTCUSDT/1m", candles)
         before = sources.rows("spot/BTCUSDT/1m", 64)
         raw = {row[0]: row[1] for row in store.db.execute("SELECT key,payload_json FROM runtime")}
+        assert not store.compact_candles
     with closing(sqlite3.connect(source.as_uri() + "?mode=ro", uri=True)) as db:
         db.execute("PRAGMA query_only=ON")
         report = copy_validated(db, target, owner=233382575, maximum=1024**2, deadline=time.monotonic() + 15)
@@ -314,6 +315,23 @@ def test_compact_candles_preserve_source_windows_and_future_outcome_rows(tmp_pat
             assert encode(store.get_runtime(key)) == raw[key]
         sources.put("spot/BTCUSDT/1m", candles, live=True)
         assert sources.rows("spot/BTCUSDT/1m", 64) == before
+        assert store.compact_candles
+        latest = Candle.parse(
+            [start + 64 * 60000, 100, 102, 99, 101, 1, 400],
+            "1m",
+            "ws",
+            start + 65 * 60000,
+            start + 65 * 60000,
+        )
+        assert sources.put("spot/BTCUSDT/1m", [latest], live=True)
+        key = Sources.prefix("spot/BTCUSDT/1m") + f"{latest.start:016d}"
+        encoded = store.db.execute("SELECT payload_json FROM runtime WHERE key=?", (key,)).fetchone()[0]
+        assert json.loads(encoded).keys() == {"_cw_candle_v1"}
+        assert len(encoded) < len(encode(asdict(latest)))
+    with closing(Store(target, 233382575)) as store:
+        assert Sources(store).rows("spot/BTCUSDT/1m", 1) == [latest.row()]
+        assert read_candles(store, "spot/BTCUSDT/1m", latest.start, latest.end) == [latest]
+        assert store.get_runtime(key) == asdict(latest)
 
 
 @pytest.mark.parametrize("one_time", [False, True])

@@ -111,6 +111,11 @@ source/candidate/recovery и ordinary state/archive backup на schema2 за≤3
 Ранние fixture failures import path/tmpfs исправлены в изолированном окружении,
 production не mounted/не останавливалась. Новый operator сохраняет worker.log
 до удаления контейнера, чтобы failure diagnostics не терялись.
+Дополнительно локально writer новых source candles использует compact array
+только после открытия schema2 с exact candle declaration. Schema1 и frame-only
+declaration сохраняют прежний формат; новые timestamps/units/prices не меняются.
+Sources/restart/outcome/legacy tests81 PASS/1 skip. Этот follow-up не меняет
+уже staged/hash-bound qualification bundle; до runtime поставки нужен required CI.
 Owner разрешил удалить только предыдущий failed source.frames: повторные
 identity/hash/no handles PASS, primary `one-time-scratch-cleanup-baemndzl/receipt.json`,
 освобождено4,975,001,600 allocated bytes, working DB/private/recovery не изменены.

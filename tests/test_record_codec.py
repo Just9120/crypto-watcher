@@ -126,17 +126,25 @@ def test_framed_immutable_versions_remain_complete_through_heads_and_history(sto
         history.codec.pack(json.loads(pack('{"event_id":"one"}')))
 
 
-def test_framed_database_version_is_explicit_and_survives_reopen(store):
-    from cryptowatcher.storage import COMPRESSED_RECORD_VERSION, RECORD_FORMAT, RECORD_FORMAT_KEY, Store
+@pytest.mark.parametrize("legacy", [False, True])
+def test_framed_database_version_is_explicit_and_survives_reopen(store, legacy):
+    from cryptowatcher.storage import (
+        COMPRESSED_RECORD_VERSION,
+        LEGACY_RECORD_FORMAT,
+        RECORD_FORMAT,
+        RECORD_FORMAT_KEY,
+        Store,
+    )
 
     path = store.path
     with store.db:
-        store.put_runtime(RECORD_FORMAT_KEY, RECORD_FORMAT)
+        store.put_runtime(RECORD_FORMAT_KEY, LEGACY_RECORD_FORMAT if legacy else RECORD_FORMAT)
         store.db.execute(f"PRAGMA user_version={COMPRESSED_RECORD_VERSION}")
     store.close()
     reopened = Store(path, 233382575)
     assert reopened.db.execute("PRAGMA user_version").fetchone()[0] == COMPRESSED_RECORD_VERSION
     assert reopened.snapshot().revision == 1
+    assert reopened.compact_candles is (not legacy)
     reopened.close()
 
 

@@ -12,7 +12,7 @@ from typing import Any
 
 from .config import TIMEFRAMES
 from .market import MarketError, finite
-from .record_codec import sql_payload
+from .record_codec import pack_candle, sql_payload
 from .storage import RUNTIME_UPSERT, Store, encode
 
 WINDOW_SIZE = 256
@@ -113,7 +113,10 @@ class Sources:
                 raise MarketError("conflicting_closed_candle")
             if existing and existing.row() == candle.row():
                 continue
-            writes.append((self.prefix(stream) + f"{candle.start:016d}", encode(asdict(candle))))
+            payload = encode(asdict(candle))
+            if self.store.compact_candles:
+                payload = pack_candle(payload)
+            writes.append((self.prefix(stream) + f"{candle.start:016d}", payload))
         # Save before exposing to the detector/Telegram consumer.
         with self.store.db:
             self.store.db.executemany(RUNTIME_UPSERT, writes)

@@ -214,6 +214,7 @@ class Store:
         self.owner_id = owner_id
         self.readonly = readonly
         version = SCHEMA_VERSION
+        record_format = None
         if path.exists():
             probe = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
             try:
@@ -224,6 +225,7 @@ class Store:
                     ).fetchone()
                     if marker is None or not known_record_format(marker[0]):
                         raise StateError("Unsupported database schema; database preserved")
+                    record_format = marker[0]
                 elif version != SCHEMA_VERSION:
                     raise StateError("Unsupported database schema; database preserved")
                 binding = probe.execute("SELECT owner_id FROM owner_settings").fetchone()
@@ -248,6 +250,7 @@ class Store:
 
         self.db.create_function("cw_record_json", 1, sql_payload, deterministic=True)
         self.db.row_factory = sqlite3.Row
+        self.compact_candles = version == COMPRESSED_RECORD_VERSION and record_format == encode(RECORD_FORMAT)
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA busy_timeout=5000")
         if not readonly:

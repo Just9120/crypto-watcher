@@ -14,8 +14,11 @@ Known format declaration дополнительно поддерживает `cr
 Для exact canonical source candle с фиксированными11 fields используется
 `_cw_candle_v1` array в стабильном порядке; original JSON восстанавливается
 побайтно. Unknown fields/noncanonical rows остаются прежними. Store/Sources/
-outcome readers и SQL scalar раскрывают array, live source writer сохраняет
-обычный совместимый JSON. Manifest каждого runtime row проверяет exact original
+outcome readers и SQL scalar раскрывают array. После migration к version2 с
+exact candle declaration live source writer тоже пишет компактный array; schema1
+и прежняя frame-only declaration сохраняют обычный JSON. Это не включает новую
+схему автоматически: режим определяется при открытии известной БД. Manifest
+каждого runtime row проверяет exact original
 bytes; compiler не округляет числа и не теряет receipt/server/source provenance.
 Исходная известная frame-only declaration version2 также читается; future/unknown
 declarations отвергаются. Production macro/promotion пока не выполнялись.
