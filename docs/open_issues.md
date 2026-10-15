@@ -37,6 +37,35 @@ Snapshot: 2026-10-10, проверка около 10:00–10:15 Europe/Moscow; `
 
 ## Current Goal — полный scope CryptoWatcher (IMPLEMENT)
 
+Поручение16Oct: переработать backup без увеличения RAM, сохранить newer live
+writes и уменьшить рабочую БД, сохранив useful history и алерты; ordinary
+backup/CD≤900s. Продолжение в текущем PR36/base2efd9093. Сжатый validation image
+переносится из anonymous RAM в private disk spool; memory/cache/container caps
+CPU1/4GiB, full source/CHECK и full persisted backup readback/hash сохраняются.
+Disk capacity проверяется по фактическому free space с reserve1.5GiB; невалидный
+или незавершённый backup не становится пригодным. Scope F22/F27/F34, AC-10/12.
+Non-goals: смена DB engine, удаление полезной history, увеличение ordinary
+budgets, замена current state историческим snapshot. Перед переключением
+обязательна отдельная сверка newer writes и точных runtime/config identities.
+Validation Plan: REQUIRED local disk snapshot/archive restore и WAL-race,
+CHECK/corruption, expiry/space/path refusal, preserved partial destination;
+existing storage/compressed/native regressions и quality из root. REQUIRED CI
+final PR head. REQUIRED extended actual-candidate и VPS CPU1/4GiB/whole900s
+proof с full checks; затем fresh-data-preserving promotion и runtime post-checks.
+DoD: актуальная рабочая DB физически уменьшена, source/history/private data
+сверены, алерты работают, applicable merge/CD и ordinary900s подтверждены.
+Local disk implementation: private disk spool, bounded SQLite cache, full source
+и persisted archive/CHECK/hash readback реализованы; shared CLI timeout≤900s,
+RAM fallback отсутствует. Source WAL reader закрывается до expensive checks;
+при ошибке чтения освобождается mmap, partial destination сохраняется.
+Local61 storage/compressed/recovery tests и40 CLI/storage/disk scenarios PASS
+(наборы пересекаются), canonical quality/mypy44 PASS. Current actual target
+whole900s всё ещё PENDING. Для Linux rehearsal CI сохраняет уже собранный image;
+публикация нужна для required pre-merge target proof, не для production switch.
+Qualified historical candidate передан в transport archive5,265,560,151bytes,
+SHA36278747…; independent single-frame decode/raw SHA4efb5820… PASS в исходном
+900s transport window. Работающая DB и старые source/recovery копии сохранены.
+
 15Oct owner поручил уменьшить накопленную БД, сохранив useful history и работу
 алертов. Последующее решение15Oct: owner разрешил более15min только для
 разовой конвертации; ordinary backup/CD не должны получать этот бюджет.

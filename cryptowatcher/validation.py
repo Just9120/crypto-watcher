@@ -124,11 +124,19 @@ def validate_backup(
 
 @contextmanager
 def validated_snapshot(
-    path: Path, directory: Path, *, deadline: float, compressed: bool = False
+    path: Path, directory: Path, *, deadline: float, compressed: bool = False, disk: bool = False
 ) -> Iterator[sqlite3.Connection | apsw.Connection]:
     """Release the live WAL snapshot before the expensive full integrity check."""
     try:
         budget(deadline)
+        if disk:
+            if compressed:
+                raise IntegrityError("DATABASE_ERROR", "Conflicting validation modes")
+            from .disk_backup import snapshot as disk_snapshot
+
+            with disk_snapshot(path, directory, deadline=deadline) as (connection, _):
+                yield connection
+            return
         scratch_space(directory, 0)
         if compressed:
             from .compressed_validation import snapshot as compressed_snapshot

@@ -348,14 +348,22 @@ class Store:
         validation_directory: Path | None = None,
         compressed_validation: bool = False,
         archive: bool = False,
+        disk_validation: bool = False,
     ) -> dict[str, float | str]:
         if compressed_validation and validation_directory is None:
             raise StateError("Compressed validation requires a private validation directory")
-        if archive and (not compressed_validation or validation_directory is None):
+        if archive and (not (compressed_validation or disk_validation) or validation_directory is None):
             raise StateError("Archived backup requires compressed validation")
+        if disk_validation and (compressed_validation or not archive or validation_directory is None):
+            raise StateError("Disk validation requires an archived backup and a private disk directory")
         if destination.exists() or destination.resolve() == self.path.resolve():
             raise StateError("Backup destination must be new")
         destination.parent.mkdir(parents=True, exist_ok=True)
+        if disk_validation:
+            from .disk_backup import backup as disk_backup
+
+            assert validation_directory is not None
+            return disk_backup(self.path, destination, validation_directory, seconds=timeout_seconds)
         if archive:
             from .compressed_validation import archive_backup
             from .validation import scratch_space

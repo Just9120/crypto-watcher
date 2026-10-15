@@ -203,7 +203,15 @@ class Image:
         if path is None:
             self.mutable = True
             return
-        self.path = Path(path)
+        try:
+            self._load(Path(path), progress)
+        except BaseException:
+            # A failed decoder must not keep a disk mmap alive through its traceback.
+            self.blocks.close()
+            raise
+
+    def _load(self, path: Path, progress: Any) -> None:
+        self.path = path
         self.before = self.path.lstat()
         if not stat.S_ISREG(self.before.st_mode):
             raise QualificationError("REGULAR_CLOSED_FILE_REQUIRED")
@@ -212,20 +220,20 @@ class Image:
         self.hash = hashlib.sha256()
         with self.source_reader() as source:
             while True:
-                budget(deadline)
+                budget(self.deadline)
                 data = source.read(BLOCK)
                 if not data:
                     break
                 blob = self.compressor.compress(data)
                 self.retained += sys.getsizeof(blob)
-                if self.retained + sys.getsizeof(self.blocks) + BLOCK + 128 > limit:
+                if self.retained + sys.getsizeof(self.blocks) + BLOCK + 128 > self.limit:
                     raise QualificationError("COMPRESSED_MEMORY_LIMIT")
                 self.blocks.append(blob)
                 self.size += len(data)
                 self.hash.update(data)
                 progress(phase="COMPRESS", bytes=self.size, compressed_bytes=self.retained)
         self.assert_source_unchanged()
-        if archive_encoding is None and self.size != self.before.st_size:
+        if self.archive_encoding is None and self.size != self.before.st_size:
             raise QualificationError("SOURCE_CHANGED")
         self.sha256 = self.hash.hexdigest()
         self.blocks.flush_private()

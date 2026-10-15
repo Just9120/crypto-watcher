@@ -235,6 +235,32 @@ Canonical receiver — [deploy_receiver.py](../../scripts/deploy_receiver.py). �
 
 Records: Actions tested SHA/check/run/attempt, build artifact/manifest, target release `deployment.json` (previous image, backup, switch and post-check state), uploaded deployment artifact. Секреты и resolved config не логируются. Failed operation сохраняет attempted release; повтор с тем же bundle отвергается до разбора state. После transient failure новая artifact attempt допустима только после known state inspection. Advanced cleanup/backups retention пока manual, без system prune или удаления живых данных.
 
+## Дисковый режим backup — кандидат PR36
+
+Режим `--disk-validation` хранит frozen compressed frames в private disk spool,
+с прежними CPU1/4GiB и SQLite cache≤1GiB. Anonymous RAM image не создаётся.
+Проверки full source integrity/CHECK, полного persisted backup readback и raw/
+encoded SHA256 сохраняются. Один `--timeout-seconds`≤900 покрывает capture,
+проверку, запись архива и его проверку; budget не обновляется между этапами.
+Spool capacity зависит от фактического free space с reserve1.5GiB; нехватка места
+прекращает операцию. Частичный destination сохраняется и не считается backup.
+
+Из root приложения, с настроенными owner/database environment и writable private
+directory UID10001 (на VPS внутри установленного data volume):
+
+```bash
+python -m cryptowatcher backup --disk-validation --archive-backup \
+  --validation-directory /data/sqlite/validation \
+  --destination /data/sqlite/backups/UNIQUE.sqlite3.zst --timeout-seconds 900
+```
+
+Это подготовленный режим, current production receiver всё ещё использует прежний
+COMPRESSED_RAM gate. До его замены обязательны fresh CI/image и actual target
+whole900s proof; fixture PASS или qualified historical snapshot их не заменяют.
+PR CI сохраняет уже собранный immutable rehearsal bundle на7 дней для offline
+проверки без production secrets. Test-merge revision такого artifact фиксируется
+в Evidence и не разрешает production deploy: receiver требует актуальный main.
+
 ## Изолированная конвертация legacy history backup
 
 Canonical command из root repository в locked Python environment либо внутри

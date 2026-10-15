@@ -49,6 +49,16 @@ jobs:
           docker build --build-arg SOURCE_REVISION="$REVISION" --build-arg BUILD_RUN="$RUN_ID" -t "cryptowatcher:$REVISION" .
           python scripts/image_checks.py "cryptowatcher:$REVISION" "$REVISION"
           python scripts/package_release.py "$REVISION" "$RUN_ID" "cryptowatcher:$REVISION" .cache-g1/ci-release
+      - name: Retain immutable image for isolated backup rehearsal
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rehearsal-${{ github.event.pull_request.number }}-${{ github.run_id }}
+          path: |
+            .cache-g1/ci-release/bundle.tar
+            .cache-g1/ci-release/bundle.sha256
+            .cache-g1/ci-release/manifest.json
+          retention-days: 7
+          if-no-files-found: error
   ci-required:
     needs: [select, documentation, validation]
     if: always()

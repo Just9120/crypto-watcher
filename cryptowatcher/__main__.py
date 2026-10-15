@@ -49,6 +49,7 @@ def main() -> int:
     parser.add_argument("--destination", type=Path)
     parser.add_argument("--validation-directory", type=Path)
     parser.add_argument("--compressed-validation", action="store_true")
+    parser.add_argument("--disk-validation", action="store_true")
     parser.add_argument("--archive-backup", action="store_true")
     parser.add_argument("--owner-id", type=int)
     parser.add_argument("--format", choices=("ndjson", "csv"), default="ndjson")
@@ -74,7 +75,17 @@ def main() -> int:
             raise ConfigError("validation-directory is only supported for state-check and backup")
         if args.compressed_validation and args.validation_directory is None:
             raise ConfigError("compressed-validation requires validation-directory")
-        if args.archive_backup and (args.command != "backup" or not args.compressed_validation):
+        if args.disk_validation and (
+            args.validation_directory is None
+            or args.command not in ("backup", "state-check")
+            or args.compressed_validation
+        ):
+            raise ConfigError(
+                "disk-validation requires its private directory and cannot use compressed-validation"
+            )
+        if args.archive_backup and (
+            args.command != "backup" or not (args.compressed_validation or args.disk_validation)
+        ):
             raise ConfigError("archive-backup requires backup and compressed-validation")
         if args.command == "migrate":
             if (
@@ -152,6 +163,7 @@ def main() -> int:
                     deadline = time.monotonic() + args.timeout_seconds
                     if args.validation_directory is None:
                         check_integrity(store.db, deadline=deadline)
+                        verified_schema = store.db.execute("PRAGMA user_version").fetchone()[0]
                         imported = store.db.execute("SELECT source_sha256 FROM legacy_import").fetchone()
                         enabled = store.enabled()
                     else:
@@ -163,7 +175,12 @@ def main() -> int:
                             args.validation_directory,
                             deadline=deadline,
                             compressed=args.compressed_validation,
+                            disk=args.disk_validation,
                         ) as validated:
+                            schema_row = validated.execute("PRAGMA user_version").fetchone()
+                            if schema_row is None:
+                                raise StateError("Validated schema unavailable")
+                            verified_schema = schema_row[0]
                             owner_row = validated.execute(
                                 "SELECT owner_id,revision,settings_json FROM owner_settings"
                             ).fetchone()
@@ -182,7 +199,7 @@ def main() -> int:
                         json.dumps(
                             {
                                 "status": "integrity_ok",
-                                "schema": 1,
+                                "schema": verified_schema,
                                 "owner_id": store.owner_id,
                                 "configuration_revision": snapshot.revision,
                                 "settings_sha256": hashlib.sha256(
@@ -190,7 +207,9 @@ def main() -> int:
                                 ).hexdigest(),
                                 "legacy_sha256": imported[0] if imported else None,
                                 "alerts_enabled": enabled,
-                                "validation_mode": "COMPRESSED_RAM"
+                                "validation_mode": "COMPRESSED_DISK"
+                                if args.disk_validation
+                                else "COMPRESSED_RAM"
                                 if args.compressed_validation
                                 else ("TMPFS" if args.validation_directory else "DISK"),
                             }
@@ -215,6 +234,7 @@ def main() -> int:
                         validation_directory=args.validation_directory,
                         compressed_validation=args.compressed_validation,
                         archive=args.archive_backup,
+                        disk_validation=args.disk_validation,
                     )
                     print(json.dumps({"status": "backup_integrity_ok", "backup": metrics}))
                 else:
