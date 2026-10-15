@@ -110,7 +110,23 @@ RO input, fresh source copy0bytes, production mount/stop/network0; один
 3500s worker/3600s managed budget, CPU1/RAM4GiB/no swap. Cache строится при полном
 checksum/decode/raw SHA источника, затем native слой отдельно сверяет каждую
 cached page. После этого остаются все source/candidate/recovery gates. Result
-PENDING, cache actual bytes/whole fit/physical shrink UNSET/UNSET/0.
+PENDING, whole fit/physical shrink UNSET/0. Actual242.365s: полные raw bytes/SHA
+совпали; cache424,691pages/502,906,708encoded bytes. Native admission сравнил все
+cached pages с source к369.496s; source SQL начат369.864s. Readback11:51UTC:
+SQL PENDING, OOMfalse, тот же production healthy; candidate отсутствует.
+
+Подготовлена альтернативная разовая local native qualification; owner resource
+exception PENDING (вопрос15Oct в чате). Локальная private ACL папка на D содержит
+только собственные synthetic fixtures; история VPS не загружалась. Small2.015MB
+source→candidate139KB full integrity/manifests/recovery PASS0.266s; closed WAL
+header PASS0.234s; CHECK/index corruption controls PASS, source unchanged и
+candidate0. Windows Job Object/CPU affinity readback подтверждает process4GiB/
+one logical CPU. OS file cache этим пределом не ограничен: это отличие от Linux
+cgroup4GiB и требует согласования по AGENTS.md. Оно не объявляется VPS capacity
+proof; ordinary900s/full data gates и production сохраняются. Exact local
+operator/review/target records находятся вне tracked files. До ответа нельзя
+переносить полный снимок или выполнять большой local run; разрешённый VPS job
+продолжает работу в прежних пределах.
 
 Read-only retained input — `adaptive-batch-qualification-ytc_om2q/work/`:
 descriptorSHA256def55554dd2e67f4be44f5ec0eb3005b7b70c477510311fd6cdde5090c13cd3f,
