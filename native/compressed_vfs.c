@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #include "sqlite3ext.h"
 SQLITE_EXTENSION_INIT1
@@ -9,6 +10,10 @@ SQLITE_EXTENSION_INIT1
 #include <time.h>
 #include <limits.h>
 #include <math.h>
+#if defined(__linux__)
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
 
 #define BLOCK 65536u
 #define SLOTS 512u
@@ -21,7 +26,8 @@ struct Ctx {
     char name[100]; const unsigned char *data;
     char path[4096];
     size_t extent, count; uint64_t size, clock, reads, decodes;
-    double deadline; int opens;
+    double deadline; int opens, disk_prefetch;
+    size_t page_size; uint64_t prefetches, prefetch_failures, encoded_bytes;
     Frame *frames; int *map; Slot slots[SLOTS];
     unsigned char *cache; ZSTD_DCtx *decoder;
 };
@@ -47,6 +53,15 @@ static int read_file(sqlite3_file *p, void *out, int n, sqlite3_int64 offset) {
             if(c->slots[slot].block!=UINT64_MAX) c->map[c->slots[slot].block]=-1;
             c->slots[slot].block=UINT64_MAX;c->slots[slot].age=0;
             Frame f=c->frames[index];
+#if defined(__linux__)
+            if(c->disk_prefetch) {
+                size_t start=(size_t)f.off-((size_t)f.off%c->page_size);
+                size_t length=(size_t)(f.off+f.len)-start;
+                c->prefetches++;
+                if(madvise((void*)(c->data+start),length,MADV_WILLNEED)!=0) c->prefetch_failures++;
+            }
+#endif
+            c->encoded_bytes+=f.len;
             size_t decoded=ZSTD_decompressDCtx(c->decoder,c->cache+(size_t)slot*BLOCK,BLOCK,c->data+f.off,f.len);
             size_t expected=(size_t)((c->size-(uint64_t)index*BLOCK)<BLOCK?c->size-(uint64_t)index*BLOCK:BLOCK);
             if(ZSTD_isError(decoded) || (decoded!=expected && decoded!=BLOCK)) return SQLITE_IOERR_READ;
@@ -112,7 +127,11 @@ static int randomness(sqlite3_vfs *v,int n,char *out) { Ctx *c=v->pAppData;retur
 static int sleep_vfs(sqlite3_vfs *v,int n) { Ctx *c=v->pAppData;return c->parent->xSleep(c->parent,n); }
 static int current_time(sqlite3_vfs *v,double *out) { Ctx *c=v->pAppData;return c->parent->xCurrentTime(c->parent,out); }
 static void release(Ctx *c) {
-    if(!c)return;ZSTD_freeDCtx(c->decoder);free(c->frames);free(c->map);free(c->cache);free(c);
+    if(!c)return;
+#if defined(__linux__)
+    if(c->disk_prefetch) (void)madvise((void*)c->data,c->extent,MADV_NORMAL);
+#endif
+    ZSTD_freeDCtx(c->decoder);free(c->frames);free(c->map);free(c->cache);free(c);
 }
 void *cwcvfs_create(const char *name,const void *data,size_t extent,const uint64_t *offsets,const uint64_t *lengths,size_t count,uint64_t size,double deadline) {
     if(!sqlite3_api || !name || strlen(name)>=100 || !data || (count && (!offsets || !lengths)) || !isfinite(deadline) || size>INT64_MAX || count!=(size/BLOCK+(size%BLOCK!=0)) || count>SIZE_MAX/sizeof(Frame) || count>SIZE_MAX/sizeof(int) || sqlite3_vfs_find(name)) return NULL;
@@ -136,6 +155,21 @@ void *cwcvfs_create(const char *name,const void *data,size_t extent,const uint64
 }
 int cwcvfs_destroy(void *p) { Ctx *c=p;if(!c)return SQLITE_MISUSE;if(c->opens)return SQLITE_BUSY;int r=sqlite3_vfs_unregister(&c->vfs);if(r==SQLITE_OK)release(c);return r; }
 void cwcvfs_stats(void *p,uint64_t *reads,uint64_t *decodes) { Ctx *c=p;*reads=c->reads;*decodes=c->decodes; }
+/* Optional disk-only optimization. Frames, SQLite reads and integrity checks
+   are unchanged; older callers continue using the original ABI. */
+int cwcvfs_disk_prefetch(void *p) {
+#if defined(__linux__)
+    Ctx *c=p;long page=sysconf(_SC_PAGESIZE);
+    if(!c || page<=0 || !c->extent || (uintptr_t)c->data%(size_t)page) return 0;
+    if(madvise((void*)c->data,c->extent,MADV_RANDOM)!=0) return 0;
+    c->page_size=(size_t)page;c->disk_prefetch=1;return 1;
+#else
+    (void)p;return 0;
+#endif
+}
+void cwcvfs_prefetch_stats(void *p,uint64_t *calls,uint64_t *failures,uint64_t *bytes) {
+    Ctx *c=p;*calls=c->prefetches;*failures=c->prefetch_failures;*bytes=c->encoded_bytes;
+}
 int sqlite3_cwcvfs_init(sqlite3 *db,char **error,const sqlite3_api_routines *api) {
     (void)db;(void)error;SQLITE_EXTENSION_INIT2(api);
     return sqlite3_libversion_number()==3053004 && ZSTD_versionNumber()==10507?SQLITE_OK:SQLITE_MISMATCH;

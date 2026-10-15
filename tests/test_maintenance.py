@@ -66,6 +66,7 @@ def test_whole_deadline_includes_stop_checkpoint_qualification_restore_and_check
     assert ops.worker_budget == 900 - 150 - 17
     assert proof["elapsed_seconds"] == 448
     assert ops.calls == ["verify", "stop", "checkpoint", "qualify", "terminate", "restore", "postcheck"]
+    assert ops.records[0]["baseline"] == {"settings_hash": "preserved"}
 
 
 @pytest.mark.parametrize("failure", ["stop", "checkpoint", "qualify", "terminate", "overrun"])
@@ -121,3 +122,23 @@ def test_one_time_mode_also_has_a_hard_upper_bound():
     with pytest.raises(StateError):
         qualify_closed(ops, TARGET, seconds=3601, one_time_maintenance=True)
     assert not ops.calls
+
+
+def test_managed_clock_includes_time_spent_before_the_controller():
+    ops = FakeOperations()
+    proof = qualify_closed(ops, TARGET, absolute_deadline=850, clock=lambda: ops.now)
+    assert ops.worker_budget == 850 - 150 - 17
+    assert proof["state"] == "QUALIFIED_RUNTIME_RESTORED"
+
+
+def test_expired_managed_clock_cannot_request_a_stop():
+    ops = FakeOperations()
+    with pytest.raises(StateError, match="budget"):
+        qualify_closed(ops, TARGET, absolute_deadline=100, clock=lambda: ops.now)
+    assert not ops.calls
+
+
+def test_late_postcheck_cannot_turn_managed_budget_failure_into_pass():
+    ops = FakeOperations()
+    proof = qualify_closed(ops, TARGET, absolute_deadline=440, clock=lambda: ops.now)
+    assert proof["state"] == "UNQUALIFIED_RUNTIME_RESTORED"

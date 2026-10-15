@@ -14,11 +14,17 @@ from .test_history_rebuild import closed_backup
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Native Linux validation helper")
 
 
-def test_native_full_validation_preserves_all_types_and_rejects_writes_and_early_release(tmp_path):
+@pytest.mark.parametrize("disk", [False, True])
+def test_native_full_validation_preserves_all_types_and_rejects_writes_and_early_release(tmp_path, disk):
     assert available(), "Build canonical native helper before Linux tests"
     source, _ = closed_backup(tmp_path)
     original = source.read_bytes()
-    image = cv.Image(source, limit=cv.MAX_COMPRESSED_BYTES, deadline=time.monotonic() + 30)
+    image = cv.Image(
+        source,
+        limit=8 * 1024**2 if disk else cv.MAX_COMPRESSED_BYTES,
+        deadline=time.monotonic() + 30,
+        backing=tmp_path / "source.frames" if disk else None,
+    )
     sentinel = tmp_path / "sentinel.sqlite3"
     sentinel.touch(mode=0o600)
     vfs = cv.frozen_vfs(image, sentinel)
@@ -38,7 +44,12 @@ def test_native_full_validation_preserves_all_types_and_rejects_writes_and_early
             vfs.unregister()
         with pytest.raises(apsw.ReadOnlyError):
             db.execute("DELETE FROM runtime")
-        assert vfs.stats()["reads"] > 0
+        stats = vfs.stats()
+        assert stats["reads"] > 0
+        assert stats["disk_prefetch"] is disk
+        if disk:
+            assert stats["prefetches"] > 0 and stats["prefetch_failures"] == 0
+            assert stats["encoded_bytes"] > 0
     finally:
         db.close()
         vfs.unregister()
@@ -46,6 +57,7 @@ def test_native_full_validation_preserves_all_types_and_rejects_writes_and_early
     assert image.reconstructed_hash() == image.sha256
     with pytest.raises(cv.QualificationError, match="NATIVE_VFS_CONTEXT_CLOSED"):
         vfs.stats()
+    image.blocks.close()
 
 
 @pytest.mark.parametrize("damage", ["check", "index"])

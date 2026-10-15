@@ -6,6 +6,7 @@ This controller never promotes a candidate or resets the whole-operation budget.
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
@@ -40,6 +41,7 @@ def qualify_closed(
     seconds: float = 900,
     restore_reserve: float = 150,
     one_time_maintenance: bool = False,
+    absolute_deadline: float | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
     """Execute only with prior authorization and an independently armed watchdog."""
@@ -48,6 +50,10 @@ def qualify_closed(
         raise StateError("Invalid maintenance deadline or restore reserve")
     started = clock()
     deadline = started + seconds
+    if absolute_deadline is not None:
+        if not math.isfinite(absolute_deadline):
+            raise StateError("Invalid managed deadline")
+        deadline = min(deadline, absolute_deadline)
 
     def remaining(reserve: float = 0) -> float:
         value = deadline - clock() - reserve
@@ -55,6 +61,7 @@ def qualify_closed(
             raise StateError("Maintenance time budget exhausted")
         return value
 
+    remaining(restore_reserve)
     baseline = operations.verify(expected)
     report: dict[str, Any] = {
         "state": "PREFLIGHT_PASS",
@@ -64,6 +71,7 @@ def qualify_closed(
         "production_replacement": False,
         "whole_budget_seconds": seconds,
         "one_time_maintenance": one_time_maintenance,
+        "baseline": baseline,
     }
     operations.record(report)
     # Set this before requesting stop: a lost acknowledgement must restore too.
@@ -110,7 +118,7 @@ def qualify_closed(
                 "RESTORATION_UNCONFIRMED"
                 if restoration_failure is not None
                 else "UNQUALIFIED_RUNTIME_RESTORED"
-                if failure is not None or elapsed > seconds
+                if failure is not None or clock() > deadline
                 else "QUALIFIED_RUNTIME_RESTORED"
             ),
         )

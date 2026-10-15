@@ -16,6 +16,7 @@ import socket
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -73,12 +74,12 @@ def call(args: list[str], *, seconds: float = 15, data: str | None = None) -> st
     return result.stdout
 
 
-def inspect(identifier: str) -> dict[str, Any]:
-    return json.loads(call([*DOCKER, "inspect", identifier]))[0]
+def inspect(identifier: str, *, seconds: float = 15) -> dict[str, Any]:
+    return json.loads(call([*DOCKER, "inspect", identifier], seconds=seconds))[0]
 
 
-def exact_unit(expected: Unit) -> dict[str, Any]:
-    value = inspect("crypto-watcher")
+def exact_unit(expected: Unit, *, seconds: float = 15) -> dict[str, Any]:
+    value = inspect("crypto-watcher", seconds=seconds)
     labels = value["Config"].get("Labels") or {}
     if (
         value["Id"] != expected.container
@@ -91,9 +92,13 @@ def exact_unit(expected: Unit) -> dict[str, Any]:
     return value
 
 
-def private_readback(expected: Unit) -> dict[str, Any]:
+def private_readback(expected: Unit, *, seconds: float = 15) -> dict[str, Any]:
     return json.loads(
-        call([*DOCKER, "exec", "-i", expected.container, "python", "-B", "-"], data=PRIVATE_READBACK)
+        call(
+            [*DOCKER, "exec", "-i", expected.container, "python", "-B", "-"],
+            seconds=seconds,
+            data=PRIVATE_READBACK,
+        )
     )
 
 
@@ -288,22 +293,23 @@ class DockerOperations:
         self.remove_owned(self.worker + "-checkpoint")
 
     def restore(self, expected: Unit, seconds: float) -> None:
-        exact_unit(expected)
-        call([*DOCKER, "start", expected.container], seconds=seconds)
+        deadline = time.monotonic() + seconds
+        exact_unit(expected, seconds=remaining_seconds(deadline))
+        call([*DOCKER, "start", expected.container], seconds=remaining_seconds(deadline, cap=60))
         self.restored_at = time.time()
 
     def postcheck(self, expected: Unit, baseline: dict[str, Any], seconds: float) -> dict[str, Any]:
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
-            value = exact_unit(expected)
+            value = exact_unit(expected, seconds=remaining_seconds(deadline))
             if value["State"]["Running"] and value["State"].get("Health", {}).get("Status") == "healthy":
-                current = private_readback(expected)
+                current = private_readback(expected, seconds=remaining_seconds(deadline))
                 if current != baseline:
                     raise RuntimeError("Private state changed during maintenance")
                 state = json.loads(
                     call(
                         [*DOCKER, "exec", "-i", expected.container, "python", "-B", "-"],
-                        seconds=min(10, max(0.1, deadline - time.monotonic())),
+                        seconds=remaining_seconds(deadline, cap=10),
                         data=RUNTIME_READBACK,
                     )
                 )
@@ -317,8 +323,47 @@ class DockerOperations:
                         "delivery_runtime": "UNCHANGED",
                         "new_message_send": "NOT_FORCED",
                     }
-            time.sleep(1)
+            time.sleep(min(1, remaining_seconds(deadline)))
         raise RuntimeError("Restoration health timeout")
+
+
+def remaining_seconds(deadline: float, *, cap: float = 15) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise RuntimeError("Restoration time budget exhausted")
+    return min(cap, remaining)
+
+
+def watchdog_restore(operations: DockerOperations, expected: Unit) -> None:
+    """Record recovery acknowledgement separately; never upgrade qualification."""
+    private_directory(operations.root, uid=0)
+    report: dict[str, Any] = {
+        "state": "RECOVERY_ATTEMPT",
+        "container": expected.container,
+        "image": expected.image,
+        "source": expected.revision,
+        "service_result": os.environ.get("SERVICE_RESULT", "UNSET"),
+        "qualification": "NOT_CONFIRMED_BY_RECOVERY",
+        "health": "PENDING",
+    }
+    try:
+        try:
+            operations.terminate_worker()
+            report["worker_cleanup"] = "PASS"
+        finally:
+            operations.restore(expected, 30)
+            report["start_acknowledged"] = True
+        report["state"] = "RECOVERY_START_ACKNOWLEDGED"
+    except Exception as error:
+        report["failure_type"] = type(error).__name__
+        raise
+    finally:
+        path = operations.root / ("watchdog-recovery-" + uuid.uuid4().hex + ".json")
+        with path.open("x", encoding="utf-8") as output:
+            os.chmod(path, 0o600)
+            output.write(encode(report))
+            output.flush()
+            os.fsync(output.fileno())
 
 
 def restored_data(value: dict[str, Any], restored_at: float, now: float) -> bool:
@@ -396,10 +441,7 @@ def main() -> int:
     if args.restore_only:
         if os.geteuid() != 0 or socket.gethostname() != "vmi3224957":
             raise RuntimeError("Wrong recovery host/account")
-        try:
-            operations.terminate_worker()
-        finally:
-            operations.restore(expected, 30)
+        watchdog_restore(operations, expected)
         return 0
     if not args.execute:
         operations.verify(expected)
@@ -414,7 +456,7 @@ def main() -> int:
         *(value for value in sys.argv[1:] if value != "--execute"),
         "--restore-only",
     ]
-    verify_watchdog(
+    managed_deadline = verify_watchdog(
         args.worker, os.environ["INVOCATION_ID"], restore_argv, one_time_maintenance=args.one_time_maintenance
     )
     import fcntl
@@ -426,6 +468,7 @@ def main() -> int:
             expected,
             seconds=ONE_TIME_SECONDS if args.one_time_maintenance else 900,
             one_time_maintenance=args.one_time_maintenance,
+            absolute_deadline=managed_deadline,
         )
     print(encode(report))
     return 0 if report["state"] == "QUALIFIED_RUNTIME_RESTORED" else 3
@@ -433,7 +476,7 @@ def main() -> int:
 
 def verify_watchdog(
     unit: str, invocation: str, restore_argv: list[str], *, one_time_maintenance: bool = False
-) -> None:
+) -> float:
     service = "org.freedesktop.systemd1"
     result = json.loads(
         call(
@@ -464,16 +507,22 @@ def verify_watchdog(
 
     identifier = prop("Unit", "InvocationID", "ay")
     duration = prop("Service", "RuntimeMaxUSec", "t")
+    entered = prop("Unit", "ActiveEnterTimestampMonotonic", "t")
     commands = prop("Service", "ExecStopPost", "a(sasbttttuii)")
     if (
         bytes(identifier).hex() != invocation
         or duration != (ONE_TIME_SECONDS if one_time_maintenance else 900) * 1_000_000
+        or type(entered) is not int
+        or not 0 < entered <= time.monotonic() * 1_000_000
         or len(commands) != 1
         or commands[0][0] != restore_argv[0]
         or commands[0][1] != restore_argv
         or commands[0][2] is not False
     ):
         raise RuntimeError("Reviewed watchdog/recovery binding missing")
+    # systemd starts its clock before this interpreter/preflight. Leave ten
+    # seconds for final durable reporting rather than racing RuntimeMaxSec.
+    return (entered + duration) / 1_000_000 - 10
 
 
 if __name__ == "__main__":

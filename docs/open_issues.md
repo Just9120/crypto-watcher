@@ -122,8 +122,29 @@ identity/hash/no handles PASS, primary `one-time-scratch-cleanup-baemndzl/receip
 Exact target/source остаётся7723a326/da9e2e30/2efd9093, schema1/owner revision3.
 Prepared code-only bundle1b70b07ab31f4e3f1fd3d048af70d036c76882225e81ce9e4d56ad079aad73ae,
 operation root `one-time-qualification-14k66nrc`, worker
-`cw-closed-qual-ae5132826ff94cb3b7f61ea1ac3ce748`. Current preflight/execute и full
-qualification ещё PENDING. Production DB replacement этим шагом не выполняется.
+`cw-closed-qual-ae5132826ff94cb3b7f61ea1ac3ce748`. Preflight PASS, explicit one-time
+execution15Oct около05:46–06:46UTC завершился managed timeout3600s.
+Closed source35,553,550,336bytes дошёл до SOURCE_FULL_INTEGRITY, но full proof
+не завершён; candidate/index/recovery qualification отсутствуют. Worker удалён,
+OOMfalse. Primary operation.json остался устаревшим QUALIFYING: controller убит
+systemd во время ожидания post-check. Это failure отчётности, не PASS qualification.
+Primary journal подтверждает timeout. Отдельный observed-recovery.json06:52:32UTC
+подтверждает прежние container/image/revision, health и оба fresh4TF markets:
+Spot400/400, linear920/920 ACK. Private owner revision3/schema1; сравнение private
+hash до/после UNSET, поскольку старый controller не сохранял baseline. Production
+DB не заменялась/не уменьшалась. Новый unqualified source.frames сохраняется;
+прежнее разрешение удаления относится только к предыдущему exact file.
+
+Последующая локальная переработка: controller сохраняет safe baseline, использует
+managed absolute deadline с10s запасом для durable report и ограничивает каждый
+post-check оставшимся временем; watchdog пишет отдельный start acknowledgement,
+не объявляя его health/qualification PASS. Native disk VFS использует explicit
+frame prefetch с MADV_RANDOM только вместе с MADV_WILLNEED. Paired synthetic control
+`mmap-prefetch-control-xtr1vv8p`:498→581 reads/s и1.356GB→0.162GB physical reads;
+это не доказательство fit35GB. Linux build helper SHA256776e985b…; isolated exact
+image fixture `native-prefetch-fixture-nitmec3q/receipt.json` PASS: full CHECK,
+exact rows/types/hash, refusal of writes, damaged CHECK и deadline negative controls.
+Production mount отсутствовал; live bot не останавливался. Ordinary gates не менялись.
 После получения candidate отдельно REQUIRED ordinary state/backup в прежнем
 900s бюджете и exact current-source promotion без потери writes; failure recurring
 checks требует переработки, а не переноса3600s в CD. Новых Actions не запускать

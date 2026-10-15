@@ -35,6 +35,7 @@ class NativeVFS:
         self.path = str(path.resolve())
         self.name = "cw-native-validation-" + uuid.uuid4().hex
         self.pointer: int | None = None
+        self.disk_prefetch = False
         try:
             self.lib = ctypes.CDLL(str(LIBRARY))
             # Load only the pinned local helper into an ephemeral database.
@@ -82,6 +83,14 @@ class NativeVFS:
             raise QualificationError("NATIVE_VFS_LOAD_FAILED") from error
         if self.pointer is None:
             raise QualificationError("NATIVE_VFS_REGISTRATION_REFUSED")
+        # Do not alter anonymous RAM images or require a new ABI from an older
+        # installed helper. A file-backed frame gets one explicit prefetch,
+        # avoiding kernel read-ahead of unrelated compressed neighbours.
+        prefetch = getattr(self.lib, "cwcvfs_disk_prefetch", None)
+        if getattr(image.blocks, "backing", None) is not None and prefetch is not None:
+            prefetch.argtypes = [ctypes.c_void_p]
+            prefetch.restype = ctypes.c_int
+            self.disk_prefetch = bool(prefetch(self.pointer))
 
     def unregister(self) -> None:
         from .compressed_validation import QualificationError
@@ -101,4 +110,18 @@ class NativeVFS:
             raise QualificationError("NATIVE_VFS_CONTEXT_CLOSED")
         reads, decodes = ctypes.c_uint64(), ctypes.c_uint64()
         self.lib.cwcvfs_stats(self.pointer, ctypes.byref(reads), ctypes.byref(decodes))
-        return {"vfs_backend": "native", "reads": reads.value, "decodes": decodes.value}
+        result = {
+            "vfs_backend": "native",
+            "reads": reads.value,
+            "decodes": decodes.value,
+            "disk_prefetch": self.disk_prefetch,
+        }
+        extra = getattr(self.lib, "cwcvfs_prefetch_stats", None)
+        if extra is not None:
+            extra.argtypes = [ctypes.c_void_p, *([ctypes.POINTER(ctypes.c_uint64)] * 3)]
+            calls, failures, encoded = ctypes.c_uint64(), ctypes.c_uint64(), ctypes.c_uint64()
+            extra(self.pointer, ctypes.byref(calls), ctypes.byref(failures), ctypes.byref(encoded))
+            result.update(
+                prefetches=calls.value, prefetch_failures=failures.value, encoded_bytes=encoded.value
+            )
+        return result
