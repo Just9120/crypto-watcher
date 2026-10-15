@@ -46,6 +46,9 @@ CPU1/RAM4GiB/no-swap/full checks. Default conversion и ordinary backup/CD
 state/backup gates на уменьшенной candidate в прежнем бюджете. Если не укладываются,
 переработать recurring path; продление maintenance не считается его исправлением.
 Текущий exact stop/qualification всё ещё без production DB replacement.
+Последующее явное решение owner15Oct: разрешён один local PC run5400s по
+подготовленной процедуре, process4GiB/CPU1 и согласованный Windows file cache.
+Исключение относится только к этому local run; ordinary backup/CD900s сохранены.
 Проверенный `origin/main = 2efd9093d9639f767f2a0df697bfd060c2ce47e0` (PR35),
 automatic CD38625409154 PASS. Branch `codex/compact-history-records-20261015`,
 base тот же; storage code ещё локальный, initial push/нового PR/CI/CD нет.
@@ -59,7 +62,8 @@ qualification, compatible-reader CI/CD и отдельно проверенна�
 без потери newer writes. Формулы, settings, полезная история и retention не меняются.
 Validation REQUIRED: legacy/compact/new exact-value reads, corruption/bounds/
 checksum/hash/negative controls; full current dataset proof(default900s; approved one-time≤3600s)/CPU1/RAM4GiB;
-exact-target recovery/promotion, required PR CI и applicable CD. Physical shrink
+exact-target recovery/promotion, required PR CI и applicable CD. Для разрешённого
+local PC run ceiling5400s; это не изменение ordinary900s или VPS resource caps. Physical shrink
 не выводится из reusable pages или малого fixture.
 
 Актуальная storage qualification15Oct2026: **PENDING**, production shrink0.
@@ -142,7 +146,10 @@ readback/recovery в этом запуске не завершены. Local `con
 и operator process receipt сохраняют failure. Candidate5,615,271,936bytes с
 30,208byte journal — незавершённая transaction, не qualified DB; его не открывали
 для promotion и не удаляли. Input/raw сохранены; новый90min local review/diff
-подготовлен, owner approval PENDING, новый run NOT_STARTED. Production readback
+явно разрешён owner15Oct. Новый local run стартовал14:57:02UTC,
+driverSHA9e073a01…/work `continuation90`, единый5400s deadline, hard process4GiB/
+CPU1 и bounded writer512MiB. Actual live PID8008/phase IDENTICAL_SOURCE_BYTES;
+full qualification PENDING. Production readback
 14:27:56UTC: same container/image/source2efd9093, running/healthy; physical shrink0.
 Small2.015MB
 source→candidate139KB full integrity/manifests/recovery PASS0.266s; closed WAL
@@ -152,8 +159,10 @@ one logical CPU. OS file cache этим пределом не ограничен
 разовое отличие от Linux cgroup4GiB. Оно не объявляется VPS capacity
 proof; ordinary900s/full data gates и production сохраняются. Exact local
 operator/review/target/approval records находятся вне tracked files. Local3500s
-и последний VPS job терминальные UNQUALIFIED; живого conversion worker нет.
-Следующий local90min run ожидает explicit owner decision; прежний не повторять.
+и последний VPS job терминальные UNQUALIFIED; новый5400s local worker live.
+Прежние прогоны не повторять. Встроенный Goal tracker остаётся blocked после
+явного resume пользователя: available API не предоставляет status active/resume;
+существующая Goal используется, implementation по поручению возобновлён.
 Повторный полный scan без нового основания не запускать.
 
 Independent local preparation: metadata projection ABBA на128 retained records/
@@ -164,7 +173,7 @@ process memory34.7MB, bounded writer512MiB, synthetic values unchanged и over-b
 refusal; общий hard process4GiB/CPU1 сохранён. Это исправление accounting только
 подготовленного local operator, не production change или доказательство скорости.
 Новый operator без owner approval отказал до создания новой папки (control PASS);
-launcher/exact diff подготовлены, большой новый run не запущен.
+после явного owner approval подготовленный launcher запустил один новый run.
 
 Read-only retained input — `adaptive-batch-qualification-ytc_om2q/work/`:
 descriptorSHA256def55554dd2e67f4be44f5ec0eb3005b7b70c477510311fd6cdde5090c13cd3f,
@@ -1442,7 +1451,7 @@ Priority: P1 — блокирует correctness/security/основной scope;
 | B02 | Последний проверенный consumer14Oct42b3f809; dedicated radar credential draft/TOTP отложен владельцем. Binding/ingest OFF, max-age900s согласован, actual configuration/activation не подтверждены | Сохранить existing master/other credentials/trading flags; после owner draft выполнить recovery и reviewed signed activation. Producer runtime PR35 подтверждён; текущую consumer revision/config перечитать перед операцией |
 | B03 | Numeric SPEC gaps RESOLVED approved D09–D20; owner mapping EVG6 и actual migration/restore EVG8 PASS | Сохранять accepted policies и migrated settings/custom empty/delivery/mutes; новые unknown/conflicting states сохраняют diagnostic gate |
 | B04 | RESOLVED: Just9120 admin; strict main protection/production Environment and DEPLOY_ENABLED=true readback PASS | Reread current protections/revision before each merge; runtime delivery via dedicated CD |
-| B05 | Whole current qualification не завершена. Retained35.55GB source full PASS2803.353s; exact local download/pre-copy raw SHA PASS. Разовый local3500s завершён UNQUALIFIED/exit3 на COPY6.78M rows, candidate с journal не qualified. Новый local90min review подготовлен, разрешение PENDING; physical shrink0, бот unchanged/healthy14:27UTC | После owner decision получить complete candidate/manifests/recovery, проверить ordinary state/backup≤900s на VPS. Затем compatible reader CI/CD и reviewed fresh-current-source promotion без потери новых writes; historical source PASS не заменяет эти gates |
+| B05 | Whole current qualification не завершена. Retained35.55GB source full PASS2803.353s; exact local download/pre-copy raw SHA PASS. Разовый local3500s завершён UNQUALIFIED/exit3 на COPY6.78M rows, candidate с journal не qualified. Owner явно разрешил один local5400s run; actual worker8008 стартовал14:57UTC, full qualification PENDING; physical shrink0, бот unchanged/healthy14:27UTC | После owner decision получить complete candidate/manifests/recovery, проверить ordinary state/backup≤900s на VPS. Затем compatible reader CI/CD и reviewed fresh-current-source promotion без потери новых writes; historical source PASS не заменяет эти gates |
 
 ## Audit quality review
 
