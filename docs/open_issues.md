@@ -148,9 +148,34 @@ readback/recovery в этом запуске не завершены. Local `con
 для promotion и не удаляли. Input/raw сохранены; новый90min local review/diff
 явно разрешён owner15Oct. Новый local run стартовал14:57:02UTC,
 driverSHA9e073a01…/work `continuation90`, единый5400s deadline, hard process4GiB/
-CPU1 и bounded writer512MiB. Actual live PID8008/phase IDENTICAL_SOURCE_BYTES;
-full qualification PENDING. Production readback
-14:27:56UTC: same container/image/source2efd9093, running/healthy; physical shrink0.
+CPU1 и bounded writer512MiB. Эта подстадия завершилась UNQUALIFIED556.719s:
+COPY7.76M rows достиг расчётного candidate bound6GiB, CANDIDATE_CAPACITY_EXCEEDED;
+transaction откатилась, сохранив36,864byte unqualified candidate. Canonical runbook
+задаёт CANDIDATE_BOUND по fresh disk admission, без фиксированного6GiB ceiling.
+При850GB свободного D выбран finite bound16GiB; resource/time/check gates прежние.
+Внутри исходного5400s окна14:57:02UTC начата подстадия `continuation90b`,
+PID25192, remaining4620.246s на старте; новый90min budget не открыт. Эта
+подстадия завершилась UNQUALIFIED2462.5s/COPY11.86M: Windows sharing violation
+при atomic replace служебного status.json прервала iterator и откатила copy
+transaction. Это operator reporting failure, не доказательство дефекта исходной
+БД; candidate36,864bytes не qualified. Конфликт чтения воспроизведён маленьким
+fixture; bounded retry после освобождения reader PASS. Исправлен только local
+operator, бизнес-код/проверки данных прежние. Подстадия `continuation90c`,
+PID36512, начата15:55:01UTC с оставшимися1920.543s исходного окна;
+absolute deadline16:27:02UTC не перенесён. Наблюдение через stdout, без открытия
+status.json во время работы. Full qualification PENDING.
+Production readback16:02:42UTC: same container/image/source2efd9093,
+running/healthy; DB37,695,684,608bytes, WAL12,598,992bytes,
+free6,985,973,760bytes; physical shrink0. Runtime readback16:02:39UTC:
+ingestion FRESH1.7s/1324streams/recovery_pending0, poll1323/1324 DEGRADED,
+analyticsOK/Telegram DELIVERED; outcomes pending counts ограничены diagnostic
+query budget, полный backlog этим probe не подтверждён. Отдельная read-only сверка старых
+служебных копий15:32:11UTC PASS: обе сохранённые Zstd-копии полностью decode
+в исходные raw SHA; retained frames SHA совпал с input на ПК. Возможное
+освобождение9,305,128,960 allocated bytes относится к шести именам/трём
+физическим файлам, не к production DB. Exact identities/handles/mount inventory
+15:49:55UTC: handles/maps0, только широкие read-only monitoring mounts `/`.
+Удаление не разрешено и не выполнено; точный review остаётся вне repository.
 Small2.015MB
 source→candidate139KB full integrity/manifests/recovery PASS0.266s; closed WAL
 header PASS0.234s; CHECK/index corruption controls PASS, source unchanged и
@@ -159,7 +184,8 @@ one logical CPU. OS file cache этим пределом не ограничен
 разовое отличие от Linux cgroup4GiB. Оно не объявляется VPS capacity
 proof; ordinary900s/full data gates и production сохраняются. Exact local
 operator/review/target/approval records находятся вне tracked files. Local3500s
-и последний VPS job терминальные UNQUALIFIED; новый5400s local worker live.
+и последний VPS job терминальные UNQUALIFIED; local90b также терминальный,
+local90c worker live в том же5400s окне.
 Прежние прогоны не повторять. Встроенный Goal tracker остаётся blocked после
 явного resume пользователя: available API не предоставляет status active/resume;
 существующая Goal используется, implementation по поручению возобновлён.
@@ -1431,7 +1457,7 @@ Priority: P1 — блокирует correctness/security/основной scope;
 | F31 HARDENING | Docker runtime использует root default; resource/health policy UNSET; Dockerfile/Compose; AC-12-01 | Нет USER/healthcheck/resource settings; фактические VPS user/resource limits не проверены; G1 update: G1 image UID10001/cap-drop/read-only root/health prepared; EVG8 actual UID10001/SQLite ownership/health/persistence PASS; EVG3 resource snapshot only, future full-universe load unverified. No invented CPU/RAM limits | P3 | DEFER: После runtime inventory выбрать минимальные privileges/health/resources по необходимости; отсутствие инструмента само по себе не defect | B01; не превращать hardening в новый AC автоматически | MEDIUM / PARTIAL |
 | F32 UX CANDIDATE | Legacy polish/preset strategy без конкретного нового дефекта; прежний open_issues #6/#7; E07/E08 | Следить за едиными русскими terms/threshold explanations; visual quality/чувствительность требуют user feedback/statistics, не подтверждены как bug; G2B update: G2B: five-detector explanations, actual profiles/manual parameters and event detail implemented. Statistical calibration/views G3/G5; unsupported polish remains DEFER.; G3: event→outcome/noise/completeness and descriptive cohorts/no-signal N доступны; enrichment/manual version comparison views G5, unsupported polish DEFER. G5 update: G5: recorded profile/version/settings comparison with N/noise/limits and explicit revision-preserving recompare; no auto threshold change. Unsupported visual polish remains DEFER. | P3 | DEFER: Сохранить полезные terms/presets; улучшать объяснения и выбор thresholds по согласованным detector profiles и outcome statistics | G3 calibration; Q01, не откладывает agent integration | MEDIUM / PARTIAL |
 | F33 G1 REGRESSION | `/sample_alert` потерял baseline Bybit/mute/coin controls и не учитывает active TF; cryptowatcher/bot.py/render.py; G1 preservation / AC-07-03 | EVG9 msg656783 на deployed065e49d подтверждает code regression относительно legacy8ace3638; EVG10 исправляет current snapshot rendering/buttons без REST/state writes ; Current update: PR22 code/CI PASS, actual CD38087285142 main40882eb; owner screenshot401ddabd… and “вроде работает” smoke PASS with assertion limits | P2: неверный sample и потеря manual controls | FIX: Восстановить existing demonstration/controls, не менять live formula, auth, settings или schema; meaningful regression tests | Necessary G1 hotfix, required CI/merge/release/CD | HIGH / CLOSED |
-| F34 HISTORY CAPACITY | Полные legacy heads дублируют revisions; пересекающиеся inputs/settings/context повторяются. events.py/outcomes.py; AC-10-02/F15/F22 | Новые writes исправлены PR31/32/33, inherited production PR35/source2efd9093, CD38625409154 PASS. Накопленная БД не конвертирована: bounded readback15Oct10:17UTC36,305,960,960bytes. Historical5.42GB→2.107GB qualification833.526s относится к старому source, не к текущей БД. Retained35.55GB source full PASS2803.353s и approved PC offload описаны в Current Goal: download/pre-copy raw hashes PASS, local3500s timeout на COPY6.78M rows. Candidate/recovery не qualified, physical shrink0; local90min review ожидает owner decision | P1: disk/write amplification и current capacity остаются незакрытыми | REFACTOR: shared references/projections, lossless record/candle format и qualified current-data conversion без потери history/provenance/new writes. Ordinary900s/CPU1/RAM4GiB/retention сохраняются; one-time≤3600s разрешён отдельно | Compatible reader CI/CD, whole current source/candidate/recovery, ordinary compact backup proof и reviewed promotion; obsolete PR33 PENDING заменён подтверждённой PR35 delivery | HIGH / PARTIAL |
+| F34 HISTORY CAPACITY | Полные legacy heads дублируют revisions; пересекающиеся inputs/settings/context повторяются. events.py/outcomes.py; AC-10-02/F15/F22 | Новые writes исправлены PR31/32/33, inherited production PR35/source2efd9093, CD38625409154 PASS. Накопленная БД не конвертирована: bounded readback15Oct10:17UTC36,305,960,960bytes. Historical5.42GB→2.107GB qualification833.526s относится к старому source, не к текущей БД. Retained35.55GB source full PASS2803.353s и approved PC offload описаны в Current Goal: download/pre-copy raw hashes PASS, local3500s timeout на COPY6.78M rows. Candidate/recovery ещё не qualified, physical shrink0; local90min разрешён и выполняется, детали в Current Goal | P1: disk/write amplification и current capacity остаются незакрытыми | REFACTOR: shared references/projections, lossless record/candle format и qualified current-data conversion без потери history/provenance/new writes. Ordinary900s/CPU1/RAM4GiB/retention сохраняются; one-time≤3600s разрешён отдельно | Compatible reader CI/CD, whole current source/candidate/recovery, ordinary compact backup proof и reviewed promotion; obsolete PR33 PENDING заменён подтверждённой PR35 delivery | HIGH / PARTIAL |
 
 ### План консолидации документов/кода
 
@@ -1451,7 +1477,7 @@ Priority: P1 — блокирует correctness/security/основной scope;
 | B02 | Последний проверенный consumer14Oct42b3f809; dedicated radar credential draft/TOTP отложен владельцем. Binding/ingest OFF, max-age900s согласован, actual configuration/activation не подтверждены | Сохранить existing master/other credentials/trading flags; после owner draft выполнить recovery и reviewed signed activation. Producer runtime PR35 подтверждён; текущую consumer revision/config перечитать перед операцией |
 | B03 | Numeric SPEC gaps RESOLVED approved D09–D20; owner mapping EVG6 и actual migration/restore EVG8 PASS | Сохранять accepted policies и migrated settings/custom empty/delivery/mutes; новые unknown/conflicting states сохраняют diagnostic gate |
 | B04 | RESOLVED: Just9120 admin; strict main protection/production Environment and DEPLOY_ENABLED=true readback PASS | Reread current protections/revision before each merge; runtime delivery via dedicated CD |
-| B05 | Whole current qualification не завершена. Retained35.55GB source full PASS2803.353s; exact local download/pre-copy raw SHA PASS. Разовый local3500s завершён UNQUALIFIED/exit3 на COPY6.78M rows, candidate с journal не qualified. Owner явно разрешил один local5400s run; actual worker8008 стартовал14:57UTC, full qualification PENDING; physical shrink0, бот unchanged/healthy14:27UTC | После owner decision получить complete candidate/manifests/recovery, проверить ordinary state/backup≤900s на VPS. Затем compatible reader CI/CD и reviewed fresh-current-source promotion без потери новых writes; historical source PASS не заменяет эти gates |
+| B05 | Whole current qualification не завершена. Retained35.55GB source full PASS2803.353s; exact local download/pre-copy raw SHA PASS. Разовый local3500s завершён UNQUALIFIED/exit3 на COPY6.78M rows, candidate с journal не qualified. Owner явно разрешил local5400s; первая подстадия отказала на6GiB candidate bound, local90b/PID25192 продолжает с finite16GiB bound и исходным deadline. Full qualification PENDING; physical shrink0, бот healthy15:05UTC | После owner decision получить complete candidate/manifests/recovery, проверить ordinary state/backup≤900s на VPS. Затем compatible reader CI/CD и reviewed fresh-current-source promotion без потери новых writes; historical source PASS не заменяет эти gates |
 
 ## Audit quality review
 
