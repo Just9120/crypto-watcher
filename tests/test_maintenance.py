@@ -104,3 +104,20 @@ def test_budget_extension_or_missing_restore_reserve_is_rejected(seconds, reserv
     with pytest.raises(StateError):
         qualify_closed(ops, TARGET, seconds=seconds, restore_reserve=reserve)
     assert not ops.calls
+
+
+def test_explicit_one_time_budget_keeps_single_deadline_and_restore_reserve():
+    ops = FakeOperations()
+    proof = qualify_closed(ops, TARGET, seconds=3600, one_time_maintenance=True, clock=lambda: ops.now)
+    assert proof["state"] == "QUALIFIED_RUNTIME_RESTORED"
+    assert proof["one_time_maintenance"] is True
+    assert proof["whole_budget_seconds"] == 3600
+    assert ops.worker_budget == 3600 - 150 - 17
+    assert ops.calls[-3:] == ["terminate", "restore", "postcheck"]
+
+
+def test_one_time_mode_also_has_a_hard_upper_bound():
+    ops = FakeOperations()
+    with pytest.raises(StateError):
+        qualify_closed(ops, TARGET, seconds=3601, one_time_maintenance=True)
+    assert not ops.calls

@@ -465,8 +465,22 @@ Owner ad-hoc `/derivatives spot/BTC`, `/compare`, `/enrichment` status реко�
 
 ## Изолированная lossless-конвертация накопленной history (подготовка)
 
+Owner decision15Oct2026: разрешён один extended maintenance с явным
+`--one-time-maintenance`, whole≤3600s включая restore reserve150s. Флаг
+поддерживают только framed converter и closed-source operator/controller/launcher;
+для converter он разрешён только вместе с `--closed-source` без archive input.
+Default остаётся900s. Обычные `state-check`, `backup`, receiver и Actions не
+получают этот флаг и сохраняют прежние limits/checks. Qualification не считается
+завершением storage Goal: на current compact candidate отдельно REQUIRED обычные
+state/backup checks в прежнем бюджете, затем compatible reader CI/CD и reviewed
+current-source promotion. Если recurring checks не укладываются, исправить их,
+а не переносить3600s в обычный flow. Это исключение меняет только время разовой
+операции; CPU1/RAM4GiB/no-swap/full integrity/manifests/recovery не ослабляются.
+Для explicit one-time invocation runtime unit и typed D-Bus binding используют
+3600000000 microseconds; original restore argv сохраняет этот же флаг.
+
 Новый `cryptowatcher.framed_rebuild` создаёт только отдельный candidate. Обычные
-backup/CD gates, CPU1/RAM4GiB/no-swap и общий предел900s не меняются. Рабочая БД
+backup/CD gates, CPU1/RAM4GiB/no-swap и default предел900s не меняются. Рабочая БД
 этой командой не заменяется, бот не останавливается. Запускать в согласованном
 изолированном контейнере с private disk-backed scratch и read-only source mount;
 prod secrets/network не нужны. Размеры задаются явно по свежему disk admission.

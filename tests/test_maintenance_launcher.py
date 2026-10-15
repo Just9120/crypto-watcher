@@ -15,6 +15,7 @@ def invocation(**kwargs):
         Path("/opt/crypto_watcher/rehearsals/test/code"),
         "d" * 64,
         "cw-closed-qual-" + "e" * 32,
+        one_time_maintenance=kwargs.get("one_time_maintenance", False),
     )
 
 
@@ -28,6 +29,15 @@ def test_default_preflight_cannot_stop_production_and_recovery_args_match_execut
     )
     assert restore.split() == preflight + ["--restore-only"]
     assert launch[-len(preflight) - 1 :] == preflight + ["--execute"]
+
+
+def test_one_time_limit_is_explicit_and_bound_to_both_executor_and_recovery():
+    preflight, launch = invocation(one_time_maintenance=True)
+    assert "--property=RuntimeMaxSec=3600" in launch
+    assert preflight[-1] == "--one-time-maintenance"
+    restore = next(x.split("=", 2)[2] for x in launch if x.startswith("--property=ExecStopPost="))
+    assert restore.split() == preflight + ["--restore-only"]
+    assert "--one-time-maintenance" not in invocation()[0]
 
 
 @pytest.mark.parametrize(

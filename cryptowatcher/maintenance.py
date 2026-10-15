@@ -12,6 +12,8 @@ from typing import Any, Callable, Protocol
 
 from .storage import StateError
 
+ONE_TIME_SECONDS = 3600
+
 
 @dataclass(frozen=True)
 class Unit:
@@ -37,10 +39,12 @@ def qualify_closed(
     *,
     seconds: float = 900,
     restore_reserve: float = 150,
+    one_time_maintenance: bool = False,
     clock: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
     """Execute only with prior authorization and an independently armed watchdog."""
-    if not 0 < seconds <= 900 or not 30 <= restore_reserve < seconds:
+    limit = ONE_TIME_SECONDS if one_time_maintenance else 900
+    if not 0 < seconds <= limit or not 30 <= restore_reserve < seconds:
         raise StateError("Invalid maintenance deadline or restore reserve")
     started = clock()
     deadline = started + seconds
@@ -59,6 +63,7 @@ def qualify_closed(
         "source": expected.revision,
         "production_replacement": False,
         "whole_budget_seconds": seconds,
+        "one_time_maintenance": one_time_maintenance,
     }
     operations.record(report)
     # Set this before requesting stop: a lost acknowledgement must restore too.
@@ -90,7 +95,7 @@ def qualify_closed(
             try:
                 # An adapter overrun is a failed budget, but must not leave the
                 # bot stopped. Emergency recovery gets one bounded start attempt;
-                # the result still cannot be a successful <=900s qualification.
+                # the result cannot qualify outside its approved whole budget.
                 operations.restore(expected, max(1, min(60, deadline - clock())))
                 report["post_checks"] = operations.postcheck(expected, baseline, remaining())
                 if report["post_checks"].get("state") != "PASS":

@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from cryptowatcher.maintenance import Unit, qualify_closed
+from cryptowatcher.maintenance import ONE_TIME_SECONDS, Unit, qualify_closed
 from cryptowatcher.storage import encode
 
 APP = Path("/opt/crypto_watcher")
@@ -109,10 +109,13 @@ def private_directory(path: Path, *, uid: int) -> None:
 
 
 class DockerOperations:
-    def __init__(self, root: Path, code: Path, code_sha256: str, worker: str) -> None:
+    def __init__(
+        self, root: Path, code: Path, code_sha256: str, worker: str, *, one_time_maintenance: bool = False
+    ) -> None:
         self.root, self.code, self.worker = root, code, worker
         self.work = root / "work"
         self.code_sha256 = code_sha256
+        self.one_time_maintenance = one_time_maintenance
         self.restored_at = 0.0
 
     def record(self, value: dict[str, Any]) -> None:
@@ -255,8 +258,15 @@ class DockerOperations:
             "-B",
             "/code/driver.py",
             str(seconds),
+            *(["--one-time-maintenance"] if self.one_time_maintenance else []),
         ]
-        call(command, seconds=seconds)
+        # Persist bounded worker diagnostics before cleanup removes its container.
+        # This private worker has no network, env file or production secrets.
+        with (self.root / "worker.log").open("x", encoding="utf-8") as output:
+            os.chmod(self.root / "worker.log", 0o600)
+            subprocess.run(
+                command, text=True, stdout=output, stderr=subprocess.STDOUT, timeout=seconds, check=True
+            )
         receipt = self.work / "qualification.json"
         if receipt.is_symlink() or not receipt.is_file():
             raise RuntimeError("Primary qualification receipt missing")
@@ -367,6 +377,7 @@ def main() -> int:
     parser.add_argument("--worker", required=True)
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--restore-only", action="store_true")
+    parser.add_argument("--one-time-maintenance", action="store_true")
     args = parser.parse_args()
     for value in (args.container, args.driver_sha256):
         if re.fullmatch(r"[a-f0-9]{64}", value) is None:
@@ -379,7 +390,9 @@ def main() -> int:
     ):
         raise RuntimeError("Reviewed source/image identity required")
     expected = Unit(args.container, args.image, args.revision)
-    operations = DockerOperations(args.root, args.code, args.driver_sha256, args.worker)
+    operations = DockerOperations(
+        args.root, args.code, args.driver_sha256, args.worker, one_time_maintenance=args.one_time_maintenance
+    )
     if args.restore_only:
         if os.geteuid() != 0 or socket.gethostname() != "vmi3224957":
             raise RuntimeError("Wrong recovery host/account")
@@ -401,17 +414,26 @@ def main() -> int:
         *(value for value in sys.argv[1:] if value != "--execute"),
         "--restore-only",
     ]
-    verify_watchdog(args.worker, os.environ["INVOCATION_ID"], restore_argv)
+    verify_watchdog(
+        args.worker, os.environ["INVOCATION_ID"], restore_argv, one_time_maintenance=args.one_time_maintenance
+    )
     import fcntl
 
     with (APP / ".deploy.lock").open("rb") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        report = qualify_closed(operations, expected)
+        report = qualify_closed(
+            operations,
+            expected,
+            seconds=ONE_TIME_SECONDS if args.one_time_maintenance else 900,
+            one_time_maintenance=args.one_time_maintenance,
+        )
     print(encode(report))
     return 0 if report["state"] == "QUALIFIED_RUNTIME_RESTORED" else 3
 
 
-def verify_watchdog(unit: str, invocation: str, restore_argv: list[str]) -> None:
+def verify_watchdog(
+    unit: str, invocation: str, restore_argv: list[str], *, one_time_maintenance: bool = False
+) -> None:
     service = "org.freedesktop.systemd1"
     result = json.loads(
         call(
@@ -445,7 +467,7 @@ def verify_watchdog(unit: str, invocation: str, restore_argv: list[str]) -> None
     commands = prop("Service", "ExecStopPost", "a(sasbttttuii)")
     if (
         bytes(identifier).hex() != invocation
-        or duration != 900_000_000
+        or duration != (ONE_TIME_SECONDS if one_time_maintenance else 900) * 1_000_000
         or len(commands) != 1
         or commands[0][0] != restore_argv[0]
         or commands[0][1] != restore_argv

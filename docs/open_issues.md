@@ -38,7 +38,14 @@ Snapshot: 2026-10-10, проверка около 10:00–10:15 Europe/Moscow; `
 ## Current Goal — полный scope CryptoWatcher (IMPLEMENT)
 
 15Oct owner поручил уменьшить накопленную БД, сохранив useful history и работу
-алертов; общий предел whole conversion900s, CPU1/RAM4GiB не меняется.
+алертов. Последующее решение15Oct: owner разрешил более15min только для
+разовой конвертации; ordinary backup/CD не должны получать этот бюджет.
+Выбран bounded one-time maintenance3600s total с прежним restore reserve150s,
+CPU1/RAM4GiB/no-swap/full checks. Default conversion и ordinary backup/CD
+сохраняют900s. До признания результата обязательна отдельная проверка обычных
+state/backup gates на уменьшенной candidate в прежнем бюджете. Если не укладываются,
+переработать recurring path; продление maintenance не считается его исправлением.
+Текущий exact stop/qualification всё ещё без production DB replacement.
 Проверенный `origin/main = 2efd9093d9639f767f2a0df697bfd060c2ce47e0` (PR35),
 automatic CD38625409154 PASS. Branch `codex/compact-history-records-20261015`,
 base тот же; storage code ещё локальный, initial push/нового PR/CI/CD нет.
@@ -51,7 +58,7 @@ candidate с full source/candidate CHECK, точными all-row manifests/priva
 qualification, compatible-reader CI/CD и отдельно проверенная promotion procedure
 без потери newer writes. Формулы, settings, полезная история и retention не меняются.
 Validation REQUIRED: legacy/compact/new exact-value reads, corruption/bounds/
-checksum/hash/negative controls; full current dataset proof≤900s/CPU1/RAM4GiB;
+checksum/hash/negative controls; full current dataset proof(default900s; approved one-time≤3600s)/CPU1/RAM4GiB;
 exact-target recovery/promotion, required PR CI и applicable CD. Physical shrink
 не выводится из reusable pages или малого fixture.
 
@@ -90,18 +97,33 @@ deadline. Итог **UNQUALIFIED_RUNTIME_RESTORED**, TimeoutExpired, whole834.48
 schema1, прежние container/image сохранены; production replacement/retention
 DML0. Worker удалён. Post-checks PASS: health, private state, fresh all4TF,
 Spot404/404 и linear908/908 ACK; new Telegram message не форсировалось.
-В operation work остаётся unqualified preallocated source.frames5GiB; это не
-recovery archive. Его удаление не входило в exact3 cleanup, файл сохранён.
+После operation оставался unqualified source.frames5GiB, не recovery archive.
+Он не входил в exact3 cleanup; отдельное последующее согласие и удаление указаны ниже.
 
-**Blocker / следующий шаг:** нынешний pipeline сначала читает/сжимает весь35GB
-файл и затем выполняет full source scan; даже closed-source вариант не успевает
-дойти до создания candidate в оставшемся бюджете. Current qualification и
-фактическое уменьшение рабочей БД не выполнены. Не повторять этот же maintenance,
-не увеличивать deadline, не запускать speculative Actions и не выдавать копию за
-пригодную. Следующая разработка должна убрать измеренную стоимость preparation/
-validation, сохранив full gates; новый production stop/replacement требует exact
-процедуры в согласованном scope. Ожидающая credential/TOTP consumer activation
-остаётся отложенной владельцем. Общая Goal и storage DoD не завершены.
+**Следующий шаг15Oct — разрешённый одноразовый extended maintenance:** owner
+подтвердил более15min для разового прогона при сохранении ordinary flow. Explicit
+`--one-time-maintenance` ограничен3600s total/restore reserve150s, CPU1/RAM4GiB,
+только closed source без archive input; default и recurring backup/CD остаются900s.
+58 targeted tests PASS/1 Linux skip, quality PASS; Linux fixture
+`one-time-qualification-14k66nrc/fixture-2/receipt.json` PASS: native full
+source/candidate/recovery и ordinary state/archive backup на schema2 за≤30s.
+Это маленький fixture, не доказательство current dataset или его recurring cost.
+Ранние fixture failures import path/tmpfs исправлены в изолированном окружении,
+production не mounted/не останавливалась. Новый operator сохраняет worker.log
+до удаления контейнера, чтобы failure diagnostics не терялись.
+Owner разрешил удалить только предыдущий failed source.frames: повторные
+identity/hash/no handles PASS, primary `one-time-scratch-cleanup-baemndzl/receipt.json`,
+освобождено4,975,001,600 allocated bytes, working DB/private/recovery не изменены.
+Exact target/source остаётся7723a326/da9e2e30/2efd9093, schema1/owner revision3.
+Prepared code-only bundle1b70b07ab31f4e3f1fd3d048af70d036c76882225e81ce9e4d56ad079aad73ae,
+operation root `one-time-qualification-14k66nrc`, worker
+`cw-closed-qual-ae5132826ff94cb3b7f61ea1ac3ce748`. Current preflight/execute и full
+qualification ещё PENDING. Production DB replacement этим шагом не выполняется.
+После получения candidate отдельно REQUIRED ordinary state/backup в прежнем
+900s бюджете и exact current-source promotion без потери writes; failure recurring
+checks требует переработки, а не переноса3600s в CD. Новых Actions не запускать
+ради этого operator job. Credential/TOTP activation остаётся отложенной владельцем.
+
 
 Владелец разрешил разовую code-only поставку PR35 (reply
 call_ad7a2863d9c8418baf778d671670d3ca, «Разрешаю разовую поставку PR35»).
@@ -1328,7 +1350,7 @@ Priority: P1 — блокирует correctness/security/основной scope;
 | B02 | Последний проверенный consumer14Oct42b3f809; dedicated radar credential draft/TOTP отложен владельцем. Binding/ingest OFF, max-age900s согласован, actual configuration/activation не подтверждены | Сохранить existing master/other credentials/trading flags; после owner draft выполнить recovery и reviewed signed activation. Producer runtime PR35 подтверждён; текущую consumer revision/config перечитать перед операцией |
 | B03 | Numeric SPEC gaps RESOLVED approved D09–D20; owner mapping EVG6 и actual migration/restore EVG8 PASS | Сохранять accepted policies и migrated settings/custom empty/delivery/mutes; новые unknown/conflicting states сохраняют diagnostic gate |
 | B04 | RESOLVED: Just9120 admin; strict main protection/production Environment and DEPLOY_ENABLED=true readback PASS | Reread current protections/revision before each merge; runtime delivery via dedicated CD |
-| B05 | Текущий storage pipeline не укладывается в whole900s: closed capture35.35GB, затем full source scan; candidate не создана. Production physical shrink0 | Устранить измеренную стоимость алгоритма и квалифицировать весь current dataset без ослабления checks/лимитов. Не повторять прежний failing maintenance; primary closed-source-qualification-_cqjm0p_/operation.json |
+| B05 | Whole900s qualification текущих35GB не завершена; owner разрешил один explicit maintenance≤3600s, обычные backup/CD остаются900s. Actual physical shrink0 | Выполнить whole current qualification и подтвердить recurring state/backup на compact candidate в прежнем бюджете. Затем compatible reader CI/CD и reviewed current-source promotion; permission не заменяет Evidence |
 
 ## Audit quality review
 

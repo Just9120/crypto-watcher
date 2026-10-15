@@ -321,12 +321,18 @@ def build_candidate(
     seconds: float = 900,
     archive_encoding: Literal["GZIP", "ZSTD"] | None = None,
     closed_source: bool = False,
+    one_time_maintenance: bool = False,
     progress: Any = lambda **kw: None,
 ) -> dict[str, Any]:
     """One bounded read-only qualification; never replaces or edits production."""
     started = time.monotonic()
-    if not 0 < seconds <= 900:
-        raise StateError("Whole conversion budget must not exceed900s")
+    from .maintenance import ONE_TIME_SECONDS
+
+    limit = ONE_TIME_SECONDS if one_time_maintenance else 900
+    if not 0 < seconds <= limit:
+        raise StateError(f"Whole conversion budget must not exceed{limit}s")
+    if one_time_maintenance and (not closed_source or archive_encoding is not None):
+        raise StateError("One-time budget requires closed-source maintenance")
     deadline = started + seconds
     if source.resolve() != source or source.is_symlink() or not source.is_file():
         raise StateError("Source path refused")
@@ -385,6 +391,8 @@ def build_candidate(
         elapsed_seconds=round(time.monotonic() - started, 3),
         production_replacement=False,
         snapshot_not_current_state_after_capture=True,
+        one_time_maintenance=one_time_maintenance,
+        whole_budget_seconds=seconds,
     )
     receipt = directory / "qualification.json"
     with receipt.open("x", encoding="utf-8") as output:
@@ -408,6 +416,7 @@ def main() -> int:
     parser.add_argument("--seconds", type=float, default=900)
     parser.add_argument("--archive-encoding", choices=("GZIP", "ZSTD"))
     parser.add_argument("--closed-source", action="store_true")
+    parser.add_argument("--one-time-maintenance", action="store_true")
     args = parser.parse_args()
     last = time.monotonic()
 
@@ -428,6 +437,7 @@ def main() -> int:
             seconds=args.seconds,
             archive_encoding=args.archive_encoding,
             closed_source=args.closed_source,
+            one_time_maintenance=args.one_time_maintenance,
             progress=progress,
         )
     except (StateError, OSError, ValueError, sqlite3.Error) as error:

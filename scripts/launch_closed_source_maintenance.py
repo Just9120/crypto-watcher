@@ -10,7 +10,7 @@ import socket
 import subprocess
 from pathlib import Path, PurePosixPath
 
-from cryptowatcher.maintenance import Unit
+from cryptowatcher.maintenance import ONE_TIME_SECONDS, Unit
 
 
 def commands(
@@ -23,6 +23,7 @@ def commands(
     worker: str,
     *,
     python: str = "/usr/bin/python3",
+    one_time_maintenance: bool = False,
 ) -> tuple[list[str], list[str]]:
     if (
         re.fullmatch(r"[a-f0-9]{64}", expected.container) is None
@@ -51,6 +52,8 @@ def commands(
         "--worker",
         worker,
     ]
+    if one_time_maintenance:
+        args.append("--one-time-maintenance")
     # These are generated private Linux paths. Restrict the systemd property
     # grammar instead of forwarding shell syntax, specifiers or env assignments.
     for value in (*args, str(package)):
@@ -73,7 +76,7 @@ def commands(
         "--collect",
         "--unit",
         worker,
-        "--property=RuntimeMaxSec=900",
+        "--property=RuntimeMaxSec=" + str(ONE_TIME_SECONDS if one_time_maintenance else 900),
         "--property=TimeoutStopSec=10",
         "--property=KillMode=mixed",
         "--property=UMask=0077",
@@ -99,6 +102,7 @@ def main() -> int:
     parser.add_argument("--driver-sha256", required=True)
     parser.add_argument("--worker", required=True)
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--one-time-maintenance", action="store_true")
     args = parser.parse_args()
     if os.geteuid() != 0 or socket.gethostname() != "vmi3224957":
         raise RuntimeError("Wrong launcher host/account")
@@ -110,6 +114,7 @@ def main() -> int:
         PurePosixPath(str(args.code)),
         args.driver_sha256,
         args.worker,
+        one_time_maintenance=args.one_time_maintenance,
     )
     environment = {**os.environ, "PYTHONPATH": str(args.package)}
     result = subprocess.run(preflight, env=environment, capture_output=True, text=True, timeout=45)

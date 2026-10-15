@@ -135,6 +135,32 @@ def test_whole_qualification_cannot_extend_budget_or_overwrite_work(tmp_path):
     assert (tmp_path / "candidate.sqlite3").read_bytes() == b"keep"
 
 
+def test_long_one_time_budget_cannot_enter_online_or_archive_qualification(tmp_path):
+    source = (tmp_path / "source.sqlite3").resolve()
+    source_history(source)
+    with pytest.raises(StateError, match="closed-source"):
+        build_candidate(
+            source,
+            tmp_path.resolve(),
+            owner=233382575,
+            encoded_limit=1024,
+            maximum=1024,
+            seconds=1000,
+            one_time_maintenance=True,
+        )
+    with pytest.raises(StateError, match="3600s"):
+        build_candidate(
+            source,
+            tmp_path.resolve(),
+            owner=233382575,
+            encoded_limit=1024,
+            maximum=1024,
+            seconds=3601,
+            closed_source=True,
+            one_time_maintenance=True,
+        )
+
+
 def test_closed_gzip_qualification_and_recopy_preserve_history(tmp_path):
     import gzip
 
@@ -290,7 +316,8 @@ def test_compact_candles_preserve_source_windows_and_future_outcome_rows(tmp_pat
         assert sources.rows("spot/BTCUSDT/1m", 64) == before
 
 
-def test_closed_file_qualification_checks_bytes_and_never_ignores_sidecars(tmp_path):
+@pytest.mark.parametrize("one_time", [False, True])
+def test_closed_file_qualification_checks_bytes_and_never_ignores_sidecars(tmp_path, one_time):
     from cryptowatcher.compressed_validation import QualificationError, disk_backing
 
     source = (tmp_path / "source.sqlite3").resolve()
@@ -306,12 +333,14 @@ def test_closed_file_qualification_checks_bytes_and_never_ignores_sidecars(tmp_p
         owner=233382575,
         encoded_limit=8 * 1024**2,
         maximum=8 * 1024**2,
-        seconds=30,
+        seconds=901 if one_time else 30,
         closed_source=True,
+        one_time_maintenance=one_time,
     )
     assert report["recovery"]["raw_sha256"] == original
     assert report["candidate_sha256"] == hashlib.sha256((work / "candidate.sqlite3").read_bytes()).hexdigest()
     assert (work / "qualification.json").is_file()
+    assert report["one_time_maintenance"] is one_time
     assert hashlib.sha256(source.read_bytes()).hexdigest() == original
     busy = (tmp_path / "busy").resolve()
     busy.mkdir(mode=448)
@@ -325,5 +354,6 @@ def test_closed_file_qualification_checks_bytes_and_never_ignores_sidecars(tmp_p
             maximum=8 * 1024**2,
             seconds=30,
             closed_source=True,
+            one_time_maintenance=one_time,
         )
     assert not (busy / "candidate.sqlite3").exists()

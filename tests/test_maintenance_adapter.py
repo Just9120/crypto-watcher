@@ -55,7 +55,7 @@ def test_old_or_incomplete_status_cannot_confirm_restored_alert_runtime(fault):
     assert not adapter.restored_data(value, 100, 150 if fault == "stale" else 102)
 
 
-def watchdog(monkeypatch, fault=None):
+def watchdog(monkeypatch, fault=None, *, one_time=False):
     invocation = "01" * 16
     argv = ["/usr/bin/python3", "-B", "/reviewed/runner.py", "--restore-only"]
 
@@ -66,7 +66,8 @@ def watchdog(monkeypatch, fault=None):
         if name == "InvocationID":
             return json.dumps({"type": "ay", "data": [1] * 16 if fault != "invocation" else [2] * 16})
         if name == "RuntimeMaxUSec":
-            return json.dumps({"type": "t", "data": 900000000 if fault != "budget" else 1800000000})
+            duration = (3600 if one_time else 900) * 1000000
+            return json.dumps({"type": "t", "data": duration if fault != "budget" else 1800000000})
         command = [argv[0], argv, False, 0, 0, 0, 0, 0, 0, 0]
         if fault == "echo":
             command = ["/usr/bin/echo", argv, False, 0, 0, 0, 0, 0, 0, 0]
@@ -86,6 +87,13 @@ def watchdog(monkeypatch, fault=None):
 def test_watchdog_must_bind_exact_restore_program_arguments_and_deadline(monkeypatch):
     invocation, argv = watchdog(monkeypatch)
     adapter.verify_watchdog("unit", invocation, argv)
+
+
+def test_long_watchdog_cannot_be_used_without_the_explicit_one_time_flag(monkeypatch):
+    invocation, argv = watchdog(monkeypatch, one_time=True)
+    with pytest.raises(RuntimeError, match="binding"):
+        adapter.verify_watchdog("unit", invocation, argv)
+    adapter.verify_watchdog("unit", invocation, argv, one_time_maintenance=True)
 
 
 @pytest.mark.parametrize(
