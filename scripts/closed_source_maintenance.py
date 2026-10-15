@@ -134,6 +134,16 @@ class DockerOperations:
         os.replace(temporary, destination)
 
     def verify(self, expected: Unit) -> dict[str, Any]:
+        baseline = self.verify_binding(expected)
+        if shutil.disk_usage(self.work).free < int(12.5 * 1024**3):
+            raise RuntimeError("Insufficient disk admission before stop")
+        memory = dict(line.split(":", 1) for line in Path("/proc/meminfo").read_text().splitlines())
+        if int(memory["MemAvailable"].split()[0]) * 1024 < 5 * 1024**3:
+            raise RuntimeError("Insufficient RAM reserve before stop")
+        return baseline
+
+    def verify_binding(self, expected: Unit) -> dict[str, Any]:
+        """Shared target/code/private-state identity; operation resource gates stay separate."""
         if os.geteuid() != 0 or socket.gethostname() != "vmi3224957":
             raise RuntimeError("Wrong host/account")
         value = exact_unit(expected)
@@ -150,11 +160,6 @@ class DockerOperations:
         verify_code_bundle(self.root, self.code, self.code_sha256)
         if any(self.work.iterdir()):
             raise RuntimeError("Fresh work directory required")
-        if shutil.disk_usage(self.work).free < int(12.5 * 1024**3):
-            raise RuntimeError("Insufficient disk admission before stop")
-        memory = dict(line.split(":", 1) for line in Path("/proc/meminfo").read_text().splitlines())
-        if int(memory["MemAvailable"].split()[0]) * 1024 < 5 * 1024**3:
-            raise RuntimeError("Insufficient RAM reserve before stop")
         meta = DATABASE.stat()
         if DATABASE.resolve() != DATABASE or meta.st_ino != 1930781 or meta.st_uid != 10001:
             raise RuntimeError("Reviewed database identity changed")
@@ -220,6 +225,20 @@ class DockerOperations:
             raise RuntimeError("Closed source sidecars remain")
 
     def qualify(self, expected: Unit, seconds: float) -> dict[str, Any]:
+        return self.run_worker(expected, seconds)
+
+    def run_worker(
+        self,
+        expected: Unit,
+        seconds: float,
+        *,
+        result_name: str = "qualification.json",
+        mount_input: bool = False,
+    ) -> dict[str, Any]:
+        if result_name not in ("qualification.json", "capture.json"):
+            raise RuntimeError("Unknown worker result type")
+        if mount_input:
+            private_directory(self.root / "input", uid=10001)
         if exact_unit(expected)["State"]["Running"]:
             raise RuntimeError("Closed-source writer reappeared")
         command = [
@@ -265,6 +284,13 @@ class DockerOperations:
             str(seconds),
             *(["--one-time-maintenance"] if self.one_time_maintenance else []),
         ]
+        if mount_input:
+            # This is the only extra mount: a private, read-only capture input.
+            index = command.index("--entrypoint")
+            command[index:index] = [
+                "--mount",
+                "type=bind,src=" + str(self.root / "input") + ",dst=/input,readonly",
+            ]
         # Persist bounded worker diagnostics before cleanup removes its container.
         # This private worker has no network, env file or production secrets.
         with (self.root / "worker.log").open("x", encoding="utf-8") as output:
@@ -272,9 +298,13 @@ class DockerOperations:
             subprocess.run(
                 command, text=True, stdout=output, stderr=subprocess.STDOUT, timeout=seconds, check=True
             )
-        receipt = self.work / "qualification.json"
+        receipt = self.work / result_name
         if receipt.is_symlink() or not receipt.is_file():
-            raise RuntimeError("Primary qualification receipt missing")
+            raise RuntimeError(
+                "Primary qualification receipt missing"
+                if result_name == "qualification.json"
+                else "Primary capture receipt missing"
+            )
         return json.loads(receipt.read_text(encoding="utf-8"))
 
     def remove_owned(self, name: str, image: str | None = None) -> None:

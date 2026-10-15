@@ -1,6 +1,6 @@
 import pytest
 
-from cryptowatcher.maintenance import Unit, qualify_closed
+from cryptowatcher.maintenance import Unit, capture_closed, qualify_closed
 from cryptowatcher.storage import StateError
 
 TARGET = Unit("reviewed-container", "reviewed-image", "reviewed-source")
@@ -97,6 +97,49 @@ def test_adapter_overrun_still_attempts_start_without_claiming_a_budget_pass():
     assert "restore" in ops.calls
     assert proof["elapsed_seconds"] > 900
     assert proof["state"] == "RESTORATION_UNCONFIRMED"
+
+
+class FakeCapture(FakeOperations):
+    def qualify(self, expected, seconds):
+        raise AssertionError("A physical capture cannot run the qualification adapter")
+
+    def capture(self, expected, seconds):
+        self.worker_budget = seconds
+        self.step("capture", 800 if self.failure == "overrun" else 400)
+        return {"state": "CAPTURED_BYTES_NOT_QUALIFIED", "full_source_integrity": "PENDING"}
+
+
+def test_capture_preserves_one_whole_deadline_and_cannot_claim_qualification():
+    ops = FakeCapture()
+    result = capture_closed(ops, TARGET, clock=lambda: ops.now)
+    assert result["state"] == "CAPTURED_RUNTIME_RESTORED"
+    assert "qualification" not in result
+    assert result["capture"]["full_source_integrity"] == "PENDING"
+    assert ops.worker_budget == 733
+    assert result["elapsed_seconds"] == 448
+    assert ops.calls == ["verify", "stop", "checkpoint", "capture", "terminate", "restore", "postcheck"]
+
+
+@pytest.mark.parametrize("failure", ["stop", "checkpoint", "capture", "terminate", "overrun"])
+def test_capture_failure_always_restores_original_runtime(failure):
+    ops = FakeCapture(failure)
+    result = capture_closed(ops, TARGET, clock=lambda: ops.now)
+    assert result["state"] == "UNCAPTURED_RUNTIME_RESTORED"
+    assert "restore" in ops.calls and "postcheck" in ops.calls
+
+
+@pytest.mark.parametrize("failure", ["restore", "postcheck"])
+def test_capture_never_claims_success_without_restoration(failure):
+    ops = FakeCapture(failure)
+    result = capture_closed(ops, TARGET, clock=lambda: ops.now)
+    assert result["state"] == "RESTORATION_UNCONFIRMED"
+
+
+def test_capture_budget_cannot_borrow_one_time_qualification_exception():
+    ops = FakeCapture()
+    with pytest.raises(StateError, match="deadline"):
+        capture_closed(ops, TARGET, seconds=901, clock=lambda: ops.now)
+    assert ops.calls == []
 
 
 @pytest.mark.parametrize("seconds,reserve", [(901, 150), (900, 0), (900, 900), (0, 150)])

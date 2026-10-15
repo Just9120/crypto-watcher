@@ -297,10 +297,28 @@ reconstructed SHA обязательны. Network transfer и JSON row decoding 
 в capture; captured bytes сами по себе не подтверждают SQLite integrity.
 
 Capture разрешён только после exact target preflight, fencing одного writer,
-WAL checkpoint и отсутствия WAL/SHM/journal. Нужны отдельная reviewed procedure,
-independent watchdog900s с restore reserve150s и обязательным запуском прежнего
-container при любом результате. Сейчас такая production capture ещё NOT_RUN;
+WAL checkpoint и отсутствия WAL/SHM/journal. Canonical adapter —
+[closed_page_capture.py](../../scripts/closed_page_capture.py), worker —
+[page_capture_worker.py](../../scripts/page_capture_worker.py). Он использует
+существующий [launcher](../../scripts/launch_closed_source_maintenance.py) с новым
+runner, default900s и independent ExecStopPost recovery. Reserve150s включает
+возврат прежнего container, private-state/hash/health и свежие4TF/both-market ACK.
+При ошибке cleanup не мешает попытке restoration; неизвестная recovery остаётся
+RESTORATION_UNCONFIRMED. Capture mode не принимает one-time3600s extension и
+не возвращает QUALIFIED_RUNTIME_RESTORED. Сейчас production capture NOT_RUN;
 обычный backup/CD этот tool не запускает и его gates не заменяет.
+
+Root-owned0600 `capture-plan.json` задаёт schema cryptowatcher.closed-page-capture.v1,
+baseline descriptor SHA, journal epoch и явный archive cap≤3GiB; его bytes
+совпадают с private input copy. Input set строго `base.json`, `base.index`, plan;
+driver и все worker modules привязаны к code manifest. До stop проверяются
+current unit/image/source, private owner state, journal valid/expiry≥900s,
+free disk≥archive cap+1.5GiB+64MiB и MemAvailable≥4GiB+1.5GiB. Это capture-only
+admission без полной candidate; существующая full qualification сохраняет прежний
+12.5GiB admission. Worker4GiB/CPU1/no swap проверяет kernel cgroup limits.
+Sources/input/code mounts read-only, scratch writable; env file/secrets не нужны.
+Captured receipt содержит exact raw/encoded/descriptor hashes и journal watermark.
+Полноценная квалификация source/history выполняется отдельно на сохранённой копии.
 
 `apply_to_working_copy` меняет только disposable закрытую PC copy, для которой
 сохранён и проверен исходный recovery. Она проверяет baseline SHA перед первой

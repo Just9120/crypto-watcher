@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Literal, Protocol
 
 from .storage import StateError
 
@@ -23,15 +23,22 @@ class Unit:
     revision: str
 
 
-class Operations(Protocol):
+class CommonOperations(Protocol):
     def verify(self, expected: Unit) -> dict[str, Any]: ...
     def stop(self, expected: Unit, seconds: float) -> None: ...
     def checkpoint(self, expected: Unit, seconds: float) -> None: ...
-    def qualify(self, expected: Unit, seconds: float) -> dict[str, Any]: ...
     def terminate_worker(self) -> None: ...
     def restore(self, expected: Unit, seconds: float) -> None: ...
     def postcheck(self, expected: Unit, baseline: dict[str, Any], seconds: float) -> dict[str, Any]: ...
     def record(self, value: dict[str, Any]) -> None: ...
+
+
+class Operations(CommonOperations, Protocol):
+    def qualify(self, expected: Unit, seconds: float) -> dict[str, Any]: ...
+
+
+class CaptureOperations(CommonOperations, Protocol):
+    def capture(self, expected: Unit, seconds: float) -> dict[str, Any]: ...
 
 
 def qualify_closed(
@@ -45,6 +52,54 @@ def qualify_closed(
     clock: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
     """Execute only with prior authorization and an independently armed watchdog."""
+    return _run_closed(
+        operations,
+        expected,
+        work=operations.qualify,
+        mode="QUALIFICATION",
+        seconds=seconds,
+        restore_reserve=restore_reserve,
+        one_time_maintenance=one_time_maintenance,
+        absolute_deadline=absolute_deadline,
+        clock=clock,
+    )
+
+
+def capture_closed(
+    operations: CaptureOperations,
+    expected: Unit,
+    *,
+    seconds: float = 900,
+    restore_reserve: float = 150,
+    absolute_deadline: float | None = None,
+    clock: Callable[[], float] = time.monotonic,
+) -> dict[str, Any]:
+    """Capture bytes and restore runtime; never claim SQLite/history qualification."""
+    return _run_closed(
+        operations,
+        expected,
+        work=operations.capture,
+        mode="CAPTURE",
+        seconds=seconds,
+        restore_reserve=restore_reserve,
+        one_time_maintenance=False,
+        absolute_deadline=absolute_deadline,
+        clock=clock,
+    )
+
+
+def _run_closed(
+    operations: CommonOperations,
+    expected: Unit,
+    *,
+    work: Callable[[Unit, float], dict[str, Any]],
+    mode: Literal["QUALIFICATION", "CAPTURE"],
+    seconds: float,
+    restore_reserve: float,
+    one_time_maintenance: bool,
+    absolute_deadline: float | None,
+    clock: Callable[[], float],
+) -> dict[str, Any]:
     limit = ONE_TIME_SECONDS if one_time_maintenance else 900
     if not 0 < seconds <= limit or not 30 <= restore_reserve < seconds:
         raise StateError("Invalid maintenance deadline or restore reserve")
@@ -72,6 +127,7 @@ def qualify_closed(
         "whole_budget_seconds": seconds,
         "one_time_maintenance": one_time_maintenance,
         "baseline": baseline,
+        "mode": mode,
     }
     operations.record(report)
     # Set this before requesting stop: a lost acknowledgement must restore too.
@@ -83,10 +139,14 @@ def qualify_closed(
         operations.record({**report, "state": "STOP_REQUESTED"})
         operations.stop(expected, min(60, remaining(restore_reserve)))
         operations.checkpoint(expected, min(30, remaining(restore_reserve)))
-        operations.record({**report, "state": "QUALIFYING"})
-        report["qualification"] = operations.qualify(expected, remaining(restore_reserve))
-        if report["qualification"].get("state") != "QUALIFIED_SNAPSHOT_CANDIDATE":
-            raise StateError("Candidate not qualified")
+        operations.record({**report, "state": "QUALIFYING" if mode == "QUALIFICATION" else "CAPTURING"})
+        result = work(expected, remaining(restore_reserve))
+        report["qualification" if mode == "QUALIFICATION" else "capture"] = result
+        wanted = "QUALIFIED_SNAPSHOT_CANDIDATE" if mode == "QUALIFICATION" else "CAPTURED_BYTES_NOT_QUALIFIED"
+        if result.get("state") != wanted:
+            raise StateError(
+                "Candidate not qualified" if mode == "QUALIFICATION" else "Closed capture incomplete"
+            )
         remaining(restore_reserve)
     except Exception as error:
         failure = error
@@ -117,9 +177,15 @@ def qualify_closed(
             state=(
                 "RESTORATION_UNCONFIRMED"
                 if restoration_failure is not None
-                else "UNQUALIFIED_RUNTIME_RESTORED"
+                else (
+                    "UNQUALIFIED_RUNTIME_RESTORED"
+                    if mode == "QUALIFICATION"
+                    else "UNCAPTURED_RUNTIME_RESTORED"
+                )
                 if failure is not None or clock() > deadline
-                else "QUALIFIED_RUNTIME_RESTORED"
+                else (
+                    "QUALIFIED_RUNTIME_RESTORED" if mode == "QUALIFICATION" else "CAPTURED_RUNTIME_RESTORED"
+                )
             ),
         )
         operations.record(report)

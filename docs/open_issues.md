@@ -82,6 +82,14 @@ source mutation и чужой resume. Page baseline35,553,550,336bytes/SHA24314f
 прочитан за44.562s на ПК,542505 block hashes, descriptor SHA7f2f5403….
 VPS sample1GiB/4 regions прочитан6.564s/512MiB, физически899MB; это sample,
 не доказательство времени full capture. Actual closed-source capture NOT_RUN.
+Подготовлен отдельный capture controller/worker и общий проверенный recovery путь:
+exact target/driver/input binding, bounded archive, live journal epoch/expiry,
+source read-only copy, independent systemd watchdog900s/restore reserve150s,
+тот же container после stop/checkpoint/capture. Capture возвращает только
+CAPTURED_RUNTIME_RESTORED с SQL integrity PENDING; не может заимствовать3600s
+qualification exception. Default full qualification сохраняет12.5GiB disk gate
+и прежние checks. Local75 controller/operator/dataflow/limits regressions PASS;
+Linux CI новой revision ещё REQUIRED до использования. Production launch NOT_RUN.
 
 Последний runtime readback15Oct23:19:53UTC: same container7723a326…/main2efd9093,
 DB39,452,344,320bytes, free3,451,576,320bytes, alerts enabled/config revision3,
@@ -90,6 +98,10 @@ DB39,452,344,320bytes, free3,451,576,320bytes, alerts enabled/config revision3,
 вернул BUSY[1,1480,457], size1,004,307,712bytes не уменьшился; строк не удаляли,
 бот не останавливали. Не выдавать эту попытку за shrink. Source feeds частично
 недоступны; не утверждать total healthy по одному heartbeat.
+Последний read-only capture readiness15Oct23:43:13UTC: same running source,
+journal valid1/376608keys/73,637,434charged bytes, DB39,580,311,552bytes,
+WAL1,004,307,712bytes, free3,301,773,312bytes. Перед исполнением вновь проверить
+resource/journal bounds; при invalid/expired полнота tail не утверждается.
 
 Validation Plan: local disk/indexed/journal/CLI42 и delta9 scenarios PASS;
 canonical docs/Ruff/mypy46 PASS. Full required Linux CI38820426158/head63c4018
