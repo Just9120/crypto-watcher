@@ -288,6 +288,30 @@ PR CI сохраняет уже собранный immutable rehearsal bundle н
 проверки без production secrets. Test-merge revision такого artifact фиксируется
 в Evidence и не разрешает production deploy: receiver требует актуальный main.
 
+## Передача свежего closed snapshot по страницам — подготовка PR36
+
+[page_delta.py](../../cryptowatcher/page_delta.py) создаёт64KiB block-hash index
+старого exact-source snapshot и передаёт только изменённые blocks нового closed
+source. Source raw SHA, baseline/index hashes, encoded frame checksums и whole
+reconstructed SHA обязательны. Network transfer и JSON row decoding не входят
+в capture; captured bytes сами по себе не подтверждают SQLite integrity.
+
+Capture разрешён только после exact target preflight, fencing одного writer,
+WAL checkpoint и отсутствия WAL/SHM/journal. Нужны отдельная reviewed procedure,
+independent watchdog900s с restore reserve150s и обязательным запуском прежнего
+container при любом результате. Сейчас такая production capture ещё NOT_RUN;
+обычный backup/CD этот tool не запускает и его gates не заменяет.
+
+`apply_to_working_copy` меняет только disposable закрытую PC copy, для которой
+сохранён и проверен исходный recovery. Она проверяет baseline SHA перед первой
+записью, берёт exclusive RuntimeLease, хранит descriptor/inode binding для
+явного resume и идемпотентно повторяет только changed page writes. Ошибка или
+kill оставляют копию неквалифицированной; final full raw SHA обязателен, затем
+отдельно нужны полные SQLite CHECK и history/private-state reconciliation.
+Нельзя применять её к production path или считать transport receipt разрешением
+на замену рабочей БД. Новые live writes после snapshot сохраняются через bounded
+journal и должны войти в final tail; invalid/expired journal блокирует promotion.
+
 ## Изолированная конвертация legacy history backup
 
 Canonical command из root repository в locked Python environment либо внутри
