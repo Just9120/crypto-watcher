@@ -37,7 +37,9 @@ def binding(source_identity: str, owner: int, maximum: int) -> dict[str, Any]:
         "storage.py",
     ):
         fingerprint.update(name.encode())
-        fingerprint.update(Path(__file__).with_name(name).read_bytes())
+        # Python's loader normalizes CRLF; Git checkout line endings must not
+        # invalidate otherwise identical committed conversion progress.
+        fingerprint.update(Path(__file__).with_name(name).read_text(encoding="utf-8").encode())
     return {
         "schema": SCHEMA,
         "source_identity": source_identity,
