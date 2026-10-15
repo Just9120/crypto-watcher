@@ -123,6 +123,11 @@ candidate SHA до/после совпал. Это capacity FAIL существ�
 reporting исправлен и повторён в том же исходном900s окне, exit0/refusal воспроизведён.
 До promotion нужны устранение этого ограничения без расширения обычных лимитов,
 место для reviewed операции и сверка всех newer live writes.
+F22/F27: альтернативная runtime table WITHOUT ROWID проверена только на
+stratified70k memory fixture из qualified snapshot:41,066,496→47,378,432bytes,
+то есть рост размера; такой результат не обосновывает замену physical schema.
+Это не измерение всего dataset или VPS performance. Snapshot квалифицирован,
+ordinary backup/CD path остаётся на переработке; повторный full COPY не нужен.
 Ordinary whole backup/CD≤900s остаётся обязательным требованием: текущий receiver
 ограничивает900s каждый из двух DB этапов отдельно, release job40min включает
 build. Это ещё не подтверждение общего900s; F27 остаётся открытым до actual
