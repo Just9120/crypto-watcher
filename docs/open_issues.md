@@ -62,194 +62,74 @@ checksum/hash/negative controls; full current dataset proof(default900s; approve
 exact-target recovery/promotion, required PR CI и applicable CD. Physical shrink
 не выводится из reusable pages или малого fixture.
 
-Local evidence:223 targeted tests PASS/2 Linux skips,38 maintenance tests PASS,
-canonical quality PASS. Linux fixtures `record-disk-linux-jp_zkzk0`,
-`framed-final-linux-34327q4d`, `framed-candle-linux-19yauuwj`,
-`closed-source-linux-e_dyhshs` проверяют exact public/raw bytes, native VFS,
-full CHECK/negative controls и durable qualification receipt на synthetic data.
-`watchdog-control-xseglams/receipt.json` PASS подтверждает independent recovery
-hook при deadline/SIGKILL disposable parent, без production. Эти fixtures не
-доказывают fit нынешней35GB DB. Historical engine5.42GB/~635s вернул полную
-candidate, но operator reporting failed; старый UNQUALIFIED receipt не исправлялся
-на PASS. Online current trial `framed-current-jj7s59n9` UNQUALIFIED900.652s:
-33,720,209,408bytes capture/freeze/hash заняли872.523s; candidate отсутствует.
-Его DATABASE_CORRUPT был misclassification deadline, исправлен regression test;
-повреждение исходной БД этим не доказано. Оба неудачных алгоритма не повторять
-без конкретного изменения проверяемой причины.
+Актуальная storage qualification15Oct2026: **PENDING**, production shrink0.
+Все operator records ниже находятся в `/opt/crypto_watcher/rehearsals/` на Contabo;
+локальные исследовательские логи в repository не включаются.
 
-**Latest actual maintenance15Oct2026,04:55–05:10UTC:** owner «Делай» разрешил
-exact three scratch-file cleanup и closed-source qualification с temporary stop,
-150s restore reserve, без production DB replacement. Cleanup PASS после повторных
-identities/hashes/no handles и retained candidate/original gzip decode/hash:
-`approved-scratch-cleanup-f4c04jnj/receipt.json`, освобождено7,417,622,528 allocated
-bytes. Удалены только3 ранее перечисленных failed files; working DB/recovery/
-остальные копии сохранены. Ошибка финального stdout cleanup не затронула durable
-PASS receipt; отдельный readback подтвердил exact3 удаления, повтор не выполнялся.
+| Проверка / первичный record | Результат и граница Evidence |
+| --- | --- |
+| `closed-source-qualification-_cqjm0p_/operation.json` | UNQUALIFIED_RUNTIME_RESTORED834.489s/900s; full source не завершён, candidate отсутствует. Прежний контейнер восстановлен, health/private/fresh4TF/full ACK PASS |
+| `one-time-qualification-14k66nrc/observed-recovery.json` | Разовый3600s timeout до candidate. Primary operation.json остался QUALIFYING после завершения controller; это ошибка отчётности, не PASS. Отдельный readback06:52:32UTC подтвердил прежние container/image/source, owner revision3/schema1, health/fresh4TF/ACK. Pre-stop private hash UNSET, поэтому exact private pre/post equality не заявляется |
+| `sealed-snapshot-qualification-t9_6ad5b/operation.json` | UNQUALIFIED3503.782s, full source не завершён; worker cleanup PASS, production не останавливалась |
+| `sealed-copy-diagnostic-xksopd9g/operation.json` | DIAGNOSTIC_INCOMPLETE838.613s; даже quick_check не завершён. Этот diagnostic не разрешает promotion и не изменил required full source gate |
+| `adaptive-batch-qualification-ytc_om2q/superseded.json` | UNQUALIFIED2527.364s; остановлен после подтверждения reverse-read bottleneck и проверки исправления, до candidate. Input/metadata сохранены, worker cleanup PASS |
+| `native-bidirectional2-tests-dgn0krmx/receipt.json` | Linux8/8 PASS5.44s: exact bytes/type/readonly, CHECK/index corruption и deadlines; interleaved forward/reverse tests |
+| `indexed-bidirectional2-fixture-28sgj397/receipt.json` | Малый fixture PASS: full source/candidate, complete manifests/private bytes, independent recovery и checksum/truncation/tail/raw-size negatives. Не доказывает fit35GB |
 
-Pinned code-only bundle SHA256e0e37f6021c6688d37aad5323540dd6694234df1a743c849fa78baf89c610537
-прошёл manifests/private ownership и fresh target/config/disk/RAM preflight.
-Primary operation: `closed-source-qualification-_cqjm0p_/operation.json`, managed
-unit `cw-closed-qual-f3fa570a306145e7ab443bf51de2822a`, source2efd9093/image da9e2e30,
-exact container7723a326. Stop/checkpoint PASS; direct closed capture35,348,242,432bytes
-дошёл до SOURCE_FULL_INTEGRITY, но full source scan не завершился до рабочего
-deadline. Итог **UNQUALIFIED_RUNTIME_RESTORED**, TimeoutExpired, whole834.489s
-из900s; candidate/index/recovery qualification отсутствуют. Source inode1930781,
-schema1, прежние container/image сохранены; production replacement/retention
-DML0. Worker удалён. Post-checks PASS: health, private state, fresh all4TF,
-Spot404/404 и linear908/908 ACK; new Telegram message не форсировалось.
-После operation оставался unqualified source.frames5GiB, не recovery archive.
-Он не входил в exact3 cleanup; отдельное последующее согласие и удаление указаны ниже.
+Текущий изолированный job стартовал10:05UTC:
+`indexed-bidirectional-qualification-tfd1evsr`, unit
+`cw-sealed-qual-df08d59c64134a4abacaa115570d8249`, code archive2a6b7654…,
+helper a794f9eb…. Один3600s managed/3500s worker budget, CPU1/RAM4GiB/no swap;
+production mount/stop/network отсутствуют. Readback10:19:52UTC: source SQL
+integrity PENDING, candidate отсутствует, OOMfalse, memory1.126GiB; тот же
+production container/image running/healthy. Percent/progress SQL scan UNSET.
 
-**Следующий шаг15Oct — разрешённый одноразовый extended maintenance:** owner
-подтвердил более15min для разового прогона при сохранении ordinary flow. Explicit
-`--one-time-maintenance` ограничен3600s total/restore reserve150s, CPU1/RAM4GiB,
-только closed source без archive input; default и recurring backup/CD остаются900s.
-58 targeted tests PASS/1 Linux skip, quality PASS; Linux fixture
-`one-time-qualification-14k66nrc/fixture-2/receipt.json` PASS: native full
-source/candidate/recovery и ordinary state/archive backup на schema2 за≤30s.
-Это маленький fixture, не доказательство current dataset или его recurring cost.
-Ранние fixture failures import path/tmpfs исправлены в изолированном окружении,
-production не mounted/не останавливалась. Новый operator сохраняет worker.log
-до удаления контейнера, чтобы failure diagnostics не терялись.
-Дополнительно локально writer новых source candles использует compact array
-только после открытия schema2 с exact candle declaration. Schema1 и frame-only
-declaration сохраняют прежний формат; новые timestamps/units/prices не меняются.
-Sources/restart/outcome/legacy tests81 PASS/1 skip. Этот follow-up не меняет
-уже staged/hash-bound qualification bundle; до runtime поставки нужен required CI.
-Owner разрешил удалить только предыдущий failed source.frames: повторные
-identity/hash/no handles PASS, primary `one-time-scratch-cleanup-baemndzl/receipt.json`,
-освобождено4,975,001,600 allocated bytes, working DB/private/recovery не изменены.
-Exact target/source остаётся7723a326/da9e2e30/2efd9093, schema1/owner revision3.
-Prepared code-only bundle1b70b07ab31f4e3f1fd3d048af70d036c76882225e81ce9e4d56ad079aad73ae,
-operation root `one-time-qualification-14k66nrc`, worker
-`cw-closed-qual-ae5132826ff94cb3b7f61ea1ac3ce748`. Preflight PASS, explicit one-time
-execution15Oct около05:46–06:46UTC завершился managed timeout3600s.
-Closed source35,553,550,336bytes дошёл до SOURCE_FULL_INTEGRITY, но full proof
-не завершён; candidate/index/recovery qualification отсутствуют. Worker удалён,
-OOMfalse. Primary operation.json остался устаревшим QUALIFYING: controller убит
-systemd во время ожидания post-check. Это failure отчётности, не PASS qualification.
-Primary journal подтверждает timeout. Отдельный observed-recovery.json06:52:32UTC
-подтверждает прежние container/image/revision, health и оба fresh4TF markets:
-Spot400/400, linear920/920 ACK. Private owner revision3/schema1; сравнение private
-hash до/после UNSET, поскольку старый controller не сохранял baseline. Production
-DB не заменялась/не уменьшалась. Новый unqualified source.frames сохраняется;
-прежнее разрешение удаления относится только к предыдущему exact file.
+Read-only retained input — `adaptive-batch-qualification-ytc_om2q/work/`:
+descriptorSHA256def55554dd2e67f4be44f5ec0eb3005b7b70c477510311fd6cdde5090c13cd3f,
+encoded data46b168bf…/index8d602bec…, raw35,553,550,336bytes/SHA25624314f94….
+Fresh full encoded/index hashes заняли37.859s. Descriptor сохраняет
+source SQL CALLER_REQUIRED. Полный source SQL выполняется заново; full target,
+all-row manifests/private equality и final independent decode всех исходных bytes
+остаются REQUIRED. Исторический снимок нельзя переносить поверх новых live writes.
 
-Последующая локальная переработка: controller сохраняет safe baseline, использует
-managed absolute deadline с10s запасом для durable report и ограничивает каждый
-post-check оставшимся временем; watchdog пишет отдельный start acknowledgement,
-не объявляя его health/qualification PASS. Native disk VFS использует explicit
-frame prefetch с MADV_RANDOM только вместе с MADV_WILLNEED. Paired synthetic control
-`mmap-prefetch-control-xtr1vv8p`:498→581 reads/s и1.356GB→0.162GB physical reads;
-это не доказательство fit35GB. Linux build helper SHA256776e985b…; isolated exact
-image fixture `native-prefetch-fixture-nitmec3q/receipt.json` PASS: full CHECK,
-exact rows/types/hash, refusal of writes, damaged CHECK и deadline negative controls.
-Production mount отсутствовал; live bot не останавливался. Ordinary gates не менялись.
-Local storage/maintenance regression99 PASS/7 platform skips; canonical quality
-PASS. Guard/recording block48 PASS, отдельно Linux helper controls PASS.
-Linux native suite6/6 PASS2.08s на exact PR35 image с reviewed helper/code overlay,
-private fixture и без production mount: `native-targeted-tests-a6jk41eg/receipt.json`.
-Это закрывает platform skips изменённых native tests, не заменяя required PR CI.
-Ранние isolated runner failures зависимостей/temp/cwd исправлены; PASS относится
-к новому коду, а не к старому installed module. Typed managed timestamp проверен
-на host; bounded runtime readback07:41UTC подтверждает fresh4TF/full ACK обоих
-рынков и Telegram DELIVERED после старта изолированной работы.
+Исправления helper/controller: baseline сохраняется до stop, restore/readback
+ограничены managed absolute deadline с10s reporting reserve; watchdog сохраняет
+отдельный start ACK, не выдавая его за health PASS. Native disk prefetch подавляет
+перекрытия и учитывает обе стороны только при physical adjacency; при конфликте
+сохраняет forward behavior. Actual15s trace показал558 wide/6714 advice calls
+после исправления против72/7284 ранее; это sample, не доказательство whole fit.
+Current small/Linux fixtures выше и canonical quality PASS. Storage/maintenance
+regressions99 PASS/7 platform skips; controller guards48 PASS. Ранее223 targeted
+PASS/2 platform skips и38 maintenance PASS относятся к прежним local revisions;
+актуальный required PR CI ещё не запускался. Native library current version
+проверена отдельно на Linux; локальный Windows skip не заменяет этот Evidence.
 
-Изолированный job15Oct07:36–08:34UTC: `sealed-snapshot-qualification-t9_6ad5b`,
-unit `cw-sealed-qual-59eba27ae93f424fbb3958c3a69f7b16`. Borrowed source.frames
-предыдущего closed capture подключён read-only; fresh input copy0bytes, отдельная
-candidate; production DB/credentials/network отсутствуют. Один managed budget3600s,
-worker3500s, CPU1/RAM4GiB/no swap. Parser восстановил все35,553,550,336 raw bytes
-за149.301s, проверил каждый frame/checksum/bounds и нулевой allocation tail.
-Итог primary operation.json **UNQUALIFIED**, TIME_BUDGET_EXCEEDED,3503.782s,
-worker_cleanup PASS. SOURCE_FULL_INTEGRITY не завершена, candidate отсутствует.
-Полный same-dataset scan не повторяется без изменения проверяемой причины.
-Изолированный fixture `sealed-snapshot-fixture-13la3eo2/receipt.json` PASS:
-source/candidate CHECK, all-row manifests, independent recovery encoded/decoded
-identity, checksum/truncation/tail/raw-size negative controls. Ошибка wrapper JSON
-при cleanup исправлена; primary PASS receipt перечитан, own exited container удалён
-без повторного fixture. Реальный job не останавливает working bot; last readback
-08:35UTC same container/image, healthy. Это исторический snapshot: его нельзя
-переносить поверх текущей БД без доказанного сохранения новых writes.
-Readback08:01–08:02UTC: fresh both-market4TF/full ACK и новая Telegram DELIVERED.
-Один Docker resource snapshot: bot1.102GiB/34.94% CPU, isolated helper2.191GiB/47.12%
-CPU с cap4GiB/CPU1. Это измерение во время maintenance, не steady-state capacity
-или обещание достаточности ресурсов; F22/F31 остаются предметом final validation.
+Writer новых source candles использует compact array только при schema2 с exact
+candle declaration. Schema1/frame-only declaration сохраняют прежний формат;
+Sources/restart/outcome/legacy tests81 PASS/1 platform skip. Формулы/settings,
+units/timestamps/prices не меняются. Storage reader/writer всё ещё локальные.
 
-Следующий безопасный diagnostic15Oct08:35UTC:
-`sealed-copy-diagnostic-xksopd9g`, unit
-`cw-sealed-diagnostic-e3c30c7b6a464d26884566428e5d8ae5`. Source quick_check и
-complete copy/target full CHECK/all-row manifests/recovery измеряются отдельно;
-**source full integrity NOT_RUN, результат не разрешает promotion**. Этот
-private research code не меняет canonical converter, normal backup/CD и full
-source gate. Один total900s/worker830s, CPU1/RAM4GiB/no swap, тот же RO retained
-snapshot, fresh input copy0bytes, production mount/network0. Small control
-`quick-policy-control-ku43ftfw/receipt.json` PASS показывает точную границу:
-quick_check пропускает специально рассогласованный old PK index; table rows
-сохраняются, full target index/CHECK и all-row readback восстанавливают валидный
-candidate. Это DIAGNOSTIC_ROWS_VERIFIED_NO_PROMOTION, не qualification. Новая
-policy не согласована/не применяется; invalid source index не объявлен
-безопасным для текущих required gates. Whole diagnostic **DIAGNOSTIC_INCOMPLETE**,
-TIME_BUDGET_EXCEEDED838.613s, worker_cleanup PASS; даже SOURCE_QUICK_CHECK не
-завершён, candidate отсутствует. Следовательно, оснований менять required source
-gate нет. Production same/healthy, никаких DB replacement/retention DML.
-Bounded synthetic controls128MiB/CPU1, no production inputs: naive sequential
-prefetch выигрывал на простых последовательностях, но оказался медленнее на
-interleaved table/index pattern; этот вариант не оставлен в коде. Batch control
-`mmap-batch-control-6l9wtbry` подтвердил пользу подавления перекрывающихся advice.
-Guarded variant `mmap-adaptive-batch-control-n0u7v5vq`: mixed2643 versus662 reads/s,
-random515 versus892 reads/s в коротком одиночном sample. По этим samples нельзя
-обещать ускорение всех workloads; random widening ограничен predecessor detection,
-actual-data proof обязателен. Все прочитанные bytes проверены, synthetic files
-удалены собственным TemporaryDirectory, working container unchanged.
+Завершённый authorized cleanup: `approved-scratch-cleanup-f4c04jnj/receipt.json`
+подтверждает удаление exact3 ранее согласованных failed files после повторных
+hash/identity/decode/no-handles checks,7,417,622,528 allocated bytes. Последующее
+отдельное согласие owner на один exact failed snapshot выполнено:
+`one-time-scratch-cleanup-baemndzl/receipt.json`, hash/identity/no handles PASS,
+удалён только `closed-source-qualification-_cqjm0p_/work/source.frames`,
+освобождено4,975,001,600bytes. Working DB/private state/recovery сохранены.
+Разрешение не распространяется на retained input/current candidate/иные копии.
 
-Native guarded batching сохраняет узкие случайные запросы, учитывает несколько
-interleaved streams и не повторяет advice для уже покрытых диапазонов. Linux
-`native-batch-tests-wmm0d_3_/receipt.json`7/7 PASS; новый test читает interleaved
-blocks и сверяет исходные bytes/readonly lifetime. Whole small fixture
-`adaptive-batch-whole-fixture-dxnbo874/receipt.json` PASS: full source/candidate,
-all-row manifests и независимый recovery; helper SHA25660b25811….
+Свежий production readback10:17:21UTC: source2efd9093, owner revision3,
+DB36,305,960,960bytes, ingestion FRESH4s,1324 streams/recovery_pending0;
+poll1323/1324 DEGRADED, analytics OK, Telegram DELIVERED. Одно unavailable stream
+не выдаётся за full market readiness. Pending outcome counts UNSET из-за bounded
+query budget. Это snapshot во время maintenance, не steady-state capacity proof.
 
-Current actual-data run15Oct09:22UTC: `adaptive-batch-qualification-ytc_om2q`, unit
-`cw-sealed-qual-deb7ca7d5d9247e296c328262cf61582`, code archive777074ef….
-Тот же RO retained source, input copy0bytes, no production mount/stop/network.
-Whole3600s/worker3500s/CPU1/RAM4GiB/no swap; all source/target/recovery gates прежние.
-Recovery metadata записывается до SQL и явно оставляет source SQL CALLER_REQUIRED;
-raw SHA сравнивается с первоначальным decode, final independent decode проверяет
-те же bytes после copy. Это сохраняет input identity при failure и не является
-qualification до полного PASS. Dataset result PENDING; ordinary checks900s и
-current-source promotion остаются отдельными REQUIRED этапами.
-
-09:xx actual owned-helper trace (15s, production process не traced) выявил7284
-advice calls/72 wide; по7212 точным frame identities —488 adjacent backward и0
-adjacent forward steps. Это sample, не полная access distribution. Поэтому
-forward-only helper остановлен10:04:32UTC до candidate:2527.364s, UNQUALIFIED,
-worker_cleanup PASS, input/metadata сохранены, same production container running.
-Primary `adaptive-batch-qualification-ytc_om2q/superseded.json` сохраняет причину.
-
-Bidirectional guard учитывает physical adjacency и сохраняет forward behavior
-при неоднозначных interleaved соседях. Linux8/8 PASS:
-`native-bidirectional2-tests-dgn0krmx/receipt.json`; full small indexed-input
-source/candidate/recovery fixture `indexed-bidirectional2-fixture-28sgj397` PASS.
-Current isolated run10:05UTC: `indexed-bidirectional-qualification-tfd1evsr`,
-unit `cw-sealed-qual-df08d59c64134a4abacaa115570d8249`, code2a6b7654…/helper a794f9eb….
-Input descriptor def55554… binds data46b168bf…/index8d602bec…/raw24314f94…;
-fresh full encoded/index hashes establish the same previously decoded immutable
-input, without a second big copy or repeating its initial decode. Full source SQL,
-full candidate/manifests/private equality и final independent all-byte recovery
-decode remain REQUIRED within one3500s worker/3600s managed budget, CPU1/RAM4GiB.
-No production mount/stop/network. Historical snapshot scope сохраняется; result
-PENDING и actual physical shrink0. Ordinary checks и promotion не объявлены PASS.
-Readback10:14UTC: тот же production container/image, running/healthy; worker
-SOURCE_FULL_INTEGRITY, candidate ещё нет, OOMfalse,1.125GiB при cap4GiB/CPU1.
-Изменение направления prefetch проверено обоими interleaved byte-read сценариями;
-Linux8/8 и indexed whole fixture выше PASS, canonical quality15Oct PASS. Это
-подтверждает корректность helper на fixtures, но не fit35GB или текущий shrink.
-После получения candidate отдельно REQUIRED ordinary state/backup в прежнем
-900s бюджете и exact current-source promotion без потери writes; failure recurring
-checks требует переработки, а не переноса3600s в CD. Новых Actions не запускать
-ради этого operator job. Credential/TOTP activation остаётся отложенной владельцем.
-
+Следующий шаг: получить terminal qualification result. Только после PASS —
+обычные state/backup checks в прежнем900s бюджете; failure требует переработки,
+не переноса3600s в CD. Затем compatible reader CI/CD и reviewed current-source
+promotion с сохранением всех новых writes и runtime/recovery checks. Новые
+Actions ради operator job не запускаются. Owner credential/TOTP activation
+по-прежнему отложена; scope54/58 по коду, Goal не DONE.
 
 Владелец разрешил разовую code-only поставку PR35 (reply
 call_ad7a2863d9c8418baf778d671670d3ca, «Разрешаю разовую поставку PR35»).
