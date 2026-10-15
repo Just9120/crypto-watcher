@@ -79,6 +79,19 @@ process4GiB сохраняется. Создаётся отдельный immuta
 renewal или переноса бюджета в ordinary backup/CD. Физическая production DB
 этой проверкой не заменяется; newer live writes должны быть сохранены отдельно.
 
+Исправленный local run15Oct: immutable window18:44:41–20:14:41UTC,
+implementation635a09a, private work `resumable-copy-d37a9cd20dd4498f8146efa77a7e97e2`.
+На19:00UTC committed1,350,000 runtime rows; это checkpoint COPY, не qualification
+или production shrink. PID50136/Job4GiB/CPU1, automatic renewal отсутствует.
+При потере controller сначала проверить процесс, SQLite checkpoint и terminal
+receipt, затем продолжать в исходном окне. VPS readback18:59:28UTC: source2efd9093,
+owner revision3, DB38,344,421,376bytes, fresh ingestion1324 streams,
+available1321/1324, analyticsOK/TelegramDELIVERED. Production writes не менялись.
+Ordinary whole backup/CD≤900s остаётся обязательным требованием: текущий receiver
+ограничивает900s каждый из двух DB этапов отдельно, release job40min включает
+build. Это ещё не подтверждение общего900s; F27 остаётся открытым до actual
+combined proof и, при необходимости, исправления recurring orchestration.
+
 Storage scope: lossless compression immutable records, compact candle field
 layout и совместимые history/export/outcome/consumer readers; private isolated
 candidate с full source/candidate CHECK, точными all-row manifests/private bytes,
