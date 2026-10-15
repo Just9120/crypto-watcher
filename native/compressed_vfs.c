@@ -33,6 +33,10 @@ struct Ctx {
     unsigned recent_next, prefetch_next; Prefetch requested[8];
     Frame *frames; int *map; Slot slots[SLOTS];
     unsigned char *cache; ZSTD_DCtx *decoder;
+    const unsigned char *pinned_data;
+    Frame *pinned_frames; int *pinned_map; size_t pinned_count;
+    uint64_t pinned_reads, pinned_last;
+    unsigned char pinned_page[4096];
 };
 static int expired(Ctx *c) {
     struct timespec now;
@@ -46,6 +50,20 @@ static int read_file(sqlite3_file *p, void *out, int n, sqlite3_int64 offset) {
     c->reads++;
     uint64_t pos=(uint64_t)offset; int left=n;
     while(left>0 && pos<c->size) {
+        size_t page=(size_t)(pos/4096u);
+        if(c->pinned_map && c->pinned_map[page]>=0) {
+            if(c->pinned_last!=page) {
+                Frame f=c->pinned_frames[c->pinned_map[page]];
+                size_t decoded=ZSTD_decompressDCtx(c->decoder,c->pinned_page,4096,c->pinned_data+f.off,f.len);
+                if(ZSTD_isError(decoded) || decoded!=4096) return SQLITE_IOERR_READ;
+                c->pinned_last=page;
+            }
+            size_t start=(size_t)(pos%4096u), take=4096u-start;
+            if(take>(size_t)left) take=(size_t)left;
+            memcpy(target,c->pinned_page+start,take);
+            target+=take;pos+=take;left-=(int)take;c->pinned_reads++;
+            continue;
+        }
         size_t index=(size_t)(pos/BLOCK), start=(size_t)(pos%BLOCK);
         if(index>=c->count) return SQLITE_IOERR_READ;
         int slot=c->map[index];
@@ -167,7 +185,8 @@ static void release(Ctx *c) {
 #if defined(__linux__)
     if(c->disk_prefetch) (void)madvise((void*)c->data,c->extent,MADV_NORMAL);
 #endif
-    ZSTD_freeDCtx(c->decoder);free(c->frames);free(c->map);free(c->cache);free(c);
+    ZSTD_freeDCtx(c->decoder);free(c->frames);free(c->map);free(c->cache);
+    free(c->pinned_frames);free(c->pinned_map);free(c);
 }
 void *cwcvfs_create(const char *name,const void *data,size_t extent,const uint64_t *offsets,const uint64_t *lengths,size_t count,uint64_t size,double deadline) {
     if(!sqlite3_api || !name || strlen(name)>=100 || !data || (count && (!offsets || !lengths)) || !isfinite(deadline) || size>INT64_MAX || count!=(size/BLOCK+(size%BLOCK!=0)) || count>SIZE_MAX/sizeof(Frame) || count>SIZE_MAX/sizeof(int) || sqlite3_vfs_find(name)) return NULL;
@@ -209,6 +228,39 @@ void cwcvfs_prefetch_stats(void *p,uint64_t *calls,uint64_t *failures,uint64_t *
 }
 void cwcvfs_prefetch_shape(void *p,uint64_t *wide,uint64_t *covered,uint64_t *bytes) {
     Ctx *c=p;*wide=c->wide_prefetches;*covered=c->covered_prefetches;*bytes=c->prefetch_bytes;
+}
+/* Optional bounded index-page cache. Verify every supplied page against the
+   original frozen VFS before publishing any cache entry. No SQLite handle may
+   be open while installing it; rejected caches leave the original view intact. */
+int cwcvfs_pin_pages(void *p,const void *data,size_t extent,const uint64_t *pages,const uint64_t *offsets,const uint64_t *lengths,size_t count) {
+    Ctx *c=p;
+    if(!c || c->opens || c->pinned_map || !data || !extent || extent>1073741824u || !count || !pages || !offsets || !lengths || c->size%4096u || c->size/4096u>SIZE_MAX/sizeof(int) || count>INT_MAX || count>SIZE_MAX/sizeof(Frame)) return SQLITE_MISUSE;
+    size_t total=(size_t)(c->size/4096u);
+    if(count>total) return SQLITE_MISUSE;
+    Frame *frames=malloc(count*sizeof(Frame));int *map=malloc(total*sizeof(int));
+    if(!frames || !map) { free(frames);free(map);return SQLITE_NOMEM; }
+    for(size_t i=0;i<total;i++) map[i]=-1;
+    File source={0};source.ctx=c;
+    unsigned char original[4096],decoded[4096];int result=SQLITE_OK;
+    const unsigned char *bytes=data;
+    for(size_t i=0;i<count;i++) {
+        if(expired(c)) { result=SQLITE_INTERRUPT;break; }
+        if(pages[i]>=total || (i && pages[i]<=pages[i-1]) || offsets[i]>extent || lengths[i]<6 || lengths[i]>65536u || lengths[i]>extent-offsets[i]) { result=SQLITE_MISUSE;break; }
+        const unsigned char *frame=bytes+offsets[i];size_t length=(size_t)lengths[i];
+        if((frame[4]&63u)!=36u || ZSTD_getFrameContentSize(frame,length)!=4096u || ZSTD_findFrameCompressedSize(frame,length)!=length) { result=SQLITE_CORRUPT;break; }
+        size_t n=ZSTD_decompressDCtx(c->decoder,decoded,sizeof(decoded),frame,length);
+        if(ZSTD_isError(n) || n!=sizeof(decoded)) { result=SQLITE_CORRUPT;break; }
+        result=read_file((sqlite3_file*)&source,original,sizeof(original),(sqlite3_int64)(pages[i]*4096u));
+        if(result!=SQLITE_OK) break;
+        if(memcmp(original,decoded,sizeof(original))) { result=SQLITE_CORRUPT;break; }
+        frames[i]=(Frame){offsets[i],lengths[i]};map[pages[i]]=(int)i;
+    }
+    if(result!=SQLITE_OK) { free(frames);free(map);return result; }
+    c->pinned_data=data;c->pinned_frames=frames;c->pinned_map=map;
+    c->pinned_count=count;c->pinned_last=UINT64_MAX;return SQLITE_OK;
+}
+void cwcvfs_pinned_stats(void *p,uint64_t *pages,uint64_t *reads) {
+    Ctx *c=p;*pages=c->pinned_count;*reads=c->pinned_reads;
 }
 int sqlite3_cwcvfs_init(sqlite3 *db,char **error,const sqlite3_api_routines *api) {
     (void)db;(void)error;SQLITE_EXTENSION_INIT2(api);

@@ -2,10 +2,12 @@ import random
 import sqlite3
 import sys
 import time
+from array import array
 from contextlib import closing
 
 import apsw
 import pytest
+import zstandard
 
 from cryptowatcher import compressed_validation as cv
 from cryptowatcher.native_validation import NativeVFS, available
@@ -13,6 +15,105 @@ from cryptowatcher.native_validation import NativeVFS, available
 from .test_history_rebuild import closed_backup
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Native Linux validation helper")
+
+
+def page_frames(raw):
+    data = bytearray()
+    pages, offsets, lengths = array("Q"), array("Q"), array("Q")
+    compressor = zstandard.ZstdCompressor(level=1, write_checksum=True)
+    for start in range(0, len(raw), 4096):
+        encoded = compressor.compress(raw[start : start + 4096])
+        pages.append(start // 4096)
+        offsets.append(len(data))
+        lengths.append(len(encoded))
+        data.extend(encoded)
+    return data, pages, offsets, lengths
+
+
+def test_auxiliary_pages_preserve_source_and_full_sqlite_checks(tmp_path):
+    source, _ = closed_backup(tmp_path)
+    original = source.read_bytes()
+    data, pages, offsets, lengths = page_frames(original)
+    image = cv.Image(source, limit=cv.MAX_COMPRESSED_BYTES, deadline=time.monotonic() + 30)
+    sentinel = tmp_path / "pinned.sqlite3"
+    sentinel.touch(mode=0o600)
+    vfs = cv.frozen_vfs(image, sentinel)
+    try:
+        pages, offsets, lengths = (a[::2] for a in (pages, offsets, lengths))
+        vfs.pin_pages(data, len(data), pages, offsets, lengths)
+        with pytest.raises(BufferError):
+            data.extend(b"must stay pinned")
+        file = apsw.VFSFile(
+            vfs.name, str(sentinel), [apsw.SQLITE_OPEN_READWRITE | apsw.SQLITE_OPEN_MAIN_DB, 0]
+        )
+        try:
+            assert file.xRead(8192, 4090) == original[4090:12282]
+        finally:
+            file.xClose()
+        with closing(apsw.Connection(str(sentinel), flags=apsw.SQLITE_OPEN_READWRITE, vfs=vfs.name)) as db:
+            db.execute("PRAGMA query_only=ON")
+            cv.full_check(db, image.deadline)
+            with closing(sqlite3.connect(source)) as raw:
+                assert list(db.execute("SELECT * FROM runtime ORDER BY rowid")) == list(
+                    raw.execute("SELECT * FROM runtime ORDER BY rowid")
+                )
+            with pytest.raises(cv.QualificationError, match="NATIVE_PAGE_CACHE_REFUSED"):
+                vfs.pin_pages(data, len(data), pages, offsets, lengths)
+            with pytest.raises(apsw.ReadOnlyError):
+                db.execute("DELETE FROM runtime")
+        stats = vfs.stats()
+        assert stats["pinned_pages"] == len(pages) and stats["pinned_reads"] > 0
+    finally:
+        vfs.unregister()
+        image.blocks.close()
+    assert source.read_bytes() == original
+    data.extend(b"released")
+
+
+@pytest.mark.parametrize(
+    "fault", ["different_page", "checksum", "trailer", "duplicate", "bounds", "open_handle"]
+)
+def test_auxiliary_cache_refusal_leaves_original_view_intact(tmp_path, fault):
+    source, _ = closed_backup(tmp_path)
+    original = source.read_bytes()
+    data, pages, offsets, lengths = page_frames(original)
+    if fault == "different_page":
+        changed = bytearray(original)
+        changed[200] ^= 1
+        data, pages, offsets, lengths = page_frames(changed)
+    elif fault == "checksum":
+        data[lengths[0] - 1] ^= 1
+    elif fault == "trailer":
+        lengths[0] += 1
+    elif fault == "duplicate":
+        pages[1] = pages[0]
+    elif fault == "bounds":
+        offsets[0] = len(data)
+    image = cv.Image(source, limit=cv.MAX_COMPRESSED_BYTES, deadline=time.monotonic() + 30)
+    sentinel = tmp_path / "refused.sqlite3"
+    sentinel.touch(mode=0o600)
+    vfs = cv.frozen_vfs(image, sentinel)
+    db = (
+        apsw.Connection(str(sentinel), flags=apsw.SQLITE_OPEN_READWRITE, vfs=vfs.name)
+        if fault == "open_handle"
+        else None
+    )
+    try:
+        with pytest.raises(cv.QualificationError, match="NATIVE_PAGE_CACHE_REFUSED"):
+            vfs.pin_pages(data, len(data), pages, offsets, lengths)
+        assert vfs.stats()["pinned_pages"] == 0
+        if db is not None:
+            db.close()
+            db = None
+        with closing(apsw.Connection(str(sentinel), flags=apsw.SQLITE_OPEN_READWRITE, vfs=vfs.name)) as db:
+            db.execute("PRAGMA query_only=ON")
+            cv.full_check(db, image.deadline)
+    finally:
+        if db is not None:
+            db.close()
+        vfs.unregister()
+        image.blocks.close()
+    assert source.read_bytes() == original
 
 
 @pytest.mark.parametrize("disk", [False, True])
@@ -92,7 +193,10 @@ def test_interleaved_disk_reads_coalesce_without_changing_bytes(tmp_path, order)
 
 
 @pytest.mark.parametrize("damage", ["check", "index"])
-def test_native_full_check_rejects_constraint_or_index_corruption_without_changing_source(tmp_path, damage):
+@pytest.mark.parametrize("pinned", [False, True])
+def test_native_full_check_rejects_constraint_or_index_corruption_without_changing_source(
+    tmp_path, damage, pinned
+):
     assert available()
     source, _ = closed_backup(tmp_path)
     with closing(sqlite3.connect(source)) as db:
@@ -110,11 +214,30 @@ def test_native_full_check_rejects_constraint_or_index_corruption_without_changi
             output.seek((page - 1) * size)
             output.write(b"\xff")
     original = source.read_bytes()
-    with (
-        pytest.raises(cv.QualificationError, match="DATABASE_CORRUPT"),
-        cv.classified_errors(time.monotonic() + 30),
-    ):
-        cv.validate_closed(source, directory=tmp_path, deadline=time.monotonic() + 30)
+    if pinned:
+        image = cv.Image(source, limit=cv.MAX_COMPRESSED_BYTES, deadline=time.monotonic() + 30)
+        sentinel = tmp_path / "corrupt-pinned.sqlite3"
+        sentinel.touch(mode=0o600)
+        vfs = cv.frozen_vfs(image, sentinel)
+        data, pages, offsets, lengths = page_frames(original)
+        try:
+            vfs.pin_pages(data, len(data), pages, offsets, lengths)
+            with (
+                closing(apsw.Connection(str(sentinel), flags=apsw.SQLITE_OPEN_READWRITE, vfs=vfs.name)) as db,
+                pytest.raises(cv.QualificationError, match="DATABASE_CORRUPT"),
+                cv.classified_errors(image.deadline),
+            ):
+                db.execute("PRAGMA query_only=ON")
+                cv.full_check(db, image.deadline)
+        finally:
+            vfs.unregister()
+            image.blocks.close()
+    else:
+        with (
+            pytest.raises(cv.QualificationError, match="DATABASE_CORRUPT"),
+            cv.classified_errors(time.monotonic() + 30),
+        ):
+            cv.validate_closed(source, directory=tmp_path, deadline=time.monotonic() + 30)
     assert source.read_bytes() == original
 
 

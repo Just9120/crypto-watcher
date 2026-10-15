@@ -30,6 +30,12 @@ period/version/market filters, causal cutoff, revisions, cohort/comparator sampl
 query. Compatibility fixture сверяет complete filtered NDJSON и cohorts before/after
 conversion, включая ранний и поздний cutoff; private transport fields исключены.
 
+Optional native index-page cache применяется только в isolated validation.
+Каждая добавляемая4KiB page до открытия SQLite handles побайтно сравнивается с
+frozen source; ordered metadata/bounds и checksummed single-frame decoding
+обязательны. Cache≤1GiB входит в общий RAM cap4GiB; исходный view не меняется,
+обычные gates/time budgets не ослабляются. Реальный fit подтверждается отдельно.
+
 Disk-backed validation — explicit isolated option: owned private disk file,
 encoded allocation bound,1.5GiB reserve и отказ для tmpfs/unknown filesystem.
 Default compressed-RAM limit3GiB и общий runtime validation cap4GiB не меняются.

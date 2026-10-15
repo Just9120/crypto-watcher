@@ -6,6 +6,7 @@ import ctypes
 import math
 import sys
 import uuid
+from array import array
 from contextlib import closing
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -36,6 +37,7 @@ class NativeVFS:
         self.name = "cw-native-validation-" + uuid.uuid4().hex
         self.pointer: int | None = None
         self.disk_prefetch = False
+        self.pinned: Any = None
         try:
             self.lib = ctypes.CDLL(str(LIBRARY))
             # Load only the pinned local helper into an ephemeral database.
@@ -92,6 +94,50 @@ class NativeVFS:
             prefetch.restype = ctypes.c_int
             self.disk_prefetch = bool(prefetch(self.pointer))
 
+    def pin_pages(self, data: Any, extent: int, pages: array, offsets: array, lengths: array) -> None:
+        """Install exact-byte verified auxiliary pages before opening SQLite handles."""
+        from .compressed_validation import QualificationError, budget
+
+        budget(self.image.deadline)
+        function = getattr(self.lib, "cwcvfs_pin_pages", None)
+        if (
+            self.pointer is None
+            or self.pinned is not None
+            or function is None
+            or type(extent) is not int
+            or not 0 < extent <= min(len(data), 1024**3)
+            or not pages
+            or any(
+                a.typecode != "Q" or a.itemsize != 8 or len(a) != len(pages)
+                for a in (pages, offsets, lengths)
+            )
+        ):
+            raise QualificationError("NATIVE_PAGE_CACHE_REFUSED")
+        pointer = ctypes.POINTER(ctypes.c_uint64)
+        function.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_size_t,
+            pointer,
+            pointer,
+            pointer,
+            ctypes.c_size_t,
+        ]
+        function.restype = ctypes.c_int
+        borrow = ctypes.c_char.from_buffer(data)
+        result = function(
+            self.pointer,
+            ctypes.addressof(borrow),
+            extent,
+            *(ctypes.cast(a.buffer_info()[0], pointer) for a in (pages, offsets, lengths)),
+            len(pages),
+        )
+        if result == apsw.SQLITE_OK:
+            self.pinned = (data, borrow)
+        budget(self.image.deadline)
+        if result != apsw.SQLITE_OK:
+            raise QualificationError("NATIVE_PAGE_CACHE_REFUSED")
+
     def unregister(self) -> None:
         from .compressed_validation import QualificationError
 
@@ -102,6 +148,7 @@ class NativeVFS:
         self.pointer = None
         # The native context has released its borrowed data pointer.
         del self.borrow
+        self.pinned = None
 
     def stats(self) -> dict[str, Any]:
         from .compressed_validation import QualificationError
@@ -136,4 +183,11 @@ class NativeVFS:
                 covered_prefetches=covered.value,
                 prefetch_requested_bytes=requested.value,
             )
+        pinned = getattr(self.lib, "cwcvfs_pinned_stats", None)
+        if pinned is not None:
+            pinned.argtypes = [ctypes.c_void_p, *([ctypes.POINTER(ctypes.c_uint64)] * 2)]
+            pinned.restype = None
+            pages, calls = ctypes.c_uint64(), ctypes.c_uint64()
+            pinned(self.pointer, ctypes.byref(pages), ctypes.byref(calls))
+            result.update(pinned_pages=pages.value, pinned_reads=calls.value)
         return result

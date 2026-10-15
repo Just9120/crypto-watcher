@@ -76,13 +76,41 @@ exact-target recovery/promotion, required PR CI и applicable CD. Physical shrin
 | `native-bidirectional2-tests-dgn0krmx/receipt.json` | Linux8/8 PASS5.44s: exact bytes/type/readonly, CHECK/index corruption и deadlines; interleaved forward/reverse tests |
 | `indexed-bidirectional2-fixture-28sgj397/receipt.json` | Малый fixture PASS: full source/candidate, complete manifests/private bytes, independent recovery и checksum/truncation/tail/raw-size negatives. Не доказывает fit35GB |
 
-Текущий изолированный job стартовал10:05UTC:
+Предыдущий изолированный job стартовал10:05UTC:
 `indexed-bidirectional-qualification-tfd1evsr`, unit
 `cw-sealed-qual-df08d59c64134a4abacaa115570d8249`, code archive2a6b7654…,
 helper a794f9eb…. Один3600s managed/3500s worker budget, CPU1/RAM4GiB/no swap;
-production mount/stop/network отсутствуют. Readback10:19:52UTC: source SQL
-integrity PENDING, candidate отсутствует, OOMfalse, memory1.126GiB; тот же
-production container/image running/healthy. Percent/progress SQL scan UNSET.
+production mount/stop/network отсутствуют. Terminal primary operation.json11:03:39UTC: **UNQUALIFIED**, worker_exit1,
+TIME_BUDGET_EXCEEDED3508.971s, cleanup PASS; full source не завершён,
+candidate отсутствует. Same production container/image running/healthy.
+
+Измерения после timeout (read-only samples, не qualification):
+`snapshot-block-ratio-kd3va2aq/receipt.json`,
+`snapshot-strong-ratio-7w2yq7lc/receipt.json` и
+`snapshot-wide-ratio-8jcl3nj7/receipt.json` показали20–32% дополнительной
+экономии от широких/сильнее сжатых blocks; RAM fit по этим данным не подтверждён,
+вариант не внедрялся. Index-only footprint sample64MiB:
+`snapshot-index-locality-vz7pct5v/receipt.json` —1,028,920encoded bytes отдельных
+index pages. Это основание bounded prototype, не размер cache всего dataset.
+
+Новый optional native cache держит только выбранные exact4KiB pages; до активации
+каждая сравнивается с исходным frozen VFS. Cache≤1GiB, ordered/bounded metadata,
+checksummed single-frame decode и owned-buffer lifetime; failure не меняет view.
+Full SQL/CHECK/index/manifests/recovery и ordinary budgets прежние. Linux17/17
+PASS4.19s: `native-index-cache-tests2-nbmll80g/receipt.json`, включая mixed cache/
+fallback reads, invalid page/hash/frame/bounds/duplicate/open-handle refusals и
+source CHECK/index corruption при включённом cache. Полный synthetic fixture с
+обоими native helpers PASS: `indexed-cache-native-history-fixture-z54721hl/receipt.json`.
+Это не current-data proof; required PR CI ещё PENDING.
+
+Current isolated job11:23:37UTC: `indexed-cache-qualification-28xtuc4g`, unit
+`cw-sealed-qual-d56a243d3bbf42ad80b7badefb661259`; code archive27a1ccb6…,
+compressed VFS1bf99111…/baseline history helper f8f6b561…. Тот же сохранённый
+RO input, fresh source copy0bytes, production mount/stop/network0; один
+3500s worker/3600s managed budget, CPU1/RAM4GiB/no swap. Cache строится при полном
+checksum/decode/raw SHA источника, затем native слой отдельно сверяет каждую
+cached page. После этого остаются все source/candidate/recovery gates. Result
+PENDING, cache actual bytes/whole fit/physical shrink UNSET/UNSET/0.
 
 Read-only retained input — `adaptive-batch-qualification-ytc_om2q/work/`:
 descriptorSHA256def55554dd2e67f4be44f5ec0eb3005b7b70c477510311fd6cdde5090c13cd3f,
@@ -118,9 +146,9 @@ hash/identity/decode/no-handles checks,7,417,622,528 allocated bytes. После
 освобождено4,975,001,600bytes. Working DB/private state/recovery сохранены.
 Разрешение не распространяется на retained input/current candidate/иные копии.
 
-Свежий production readback10:17:21UTC: source2efd9093, owner revision3,
-DB36,305,960,960bytes, ingestion FRESH4s,1324 streams/recovery_pending0;
-poll1323/1324 DEGRADED, analytics OK, Telegram DELIVERED. Одно unavailable stream
+Свежий production readback10:46:19UTC: source2efd9093, owner revision3,
+DB36,412,985,344bytes, ingestion FRESH3.9s,1324 streams/recovery_pending0;
+poll1322/1324 DEGRADED, analytics OK, Telegram DELIVERED. Два unavailable streams
 не выдаётся за full market readiness. Pending outcome counts UNSET из-за bounded
 query budget. Это snapshot во время maintenance, не steady-state capacity proof.
 
@@ -1336,7 +1364,7 @@ Priority: P1 — блокирует correctness/security/основной scope;
 | F31 HARDENING | Docker runtime использует root default; resource/health policy UNSET; Dockerfile/Compose; AC-12-01 | Нет USER/healthcheck/resource settings; фактические VPS user/resource limits не проверены; G1 update: G1 image UID10001/cap-drop/read-only root/health prepared; EVG8 actual UID10001/SQLite ownership/health/persistence PASS; EVG3 resource snapshot only, future full-universe load unverified. No invented CPU/RAM limits | P3 | DEFER: После runtime inventory выбрать минимальные privileges/health/resources по необходимости; отсутствие инструмента само по себе не defect | B01; не превращать hardening в новый AC автоматически | MEDIUM / PARTIAL |
 | F32 UX CANDIDATE | Legacy polish/preset strategy без конкретного нового дефекта; прежний open_issues #6/#7; E07/E08 | Следить за едиными русскими terms/threshold explanations; visual quality/чувствительность требуют user feedback/statistics, не подтверждены как bug; G2B update: G2B: five-detector explanations, actual profiles/manual parameters and event detail implemented. Statistical calibration/views G3/G5; unsupported polish remains DEFER.; G3: event→outcome/noise/completeness and descriptive cohorts/no-signal N доступны; enrichment/manual version comparison views G5, unsupported polish DEFER. G5 update: G5: recorded profile/version/settings comparison with N/noise/limits and explicit revision-preserving recompare; no auto threshold change. Unsupported visual polish remains DEFER. | P3 | DEFER: Сохранить полезные terms/presets; улучшать объяснения и выбор thresholds по согласованным detector profiles и outcome statistics | G3 calibration; Q01, не откладывает agent integration | MEDIUM / PARTIAL |
 | F33 G1 REGRESSION | `/sample_alert` потерял baseline Bybit/mute/coin controls и не учитывает active TF; cryptowatcher/bot.py/render.py; G1 preservation / AC-07-03 | EVG9 msg656783 на deployed065e49d подтверждает code regression относительно legacy8ace3638; EVG10 исправляет current snapshot rendering/buttons без REST/state writes ; Current update: PR22 code/CI PASS, actual CD38087285142 main40882eb; owner screenshot401ddabd… and “вроде работает” smoke PASS with assertion limits | P2: неверный sample и потеря manual controls | FIX: Восстановить existing demonstration/controls, не менять live formula, auth, settings или schema; meaningful regression tests | Necessary G1 hotfix, required CI/merge/release/CD | HIGH / CLOSED |
-| F34 HISTORY CAPACITY | Полные heads дублируют revisions; пересекающиеся inputs/settings/context повторяются. events.py/outcomes.py; AC-10-02/F15/F22 | Исходный G5afd107 readonly13Oct14:16UTC: SQLite26.25GB. PR31/32 compact heads/shared blocks доставлены CD38525778657/source047c66e5; latest5 events подтверждают compact heads/shared revisions на settings revision3. Current DB30.56GB не конвертирована. Historical5.42GB→2.107GB whole qualification833.526s PASS относится только к сохранённому старому source; две historical candidates побайтно сохранены в strict Zstd archives415MB/459MB. PR33 устраняет повторную упаковку уже shared blocks в rebuild; regression/required CI38537110560 PASS, merge/CD PENDING. Current whole900s qualification и recovery/promotion не подтверждены | P1: disk/write amplification, current capacity не доказана | REFACTOR: shared references/projections и bounded validated bytes; qualified existing-data conversion без потери provenance. Policy900s/1CPU/4GiB/retention сохраняется по owner decision | PR31/32 new writes delivered; PR33 rebuild correction; current source/archive/CD gates; production promotion только по конкретной reviewed procedure | HIGH / PARTIAL |
+| F34 HISTORY CAPACITY | Полные legacy heads дублируют revisions; пересекающиеся inputs/settings/context повторяются. events.py/outcomes.py; AC-10-02/F15/F22 | Новые writes исправлены PR31/32/33, inherited production PR35/source2efd9093, CD38625409154 PASS. Накопленная БД не конвертирована: bounded readback15Oct10:17UTC36,305,960,960bytes. Historical5.42GB→2.107GB qualification833.526s относится к старому source, не к текущей БД. Retained35.55GB snapshot и current isolated job `indexed-bidirectional-qualification-tfd1evsr` описаны в Current Goal: full source/candidate/recovery PENDING; physical shrink0 | P1: disk/write amplification и current capacity остаются незакрытыми | REFACTOR: shared references/projections, lossless record/candle format и qualified current-data conversion без потери history/provenance/new writes. Ordinary900s/CPU1/RAM4GiB/retention сохраняются; one-time≤3600s разрешён отдельно | Compatible reader CI/CD, whole current source/candidate/recovery, ordinary compact backup proof и reviewed promotion; obsolete PR33 PENDING заменён подтверждённой PR35 delivery | HIGH / PARTIAL |
 
 ### План консолидации документов/кода
 
