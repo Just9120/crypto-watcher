@@ -61,10 +61,11 @@ def test_native_full_validation_preserves_all_types_and_rejects_writes_and_early
     image.blocks.close()
 
 
-def test_interleaved_disk_reads_coalesce_without_changing_bytes(tmp_path):
+@pytest.mark.parametrize("order", [(0, 2, 1, 3), (7, 5, 6, 4, 3)])
+def test_interleaved_disk_reads_coalesce_without_changing_bytes(tmp_path, order):
     source = tmp_path / "interleaved.bin"
     generator = random.Random(43015)
-    original = b"".join(generator.randbytes(8192) + b"x" * (cv.BLOCK - 8192) for _ in range(4))
+    original = b"".join(generator.randbytes(8192) + b"x" * (cv.BLOCK - 8192) for _ in range(8))
     source.write_bytes(original)
     image = cv.Image(
         source,
@@ -77,7 +78,7 @@ def test_interleaved_disk_reads_coalesce_without_changing_bytes(tmp_path):
     vfs = cv.frozen_vfs(image, sentinel)
     file = apsw.VFSFile(vfs.name, str(sentinel), [apsw.SQLITE_OPEN_READWRITE | apsw.SQLITE_OPEN_MAIN_DB, 0])
     try:
-        for block in (0, 2, 1, 3):
+        for block in order:
             offset = block * cv.BLOCK
             assert file.xRead(4096, offset) == original[offset : offset + 4096]
         stats = vfs.stats()

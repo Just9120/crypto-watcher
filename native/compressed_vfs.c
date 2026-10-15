@@ -60,20 +60,32 @@ static int read_file(sqlite3_file *p, void *out, int n, sqlite3_int64 offset) {
             if(c->disk_prefetch) {
                 size_t start=(size_t)f.off-((size_t)f.off%c->page_size);
                 size_t end=(size_t)(f.off+f.len), length=end-start;
-                int covered=0, sequential=0;
+                int covered=0, direction=0;
                 for(unsigned i=0;i<8;i++) {
                     if(c->requested[i].start<=f.off && end<=c->requested[i].end) covered=1;
-                    if(c->recent_blocks[i]!=UINT64_MAX && index==c->recent_blocks[i]+1) sequential=1;
+                    uint64_t recent=c->recent_blocks[(c->recent_next+7-i)%8];
+                    if(recent!=UINT64_MAX) {
+                        Frame previous=c->frames[recent];
+                        /* Preserve forward batching if two interleaved
+                           neighbours suggest opposite directions. */
+                        if(index==recent+1 && previous.off+previous.len<=f.off && f.off-(previous.off+previous.len)<=4096u) direction=1;
+                        if(!direction && index+1==recent && end<=previous.off && previous.off-end<=4096u) direction=-1;
+                    }
                 }
                 if(covered) c->covered_prefetches++;
                 else {
                     /* Keep random probes narrow. Coalesce sequential streams,
                        including table/index interleaving, without repeatedly
                        advising overlapping ranges. This never changes bytes. */
-                    if(sequential && length<131072u) {
+                    if(direction>0 && length<131072u) {
                         size_t ahead=c->extent-start;
                         if(ahead>131072u) ahead=131072u;
                         if(ahead>length) { length=ahead;c->wide_prefetches++; }
+                    }
+                    if(direction<0 && length<131072u) {
+                        size_t first=end>131072u?end-131072u:0;
+                        first-=first%c->page_size;
+                        if(first<start) { start=first;length=end-start;c->wide_prefetches++; }
                     }
                     c->prefetches++;c->prefetch_bytes+=length;
                     if(madvise((void*)(c->data+start),length,MADV_WILLNEED)!=0) c->prefetch_failures++;

@@ -219,6 +219,32 @@ raw SHA сравнивается с первоначальным decode, final i
 те же bytes после copy. Это сохраняет input identity при failure и не является
 qualification до полного PASS. Dataset result PENDING; ordinary checks900s и
 current-source promotion остаются отдельными REQUIRED этапами.
+
+09:xx actual owned-helper trace (15s, production process не traced) выявил7284
+advice calls/72 wide; по7212 точным frame identities —488 adjacent backward и0
+adjacent forward steps. Это sample, не полная access distribution. Поэтому
+forward-only helper остановлен10:04:32UTC до candidate:2527.364s, UNQUALIFIED,
+worker_cleanup PASS, input/metadata сохранены, same production container running.
+Primary `adaptive-batch-qualification-ytc_om2q/superseded.json` сохраняет причину.
+
+Bidirectional guard учитывает physical adjacency и сохраняет forward behavior
+при неоднозначных interleaved соседях. Linux8/8 PASS:
+`native-bidirectional2-tests-dgn0krmx/receipt.json`; full small indexed-input
+source/candidate/recovery fixture `indexed-bidirectional2-fixture-28sgj397` PASS.
+Current isolated run10:05UTC: `indexed-bidirectional-qualification-tfd1evsr`,
+unit `cw-sealed-qual-df08d59c64134a4abacaa115570d8249`, code2a6b7654…/helper a794f9eb….
+Input descriptor def55554… binds data46b168bf…/index8d602bec…/raw24314f94…;
+fresh full encoded/index hashes establish the same previously decoded immutable
+input, without a second big copy or repeating its initial decode. Full source SQL,
+full candidate/manifests/private equality и final independent all-byte recovery
+decode remain REQUIRED within one3500s worker/3600s managed budget, CPU1/RAM4GiB.
+No production mount/stop/network. Historical snapshot scope сохраняется; result
+PENDING и actual physical shrink0. Ordinary checks и promotion не объявлены PASS.
+Readback10:14UTC: тот же production container/image, running/healthy; worker
+SOURCE_FULL_INTEGRITY, candidate ещё нет, OOMfalse,1.125GiB при cap4GiB/CPU1.
+Изменение направления prefetch проверено обоими interleaved byte-read сценариями;
+Linux8/8 и indexed whole fixture выше PASS, canonical quality15Oct PASS. Это
+подтверждает корректность helper на fixtures, но не fit35GB или текущий shrink.
 После получения candidate отдельно REQUIRED ordinary state/backup в прежнем
 900s бюджете и exact current-source promotion без потери writes; failure recurring
 checks требует переработки, а не переноса3600s в CD. Новых Actions не запускать
