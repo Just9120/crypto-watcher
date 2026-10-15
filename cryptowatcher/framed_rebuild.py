@@ -11,12 +11,14 @@ import sqlite3
 import time
 from collections.abc import Iterator
 from contextlib import closing
+from itertools import zip_longest
 from pathlib import Path
 from typing import Any, Literal
 
 from .compressed_validation import archived_image, snapshot_image
+from .copy_checkpoint import Checkpoint, binding, initial_state
 from .events import HEAD_FIELDS, HEAD_SCHEMA, PREFIX, History
-from .frame_archive import save_index
+from .frame_archive import manifest, save_index
 from .frame_archive import verify as verify_recovery
 from .history_codec import BLOB_PREFIX, MARKER, MAX_BYTES
 from .history_rebuild import (
@@ -44,6 +46,18 @@ from .storage import (
 
 def original_payload(payload: str) -> str:
     return sql_payload(payload)
+
+
+def runtime_namespace(key: str) -> str:
+    return (
+        "history-body"
+        if key.startswith(BLOB_PREFIX)
+        else "history:" + key.removeprefix(PREFIX).partition(":")[0]
+        if key.startswith(PREFIX)
+        else "source-candle"
+        if key.startswith("source:v1:candle:")
+        else "other-runtime"
+    )
 
 
 def metadata(db: Any, payload: str, kind: str, accelerator: Accelerator | None = None) -> dict[str, Any]:
@@ -108,9 +122,16 @@ def copy_validated(
     maximum: int,
     deadline: float,
     progress: Any = lambda **kw: None,
+    source_identity: str | None = None,
+    resume: bool = False,
+    checkpoint_rows: int = 10000,
 ) -> dict[str, Any]:
-    """Internal copy stage. The caller must keep its full-checked snapshot frozen."""
+    """Copy a full-checked frozen source; optional checkpoints never qualify partial data."""
     guard(deadline)
+    if type(checkpoint_rows) is not int or not 1 <= checkpoint_rows <= 10000:
+        raise StateError("Invalid copy checkpoint batch")
+    if resume and source_identity is None:
+        raise StateError("Frozen source fingerprint required for resume")
     source_version = source.execute("PRAGMA user_version").fetchone()[0]
     if source_version not in (1, COMPRESSED_RECORD_VERSION):
         raise StateError("Unsupported source version")
@@ -123,7 +144,9 @@ def copy_validated(
         raise StateError("Unknown source record format")
     if source_version == 1 and declaration is not None:
         raise StateError("Inconsistent source record format")
-    if destination.exists() or destination.is_symlink() or any(p.is_symlink() for p in destination.parents):
+    if destination.is_symlink() or any(p.is_symlink() for p in destination.parents):
+        raise StateError("Exclusive new candidate required")
+    if destination.exists() and not resume:
         raise StateError("Exclusive new candidate required")
     tables = {r[0] for r in source.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     objects = {
@@ -147,21 +170,28 @@ def copy_validated(
     for name, sql in source.execute("SELECT name,sql FROM sqlite_master WHERE type='table'"):
         if " ".join(sql.lower().split()) != " ".join(definitions[name].lower().split()):
             raise StateError("Source constraints or collation refused")
+    checkpoint = (
+        Checkpoint(destination, binding(source_identity, owner, maximum), resume=resume)
+        if source_identity is not None
+        else None
+    )
     accelerator = load("auto")
     codec = _CopyCodec(source, accelerator)
-    # Full source integrity is already complete. Keep its lookup cache bounded
-    # while allowing the private writer to retain index pages during bulk copy.
     source.execute("PRAGMA cache_size=-131072")
     release_source_cache(source, deadline)
-    expected = {name: hashlib.sha256() for name in TABLES}
-    counts: dict[str, int] = {}
-    runtime_counts: dict[str, int] = {}
-    runtime_payload_chars: dict[str, int] = {}
-    framed = heads = candles = 0
+    state = initial_state()
     with closing(sqlite3.connect(destination)) as target:
         if os.name != "nt":
             destination.chmod(0o600)
-        create_schema(target)
+        if not resume:
+            create_schema(target)
+        else:
+            public = dict(target.execute("SELECT name,sql FROM sqlite_master WHERE type='table'"))
+            if any(
+                name not in public or " ".join(public[name].lower().split()) != " ".join(sql.lower().split())
+                for name, sql in definitions.items()
+            ):
+                raise StateError("Candidate schema refused")
         target.execute("PRAGMA journal_mode=DELETE")
         target.execute("PRAGMA synchronous=FULL")
         target.execute("PRAGMA temp_store=MEMORY")
@@ -173,48 +203,65 @@ def copy_validated(
             > maximum
         ):
             raise StateError("Candidate capacity refused")
-        target.execute("CREATE TEMP TABLE changed_heads(key TEXT PRIMARY KEY)")
-        for name, columns in TABLES.items():
-            count = 0
+        if checkpoint is not None:
+            if not resume:
+                checkpoint.create(target)
+            saved = checkpoint.read(target)
+            if saved is None:
+                state["table_index"] = len(TABLES)
+            else:
+                state = saved
+        names = list(TABLES)
+        for table_index in range(state["table_index"], len(names)):
+            name = names[table_index]
+            columns = TABLES[name]
+            count = state["rows"]
+            cursor = state["cursor"]
+            if cursor is not None:
+                last = source.execute(f"SELECT * FROM {name} WHERE rowid=?", (cursor,)).fetchone()
+                tail = target.execute(
+                    f"SELECT {columns[0]} FROM {name} ORDER BY rowid DESC LIMIT 1"
+                ).fetchone()
+                if last is None or tail is None or last[0] != tail[0]:
+                    raise StateError("Copy checkpoint cursor mismatch")
+            elif count:
+                raise StateError("Copy checkpoint cursor mismatch")
+            if checkpoint is not None:
+                checkpoint.begin(target, state)
 
             def rows() -> Iterator[tuple[Any, ...]]:
-                nonlocal count, framed, heads, candles
-                for row in source.execute(f"SELECT * FROM {name} ORDER BY rowid"):
+                nonlocal count
+                batch_rows = batch_bytes = 0
+                query = f"SELECT rowid,* FROM {name}"
+                args = () if cursor is None else (cursor,)
+                if cursor is not None:
+                    query += " WHERE rowid>?"
+                for row in source.execute(query + " ORDER BY rowid", args):
                     guard(deadline)
                     if count % 1000 == 0 and shutil.disk_usage(destination.parent).free < 1536 * 1024**2:
                         raise StateError("Disk reserve exhausted; source preserved")
-                    values = tuple(row)
+                    rowid, *fields = row
+                    values = tuple(fields)
                     if name == "runtime":
                         key, payload = values
                         if key == RECORD_FORMAT_KEY:
                             continue
                         if not isinstance(key, str) or not isinstance(payload, str):
                             raise StateError("Runtime record types refused")
+                        namespace = runtime_namespace(key)
+                        state["runtime_counts"][namespace] = state["runtime_counts"].get(namespace, 0) + 1
+                        state["runtime_payload_chars"][namespace] = state["runtime_payload_chars"].get(
+                            namespace, 0
+                        ) + len(payload)
                         original = original_payload(payload)
-                        namespace = (
-                            "history-body"
-                            if key.startswith(BLOB_PREFIX)
-                            else "history:" + key.removeprefix(PREFIX).partition(":")[0]
-                            if key.startswith(PREFIX)
-                            else "source-candle"
-                            if key.startswith("source:v1:candle:")
-                            else "other-runtime"
-                        )
-                        runtime_counts[namespace] = runtime_counts.get(namespace, 0) + 1
-                        runtime_payload_chars[namespace] = runtime_payload_chars.get(namespace, 0) + len(
-                            payload
-                        )
-                        feed(expected[name], (key, original))
                         rewritten, changed = collapsed_head(source, key, original, accelerator)
-                        if changed:
-                            target.execute("INSERT INTO changed_heads VALUES(?)", (key,))
-                            heads += 1
+                        state["heads"] += int(changed)
                         kind = key.removeprefix(PREFIX).partition(":")[0]
                         if key.startswith("source:v1:candle:"):
                             compact = pack_candle(original)
                             if len(compact.encode()) < len(original.encode()):
                                 rewritten = compact
-                                candles += 1
+                                state["candles"] += 1
                         if key.startswith(BLOB_PREFIX):
                             codec.validate_raw(key[len(BLOB_PREFIX) :], payload)
                         elif key.startswith(PREFIX) and kind in HEAD_FIELDS:
@@ -232,63 +279,127 @@ def copy_validated(
                                 encoded = pack(original)
                                 if len(encoded.encode()) < len(original.encode()):
                                     rewritten = encoded
-                                    framed += 1
+                                    state["framed"] += 1
                         values = (key, rewritten)
-                    else:
-                        feed(expected[name], values)
-                    count += 1
-                    if count % 10000 == 0:
-                        progress(phase="COPY", table=name, rows=count)
                     yield values
+                    # executemany has inserted this row before asking for the next one.
+                    count += 1
+                    state.update(cursor=rowid, rows=count)
+                    batch_rows += 1
+                    batch_bytes += sum(len(v.encode()) for v in values if isinstance(v, str))
+                    if checkpoint is not None and (
+                        batch_rows >= checkpoint_rows or batch_bytes >= 16 * 1024**2
+                    ):
+                        checkpoint.save(target, state)
+                        progress(
+                            phase="COPY",
+                            table=name,
+                            rows=count,
+                            durable=True,
+                            namespace_counts=state["runtime_counts"],
+                            source_payload_chars=state["runtime_payload_chars"],
+                        )
+                        checkpoint.begin(target, state)
+                        batch_rows = batch_bytes = 0
+                    elif checkpoint is None and count % 10000 == 0:
+                        progress(phase="COPY", table=name, rows=count)
 
             target.executemany(f"INSERT INTO {name} VALUES ({','.join('?' for _ in columns)})", rows())
-            counts[name] = count
-        if framed or candles or source_version == COMPRESSED_RECORD_VERSION:
-            target.execute("INSERT INTO runtime VALUES (?,?)", (RECORD_FORMAT_KEY, encode(RECORD_FORMAT)))
-            target.execute(f"PRAGMA user_version={COMPRESSED_RECORD_VERSION}")
-        target.commit()
+            state["counts"][name] = count
+            state.update(table_index=table_index + 1, cursor=None, rows=0)
+            if checkpoint is not None:
+                checkpoint.save(target, state)
         release_source_cache(source, deadline)
-        progress(phase="CANDIDATE_FULL_INTEGRITY", bytes=destination.stat().st_size)
-        check_integrity(target, deadline=deadline)
+        # Re-read every source row, including committed prefixes on resume. No saved
+        # counter/hash can replace this comparison with the actual frozen source.
+        counts: dict[str, int] = {}
+        runtime_counts: dict[str, int] = {}
+        runtime_payload_chars: dict[str, int] = {}
+        framed = heads = candles = 0
         for name in TABLES:
-            actual = hashlib.sha256()
+            expected, actual = hashlib.sha256(), hashlib.sha256()
             checked = 0
-            query = (
-                "SELECT key,payload_json,EXISTS(SELECT 1 FROM changed_heads h WHERE h.key=r.key) FROM runtime r ORDER BY rowid"
-                if name == "runtime"
-                else f"SELECT * FROM {name} ORDER BY rowid"
-            )
-            for row in target.execute(query):
+            query = f"SELECT * FROM {name}"
+            args: tuple[Any, ...] = ()
+            if name == "runtime":
+                query += " WHERE key!=?"
+                args = (RECORD_FORMAT_KEY,)
+            query += " ORDER BY rowid"
+            for original, copied in zip_longest(source.execute(query, args), target.execute(query, args)):
                 guard(deadline)
-                values = tuple(row)
+                if original is None or copied is None:
+                    raise StateError("Complete source/candidate manifest mismatch")
+                before, after = tuple(original), tuple(copied)
                 if name == "runtime":
-                    key, payload, changed = values
-                    if key == RECORD_FORMAT_KEY:
-                        continue
-                    restored = original_payload(payload)
-                    if changed:
+                    key, payload = before
+                    if key != after[0]:
+                        raise StateError("Complete source/candidate manifest mismatch")
+                    namespace = runtime_namespace(key)
+                    runtime_counts[namespace] = runtime_counts.get(namespace, 0) + 1
+                    runtime_payload_chars[namespace] = runtime_payload_chars.get(namespace, 0) + len(payload)
+                    raw = original_payload(payload)
+                    restored = original_payload(after[1])
+                    kind, _, identifier = key.removeprefix(PREFIX).partition("-head:")
+                    if raw != restored and key.startswith(PREFIX) and kind in HEAD_FIELDS and identifier:
                         header = json.loads(restored)
+                        if not isinstance(header, dict) or header.get("schema") != HEAD_SCHEMA:
+                            raise StateError("Candidate head projection mismatch")
                         reference = header.get("revision_key")
+                        if not isinstance(reference, str):
+                            raise StateError("Candidate head revision missing")
                         record = target.execute(
-                            "SELECT payload_json FROM runtime WHERE key=?", (PREFIX + reference,)
+                            "SELECT payload_json FROM runtime WHERE key=?", (PREFIX + str(reference),)
                         ).fetchone()
                         if record is None:
                             raise StateError("Candidate head revision missing")
                         restored = original_payload(record[0])
-                        kind, _, identifier = key.removeprefix(PREFIX).partition("-head:")
                         projection = metadata(target, restored, kind, accelerator)
                         if (
                             projection.get(kind + "_id") != identifier
-                            or encode(History._head(kind, projection, reference)) != payload
+                            or encode(History._head(kind, projection, reference)) != after[1]
                         ):
                             raise StateError("Candidate head projection mismatch")
-                    values = (key, restored)
-                feed(actual, values)
+                        heads += 1
+                    framed += int(
+                        key.startswith(PREFIX)
+                        and key.removeprefix(PREFIX).partition(":")[0] in HEAD_FIELDS
+                        and after[1].startswith('{"_history_record_storage":')
+                    )
+                    candles += int(
+                        key.startswith("source:v1:candle:") and after[1].startswith('{"_cw_candle_v1":')
+                    )
+                    before, after = (key, raw), (key, restored)
+                feed(expected, before)
+                feed(actual, after)
                 checked += 1
                 if checked % 10000 == 0:
                     progress(phase="CANDIDATE_READBACK", table=name, rows=checked)
-            if checked != counts[name] or actual.digest() != expected[name].digest():
+            if actual.digest() != expected.digest():
                 raise StateError("Complete source/candidate manifest mismatch")
+            counts[name] = checked
+        final_version = COMPRESSED_RECORD_VERSION if framed or candles or source_version == 2 else 1
+        if resume and saved is None:
+            marker = target.execute(
+                "SELECT payload_json FROM runtime WHERE key=?", (RECORD_FORMAT_KEY,)
+            ).fetchone()
+            if target.execute("PRAGMA user_version").fetchone()[0] != final_version or (
+                (marker is None) if final_version == COMPRESSED_RECORD_VERSION else (marker is not None)
+            ):
+                raise StateError("Finalized copy version mismatch")
+            if marker is not None and not known_record_format(marker[0]):
+                raise StateError("Unknown finalized record format")
+        else:
+            if final_version == COMPRESSED_RECORD_VERSION:
+                target.execute(
+                    "INSERT OR REPLACE INTO runtime VALUES (?,?)", (RECORD_FORMAT_KEY, encode(RECORD_FORMAT))
+                )
+            target.execute(f"PRAGMA user_version={final_version}")
+            if checkpoint is not None:
+                checkpoint.finish(target)
+            else:
+                target.commit()
+        progress(phase="CANDIDATE_FULL_INTEGRITY", bytes=destination.stat().st_size)
+        check_integrity(target, deadline=deadline)
     guard(deadline)
     candidate_digest = hashlib.sha256()
     with destination.open("rb") as encoded_candidate:
@@ -308,6 +419,7 @@ def copy_validated(
         "candidate_sha256": candidate_digest.hexdigest(),
         "source_schema_integrity": "CALLER_REQUIRED",
         "source_history_deleted": 0,
+        "copy_resumed": resume,
     }
 
 
@@ -344,6 +456,7 @@ def build_candidate(
         path.exists()
         for path in (
             candidate,
+            candidate.with_name(candidate.name + ".copy.json"),
             backing,
             directory / "source.index",
             directory / "source.recovery.json",
@@ -378,11 +491,18 @@ def build_candidate(
         )
     )
     with capture as (validated, image):
+        # Persist the frozen recovery identity before any copy progress is committed.
+        descriptor = save_index(image, directory, deadline=deadline)
         report = copy_validated(
-            validated, candidate, owner=owner, maximum=maximum, deadline=deadline, progress=progress
+            validated,
+            candidate,
+            owner=owner,
+            maximum=maximum,
+            deadline=deadline,
+            progress=progress,
+            source_identity=manifest(descriptor)["raw_sha256"],
         )
         progress(phase="RECOVERY_VERIFY", bytes=image.size)
-        descriptor = save_index(image, directory, deadline=deadline)
         recovery = verify_recovery(descriptor, deadline=deadline)
         report.update(source_full_integrity="PASS", recovery=recovery, recovery_descriptor=str(descriptor))
     guard(deadline)

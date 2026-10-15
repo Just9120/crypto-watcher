@@ -54,6 +54,31 @@ automatic CD38625409154 PASS. Branch `codex/compact-history-records-20261015`,
 base тот же; storage code ещё локальный, initial push/нового PR/CI/CD нет.
 Scope58 AC, по коду54/58; Goal не DONE, audit percentage не пересчитывался.
 
+Новое поручение owner15Oct: исправить потерю прогресса и продолжать уменьшение
+рабочей БД. Текущая задача: durable batch checkpoints, привязанные к frozen source
+identity/owner/формату; безопасное возобновление после ошибки/kill и отказ при
+чужом или повреждённом checkpoint. Final full integrity, полная source/candidate
+сверка всех строк/private values и independent recovery остаются REQUIRED.
+Validation: existing framed/storage regressions, process-kill/restart, reporting
+failure после commit, подмена identity/cursor/строк и итоговая exact history equality.
+Checkpoint не разрешает promotion partial DB или сброс общего deadline.
+Ordinary backup/CD900s и уже использованный разовый local5400s не расширяются.
+
+Resume fix15Oct: atomic batches≤10k rows/16MiB, source/owner/allocation/code
+binding, partial user_version0 и full fresh source/candidate manifests перед
+final integrity реализованы локально. Новый canonical Windows runner хранит
+absolute window, exclusive lease, Job4GiB/CPU1 и отделяет volatile progress IO
+от committed DB state; source proof привязывается к реальному canonical primary
+SHA и неизменному validator, copy algorithm — отдельным binding.
+Local131 tests PASS/1 Linux-native skip, quality/docs/Ruff/mypy43 PASS;
+real Windows fixture whole pipeline/resource readback PASS. Required Linux CI
+ещё PENDING, большой dataset этим не подтверждён.
+Основание продолжения исправленного one-time PC run — новое явное поручение
+owner после отчёта об исчерпанном прежнем окне; прежний потолок5400s/CPU1/
+process4GiB сохраняется. Создаётся отдельный immutable window, без автоматического
+renewal или переноса бюджета в ordinary backup/CD. Физическая production DB
+этой проверкой не заменяется; newer live writes должны быть сохранены отдельно.
+
 Storage scope: lossless compression immutable records, compact candle field
 layout и совместимые history/export/outcome/consumer readers; private isolated
 candidate с full source/candidate CHECK, точными all-row manifests/private bytes,

@@ -512,6 +512,55 @@ exclusive raw file с теми же decoded bytes. Это самостоятел
 основанием qualification; recovery byte proof не заявляет второй SQL scan.
 Partial files не являются recovery proof. Raw restore не перезаписывает живую БД.
 
+### Возобновление изолированной конвертации
+
+`copy_validated` поддерживает `source_identity=RAW_SHA256` и явный `resume=True`.
+Источник по-прежнему должен быть frozen и иметь full SQL integrity PASS. Каждые
+не более10,000 строк или16MiB converted text сохраняются одной SQLite transaction
+вместе с cursor/counters. Checkpoint находится в `_cw_copy_checkpoint` той же
+private candidate, поэтому kill откатывает только незавершённую партию.
+Immutable `candidate.sqlite3.copy.json` связывает source SHA, owner, byte bound и
+точную версию преобразования. Несовпадение binding/cursor/schema оставляет отказ.
+
+Пока copy не завершена, `user_version=0`: приложение отказывается открывать такой
+файл. После resume заново читаются **все** source/candidate rows и сравниваются
+typed manifests, включая private configuration. Затем checkpoint удаляется,
+устанавливается точный format declaration и выполняется full final integrity.
+Окончательные hash/recovery/qualification gates обязательны; checkpoint не PASS.
+Файлы старых незавершённых transactions без этого binding автоматически не
+переиспользуются и не удаляются.
+
+Для согласованного Windows offload используется canonical команда из root:
+
+```powershell
+python -m scripts.qualify_local_copy --window PRIVATE_ABSOLUTE_WINDOW_JSON
+```
+
+Window фиксирует `schema=cryptowatcher.local-copy-window.v1`, `owner_authorized`,
+`started_at_utc`, `seconds`, `ordinary_backup_cd_seconds=900`, `source`, `recovery`,
+`source_proof`, `source_proof_sha256`, `code_archive`, `work`, `maximum`, `owner`.
+Поля записи — Evidence согласованной операции, сами по себе разрешения не дают.
+Default ceiling900s; больше900s возможно только для отдельно разрешённого local
+offload с `one_time_local=true`, верхний предел5400s. При повторном запуске берётся
+оставшееся время **исходного** window; новый start не создаётся автоматически.
+Новое окно после его исчерпания требует отдельного основания owner и не меняет
+ordinary backup/CD. Использованный15Oct window16:27UTC повторно не открывается.
+
+Private work/source/recovery размещаются на проверенном ACL диске вне OneDrive;
+symlinks/junctions и неизвестные work files запрещены. Worker удерживает exclusive
+session lock, подтверждает Windows Job4GiB/CPU1, допускает только согласованное
+использование OS file cache сверх process limit. Progress JSON/observer failure
+не откатывает durable rows; primary qualification и exit0 остаются обязательными.
+
+Повторное использование source integrity ограничено exact immutable snapshot:
+реальный hash canonical primary record, его full-SQL scope, raw/encoded/index/
+descriptor identities и byte-identical source validator в pinned code archive.
+Версия нового copy алгоритма привязана отдельным checkpoint binding; она не
+заменяет source validation. Raw source SHA проверяется до/после copy, independent
+recovery заново декодирует все bytes. Historical PASS не подтверждает более новые
+production writes и не разрешает замену рабочей БД. Нужны отдельные ordinary900s
+qualification и reviewed fresh-data-preserving promotion.
+
 Reader должен быть поставлен до candidate с user_version2. Exact declaration
 обязательна; schema1-only image не допускается для rollback после migration.
 Promotion требует текущего complete source (без потери writes после capture),
