@@ -51,7 +51,7 @@ state/backup gates на уменьшенной candidate в прежнем бю�
 Исключение относится только к этому local run; ordinary backup/CD900s сохранены.
 Проверенный `origin/main = 2efd9093d9639f767f2a0df697bfd060c2ce47e0` (PR35),
 automatic CD38625409154 PASS. Branch `codex/compact-history-records-20261015`,
-base тот же; storage code ещё локальный, initial push/нового PR/CI/CD нет.
+base тот же; storage code в draft PR36, merge/CD и physical shrink ещё PENDING.
 Scope58 AC, по коду54/58; Goal не DONE, audit percentage не пересчитывался.
 
 Новое поручение owner15Oct: исправить потерю прогресса и продолжать уменьшение
@@ -72,30 +72,36 @@ absolute window, exclusive lease, Job4GiB/CPU1 и отделяет volatile prog
 SHA и неизменному validator, copy algorithm — отдельным binding.
 Local131 tests PASS/1 Linux-native skip, quality/docs/Ruff/mypy43 PASS;
 real Windows fixture whole pipeline/resource readback PASS. Required Linux CI
-ещё PENDING, большой dataset этим не подтверждён.
+38791508899/headbcfdea4 PASS, включая native helpers и Docker; большой dataset
+этим не подтверждён. Первичный Linux fixture mode755 исправлен на0700 без
+ослабления runtime guard.
 Основание продолжения исправленного one-time PC run — новое явное поручение
 owner после отчёта об исчерпанном прежнем окне; прежний потолок5400s/CPU1/
 process4GiB сохраняется. Создаётся отдельный immutable window, без автоматического
 renewal или переноса бюджета в ordinary backup/CD. Физическая production DB
 этой проверкой не заменяется; newer live writes должны быть сохранены отдельно.
 
-Исправленный local run15Oct: immutable window18:44:41–20:14:41UTC,
-implementation635a09a, private work `resumable-copy-d37a9cd20dd4498f8146efa77a7e97e2`.
-На19:00UTC committed1,350,000 runtime rows; это checkpoint COPY, не qualification
-или production shrink. PID50136/Job4GiB/CPU1, automatic renewal отсутствует.
-При потере controller сначала проверить процесс, SQLite checkpoint и terminal
-receipt, затем продолжать в исходном окне. VPS readback18:59:28UTC: source2efd9093,
-owner revision3, DB38,344,421,376bytes, fresh ingestion1324 streams,
-available1321/1324, analyticsOK/TelegramDELIVERED. Production writes не менялись.
-Read-only disk inventory установил D=WDC SATA HDD, C=Samsung NVMe SSD. Собственный
-worker остановлен; candidate1,303,805,952bytes, journal и binding побайтно проверены
-и скопированы в private SSD work `cw-private-32b356b4920a4ad7949854247f5e78aa`.
-Исходная копия сохранена. Resume19:07:51UTC/PID36576 использует те же source/code,
-начало18:44:41UTC и deadline20:14:41UTC; учтены canonical Windows redirected path
-и UTF-8 window. CPU1/process4GiB прежние; окно не продлено.
-Draft PR36/head90c479c: CI38790642715 —812 tests PASS, Windows-only skip1,
-пять failures одного нового fixture из-за mode755 recovery directory на Linux.
-Fixture исправлен на0700 без изменения runtime guard; fresh CI REQUIRED.
+Исправленный local run15Oct, implementation635a09a: immutable window
+18:44:41–20:14:41UTC исчерпан, terminal UNQUALIFIED/TIME_BUDGET_EXCEEDED/exit3.
+Последний durable COPY log —16,580,000 runtime rows. Kill/byte-exact relocation
+и последующее продолжение на реальном dataset подтверждены; всего prefix не
+откатывается. Read-only probe указывает на необходимость SQLite journal recovery
+после последней незавершённой транзакции. Full candidate/manifests/recovery
+qualification ещё отсутствует; partial DB не разрешена приложению.
+Установлены D=WDC SATA HDD и C=Samsung NVMe SSD. Переход на SSD ускорил COPY;
+controller reserve6GiB остановил один worker без потери committed prefix.
+Candidate/journal/binding перенесены на D с полной byte/hash проверкой. После
+исчерпания окна только подготовка файлов:19 старых synthetic fixture/build files
+перенесены на D,1,050,241,362bytes/все hashes PASS, удаления данных не было.
+На SSD подготовлен work `prepared-continuation-9bc6c3c808c1453c8083153c53a1bc3a`:
+candidate13,474,045,952bytes и journal45,768,320bytes побайтно совпали с D-копией.
+Source35,553,550,336bytes/SHA24314f94… сохранён и на D, и на SSD.
+Owner запрос на дополнительный один local1800s отправлен; решение PENDING.
+Proposal owner_authorized=false/start UNSET; запуска или автоматического renewal
+нет. Source/work/proof identities и terminal/relocation receipts сохранены вне
+Git; при восстановлении читать их до любых повторов. VPS readback19:30:25UTC:
+source2efd9093, owner revision3, DB38,472,228,864bytes, FRESH1324 streams,
+available1321/1324, analyticsOK/TelegramDELIVERED. Production DB не заменялась.
 Ordinary whole backup/CD≤900s остаётся обязательным требованием: текущий receiver
 ограничивает900s каждый из двух DB этапов отдельно, release job40min включает
 build. Это ещё не подтверждение общего900s; F27 остаётся открытым до actual
@@ -1531,7 +1537,7 @@ Priority: P1 — блокирует correctness/security/основной scope;
 | F31 HARDENING | Docker runtime использует root default; resource/health policy UNSET; Dockerfile/Compose; AC-12-01 | Нет USER/healthcheck/resource settings; фактические VPS user/resource limits не проверены; G1 update: G1 image UID10001/cap-drop/read-only root/health prepared; EVG8 actual UID10001/SQLite ownership/health/persistence PASS; EVG3 resource snapshot only, future full-universe load unverified. No invented CPU/RAM limits | P3 | DEFER: После runtime inventory выбрать минимальные privileges/health/resources по необходимости; отсутствие инструмента само по себе не defect | B01; не превращать hardening в новый AC автоматически | MEDIUM / PARTIAL |
 | F32 UX CANDIDATE | Legacy polish/preset strategy без конкретного нового дефекта; прежний open_issues #6/#7; E07/E08 | Следить за едиными русскими terms/threshold explanations; visual quality/чувствительность требуют user feedback/statistics, не подтверждены как bug; G2B update: G2B: five-detector explanations, actual profiles/manual parameters and event detail implemented. Statistical calibration/views G3/G5; unsupported polish remains DEFER.; G3: event→outcome/noise/completeness and descriptive cohorts/no-signal N доступны; enrichment/manual version comparison views G5, unsupported polish DEFER. G5 update: G5: recorded profile/version/settings comparison with N/noise/limits and explicit revision-preserving recompare; no auto threshold change. Unsupported visual polish remains DEFER. | P3 | DEFER: Сохранить полезные terms/presets; улучшать объяснения и выбор thresholds по согласованным detector profiles и outcome statistics | G3 calibration; Q01, не откладывает agent integration | MEDIUM / PARTIAL |
 | F33 G1 REGRESSION | `/sample_alert` потерял baseline Bybit/mute/coin controls и не учитывает active TF; cryptowatcher/bot.py/render.py; G1 preservation / AC-07-03 | EVG9 msg656783 на deployed065e49d подтверждает code regression относительно legacy8ace3638; EVG10 исправляет current snapshot rendering/buttons без REST/state writes ; Current update: PR22 code/CI PASS, actual CD38087285142 main40882eb; owner screenshot401ddabd… and “вроде работает” smoke PASS with assertion limits | P2: неверный sample и потеря manual controls | FIX: Восстановить existing demonstration/controls, не менять live formula, auth, settings или schema; meaningful regression tests | Necessary G1 hotfix, required CI/merge/release/CD | HIGH / CLOSED |
-| F34 HISTORY CAPACITY | Полные legacy heads дублируют revisions; пересекающиеся inputs/settings/context повторяются. events.py/outcomes.py; AC-10-02/F15/F22 | Новые writes исправлены PR31/32/33, inherited production PR35/source2efd9093, CD38625409154 PASS. Накопленная БД не конвертирована: bounded readback15Oct10:17UTC36,305,960,960bytes. Historical5.42GB→2.107GB qualification833.526s относится к старому source, не к текущей БД. Retained35.55GB source full PASS2803.353s и approved PC offload описаны в Current Goal: download/pre-copy raw hashes PASS, local3500s timeout на COPY6.78M rows. Candidate/recovery не qualified, physical shrink0; local90min исчерпан16:27UTC на COPY10.92M после operator sharing failure/retry. Все workers завершены, бот healthy/FRESH16:27UTC; детали в Current Goal | P1: disk/write amplification и current capacity остаются незакрытыми | REFACTOR: shared references/projections, lossless record/candle format и qualified current-data conversion без потери history/provenance/new writes. Ordinary900s/CPU1/RAM4GiB/retention сохраняются; one-time≤3600s разрешён отдельно | Compatible reader CI/CD, whole current source/candidate/recovery, ordinary compact backup proof и reviewed promotion; obsolete PR33 PENDING заменён подтверждённой PR35 delivery | HIGH / PARTIAL |
+| F34 HISTORY CAPACITY | Полные legacy heads дублируют revisions; пересекающиеся inputs/settings/context повторяются. events.py/outcomes.py; AC-10-02/F15/F22 | Новые writes исправлены PR31/32/33, inherited production PR35/source2efd9093, CD38625409154 PASS. Накопленная БД не конвертирована: bounded readback15Oct10:17UTC36,305,960,960bytes. Historical5.42GB→2.107GB qualification833.526s относится к старому source, не к текущей БД. Retained35.55GB source full PASS2803.353s и approved PC offload описаны в Current Goal: download/pre-copy raw hashes PASS, local3500s timeout на COPY6.78M rows. Candidate/recovery не qualified, physical shrink0; local90min исчерпан16:27UTC на COPY10.92M после operator sharing failure/retry. Новый durable resume PR36/CI38791508899 PASS; corrected5400s window20:14UTC UNQUALIFIED,16.58M rows сохранены, journal recovery/full proof остаются. SSD continuation подготовлен без запуска; additional1800s owner decision PENDING. Детали и boundaries в Current Goal | P1: disk/write amplification и current capacity остаются незакрытыми | REFACTOR: shared references/projections, lossless record/candle format и qualified current-data conversion без потери history/provenance/new writes. Ordinary900s/CPU1/RAM4GiB/retention сохраняются; one-time≤3600s разрешён отдельно | Compatible reader CI/CD, whole current source/candidate/recovery, ordinary compact backup proof и reviewed promotion; obsolete PR33 PENDING заменён подтверждённой PR35 delivery | HIGH / PARTIAL |
 
 ### План консолидации документов/кода
 
