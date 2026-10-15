@@ -42,13 +42,19 @@ def window_deadline(window, *, now=None):
     return time.monotonic() + seconds - elapsed
 
 
-def digest(path, deadline):
+def digest(path, deadline, progress=lambda **kw: None):
     before = path.stat()
     h = hashlib.sha256()
+    total = 0
+    last = time.monotonic()
     with path.open("rb") as f:
         for data in iter(lambda: f.read(1024 * 1024), b""):
             cv.budget(deadline)
             h.update(data)
+            total += len(data)
+            if time.monotonic() - last >= 30:
+                progress(bytes=total, total_bytes=before.st_size)
+                last = time.monotonic()
     after = path.stat()
     if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
         after.st_dev,
@@ -100,6 +106,7 @@ class Reporter:
 
     def publish(self, **fields):
         fields["at_utc"] = datetime.now(timezone.utc).isoformat()
+        fields["pid"] = os.getpid()
         text = encode(fields)
         temporary = self.work / "latest.tmp"
         try:
@@ -194,7 +201,14 @@ def run(window):
             if source.stat().st_size != descriptor["raw_bytes"]:
                 raise StateError("Frozen source size mismatch")
             reporter.publish(state="RUNNING", phase="SOURCE_IDENTITY", limits=limits)
-            if digest(source, deadline) != descriptor["raw_sha256"]:
+            if (
+                digest(
+                    source,
+                    deadline,
+                    progress=lambda **v: reporter.publish(state="RUNNING", phase="SOURCE_IDENTITY", **v),
+                )
+                != descriptor["raw_sha256"]
+            ):
                 raise StateError("Source fingerprint mismatch")
             cv.resident_memory_bytes = process_memory_bytes
             candidate = work / "candidate.sqlite3"
@@ -215,7 +229,14 @@ def run(window):
                     progress=lambda **v: reporter.publish(state="RUNNING", **v),
                 )
             reporter.publish(state="RUNNING", phase="SOURCE_POST_IDENTITY")
-            if digest(source, deadline) != descriptor["raw_sha256"]:
+            if (
+                digest(
+                    source,
+                    deadline,
+                    progress=lambda **v: reporter.publish(state="RUNNING", phase="SOURCE_POST_IDENTITY", **v),
+                )
+                != descriptor["raw_sha256"]
+            ):
                 raise StateError("Source changed; candidate not qualified")
             reporter.publish(state="RUNNING", phase="INDEPENDENT_RECOVERY")
             recovery_result = verify(recovery, deadline=deadline)
