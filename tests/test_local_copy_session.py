@@ -63,7 +63,7 @@ def fixture_proof(tmp_path):
     source = tmp_path / "source.sqlite3"
     source_history(source)
     data = tmp_path / "recovery"
-    data.mkdir()
+    data.mkdir(mode=0o700)
     deadline = time.monotonic() + 20
     image = cv.Image(source, limit=8 * 1024**2, deadline=deadline, backing=data / "source.frames")
     try:

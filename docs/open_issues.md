@@ -87,6 +87,15 @@ implementation635a09a, private work `resumable-copy-d37a9cd20dd4498f8146efa77a7e
 receipt, затем продолжать в исходном окне. VPS readback18:59:28UTC: source2efd9093,
 owner revision3, DB38,344,421,376bytes, fresh ingestion1324 streams,
 available1321/1324, analyticsOK/TelegramDELIVERED. Production writes не менялись.
+Read-only disk inventory установил D=WDC SATA HDD, C=Samsung NVMe SSD. Собственный
+worker остановлен; candidate1,303,805,952bytes, journal и binding побайтно проверены
+и скопированы в private SSD work `cw-private-32b356b4920a4ad7949854247f5e78aa`.
+Исходная копия сохранена. Resume19:07:51UTC/PID36576 использует те же source/code,
+начало18:44:41UTC и deadline20:14:41UTC; учтены canonical Windows redirected path
+и UTF-8 window. CPU1/process4GiB прежние; окно не продлено.
+Draft PR36/head90c479c: CI38790642715 —812 tests PASS, Windows-only skip1,
+пять failures одного нового fixture из-за mode755 recovery directory на Linux.
+Fixture исправлен на0700 без изменения runtime guard; fresh CI REQUIRED.
 Ordinary whole backup/CD≤900s остаётся обязательным требованием: текущий receiver
 ограничивает900s каждый из двух DB этапов отдельно, release job40min включает
 build. Это ещё не подтверждение общего900s; F27 остаётся открытым до actual
