@@ -49,6 +49,20 @@ Journal остаётся opt-in operator code, в production не установ
 поставки нужны latest required Linux CI/image, target proof всего обычного backup
 и900s combined delivery, reconciliation актуальных записей и reviewed promotion.
 Failed target record сохранён вне Git; повтор unchanged прогона не планируется.
+Delta export подготовлен отдельно: сравнивает весь источник с fixed104-byte
+row manifest, включая updates старых rowid, удаления, key changes и reuse rowid;
+не делает ложного допущения append-only. Payload/private tables и watermark
+читаются из одного WAL snapshot, file limit/reserve/deadline обязательны.
+Local9 delta scenarios PASS; full source integrity в export обозначен PENDING,
+такая выгрузка не разрешает promotion. Baseline manifest20,247,617rows/
+1,379,790,678bytes/SHA7b3a55a4… PASS15Oct22:52:36UTC за762.848s в исходном900s
+окне, CPU1/process4GiB. Original qualified snapshot/source bytes сохранены.
+Первый pass завершил scan, но Windows fsync на readonly handle отказал; сохранённый
+manifest повторно сверён со всеми source/candidate rows в том же исходном окне,
+без повторной конвертации. Source read-only SQLite создал только empty WAL/SHM;
+standalone raw SHA снова проверен, closed-copy verification исключила эти sidecars.
+Current full CI38819137811/head37dd35f PASS для indexed backup/journal и native
+image; последующий delta module требует свой latest CI перед использованием.
 
 Preservation step16Oct: подготовить bounded временный журнал изменённых primary
 keys для всех пяти state tables. Установка только отдельной проверенной operator
