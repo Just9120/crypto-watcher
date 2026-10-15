@@ -51,6 +51,7 @@ def main() -> int:
     parser.add_argument("--compressed-validation", action="store_true")
     parser.add_argument("--disk-validation", action="store_true")
     parser.add_argument("--archive-backup", action="store_true")
+    parser.add_argument("--indexed-backup", action="store_true")
     parser.add_argument("--owner-id", type=int)
     parser.add_argument("--format", choices=("ndjson", "csv"), default="ndjson")
     parser.add_argument("--start-ms", type=int, default=0)
@@ -71,6 +72,14 @@ def main() -> int:
     load_dotenv(override=False)
     configure_logging(os.environ.get("TELEGRAM_BOT_TOKEN", ""))
     try:
+        if args.indexed_backup and (
+            args.command != "backup"
+            or args.validation_directory is not None
+            or args.archive_backup
+            or args.compressed_validation
+            or args.disk_validation
+        ):
+            raise ConfigError("indexed-backup requires backup and cannot combine validation modes")
         if args.validation_directory is not None and args.command not in ("state-check", "backup"):
             raise ConfigError("validation-directory is only supported for state-check and backup")
         if args.compressed_validation and args.validation_directory is None:
@@ -235,6 +244,7 @@ def main() -> int:
                         compressed_validation=args.compressed_validation,
                         archive=args.archive_backup,
                         disk_validation=args.disk_validation,
+                        indexed=args.indexed_backup,
                     )
                     print(json.dumps({"status": "backup_integrity_ok", "backup": metrics}))
                 else:

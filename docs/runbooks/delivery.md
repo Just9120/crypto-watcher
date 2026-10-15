@@ -245,6 +245,18 @@ encoded SHA256 сохраняются. Один `--timeout-seconds`≤900 пок
 Spool capacity зависит от фактического free space с reserve1.5GiB; нехватка места
 прекращает операцию. Частичный destination сохраняется и не считается backup.
 
+Target rehearsal15Oct22:34UTC: первый persisted ZSTD readback остановлен223.610s
+во время COMPRESS с DATABASE_ERROR; подробный subcode helper не сохранил.
+Capacity второго disk spool также недостаточна; OOM нет, production units unchanged.
+Это REFUSED, не full backup PASS. Вариант `--indexed-backup` сохраняет те же
+точные блоки сразу в exclusive private destination directory: `source.frames`,
+`source.index`, `source.recovery.json`. После полного source CHECK mapping
+закрывается; независимый Python decoder проверяет все encoded/decoded bytes и
+index hash, затем новый writable SQLite validation handle выполняет полный
+integrity/CHECK непосредственно над сохранёнными frames. Второй encoded spool
+и повторное сжатие не нужны. Native VFS отвергает writes; ACCESS_COPY mapping
+никогда не меняет recovery file. Resource/deadline/reserve gates те же.
+
 Из root приложения, с настроенными owner/database environment и writable private
 directory UID10001 (на VPS внутри установленного data volume):
 
@@ -253,6 +265,21 @@ python -m cryptowatcher backup --disk-validation --archive-backup \
   --validation-directory /data/sqlite/validation \
   --destination /data/sqlite/backups/UNIQUE.sqlite3.zst --timeout-seconds 900
 ```
+
+Кандидат без второй encoded copy; destination — новый directory, не ZSTD file:
+
+```bash
+python -m cryptowatcher backup --indexed-backup \
+  --destination /data/sqlite/backups/UNIQUE.cwbackup --timeout-seconds 900
+```
+
+Recovery этого формата: [frame_archive.py](../../cryptowatcher/frame_archive.py)
+`restore` проверяет manifest, index, frame checksum/window и весь decoded SHA256,
+записывая exclusive raw file; затем обязательны native full SQLite integrity и
+readback state tables на копии. Сам manifest хранит CALLER_REQUIRED для SQL
+integrity: только полный operation receipt доказывает, что SQL gate выполнен.
+Сохранять все три файла вместе; архивные или partial результаты не разрешают
+автоматическую замену рабочей DB. Не комбинировать indexed flag с иными режимами.
 
 Это подготовленный режим, current production receiver всё ещё использует прежний
 COMPRESSED_RAM gate. До его замены обязательны fresh CI/image и actual target

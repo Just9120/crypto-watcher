@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import math
+import mmap
 import os
 import shutil
 import sqlite3
 import stat
 import tempfile
 import time
+from array import array
 from collections.abc import Callable, Iterator
 from contextlib import closing, contextmanager
 from pathlib import Path
@@ -19,10 +21,151 @@ import apsw
 import zstandard
 
 from . import compressed_validation as cv
+from . import frame_archive
 from .validation import fingerprint
 
 DISK_RESERVE = 1536 * 1024**2
 DISK_HEADROOM = 64 * 1024**2
+
+
+@contextmanager
+def indexed_image(
+    descriptor: Path,
+    *,
+    deadline: float,
+    progress: Callable[..., Any] = lambda **kw: None,
+) -> Iterator[tuple[apsw.Connection, cv.Image]]:
+    """Reopen verified disk frames directly, without a second encoded copy."""
+    cv.budget(deadline)
+    encoded_descriptor = descriptor.read_bytes()
+    proof = frame_archive.verify(descriptor, deadline=deadline)
+    record = frame_archive.manifest(descriptor)
+    if descriptor.read_bytes() != encoded_descriptor:
+        raise cv.QualificationError("BYTE_IDENTITY_MISMATCH")
+    data = descriptor.parent / record["data"]
+    index = descriptor.parent / record["index"]
+    identities = [p.stat() for p in (data, index, descriptor)]
+    image = cv.Image(None, limit=1, deadline=deadline)
+    image.blocks.close()
+    try:
+        with data.open("rb") as raw:
+            # Native VFS borrows a writable buffer; ACCESS_COPY can never change
+            # the recovery file. Frozen Image and VFS reject database writes.
+            image.blocks.data = mmap.mmap(raw.fileno(), 0, access=mmap.ACCESS_COPY)
+        image.blocks.backing = data
+        image.blocks.end = record["extent"]
+        image.blocks.limit = record["data_bytes"]
+        image.blocks.offsets = array("Q")
+        image.blocks.lengths = array("Q")
+        with index.open("rb") as entries:
+            for entry in iter(lambda: entries.read(frame_archive.ENTRY.size), b""):
+                cv.budget(deadline)
+                offset, size = frame_archive.ENTRY.unpack(entry)
+                image.blocks.offsets.append(offset)
+                image.blocks.lengths.append(size)
+        image.blocks.capacities = array("Q", image.blocks.lengths)
+        image.size = proof["raw_bytes"]
+        image.sha256 = proof["raw_sha256"]
+        image.retained = record["extent"]
+        image.mutable = False
+        with tempfile.TemporaryDirectory(prefix="cw-indexed-check-", dir=descriptor.parent) as work:
+            sentinel = Path(work) / "sentinel.sqlite3"
+            sentinel.touch(mode=0o600)
+            vfs = cv.frozen_vfs(image, sentinel)
+            try:
+                with closing(
+                    apsw.Connection(str(sentinel), flags=apsw.SQLITE_OPEN_READWRITE, vfs=vfs.name)
+                ) as db:
+                    cache = cv.configure_cache(db, image)
+                    db.execute("PRAGMA query_only=ON")
+                    progress(phase="PERSISTED_FULL_INTEGRITY", bytes=image.size, sqlite_cache_kib=cache)
+                    cv.full_check(db, deadline)
+                    yield db, image
+            finally:
+                vfs.unregister()
+        if image.reconstructed_hash() != proof["raw_sha256"]:
+            raise cv.QualificationError("BYTE_IDENTITY_MISMATCH")
+        for path, before in zip((data, index, descriptor), identities, strict=True):
+            after = path.stat()
+            if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
+            ):
+                raise cv.QualificationError("BYTE_IDENTITY_MISMATCH")
+        cv.budget(deadline)
+    finally:
+        image.blocks.close()
+
+
+def indexed_backup(
+    path: Path,
+    destination: Path,
+    *,
+    seconds: float = 900,
+    progress: Callable[..., Any] = lambda **kw: None,
+) -> dict[str, Any]:
+    """One bounded operation: online capture, full source and persisted readback."""
+    if not math.isfinite(seconds) or not 0 < seconds <= 900:
+        raise cv.QualificationError("INVALID_TIME_BUDGET")
+    started = time.monotonic()
+    deadline = started + seconds
+    if destination.resolve() != destination or any(
+        p.is_symlink() for p in (destination, *destination.parents)
+    ):
+        raise cv.QualificationError("BACKING_PATH_REFUSED")
+    destination.mkdir(mode=0o700)  # Exclusive; incomplete archives remain for inspection.
+    private_disk(destination)
+    limit = disk_limit(destination, source_size(path))
+    with cv.classified_errors(deadline):
+        with cv.snapshot_image(
+            path,
+            destination,
+            deadline=deadline,
+            backing=destination / "source.frames",
+            encoded_limit=limit,
+            progress=progress,
+        ) as (_, image):
+            expected = (image.size, image.reconstructed_hash())
+            descriptor = frame_archive.save_index(image, destination, deadline=deadline)
+        # Both the live reader and first mapping are closed. Read the durable
+        # frames via an independent decoder, then reopen their native VFS.
+        with indexed_image(descriptor, deadline=deadline, progress=progress) as (db, readback):
+            if (readback.size, readback.sha256) != expected:
+                raise cv.QualificationError("BYTE_IDENTITY_MISMATCH")
+            cache = db.execute("PRAGMA cache_size").fetchone()
+            schema = db.execute("PRAGMA user_version").fetchone()
+            if cache is None or schema is None:
+                raise cv.QualificationError("CACHE_EVIDENCE_UNAVAILABLE")
+            result = {
+                "phase": "COMPLETE",
+                "mode": "COMPRESSED_DISK_INDEXED",
+                "validation_mode": "COMPRESSED_DISK_INDEXED",
+                "archive_encoding": "INDEXED_ZSTD",
+                "bytes": readback.size,
+                "sha256": readback.sha256,
+                "sqlite_cache_kib": -cache[0],
+                "schema": schema[0],
+            }
+        record = frame_archive.manifest(descriptor)
+        result.update(
+            archive_bytes=record["data_bytes"],
+            archive_sha256=record["data_sha256"],
+            index_sha256=record["index_sha256"],
+            descriptor_sha256=hashlib.sha256(descriptor.read_bytes()).hexdigest(),
+            elapsed_seconds=round(time.monotonic() - started, 3),
+            disk_reserve_bytes=DISK_RESERVE,
+        )
+        if os.name == "posix":
+            for folder in (destination, destination.parent):
+                fd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+        cv.budget(deadline)
+        return result
 
 
 def private_disk(directory: Path) -> None:

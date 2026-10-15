@@ -22,6 +22,96 @@ def scratch(tmp_path):
     return directory
 
 
+def test_indexed_backup_reopens_durable_frames_without_second_spool(store, tmp_path, monkeypatch):
+    from cryptowatcher import frame_archive
+
+    destination = (tmp_path / "indexed").resolve()
+    store.put_runtime("history", {"value": "useful" * 10000})
+    expected = store.snapshot()
+    original = cv.full_check
+    calls = 0
+
+    def checked(db, deadline):
+        nonlocal calls
+        calls += 1
+        store.put_runtime("later", calls)
+        assert store.db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0
+        original(db, deadline)
+
+    monkeypatch.setattr(cv, "full_check", checked)
+    proof = disk.indexed_backup(store.path, destination)
+    assert calls == 2
+    assert proof["phase"] == "COMPLETE" and proof["validation_mode"] == "COMPRESSED_DISK_INDEXED"
+    assert set(p.name for p in destination.iterdir()) == {
+        "source.frames",
+        "source.index",
+        "source.recovery.json",
+    }
+    decoded = tmp_path / "decoded.sqlite3"
+    recovered = frame_archive.restore(
+        destination / "source.recovery.json", decoded, maximum=proof["bytes"], deadline=time.monotonic() + 30
+    )
+    assert recovered["raw_sha256"] == proof["sha256"]
+    with closing(Store(decoded, store.owner_id, readonly=True)) as restored:
+        assert restored.snapshot() == expected
+        assert restored.get_runtime("later") is None
+        assert restored.get_runtime("history") == {"value": "useful" * 10000}
+    before = (destination / "source.recovery.json").read_bytes()
+    with pytest.raises(FileExistsError):
+        disk.indexed_backup(store.path, destination)
+    assert (destination / "source.recovery.json").read_bytes() == before
+
+
+def test_indexed_reopen_refuses_modified_bytes_and_keeps_recovery(store, tmp_path):
+    destination = (tmp_path / "indexed").resolve()
+    disk.indexed_backup(store.path, destination)
+    data = destination / "source.frames"
+    with data.open("r+b") as damaged:
+        damaged.seek(20)
+        damaged.write(b"bad")
+    with pytest.raises(StateError, match="identity"):
+        with disk.indexed_image(destination / "source.recovery.json", deadline=time.monotonic() + 30):
+            pytest.fail("corrupt image admitted")
+    assert data.exists()
+
+
+def test_indexed_cli_and_conflicting_modes(monkeypatch, infrastructure, store, tmp_path, capsys):
+    target = (tmp_path / "cli-indexed").resolve()
+    assert cli(monkeypatch, infrastructure, "backup", "--indexed-backup", "--destination", str(target)) == 0
+    result = json.loads(capsys.readouterr().out)["backup"]
+    assert result["phase"] == "COMPLETE" and result["archive_encoding"] == "INDEXED_ZSTD"
+    assert result["schema"] == 1
+    for args in (
+        ("state-check",),
+        ("backup", "--archive-backup"),
+        ("backup", "--disk-validation"),
+        ("backup", "--validation-directory", str(tmp_path)),
+    ):
+        assert cli(monkeypatch, infrastructure, *args, "--indexed-backup") == 2
+    capsys.readouterr()
+    with pytest.raises(StateError, match="combine"):
+        store.backup(tmp_path / "conflict", indexed=True, archive=True)
+
+
+@pytest.mark.parametrize("seconds", [0, 901, math.inf, math.nan])
+def test_indexed_backup_does_not_expand_deadline(store, tmp_path, seconds):
+    destination = tmp_path / "refused"
+    with pytest.raises(cv.QualificationError, match="TIME_BUDGET"):
+        disk.indexed_backup(store.path, destination, seconds=seconds)
+    assert not destination.exists()
+
+
+def test_indexed_source_check_rejects_invalid_constraints(store, tmp_path):
+    store.db.execute("PRAGMA ignore_check_constraints=ON")
+    with store.db:
+        store.db.execute("UPDATE owner_settings SET revision=-1")
+    store.db.execute("PRAGMA ignore_check_constraints=OFF")
+    destination = tmp_path / "invalid-source"
+    with pytest.raises(cv.QualificationError, match="DATABASE_CORRUPT"):
+        disk.indexed_backup(store.path, destination)
+    assert not (destination / "source.recovery.json").exists()
+
+
 def test_disk_backup_survives_ram_ceiling_and_wal_changes(store, tmp_path, monkeypatch):
     directory = scratch(tmp_path)
     target = tmp_path / "backup.sqlite3.zst"

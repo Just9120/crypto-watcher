@@ -349,7 +349,12 @@ class Store:
         compressed_validation: bool = False,
         archive: bool = False,
         disk_validation: bool = False,
+        indexed: bool = False,
     ) -> dict[str, float | str]:
+        if indexed and (
+            compressed_validation or disk_validation or archive or validation_directory is not None
+        ):
+            raise StateError("Indexed backup cannot combine other validation modes")
         if compressed_validation and validation_directory is None:
             raise StateError("Compressed validation requires a private validation directory")
         if archive and (not (compressed_validation or disk_validation) or validation_directory is None):
@@ -359,6 +364,10 @@ class Store:
         if destination.exists() or destination.resolve() == self.path.resolve():
             raise StateError("Backup destination must be new")
         destination.parent.mkdir(parents=True, exist_ok=True)
+        if indexed:
+            from .disk_backup import indexed_backup
+
+            return indexed_backup(self.path, destination, seconds=timeout_seconds)
         if disk_validation:
             from .disk_backup import backup as disk_backup
 

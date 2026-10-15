@@ -37,6 +37,30 @@ Snapshot: 2026-10-10, проверка около 10:00–10:15 Europe/Moscow; `
 
 ## Current Goal — полный scope CryptoWatcher (IMPLEMENT)
 
+Target disk rehearsal15Oct22:30–22:34UTC: persisted
+readback REFUSED223.610s, no OOM, unchanged running crypto-watcher/API/Postgres.
+Reported code DATABASE_ERROR during COMPRESS; подробный subcode helper не сохранил.
+Capacity admission при6.26GB free допускает<4.6GB второго encoded spool с
+reserve1.5GiB; этого недостаточно для полного набора блоков qualified candidate.
+Новый indexed backup использует один durable frame archive, independent decode
+и повторный full SQLite CHECK напрямую; full whole900s target proof PENDING.
+Local42 disk/indexed/journal/CLI scenarios PASS; canonical docs/Ruff/mypy45 PASS.
+Journal остаётся opt-in operator code, в production не установлен. До следующей
+поставки нужны latest required Linux CI/image, target proof всего обычного backup
+и900s combined delivery, reconciliation актуальных записей и reviewed promotion.
+Failed target record сохранён вне Git; повтор unchanged прогона не планируется.
+
+Preservation step16Oct: подготовить bounded временный журнал изменённых primary
+keys для всех пяти state tables. Установка только отдельной проверенной operator
+процедурой; обычное приложение не включает его само. Journal и изменения приложения
+коммитятся одной SQLite transaction, updates/deletes/key changes учитываются.
+При expiry/capacity journal становится INVALID без остановки alerts; потеря
+полноты запрещает promotion, а не выдаётся за отсутствие изменений. Replay читает
+payload и watermark из одного snapshot; private values не попадают в logs.
+Validation REQUIRED: rollback/concurrent snapshot, insert/update/delete/rename,
+restart, bounds/expiry, unknown epoch/DDL и Store compatibility. Старый qualified
+snapshot не становится актуальным без полной reconciliation и newer-write tail.
+
 Поручение16Oct: переработать backup без увеличения RAM, сохранить newer live
 writes и уменьшить рабочую БД, сохранив useful history и алерты; ordinary
 backup/CD≤900s. Продолжение в текущем PR36/base2efd9093. Сжатый validation image
