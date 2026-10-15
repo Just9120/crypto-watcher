@@ -132,16 +132,18 @@ one logical CPU. OS file cache этим пределом не ограничен
 cgroup4GiB и требует согласования по AGENTS.md. Оно не объявляется VPS capacity
 proof; ordinary900s/full data gates и production сохраняются. Exact local
 operator/review/target records находятся вне tracked files. До ответа нельзя
-переносить полный снимок или выполнять большой local run; разрешённый VPS job
-продолжает работу в прежних пределах.
+переносить полный снимок или выполнять большой local run. Последний VPS job
+терминальный UNQUALIFIED, worker cleanup PASS; живого conversion worker нет
+(readback15Oct12:30UTC). Повторный полный scan без нового основания не запускать.
 
 Read-only retained input — `adaptive-batch-qualification-ytc_om2q/work/`:
 descriptorSHA256def55554dd2e67f4be44f5ec0eb3005b7b70c477510311fd6cdde5090c13cd3f,
 encoded data46b168bf…/index8d602bec…, raw35,553,550,336bytes/SHA25624314f94….
-Fresh full encoded/index hashes заняли37.859s. Descriptor сохраняет
-source SQL CALLER_REQUIRED. Полный source SQL выполняется заново; full target,
-all-row manifests/private equality и final independent decode всех исходных bytes
-остаются REQUIRED. Исторический снимок нельзя переносить поверх новых live writes.
+Fresh full encoded/index identities подтверждены последним job. Descriptor
+сохраняет source SQL CALLER_REQUIRED; отдельный source-integrity-evidence.json
+фиксирует выполненный полный source SQL PASS. Full target, all-row manifests/
+private equality и final independent decode всех исходных bytes остаются REQUIRED
+и ещё не подтверждены для whole candidate. Исторический снимок нельзя переносить поверх новых live writes.
 
 Исправления helper/controller: baseline сохраняется до stop, restore/readback
 ограничены managed absolute deadline с10s reporting reserve; watchdog сохраняет
