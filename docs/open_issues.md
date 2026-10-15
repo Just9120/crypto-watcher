@@ -96,12 +96,33 @@ Candidate/journal/binding перенесены на D с полной byte/hash 
 На SSD подготовлен work `prepared-continuation-9bc6c3c808c1453c8083153c53a1bc3a`:
 candidate13,474,045,952bytes и journal45,768,320bytes побайтно совпали с D-копией.
 Source35,553,550,336bytes/SHA24314f94… сохранён и на D, и на SSD.
-Owner запрос на дополнительный один local1800s отправлен; решение PENDING.
-Proposal owner_authorized=false/start UNSET; запуска или автоматического renewal
-нет. Source/work/proof identities и terminal/relocation receipts сохранены вне
-Git; при восстановлении читать их до любых повторов. VPS readback19:30:25UTC:
-source2efd9093, owner revision3, DB38,472,228,864bytes, FRESH1324 streams,
-available1321/1324, analyticsOK/TelegramDELIVERED. Production DB не заменялась.
+Owner прямо разрешил ещё один local1800s. Новый immutable window начат
+15Oct20:59:31UTC, deadline21:29:31UTC; CPU1/process4GiB и все full data/recovery
+gates сохранены. Истёкшее окно5400s не открывалось заново. Canonical runner
+возобновил COPY с сохранённого prefix16,580,000. Terminal21:27:32UTC — PASS,
+exit0, elapsed1681.114s/1800s. Все20,247,617 runtime rows и четыре private tables
+сверены заново; full candidate integrity/CHECK, повторный source SHA и independent
+recovery decode/hash PASS. Candidate16,062,222,336bytes/SHA4efb5820… против
+source35,553,550,336bytes/SHA24314f94…; history_deleted0, collapsed_heads1,708,122,
+compact_candles3,136,039, framed_records1,878,922. Qualified historical snapshot
+сохранён с полным receipt; это не qualification current live source и не promotion.
+Source/work/proof identities и terminal/relocation receipts сохранены вне Git;
+при восстановлении читать active window и фактический process state до повторов.
+VPS readback21:01:12UTC: source2efd9093, owner revision3, DB38,864,125,952bytes,
+FRESH1324 streams, available1323/1324, analyticsOK/TelegramDELIVERED. Production
+DB не заменялась. Новый local window не разрешает её замену или потерю newer writes.
+Последующий bounded runtime readback21:29:11UTC: FRESH1324 streams,
+available1322/1324, owner revision3, analyticsOK/TelegramDELIVERED,
+DB38,969,483,264bytes; total disk free14,793,564,160bytes. Raw candidate16.06GB
+не помещается с резервом. Отдельная local capacity diagnostic21:32:58UTC,
+CPU1/process4GiB/deadline900s: current compressed RAM gate3GiB отказал
+COMPRESSED_MEMORY_LIMIT уже после7,727,677,440 из16,062,222,336 raw bytes;
+candidate SHA до/после совпал. Это capacity FAIL существующего ordinary path,
+не FAIL qualified candidate; current VPS/whole delivery fit этим не подтверждён.
+Первый diagnostic завершился ошибкой только при печати уже записанного receipt;
+reporting исправлен и повторён в том же исходном900s окне, exit0/refusal воспроизведён.
+До promotion нужны устранение этого ограничения без расширения обычных лимитов,
+место для reviewed операции и сверка всех newer live writes.
 Ordinary whole backup/CD≤900s остаётся обязательным требованием: текущий receiver
 ограничивает900s каждый из двух DB этапов отдельно, release job40min включает
 build. Это ещё не подтверждение общего900s; F27 остаётся открытым до actual
