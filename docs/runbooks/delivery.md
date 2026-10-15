@@ -538,6 +538,14 @@ InvocationID,900000000 microseconds и единственный обязател
 остаются обязательными. Даже при adapter overrun выполняется bounded emergency
 start; превышение900s не может стать successful qualification.
 
+Controller связывает deadline с typed `ActiveEnterTimestampMonotonic` managed
+unit, включая время до старта Python/preflight, и оставляет10s для terminal report.
+Safe baseline (owner/revision/schema/private hash) сохраняется в operation.json
+до запроса остановки. Каждый restoration inspect/readback получает только
+оставшееся время. `--restore-only` сохраняет отдельный private
+`watchdog-recovery-*.json`: start acknowledgement не является health или
+qualification PASS и не заменяет незавершённый primary operation record.
+
 Restore удаляет только принадлежащие этому operation временные worker containers,
 идентифицирует тот же исходный CryptoWatcher и запускает его. Код не заменяет DB,
 не восстанавливает backup поверх live data и не запускает другой image. PASS

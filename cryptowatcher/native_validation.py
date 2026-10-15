@@ -119,9 +119,21 @@ class NativeVFS:
         extra = getattr(self.lib, "cwcvfs_prefetch_stats", None)
         if extra is not None:
             extra.argtypes = [ctypes.c_void_p, *([ctypes.POINTER(ctypes.c_uint64)] * 3)]
+            extra.restype = None
             calls, failures, encoded = ctypes.c_uint64(), ctypes.c_uint64(), ctypes.c_uint64()
             extra(self.pointer, ctypes.byref(calls), ctypes.byref(failures), ctypes.byref(encoded))
             result.update(
                 prefetches=calls.value, prefetch_failures=failures.value, encoded_bytes=encoded.value
+            )
+        shape = getattr(self.lib, "cwcvfs_prefetch_shape", None)
+        if shape is not None:
+            shape.argtypes = [ctypes.c_void_p, *([ctypes.POINTER(ctypes.c_uint64)] * 3)]
+            shape.restype = None
+            wide, covered, requested = ctypes.c_uint64(), ctypes.c_uint64(), ctypes.c_uint64()
+            shape(self.pointer, ctypes.byref(wide), ctypes.byref(covered), ctypes.byref(requested))
+            result.update(
+                wide_prefetches=wide.value,
+                covered_prefetches=covered.value,
+                prefetch_requested_bytes=requested.value,
             )
         return result

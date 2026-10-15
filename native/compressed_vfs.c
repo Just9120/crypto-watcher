@@ -19,6 +19,7 @@ SQLITE_EXTENSION_INIT1
 #define SLOTS 512u
 typedef struct { uint64_t off, len; } Frame;
 typedef struct { uint64_t block, age; } Slot;
+typedef struct { size_t start, end; } Prefetch;
 typedef struct Ctx Ctx;
 typedef struct { sqlite3_file base; Ctx *ctx; sqlite3_file *parent; } File;
 struct Ctx {
@@ -28,6 +29,8 @@ struct Ctx {
     size_t extent, count; uint64_t size, clock, reads, decodes;
     double deadline; int opens, disk_prefetch;
     size_t page_size; uint64_t prefetches, prefetch_failures, encoded_bytes;
+    uint64_t recent_blocks[8], wide_prefetches, covered_prefetches, prefetch_bytes;
+    unsigned recent_next, prefetch_next; Prefetch requested[8];
     Frame *frames; int *map; Slot slots[SLOTS];
     unsigned char *cache; ZSTD_DCtx *decoder;
 };
@@ -56,9 +59,30 @@ static int read_file(sqlite3_file *p, void *out, int n, sqlite3_int64 offset) {
 #if defined(__linux__)
             if(c->disk_prefetch) {
                 size_t start=(size_t)f.off-((size_t)f.off%c->page_size);
-                size_t length=(size_t)(f.off+f.len)-start;
-                c->prefetches++;
-                if(madvise((void*)(c->data+start),length,MADV_WILLNEED)!=0) c->prefetch_failures++;
+                size_t end=(size_t)(f.off+f.len), length=end-start;
+                int covered=0, sequential=0;
+                for(unsigned i=0;i<8;i++) {
+                    if(c->requested[i].start<=f.off && end<=c->requested[i].end) covered=1;
+                    if(c->recent_blocks[i]!=UINT64_MAX && index==c->recent_blocks[i]+1) sequential=1;
+                }
+                if(covered) c->covered_prefetches++;
+                else {
+                    /* Keep random probes narrow. Coalesce sequential streams,
+                       including table/index interleaving, without repeatedly
+                       advising overlapping ranges. This never changes bytes. */
+                    if(sequential && length<131072u) {
+                        size_t ahead=c->extent-start;
+                        if(ahead>131072u) ahead=131072u;
+                        if(ahead>length) { length=ahead;c->wide_prefetches++; }
+                    }
+                    c->prefetches++;c->prefetch_bytes+=length;
+                    if(madvise((void*)(c->data+start),length,MADV_WILLNEED)!=0) c->prefetch_failures++;
+                    else {
+                        c->requested[c->prefetch_next]=(Prefetch){start,start+length};
+                        c->prefetch_next=(c->prefetch_next+1)%8;
+                    }
+                }
+                c->recent_blocks[c->recent_next]=index;c->recent_next=(c->recent_next+1)%8;
             }
 #endif
             c->encoded_bytes+=f.len;
@@ -137,6 +161,7 @@ void *cwcvfs_create(const char *name,const void *data,size_t extent,const uint64
     if(!sqlite3_api || !name || strlen(name)>=100 || !data || (count && (!offsets || !lengths)) || !isfinite(deadline) || size>INT64_MAX || count!=(size/BLOCK+(size%BLOCK!=0)) || count>SIZE_MAX/sizeof(Frame) || count>SIZE_MAX/sizeof(int) || sqlite3_vfs_find(name)) return NULL;
     Ctx *c=calloc(1,sizeof(*c));if(!c)return NULL;
     c->data=data;c->extent=extent;c->size=size;c->count=count;c->deadline=deadline;
+    for(unsigned i=0;i<8;i++)c->recent_blocks[i]=UINT64_MAX;
     c->frames=malloc((count?count:1)*sizeof(Frame));c->map=malloc((count?count:1)*sizeof(int));
     c->cache=malloc((size_t)BLOCK*SLOTS);c->decoder=ZSTD_createDCtx();
     if(!c->frames || !c->map || !c->cache || !c->decoder) { release(c);return NULL; }
@@ -169,6 +194,9 @@ int cwcvfs_disk_prefetch(void *p) {
 }
 void cwcvfs_prefetch_stats(void *p,uint64_t *calls,uint64_t *failures,uint64_t *bytes) {
     Ctx *c=p;*calls=c->prefetches;*failures=c->prefetch_failures;*bytes=c->encoded_bytes;
+}
+void cwcvfs_prefetch_shape(void *p,uint64_t *wide,uint64_t *covered,uint64_t *bytes) {
+    Ctx *c=p;*wide=c->wide_prefetches;*covered=c->covered_prefetches;*bytes=c->prefetch_bytes;
 }
 int sqlite3_cwcvfs_init(sqlite3 *db,char **error,const sqlite3_api_routines *api) {
     (void)db;(void)error;SQLITE_EXTENSION_INIT2(api);

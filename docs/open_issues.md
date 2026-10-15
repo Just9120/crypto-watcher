@@ -147,21 +147,78 @@ exact rows/types/hash, refusal of writes, damaged CHECK и deadline negative con
 Production mount отсутствовал; live bot не останавливался. Ordinary gates не менялись.
 Local storage/maintenance regression99 PASS/7 platform skips; canonical quality
 PASS. Guard/recording block48 PASS, отдельно Linux helper controls PASS.
+Linux native suite6/6 PASS2.08s на exact PR35 image с reviewed helper/code overlay,
+private fixture и без production mount: `native-targeted-tests-a6jk41eg/receipt.json`.
+Это закрывает platform skips изменённых native tests, не заменяя required PR CI.
+Ранние isolated runner failures зависимостей/temp/cwd исправлены; PASS относится
+к новому коду, а не к старому installed module. Typed managed timestamp проверен
+на host; bounded runtime readback07:41UTC подтверждает fresh4TF/full ACK обоих
+рынков и Telegram DELIVERED после старта изолированной работы.
 
-Текущий isolated job15Oct07:36UTC: `sealed-snapshot-qualification-t9_6ad5b`,
+Изолированный job15Oct07:36–08:34UTC: `sealed-snapshot-qualification-t9_6ad5b`,
 unit `cw-sealed-qual-59eba27ae93f424fbb3958c3a69f7b16`. Borrowed source.frames
 предыдущего closed capture подключён read-only; fresh input copy0bytes, отдельная
 candidate; production DB/credentials/network отсутствуют. Один managed budget3600s,
 worker3500s, CPU1/RAM4GiB/no swap. Parser восстановил все35,553,550,336 raw bytes
 за149.301s, проверил каждый frame/checksum/bounds и нулевой allocation tail.
-SOURCE_FULL_INTEGRITY ещё PENDING; это не source/candidate qualification PASS.
+Итог primary operation.json **UNQUALIFIED**, TIME_BUDGET_EXCEEDED,3503.782s,
+worker_cleanup PASS. SOURCE_FULL_INTEGRITY не завершена, candidate отсутствует.
+Полный same-dataset scan не повторяется без изменения проверяемой причины.
 Изолированный fixture `sealed-snapshot-fixture-13la3eo2/receipt.json` PASS:
 source/candidate CHECK, all-row manifests, independent recovery encoded/decoded
 identity, checksum/truncation/tail/raw-size negative controls. Ошибка wrapper JSON
 при cleanup исправлена; primary PASS receipt перечитан, own exited container удалён
 без повторного fixture. Реальный job не останавливает working bot; last readback
-07:40UTC same container/image, healthy. Это исторический snapshot: его нельзя
+08:35UTC same container/image, healthy. Это исторический snapshot: его нельзя
 переносить поверх текущей БД без доказанного сохранения новых writes.
+Readback08:01–08:02UTC: fresh both-market4TF/full ACK и новая Telegram DELIVERED.
+Один Docker resource snapshot: bot1.102GiB/34.94% CPU, isolated helper2.191GiB/47.12%
+CPU с cap4GiB/CPU1. Это измерение во время maintenance, не steady-state capacity
+или обещание достаточности ресурсов; F22/F31 остаются предметом final validation.
+
+Следующий безопасный diagnostic15Oct08:35UTC:
+`sealed-copy-diagnostic-xksopd9g`, unit
+`cw-sealed-diagnostic-e3c30c7b6a464d26884566428e5d8ae5`. Source quick_check и
+complete copy/target full CHECK/all-row manifests/recovery измеряются отдельно;
+**source full integrity NOT_RUN, результат не разрешает promotion**. Этот
+private research code не меняет canonical converter, normal backup/CD и full
+source gate. Один total900s/worker830s, CPU1/RAM4GiB/no swap, тот же RO retained
+snapshot, fresh input copy0bytes, production mount/network0. Small control
+`quick-policy-control-ku43ftfw/receipt.json` PASS показывает точную границу:
+quick_check пропускает специально рассогласованный old PK index; table rows
+сохраняются, full target index/CHECK и all-row readback восстанавливают валидный
+candidate. Это DIAGNOSTIC_ROWS_VERIFIED_NO_PROMOTION, не qualification. Новая
+policy не согласована/не применяется; invalid source index не объявлен
+безопасным для текущих required gates. Whole diagnostic **DIAGNOSTIC_INCOMPLETE**,
+TIME_BUDGET_EXCEEDED838.613s, worker_cleanup PASS; даже SOURCE_QUICK_CHECK не
+завершён, candidate отсутствует. Следовательно, оснований менять required source
+gate нет. Production same/healthy, никаких DB replacement/retention DML.
+Bounded synthetic controls128MiB/CPU1, no production inputs: naive sequential
+prefetch выигрывал на простых последовательностях, но оказался медленнее на
+interleaved table/index pattern; этот вариант не оставлен в коде. Batch control
+`mmap-batch-control-6l9wtbry` подтвердил пользу подавления перекрывающихся advice.
+Guarded variant `mmap-adaptive-batch-control-n0u7v5vq`: mixed2643 versus662 reads/s,
+random515 versus892 reads/s в коротком одиночном sample. По этим samples нельзя
+обещать ускорение всех workloads; random widening ограничен predecessor detection,
+actual-data proof обязателен. Все прочитанные bytes проверены, synthetic files
+удалены собственным TemporaryDirectory, working container unchanged.
+
+Native guarded batching сохраняет узкие случайные запросы, учитывает несколько
+interleaved streams и не повторяет advice для уже покрытых диапазонов. Linux
+`native-batch-tests-wmm0d_3_/receipt.json`7/7 PASS; новый test читает interleaved
+blocks и сверяет исходные bytes/readonly lifetime. Whole small fixture
+`adaptive-batch-whole-fixture-dxnbo874/receipt.json` PASS: full source/candidate,
+all-row manifests и независимый recovery; helper SHA25660b25811….
+
+Current actual-data run15Oct09:22UTC: `adaptive-batch-qualification-ytc_om2q`, unit
+`cw-sealed-qual-deb7ca7d5d9247e296c328262cf61582`, code archive777074ef….
+Тот же RO retained source, input copy0bytes, no production mount/stop/network.
+Whole3600s/worker3500s/CPU1/RAM4GiB/no swap; all source/target/recovery gates прежние.
+Recovery metadata записывается до SQL и явно оставляет source SQL CALLER_REQUIRED;
+raw SHA сравнивается с первоначальным decode, final independent decode проверяет
+те же bytes после copy. Это сохраняет input identity при failure и не является
+qualification до полного PASS. Dataset result PENDING; ordinary checks900s и
+current-source promotion остаются отдельными REQUIRED этапами.
 После получения candidate отдельно REQUIRED ordinary state/backup в прежнем
 900s бюджете и exact current-source promotion без потери writes; failure recurring
 checks требует переработки, а не переноса3600s в CD. Новых Actions не запускать
