@@ -107,6 +107,11 @@ worker code bundle/hash и fresh disk/RAM admission до stop обязатель
 вызов independent recovery hook при deadline и SIGKILL parent; production unit
 в fixture не участвовала. Production maintenance/cleanup остаются PENDING
 owner reply к ранее заданному вопросу; новых больших scans/CI/CD не запущено.
+Launcher завершён: default preflight не имеет --execute, exact restore argv
+и systemd900s/UMask0077 проверены; unsafe/relative/specifier paths отвергаются.
+38 maintenance tests PASS, quality PASS. Prepared code-only bundle286720bytes
+с manifest каждого module; data/secrets отсутствуют. Production staging/execute
+не запускались, большие проверки не повторялись; owner approval остаётся PENDING.
 
 
 

@@ -533,3 +533,17 @@ Restore удаляет только принадлежащие этому operat
 post-check оставляет operation незавершённой. SIGKILL recovery hook проверен
 отдельно на disposable units; сам production restore подтвердится только
 после разрешённой операции на exact target.
+
+
+Launcher: `scripts/launch_closed_source_maintenance.py`. Без `--execute`
+проверяет staged adapter и возвращает `started=false`; service не создаётся.
+Точный target и private paths передаются явно. При разрешённом запуске создаёт
+один owned transient unit с fixed RuntimeMaxSec900, restore-only ExecStopPost,
+private logs/UMask0077 и теми же аргументами original unit. Shell/specifier
+syntax, relative paths и paths вне private rehearsals отвергаются.
+Code-only bundle/staging содержит root-owned operator package и UID10001
+read-only worker package; полный module manifest обязателен. Worker выбирает
+pinned native helper ожидаемого image, closed source и оставшийся deadline.
+После неизвестного результата dispatch проверять exact unit/operation record;
+повторный launch без readback запрещён. Source dataset fit и actual promotion
+не доказываются успехом launcher tests.
