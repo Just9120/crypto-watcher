@@ -181,9 +181,27 @@ query budget, полный backlog этим probe не подтверждён. �
 служебных копий15:32:11UTC PASS: обе сохранённые Zstd-копии полностью decode
 в исходные raw SHA; retained frames SHA совпал с input на ПК. Возможное
 освобождение9,305,128,960 allocated bytes относится к шести именам/трём
-физическим файлам, не к production DB. Exact identities/handles/mount inventory
-15:49:55UTC: handles/maps0, только широкие read-only monitoring mounts `/`.
-Удаление не разрешено и не выполнено; точный review остаётся вне repository.
+физическим файлам, не к production DB. Owner затем явно разрешил эту exact
+cleanup после повторной проверки. Fresh PC verification18:04:45UTC PASS:
+frames/index/descriptor/raw35.55GB совпали с expected SHA, metadata стабильна.
+VPS recheck18:02:42UTC PASS: оба raw/encoded SHA, full independent archive decode
+и frames SHA. Exact inode/mtime/nlink/handles/maps/mount checks повторены перед
+execute; сохранены только широкие read-only monitoring mounts `/`.
+Terminal18:06:08UTC **PASS**, primary
+`retained-copy-release-ac18dc15aa504e428bb92bdd431c1176/operation.json`:
+удалены ровно6 имён/3 физических файла, allocated9,305,128,960bytes,
+free6,498,320,384→15,802,781,696bytes. Scope: четыре hardlinks source.frames
+в one-time/sealed-copy/sealed-snapshot/adaptive-batch trials и два raw candidates
+historical-saved-pack-p989q4jn/archive-source-qualification-tt0g_f8c.
+Разрешение использовано; не повторять или расширять scope. Оба Zstd archives,
+recovery gzip, index/metadata/receipts сохранены; retained frame input и raw source
+теперь доступны на private D-папке ПК, удалённые VPS input paths не использовать.
+Это не qualified current candidate и не уменьшение рабочей БД.
+Post-check18:06:47UTC: same container/image/source2efd9093, healthy,
+DB38,150,942,720bytes/WAL12,685,512bytes/free15,797,972,992bytes;
+ingestion FRESH2.3s/1324streams/recovery_pending0, poll1323/1324 DEGRADED,
+analyticsOK/Telegram DELIVERED. Trading agent API/Postgres identities/running
+сохранились. Ordinary backup/CD900s не менялись; новая конвертация не запускалась.
 Small2.015MB
 source→candidate139KB full integrity/manifests/recovery PASS0.266s; closed WAL
 header PASS0.234s; CHECK/index corruption controls PASS, source unchanged и
@@ -1486,7 +1504,7 @@ Priority: P1 — блокирует correctness/security/основной scope;
 | B02 | Последний проверенный consumer14Oct42b3f809; dedicated radar credential draft/TOTP отложен владельцем. Binding/ingest OFF, max-age900s согласован, actual configuration/activation не подтверждены | Сохранить existing master/other credentials/trading flags; после owner draft выполнить recovery и reviewed signed activation. Producer runtime PR35 подтверждён; текущую consumer revision/config перечитать перед операцией |
 | B03 | Numeric SPEC gaps RESOLVED approved D09–D20; owner mapping EVG6 и actual migration/restore EVG8 PASS | Сохранять accepted policies и migrated settings/custom empty/delivery/mutes; новые unknown/conflicting states сохраняют diagnostic gate |
 | B04 | RESOLVED: Just9120 admin; strict main protection/production Environment and DEPLOY_ENABLED=true readback PASS | Reread current protections/revision before each merge; runtime delivery via dedicated CD |
-| B05 | Whole current qualification не завершена. Retained35.55GB source full PASS2803.353s; exact local download/pre-copy raw SHA PASS. Разовый local5400s исчерпан16:27:02UTC на COPY10.92M после исправленного operator sharing failure; candidate с journal не qualified, worker завершён. Physical shrink0; бот healthy/FRESH16:27UTC, ordinary900s не менялись | Переработать устойчивость/производительность подготовки и согласовать следующий whole qualification после использованного разового окна; затем complete manifests/recovery, ordinary state/backup≤900s, compatible reader CI/CD и reviewed fresh-current-source promotion без потери новых writes. Historical source PASS не заменяет эти gates. Отдельный exact cleanup review подготовлен для capacity, owner approval PENDING |
+| B05 | Whole current qualification не завершена. Retained35.55GB source full PASS2803.353s; exact local download/pre-copy raw SHA PASS. Разовый local5400s исчерпан16:27:02UTC на COPY10.92M после исправленного operator sharing failure; candidate с journal не qualified, worker завершён. Physical shrink0; бот healthy/FRESH18:06UTC, ordinary900s не менялись. Owner-approved six-name cleanup PASS18:06UTC, освобождено9.305GB; retained input/raw SHA заново PASS на ПК | Переработать устойчивость/производительность подготовки и согласовать следующий whole qualification после использованного разового окна; затем complete manifests/recovery, ordinary state/backup≤900s, compatible reader CI/CD и reviewed fresh-current-source promotion без потери новых writes. Historical source PASS не заменяет эти gates. Capacity cleanup approval использован; повторять/расширять его scope нельзя |
 
 ## Audit quality review
 
