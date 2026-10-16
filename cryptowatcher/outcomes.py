@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import math
 from dataclasses import asdict
 from typing import Any, Callable
@@ -11,7 +10,7 @@ from typing import Any, Callable
 from .config import OwnerSettings
 from .events import PREFIX, History, identity
 from .sources import Candle, Sources
-from .storage import StateError, Store, encode
+from .storage import StateError, Store, encode, json_payload
 
 MINUTE = 60_000
 DAY = 86_400_000
@@ -28,6 +27,10 @@ DEFINITION = {
 
 
 def read_candles(store: Store, stream: str, start: int, end: int) -> list[Candle]:
+    if store.bounded:
+        from .market_storage import read
+
+        return [Candle(**v) for v in read(store.db, stream, start, end)]
     prefix = Sources.prefix(stream)
     rows = store.db.execute(
         "SELECT payload_json FROM runtime WHERE key>=? AND key<? ORDER BY key",
@@ -35,7 +38,7 @@ def read_candles(store: Store, stream: str, start: int, end: int) -> list[Candle
     )
     result = []
     for row in rows:
-        candle = Candle(**json.loads(row[0]))
+        candle = Candle(**json_payload(row[0]))
         if candle != Candle.parse(
             candle.row(), stream.rsplit("/", 1)[1], candle.source, candle.received_ms, candle.server_ms
         ):
@@ -129,6 +132,10 @@ def calculate(event: dict[str, Any], horizon: int, candles: list[Candle]) -> dic
 
 
 def protect(history: History, stream: str, candles: list[dict[str, Any]]) -> None:
+    if history.store.bounded:
+        # Normalized windows lease only the exact used revisions; no per-candle
+        # permanent runtime markers are written by the bounded layout.
+        return
     for candle in candles:
         history.store.db.execute(
             "INSERT OR IGNORE INTO runtime VALUES (?,?)",
@@ -173,7 +180,10 @@ class OutcomeWorker:
         for horizon in settings.outcome_horizons:
             outcome_id = identity(f"outcome/{event['event_id']}/{horizon}/{METHOD}")
             key = "outcome-job:" + outcome_id
-            if self.history.get(key) is not None:
+            if self.history.get(key) is not None or (
+                self.store.bounded
+                and self.history.get("outcome-head:" + outcome_id, {}).get("state") == "COMPLETE"
+            ):
                 continue
             due = event["reference_time_ms"] + horizon * MINUTE
             pending = pending_key(due, outcome_id)
@@ -194,7 +204,14 @@ class OutcomeWorker:
             self.history.put(pending, {"outcome_id": outcome_id})
             self.history.put(hold, {"start": event["reference_time_ms"], "end": due})
         comparison = "comparison-job:" + event["event_id"]
-        if self.history.get(comparison) is None:
+        from .analytics import COMPARATOR_VERSION
+
+        comparison_id = identity(f"comparison/{event['event_id']}/{COMPARATOR_VERSION}")
+        if self.history.get(comparison) is None and not (
+            self.store.bounded
+            and self.history.get("comparison-head:" + comparison_id, {}).get("state")
+            in ("COMPLETE", "COMPLETE_LIMITED")
+        ):
             comparison_pending = pending_key(event["available_at_ms"], event["event_id"]).replace(
                 "outcome-pending:", "comparison-pending:", 1
             )
@@ -238,7 +255,7 @@ class OutcomeWorker:
         ).fetchall()
         with self.store.db:
             for row in rows:
-                event_id = json.loads(row[1])["event_id"]
+                event_id = json_payload(row[1])["event_id"]
                 self.admit(self.history.get("event:" + event_id + ":0000000001"))
                 admission["cursor"] = row[0]
             admission["complete"] = len(rows) < batch
@@ -339,7 +356,10 @@ class OutcomeWorker:
                 job.update(state=result["state"], next_attempt_ms=now_ms + MINUTE)
                 job["pending_key"] = pending_key(job["next_attempt_ms"], job["outcome_id"])
                 self.history.put(job["pending_key"], binding)
-            self.history.put("outcome-job:" + job["outcome_id"], job)
+            if self.store.bounded and result["state"] == "COMPLETE":
+                self.history.delete("outcome-job:" + job["outcome_id"])
+            else:
+                self.history.put("outcome-job:" + job["outcome_id"], job)
 
     def diagnostics(self) -> dict[str, Any]:
         return {
@@ -355,6 +375,10 @@ class Retention:
         self.store, self.history = store, History(store)
 
     def work(self, now_ms: int, batch: int = 500) -> int:
+        if self.store.bounded:
+            from .storage_lifecycle import BoundedRetention
+
+            return BoundedRetention(self.store).work(now_ms, min(batch, 200))
         if not self.history.get("outcome-admission", {}).get("complete"):
             return 0
         state = self.history.get("retention", {"cursor": ""})
@@ -368,7 +392,7 @@ class Retention:
         with self.store.db:
             for row in rows:
                 state["cursor"] = row[0]
-                candle = Candle(**json.loads(row[1]))
+                candle = Candle(**json_payload(row[1]))
                 if candle.end >= now_ms - 90 * DAY or self.history.get("protected:" + row[0]):
                     continue
                 stream = row[0][len(prefix) :].rsplit(":", 1)[0]

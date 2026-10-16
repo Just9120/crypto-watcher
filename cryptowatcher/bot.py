@@ -133,6 +133,8 @@ MANUAL_FIELDS = {
     "liquidity_floor_24h",
     "sma_periods",
     "digest_interval_min",
+    "detail_retention_days",
+    "candle_retention_days",
 }
 MANUAL_FIELDS.update(PARAMETERS)
 
@@ -207,8 +209,27 @@ class Controller:
         self.store.update(snapshot.revision, snapshot.settings.changed(**values))
         self.store.put_runtime("last_poll_ts", 0)
 
+    def history_notice(self) -> str:
+        if not self.store.bounded:
+            return ""
+        from datetime import datetime, timezone
+
+        generation = self.store.get_runtime("history_generation", {})
+        start = generation.get("started_ms")
+        since = (
+            datetime.fromtimestamp(start / 1000, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+            if start
+            else "UNSET"
+        )
+        return (
+            f"Период новой истории: с {since}. Старая тестовая история недоступна.\n"
+            f"Подробности: {self.store.snapshot().settings.detail_retention_days} дней; quality summaries: 12 месяцев. "
+            "Доступная глубина и N ограничены накопленными данными.\n"
+        )
+
     def diagnostics(self) -> dict[str, Any]:
         return {
+            "storage": self.store.get_runtime("storage_report", {"state": "PENDING"}),
             "source_revision": self.infrastructure.source_revision,
             "configuration_revision": self.store.snapshot().revision,
             "telegram_alerts_enabled": self.store.enabled(),
@@ -413,13 +434,16 @@ class Controller:
             events = self.history.events(12)
             await self.send(
                 update,
-                "Последние сохранённые события, включая historical/suppressed и muted observations.\n"
-                + "\n".join(
-                    f"{e['symbol']} · {e['market_type']} · {e['detector_id']} · {e['timeframe']} · {e['direction']} · strength {e['strength']:.2f}"
-                    for e in events
-                )
-                if events
-                else "История пока пуста.",
+                self.history_notice()
+                + (
+                    "Последние сохранённые события, включая historical/suppressed и muted observations.\n"
+                    + "\n".join(
+                        f"{e['symbol']} · {e['market_type']} · {e['detector_id']} · {e['timeframe']} · {e['direction']} · strength {e['strength']:.2f}"
+                        for e in events
+                    )
+                    if events
+                    else "История пока пуста."
+                ),
                 history_keyboard(events),
             )
         elif command == "event":
@@ -436,7 +460,7 @@ class Controller:
                 )
                 await self.send(update, event_text(event, now_ms), event_keyboard(event))
             else:
-                await self.send(update, "Событие не найдено.")
+                await self.send(update, self.history_notice() + "Событие не найдено.")
         elif command == "horizons":
             if raw:
                 parts = raw.replace(",", " ").split()
@@ -459,7 +483,7 @@ class Controller:
             else:
                 events = self.history.events(5)
             if not events or events[0] is None:
-                await self.send(update, "История пока пуста или событие не найдено.")
+                await self.send(update, self.history_notice() + "История пока пуста или событие не найдено.")
             else:
                 for event in events:
                     from .config import OwnerSettings
@@ -817,6 +841,9 @@ class Controller:
                 processed_outcomes = await self.outcomes.async_work(self.market.server_now)
                 processed_comparisons = await ComparisonWorker(self.store).async_work(self.market.server_now)
                 self.retention.work(now)
+                from .storage_meter import sample
+
+                sample(self.store, now)
                 await self.recovery.work(now)
                 self.store.put_runtime(
                     "analytics",

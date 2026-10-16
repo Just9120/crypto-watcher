@@ -121,7 +121,7 @@ python -m cryptowatcher backup --database PATH_TO_DB --destination PATH_TO_NEW_B
 
 ## Recovery и retention
 
-Legacy source и archived other chats автоматически не удаляются. Backup names уникальны; housekeeping manual до measured policy. Event source snapshots автоматически не удаляются. Согласованные90-day ordinary candles и защиту иных outcome/comparator sources реализует G3; это не поручение удаления JSON/backups.
+D22 заменяет прежнюю indefinite policy: details30d, small-TF35d плюс ограниченные used dependencies сохраняемых расчетов, quality summaries12mo. Сначала агрегаты, затем automatic bounded cleanup. Settings/methodology provenance summaries сохраняется без raw arrays. Legacy private source/archived chats и backups не входят в market retention/reset; их удаление требует отдельного точного перечня. Backup names уникальны.
 
 До new-runtime write можно восстановить прежний application с сохранённым JSON по approved sequence. После write legacy JSON отстаёт от SQLite: blind rollback приложения теряет новые settings/runtime. Нужен compatible schema1 rollback или forward-fix; DB restore поверх live данных требует отдельного scoped approval и writer quiescence. Наличие файла `.bak` само по себе не подтверждает пригодность восстановления.
 
@@ -137,7 +137,7 @@ Physical SQLite user_version1 не меняется. Логически неза
 | source:v1:gap:market/symbol/TF | Durable start/end historical recovery cursor и PENDING/COMPLETE |
 | ingestion | Actual source/market errors, subscription acknowledgements, TF, pending/buffer diagnostics |
 
-Native свечи закрыты по confirm=true либо REST exchange time. Historical/bootstrap/recovered записи сохраняются, но live eligibility — process-local и после restart пуста. Cached window≤256; остальные rows остаются в DB. Online backup schema1 включает все source namespaces. 90-day raw retention/protected event snapshots вводятся в G3; owner/import/backup data автоматически не удаляются.
+Native свечи закрыты по confirm=true либо REST exchange time. Historical/bootstrap/recovered записи сохраняются, но live eligibility — process-local и после restart пуста. Cached window≤256; остальные rows остаются в DB. Online backup schema1 включает все source namespaces. Raw retention35d и используемые snapshots до окончания срока подробных расчетов определены D22; owner/import/backup data не входят в market cleanup.
 
 Settings дополняются typed `watchlist` и `watchlist_multiplier` (default0.75). Отсутствующие fields старой schema1 принимают defaults без переписывания сохранённого owner record; legacy custom_pairs остаются исходным migration evidence и fallback выбранного рынка. Новый список содержит spot/symbol либо linear/symbol; explicit clear очищает оба representations, empty list не получает seed. Legacy JSON watchlist остаётся untyped alias при import, не интерпретируется как новый field. Saved numeric thresholds не заменяются preset. Typed mutes имеют market/symbol; сохранённые legacy symbol mutes действуют только на selected legacy category.
 
@@ -168,7 +168,7 @@ Event + episode + decision + initial outbox сохраняются одной tr
 
 Physical schema1/NONE, один writer. `outcome-method:1` / `comparison-method:1` immutable; изменение методики без новой version блокирует работу. `outcome-job:UUID` / timestamp-length-ordered `outcome-pending:` фиксируют event revision, horizon, immutable reference и retries; `comparison-job:event` / `comparison-pending:` — отдельный bounded comparator worker. `outcome-admission` idempotently проходит прежнюю indexed history и блокирует retention до завершения. Event transaction включает initial jobs/holds до consumers. Старые snapshots без новых fields читаются agreed defaults5/15/30/60, не будущими текущими owner settings.
 
-`outcome:UUID:revision` / `outcome-head:UUID` и `comparison:UUID:revision` / head сохраняют прежние versions/results и availability timestamps. Неполные outcomes могут получить новую COMPLETE revision после recovery; завершённые results не пересчитываются автоматически. Complete result, full used inputs и `protected:source:v1:candle:` записываются атомарно. `hold:stream:job` удерживает весь pending диапазон, включая данные старше90days; bounded `retention` удаляет только unreferenced ordinary candles. Legacy JSON/backups/events/episode/outcome/comparison/settings records автоматически не удаляются.
+`outcome:UUID:revision` / `outcome-head:UUID` и `comparison:UUID:revision` / head сохраняют прежние versions/results и availability timestamps. Неполные outcomes могут получить новую COMPLETE revision после recovery; завершённые results не пересчитываются автоматически. Complete result и references на used inputs записываются атомарно. D22 требует bounded holds только нужных inputs еще сохраняемых details; pending при истечении допустимого срока получает terminal incomplete/expired status и освобождает hold. Aggregate-before-delete retention удаляет expired details/services/references; legacy private JSON/backups не входят в market cleanup.
 
 Новые event/outcome heads имеют internal schema `cryptowatcher.history-head.v1`:
 `revision_key` указывает на неизменную revision того же kind/ID, рядом сохранены
@@ -181,7 +181,7 @@ causal cutoff и public event/outcome/export schema не меняются.
 
 Legacy full heads читаются в той же базе; upgrade не запускает bulk rewrite.
 Только новая revision получает compact head в той же transaction. Existing raw
-source/outcome snapshots и history автоматически не удаляются. Physical schema
+source/outcome snapshots и history хранятся по D22; прежний запрет автоматического удаления отменен. Physical schema
 остаётся1, но старый binary после compact head writes не является совместимым
 reader: recovery требует forward-fix либо проверенную версию с этим reader.
 
@@ -197,6 +197,24 @@ Read-only export pinning BEGIN/WAL snapshot потоково читает record
 
 Owner `enrichment_enabled` — строгий bool, default OFF при отсутствии старого field; отдельно от alerts/digest/chat state. Mapping revisions `radar:v1:mapping:UUID:revision` фиксируют qualified Spot/Perpetual metadata, candidates и reason/availability. `source-context:v1:oi:linear/symbol:availableTime` хранит public latest5min points/units/server time. `oi-attempt` сохраняет next attempt/error; restart не повторяет весь batch. `enrichment-method:1` immutable; изменение definition без новой version блокируется.
 
-Event `enrichment` — frozen optional context, выбранный по availability≤observation cutoff, с method/mapping revision, instrument identities и per-metric values/units/source/observation/availability/cadence. Historical observation не получает future mapping/OI/ticker; malformed/missing/stale metric остаётся маркированным. Current owner view рассчитывает latest freshness отдельно. Все использованные snapshots входят в event/export/online all-row backup и автоматически не удаляются.
+Event `enrichment` — frozen optional context, выбранный по availability≤observation cutoff, с method/mapping revision, instrument identities и per-metric values/units/source/observation/availability/cadence. Historical observation не получает future mapping/OI/ticker; malformed/missing/stale metric остаётся маркированным. Current owner view рассчитывает latest freshness отдельно. Использованные snapshots доступны в event/export в пределах подробного срока; после expiry остаются quality summaries/settings/methodology, без бессрочных source arrays.
 
 Explicit `recompare` сохраняет comparison job original event_revision, повторно удерживает prior input ranges до completion и добавляет recalculation_requested_ms. Предыдущие result revisions доступны по as-of cutoff и export; event/settings/reference не изменяются. Автоматической recalibration/threshold mutation нет. При записи owner payload с enrichment field G3 reader несовместим: разрешён forward-fix/verified G5, без DB downgrade или restore поверх живых данных. Physical user_version1/NONE не изменяется.
+
+## Новая policy хранения и разовый reset (D22)
+
+Updated S01/owner request2026-10-16 отменяют raw90d и бессрочное хранение event/outcome/comparator inputs. Актуальные сроки/AC: [E13](product_scope.md#e13--компактное-хранение-сроки-и-новый-период-истории). Implementation state и gates: [Current Goal](open_issues.md#current-goal--весь-scope-текущий-этап-новое-накопление-и-reset). Полная конвертация прежней тестовой market history больше не задача. Описания прежних converter/qualification tools относятся к историческому tooling и не являются precondition нового reset.
+
+Reset — отдельная разовая процедура с exact market-data allowlist/target и private preservation/restore/equality proof; не startup migration. Owner settings/watchlist/thresholds/notifications/mutes сохраняются; credentials/infra не меняются. Старые market queues/cursors не импортируются; новая generation/start явно показывает нехватку истории и исключает old live replay. Backups/experiments исключены. Обычные backup/CD<=900s и RAM4GiB сохраняются. Фактический новый формат/проверенная reset процедура фиксируются до поставки; этот раздел не утверждает их реализацию.
+
+### Market layout v2: новый период
+
+Format2 включается только для нового reset candidate; schema1 не переписывается обычным open. Private tables сохраняются побайтно по значениям SQL rows; `reset_history.prepare` читает только private state, сохраняет private JSON recovery, проверяет restore на отдельном файле и integrity нового candidate. Он не удаляет и не переключает production. Host cutover/CI/artifact/unit/locks остаются отдельной обязательной процедурой.
+
+`market_candles` хранит один closed value/revision с compact numeric payload и source/provenance. Source correction создает новую revision, не меняет used inputs. Coordinate windows с checksum ссылаются на точные revisions. `needed_until` в этом layout — anchor observation time последнего использующего detail; effective expiry вычисляется по актуальной detail policy. `purge_after` — indexed scheduling hint, перепроверяемый перед удалением. Pending holds имеют конечную owner dependency. `market_context` отделяет availability timestamps от shared stable bodies; used context также имеет anchor lease. Старые permanent protected markers в v2 не пишутся.
+
+`runtime` остается rowid table для достаточно крупных JSON envelopes: WITHOUT ROWID вызывал лишние overflow pages. Narrow normalized tables используют WITHOUT ROWID. Frozen `CW2` dictionary + Zstd frame/checksum и SHA256 сохраняют точные исходные JSON bytes; public readers/SQL filters декодируют format. Все изменяемые state/index/counter updates происходят в той же writer transaction. Удаление detail и admission numeric summary атомарны; повтор cleanup не создает duplicate summary. Summary сохраняет version/settings/methodology и численные результаты без event identity/raw arrays; cohorts/NDJSON/CSV обозначают отсутствие старых details, calendar12mo и UTC-day resolution.
+
+Completed outcome/comparison jobs не дублируют результаты. Bootstrap проверяет immutable heads, explicit recompare восстанавливает job из сохраненного event. Retry/IN_FLIGHT payload остается immutable; terminal delivery receipt сокращается, успешные attempts/receipts диагностируются1day, event/episode/transport sequence сохраняют dedup в подробном сроке. Pending recovery проверяет существование активного owner hold; отсутствие владельца дает EXPIRED_RETENTION_INCOMPLETE, а не бесконечный backfill.
+
+Category counters обновляются triggers и rollback вместе с данными. Initial small DB index walk bounded; дальше runtime использует cheap counters/files/pages/samples и явно помеченную модель до появления годовых summaries. Exact later index snapshot — отдельная bounded read-only команда. Physical target20GB/forecast не доказан fixture, backups/experiments отдельно. После expiry incremental vacuum освобождает pages небольшими порциями; полный VACUUM живой истории не запускается.

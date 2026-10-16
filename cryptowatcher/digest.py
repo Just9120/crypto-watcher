@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -11,41 +10,41 @@ from telegram.error import BadRequest, Forbidden, RetryAfter, TelegramError
 
 from .events import PREFIX, History, identity
 from .outcomes import MINUTE
-from .storage import Store
+from .storage import Store, json_payload
 
 
 def aggregate(store: Store, start: int, end: int, now: int) -> dict[str, Any]:
-    base = " FROM runtime WHERE key>=? AND key<? AND json_extract(payload_json,'$.market_observation_ms')>=? AND json_extract(payload_json,'$.market_observation_ms')<?"
+    base = " FROM runtime WHERE key>=? AND key<? AND json_extract(cw_record_json(payload_json),'$.market_observation_ms')>=? AND json_extract(cw_record_json(payload_json),'$.market_observation_ms')<?"
     args = (PREFIX + "event-head:", PREFIX + "event-head:~", start, end)
     groups = [
         dict(row)
         for row in store.db.execute(
-            "SELECT json_extract(payload_json,'$.market_type') AS market, json_extract(payload_json,'$.detector_id') AS detector,COUNT(*) AS events,COUNT(DISTINCT json_extract(payload_json,'$.symbol')) AS instruments"
+            "SELECT json_extract(cw_record_json(payload_json),'$.market_type') AS market, json_extract(cw_record_json(payload_json),'$.detector_id') AS detector,COUNT(*) AS events,COUNT(DISTINCT json_extract(cw_record_json(payload_json),'$.symbol')) AS instruments"
             + base
             + " GROUP BY market,detector ORDER BY market,detector",
             args,
         )
     ]
     count = store.db.execute(
-        "SELECT COUNT(*),COUNT(DISTINCT json_extract(payload_json,'$.market_type') || '/' || json_extract(payload_json,'$.symbol'))"
+        "SELECT COUNT(*),COUNT(DISTINCT json_extract(cw_record_json(payload_json),'$.market_type') || '/' || json_extract(cw_record_json(payload_json),'$.symbol'))"
         + base,
         args,
     ).fetchone()
     strongest = [
         dict(row)
         for row in store.db.execute(
-            "SELECT json_extract(payload_json,'$.episode_id') AS episode_id,"
-            "json_extract(payload_json,'$.market_type') || '/' || json_extract(payload_json,'$.symbol') AS instrument,"
-            "json_extract(payload_json,'$.direction') AS direction,MAX(json_extract(payload_json,'$.strength')) AS strength,COUNT(*) AS events"
+            "SELECT json_extract(cw_record_json(payload_json),'$.episode_id') AS episode_id,"
+            "json_extract(cw_record_json(payload_json),'$.market_type') || '/' || json_extract(cw_record_json(payload_json),'$.symbol') AS instrument,"
+            "json_extract(cw_record_json(payload_json),'$.direction') AS direction,MAX(json_extract(cw_record_json(payload_json),'$.strength')) AS strength,COUNT(*) AS events"
             + base
             + " GROUP BY episode_id,instrument,direction ORDER BY strength DESC,episode_id LIMIT 5",
             args,
         )
     ]
     ongoing = [
-        History(store).resolve(row[0][len(PREFIX) :], json.loads(row[1]))
+        History(store).resolve(row[0][len(PREFIX) :], json_payload(row[1]))
         for row in store.db.execute(
-            "SELECT key,payload_json FROM runtime WHERE key>=? AND key<? AND json_extract(payload_json,'$.state')='ACTIVE' AND json_extract(payload_json,'$.available_at_ms')<=? ORDER BY json_extract(payload_json,'$.strength') DESC,key LIMIT 5",
+            "SELECT key,payload_json FROM runtime WHERE key>=? AND key<? AND json_extract(cw_record_json(payload_json),'$.state')='ACTIVE' AND json_extract(cw_record_json(payload_json),'$.available_at_ms')<=? ORDER BY json_extract(cw_record_json(payload_json),'$.strength') DESC,key LIMIT 5",
             (PREFIX + "episode-head:", PREFIX + "episode-head:~", now),
         )
     ]

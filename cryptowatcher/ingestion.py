@@ -314,13 +314,27 @@ class BybitRadar(BybitREST):
 
     async def backfill(self, stream: str) -> None:
         market, symbol, tf = stream.split("/")
+        needed = WINDOW_SIZE
+        if self.store.bounded:
+            from .detector_config import effective_parameters
+
+            settings = self.store.snapshot().settings
+            parameters = effective_parameters(settings)
+            needed = min(
+                WINDOW_SIZE,
+                max(
+                    16,
+                    settings.sma_periods + 1,
+                    int(max(v for k, v in parameters.items() if k.endswith("lookback"))) + 2,
+                ),
+            )
         result = await self._get(
             "/v5/market/kline",
             {
                 "category": market,
                 "symbol": symbol,
                 "interval": tf[:-1],
-                "limit": WINDOW_SIZE + 2,
+                "limit": needed + 2,
             },
         )
         if stream not in self.streams:
@@ -337,7 +351,7 @@ class BybitRadar(BybitREST):
             for row in raw_rows
             if int(finite(row[0])) + step <= clock
         ]
-        candles = sorted(candles, key=lambda c: c.start)[-WINDOW_SIZE:]
+        candles = sorted(candles, key=lambda c: c.start)[-needed:]
         if not candles:
             raise MarketError("empty_closed_history")
         self.sources.load(stream)
@@ -358,7 +372,10 @@ class BybitRadar(BybitREST):
     def record_gap(self, stream: str, start: int, end: int) -> None:
         tf = stream.rsplit("/", 1)[1]
         step = int(tf[:-1]) * 60_000
-        retention_start = ((self.server_now() - 90 * 86_400_000 + step - 1) // step) * step
+        retention_start = (
+            (self.server_now() - self.store.snapshot().settings.candle_retention_days * 86_400_000 + step - 1)
+            // step
+        ) * step
         start = max(start, retention_start)
         if start > end:
             return

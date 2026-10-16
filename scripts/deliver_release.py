@@ -3,8 +3,10 @@
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -19,6 +21,16 @@ PHASES = {
     "BOUNDED_COMPATIBILITY",
     "SWITCH",
     "POST_CHECKS",
+    "RESET_STOP_SOURCE",
+    "RESET_PRIVATE_AND_FRESH_CANDIDATE",
+    "RESET_CANDIDATE_QUALIFIED",
+    "RESET_PROMOTE",
+    "RESET_PROMOTED",
+    "RESET_PRIVATE_POST_CHECK",
+    "RESET_DISCARD_OLD_TEST_HISTORY",
+    "RESET_COMPLETE",
+    "CHECK_STATE_INTEGRITY_DISK",
+    "BACKUP_AND_VALIDATE_DISK",
     "UNSET",
 }
 SUCCESS_FIELDS = {
@@ -45,6 +57,10 @@ SUCCESS_FIELDS = {
     "candidate_name",
     "delivery_policy",
     "permit_tree",
+    "reset_permit_tree",
+    "reset_old_working_files_removed",
+    "reset_promoted",
+    "reset_private_post_check",
 }
 
 
@@ -88,6 +104,39 @@ def delivery_result(result, *, revision: str, digest: str, build_run: int) -> tu
         and re.fullmatch(r"[0-9a-f]{64}", str(proof.get("archive_sha256")))
         and re.fullmatch(r"[0-9a-f]{64}", str(proof.get("sha256")))
     )
+    state_proof = success.get("state_validation", {})
+    state_proof = state_proof if isinstance(state_proof, dict) else {}
+    disk_backup = (
+        proof.get("phase") == "COMPLETE"
+        and proof.get("validation_mode") == "DISK_STREAMING"
+        and type(proof.get("bytes")) is int
+        and proof["bytes"] > 0
+        and re.fullmatch("[0-9a-f]{64}", str(proof.get("sha256"))) is not None
+        and state_proof.get("status") == "integrity_ok"
+        and state_proof.get("schema") == 2
+    )
+    reset_proof = success.get("reset_proof", {})
+    reset = (
+        success.get("delivery_policy") == "OWNER_APPROVED_TEST_HISTORY_RESET_20261016_V1"
+        and isinstance(reset_proof, dict)
+        and reset_proof.get("state") == "PASS"
+        and reset_proof.get("integrity") == "PASS"
+        and reset_proof.get("private_restore") == "PASS"
+        and reset_proof.get("backups_and_experiments") == "NOT_TOUCHED"
+        and reset_proof.get("owner_id") == 233382575
+        and isinstance(reset_proof.get("generation"), dict)
+        and bool(reset_proof["generation"].get("id"))
+        and isinstance(success.get("reset_private_post_check"), dict)
+        and success["reset_private_post_check"].get("state") == "PASS"
+        and all(
+            re.fullmatch("[0-9a-f]{64}", str(reset_proof.get(key)))
+            for key in ("private_source_sha256", "private_fresh_sha256", "private_recovery_sha256")
+        )
+        and success.get("reset_promoted") is True
+        and type(success.get("reset_old_working_files_removed")) is int
+        and 1 <= success["reset_old_working_files_removed"] <= 4
+        and re.fullmatch("[0-9a-f]{40}", str(success.get("reset_permit_tree"))) is not None
+    )
     if (
         result.returncode == 0
         and success.get("state") == "PASS"
@@ -99,9 +148,50 @@ def delivery_result(result, *, revision: str, digest: str, build_run: int) -> tu
         and success.get("image_id")
         in (success.get("image_config_digest"), success.get("image_manifest_digest"))
         and re.fullmatch(r"sha256:[0-9a-f]{64}", str(success.get("image_id")))
-        and (full_backup or additive)
+        and (full_backup or additive or disk_backup or reset)
     ):
         record = {key: value for key, value in success.items() if key in SUCCESS_FIELDS}
+        if reset:
+            record["reset_proof"] = {
+                key: reset_proof[key]
+                for key in (
+                    "schema",
+                    "state",
+                    "private_source_sha256",
+                    "private_fresh_sha256",
+                    "private_recovery_sha256",
+                    "private_restore",
+                    "integrity",
+                    "owner_id",
+                    "configuration_revision",
+                    "generation",
+                    "backups_and_experiments",
+                    "candidate_bytes",
+                )
+                if key in reset_proof
+            }
+            return record, 0
+        if disk_backup:
+            record["state_validation"] = {
+                k: v
+                for k, v in success["state_validation"].items()
+                if k
+                in (
+                    "status",
+                    "schema",
+                    "owner_id",
+                    "configuration_revision",
+                    "settings_sha256",
+                    "legacy_sha256",
+                    "validation_mode",
+                )
+            }
+            record["backup_validation"] = {
+                k: v
+                for k, v in proof.items()
+                if k in ("phase", "validation_mode", "bytes", "sha256", "elapsed_seconds")
+            }
+            return record, 0
         if additive:
             fields = {
                 "state",
@@ -227,8 +317,22 @@ def deliver(release: Path, ssh_directory: Path, revision: str, build_run: int) -
                 "root@167.86.68.98",
                 f"cryptowatcher-deploy {revision} {digest} {bundle.stat().st_size}",
             ]
+            deadline = os.environ.get("CW_DELIVERY_DEADLINE")
+            if deadline is not None:
+                if (
+                    re.fullmatch("[1-9][0-9]{9}", deadline) is None
+                    or not 30 < int(deadline) - time.time() <= 900
+                ):
+                    raise ValueError("Invalid delivery deadline")
+                command[-1] += " " + deadline
             with bundle.open("rb") as stream:
-                result = subprocess.run(command, stdin=stream, capture_output=True, check=False)
+                result = subprocess.run(
+                    command,
+                    stdin=stream,
+                    capture_output=True,
+                    check=False,
+                    **({"timeout": max(1, int(deadline) - time.time() + 10)} if deadline else {}),
+                )
             payload, exit_status = delivery_result(
                 result, revision=revision, digest=digest, build_run=build_run
             )

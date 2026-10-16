@@ -10,6 +10,7 @@ import json
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from . import market_storage
 from .config import TIMEFRAMES
 from .market import MarketError, finite
 from .storage import RUNTIME_UPSERT, Store, encode
@@ -76,6 +77,8 @@ class Sources:
             "SELECT payload_json FROM runtime WHERE key>=? AND key<? ORDER BY key DESC LIMIT ?",
             (prefix, prefix + "~", WINDOW_SIZE),
         ).fetchall()
+        if self.store.bounded:
+            rows = [(encode(v),) for v in market_storage.read(self.store.db, stream, limit=WINDOW_SIZE)]
         window: dict[int, Candle] = {}
         try:
             for row in rows:
@@ -115,7 +118,11 @@ class Sources:
             writes.append((self.prefix(stream) + f"{candle.start:016d}", encode(asdict(candle))))
         # Save before exposing to the detector/Telegram consumer.
         with self.store.db:
-            self.store.db.executemany(RUNTIME_UPSERT, writes)
+            if self.store.bounded:
+                for key, payload in writes:
+                    market_storage.admit(self.store.db, stream, json.loads(payload))
+            else:
+                self.store.db.executemany(RUNTIME_UPSERT, writes)
         for candle in candles:
             existing = window.get(candle.start)
             if existing is None or existing.row() != candle.row():

@@ -61,6 +61,25 @@ jobs:
             release/manifest.json
           retention-days: 90
           if-no-files-found: error
+  production:
+    needs: build
+    if: needs.build.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: production
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Bound the entire delivery job
+        run: echo "CW_DELIVERY_DEADLINE=$(( $(date +%s) + 870 ))" >> "$GITHUB_ENV"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Download this run's verified artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVISION: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name "cryptowatcher-$REVISION-$RUN_ID" --dir release
       - name: Deliver only after reviewed first migration and credentials setup
         if: vars.DEPLOY_ENABLED == 'true'
         env:
@@ -86,4 +105,3 @@ jobs:
           path: release/deployment.json
           retention-days: 90
           if-no-files-found: error
-    environment: production

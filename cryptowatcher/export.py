@@ -12,7 +12,7 @@ from typing import Any, Iterator
 from .analytics import cohort_rows
 from .events import PREFIX, History
 from .history_codec import MARKER
-from .storage import Store, encode
+from .storage import Store, encode, json_payload
 
 SCHEMA = "cryptowatcher.export.v1"
 
@@ -41,8 +41,8 @@ def event_selection(selection: Selection) -> tuple[str, list[Any]]:
     terms = [
         "key>=?",
         "key<?",
-        "json_extract(payload_json,'$.market_observation_ms')>=?",
-        "json_extract(payload_json,'$.market_observation_ms')<?",
+        "json_extract(cw_record_json(payload_json),'$.market_observation_ms')>=?",
+        "json_extract(cw_record_json(payload_json),'$.market_observation_ms')<?",
     ]
     args: list[Any] = [PREFIX + "event-head:", PREFIX + "event-head:~", selection.start_ms, selection.end_ms]
     for name, value in (
@@ -51,7 +51,7 @@ def event_selection(selection: Selection) -> tuple[str, list[Any]]:
         ("market_type", selection.market),
     ):
         if value is not None:
-            terms.append(f"json_extract(payload_json,'$.{name}')=?")
+            terms.append(f"json_extract(cw_record_json(payload_json),'$.{name}')=?")
             args.append(value)
     return "WITH selected AS (SELECT payload_json FROM runtime WHERE " + " AND ".join(terms) + ") ", args
 
@@ -80,16 +80,23 @@ def ndjson(store: Store, selection: Selection) -> Iterator[str]:
                     "filters": selection.__dict__,
                     "period": "[start,end)",
                     "transport_state_included": False,
+                    "history_generation": store.get_runtime("history_generation", {"state": "LEGACY"}),
+                    "detail_retention_days": store.snapshot().settings.detail_retention_days,
+                    "summary_retention_months": 12,
+                    "summary_period_resolution": "UTC_DAY" if store.bounded else None,
+                    "expired_detail": "Unavailable; summaries are not individual event results"
+                    if store.bounded
+                    else None,
                 }
             )
             + "\n"
         )
         counts: dict[str, int] = {}
         relations = {
-            "event": "json_extract(r.payload_json,'$.event_id') IN (SELECT json_extract(payload_json,'$.event_id') FROM selected)",
-            "episode": "json_extract(r.payload_json,'$.episode_id') IN (SELECT json_extract(payload_json,'$.episode_id') FROM selected)",
-            "outcome": "json_extract(r.payload_json,'$.event_id') IN (SELECT json_extract(payload_json,'$.event_id') FROM selected)",
-            "comparison": "json_extract(r.payload_json,'$.event_id') IN (SELECT json_extract(payload_json,'$.event_id') FROM selected)",
+            "event": "json_extract(cw_record_json(r.payload_json),'$.event_id') IN (SELECT json_extract(cw_record_json(payload_json),'$.event_id') FROM selected)",
+            "episode": "json_extract(cw_record_json(r.payload_json),'$.episode_id') IN (SELECT json_extract(cw_record_json(payload_json),'$.episode_id') FROM selected)",
+            "outcome": "json_extract(cw_record_json(r.payload_json),'$.event_id') IN (SELECT json_extract(cw_record_json(payload_json),'$.event_id') FROM selected)",
+            "comparison": "json_extract(cw_record_json(r.payload_json),'$.event_id') IN (SELECT json_extract(cw_record_json(payload_json),'$.event_id') FROM selected)",
         }
         for kind, relation in relations.items():
             start = PREFIX + kind + ":"
@@ -101,14 +108,14 @@ def ndjson(store: Store, selection: Selection) -> Iterator[str]:
                 [*args, start, start + "~"],
             )
             for row in paged(rows):
-                record = history.resolve(row[0][len(PREFIX) :], json.loads(row[1]))
+                record = history.resolve(row[0][len(PREFIX) :], json_payload(row[1]))
                 counts[kind] = counts.get(kind, 0) + 1
                 yield encode({"schema": SCHEMA, "type": kind, "record": record}) + "\n"
         # Historical settings are frozen in every selected revision; export them independently too.
         rows = store.db.execute(
             cte
-            + "SELECT DISTINCT json_extract(r.payload_json,'$.settings_revision'), json_extract(r.payload_json,'$.settings_snapshot'), "
-            + f"json_extract(r.payload_json,'$.{MARKER}.fields.settings_snapshot') "
+            + "SELECT DISTINCT json_extract(cw_record_json(r.payload_json),'$.settings_revision'), json_extract(cw_record_json(r.payload_json),'$.settings_snapshot'), "
+            + f"json_extract(cw_record_json(r.payload_json),'$.{MARKER}.fields.settings_snapshot') "
             + "FROM runtime r WHERE r.key>=? AND r.key<? AND "
             + relations["event"]
             + " ORDER BY 1,2,3",
@@ -125,7 +132,7 @@ def ndjson(store: Store, selection: Selection) -> Iterator[str]:
                             "revision": row[0],
                             "snapshot": history.codec.field(json.loads(row[2]))
                             if row[2]
-                            else json.loads(row[1]),
+                            else json_payload(row[1]),
                         },
                     }
                 )
@@ -140,7 +147,46 @@ def ndjson(store: Store, selection: Selection) -> Iterator[str]:
                 )
             ):
                 counts["methodology"] = counts.get("methodology", 0) + 1
-                yield encode({"schema": SCHEMA, "type": "methodology", "record": json.loads(row[0])}) + "\n"
+                yield encode({"schema": SCHEMA, "type": "methodology", "record": json_payload(row[0])}) + "\n"
+        if store.bounded:
+            from .market_storage import decoded
+
+            clauses = ["day>=?", "day<?"]
+            values: list[Any] = [
+                selection.start_ms // 86400000,
+                (selection.end_ms + 86400000 - 1) // 86400000,
+            ]
+            for name, filter_value in (
+                ("detector", selection.detector),
+                ("version", selection.version),
+                ("market", selection.market),
+            ):
+                if filter_value is not None:
+                    clauses.append(f"json_extract(dimensions,'$.{name}')=?")
+                    values.append(filter_value)
+            for row in store.db.execute(
+                "SELECT day,dimensions,provenance,facts FROM market_quality WHERE "
+                + " AND ".join(clauses)
+                + " ORDER BY day,cohort,chunk",
+                values,
+            ):
+                counts["quality_summary"] = counts.get("quality_summary", 0) + 1
+                yield (
+                    encode(
+                        {
+                            "schema": SCHEMA,
+                            "type": "quality_summary",
+                            "record": {
+                                "event_day_utc": row[0],
+                                "dimensions": json_payload(row[1]),
+                                "provenance": history.codec.unpack(json.loads(row[2]))["quality_provenance"],
+                                "facts": decoded(bytes(row[3]), 1024 * 1024),
+                                "detail_available": False,
+                            },
+                        }
+                    )
+                    + "\n"
+                )
         yield (
             encode({"schema": SCHEMA, "type": "complete", "counts": counts, "selected_events": total}) + "\n"
         )

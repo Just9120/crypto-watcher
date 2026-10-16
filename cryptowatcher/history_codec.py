@@ -14,6 +14,8 @@ from typing import Any
 
 import zstandard
 
+from .record_codec import MARKER as RECORD_MARKER
+from .record_codec import sql_payload, unpack_bytes
 from .storage import StateError, encode
 
 MARKER = "_history_storage"
@@ -23,7 +25,13 @@ ZSTD_BLOB_SCHEMA = "cryptowatcher.shared-json.v2"
 BLOB_PREFIX = "historyblob:v1:"
 MAX_BYTES = 32 * 1024 * 1024
 CACHE_BYTES = 4 * 1024 * 1024
-SHARED_FIELDS = {"settings_snapshot", "effective_parameters", "source_context", "enrichment"}
+SHARED_FIELDS = {
+    "settings_snapshot",
+    "effective_parameters",
+    "source_context",
+    "enrichment",
+    "quality_provenance",
+}
 WINDOW_FIELDS = {"source_inputs", "future_inputs"}
 
 
@@ -45,6 +53,9 @@ class Codec:
         if body_encoding not in ("zlib", "zstd"):
             raise StateError("Unknown shared snapshot encoding")
         self.db = database
+        self.source_stream: str | None = None
+        self.source_expiry = 0
+        self.bounded = database.execute("PRAGMA user_version").fetchone()[0] == 2
         self.body_encoding = body_encoding
         self.encoded: OrderedDict[bytes, tuple[str, str]] = OrderedDict()
         self.cache_bytes = 0
@@ -53,8 +64,19 @@ class Codec:
         self.cache_limit_bytes = CACHE_BYTES
 
     def read(self, payload: str) -> Any:
+        payload = sql_payload(payload)
         value = json.loads(payload)
-        return self.unpack(value) if MARKER in payload else value
+        return self.unpack(value) if MARKER in payload or RECORD_MARKER in payload else value
+
+    @staticmethod
+    def record_value(value: Any) -> Any:
+        raw = unpack_bytes(value)
+        if raw is None:
+            return value
+        restored = json.loads(raw)
+        if not isinstance(restored, dict) or RECORD_MARKER in restored:
+            raise StateError("Invalid compressed record object")
+        return restored
 
     def save(self, value: Any) -> str:
         return self.save_bytes(encode(value).encode())
@@ -179,6 +201,24 @@ class Codec:
         return json.loads(self.field_raw(reference))
 
     def field_raw(self, reference: Any) -> bytes:
+        if isinstance(reference, dict) and reference.get("mode") == "value2":
+            if set(reference) != {"mode", "id"}:
+                raise StateError("Invalid compact shared reference")
+            return self.load_raw(reference["id"])[0]
+        if isinstance(reference, dict) and reference.get("mode") == "contexts":
+            from .market_storage import restore_context
+
+            try:
+                return restore_context(self.db, reference)
+            except (ValueError, TypeError, KeyError, zlib.error) as exc:
+                raise StateError("Invalid normalized context reference") from exc
+        if isinstance(reference, dict) and reference.get("mode") == "source":
+            from .market_storage import restore_window
+
+            try:
+                return restore_window(self.db, reference)
+            except (ValueError, TypeError, KeyError, zlib.error) as exc:
+                raise StateError("Invalid normalized source reference") from exc
         if not isinstance(reference, dict) or set(reference) != {"mode", "ids", "sha256"}:
             raise StateError("Invalid shared field reference")
         keys = reference["ids"]
@@ -277,6 +317,7 @@ class Codec:
         replacements: list[tuple[bytes, bytes]] = []
 
         def prepare(item: Any) -> Any:
+            item = self.record_value(item)
             if isinstance(item, list):
                 return [prepare(part) for part in item]
             if not isinstance(item, dict):
@@ -340,15 +381,38 @@ class Codec:
         references = {}
         for name, item in value.items():
             raw = encode(item).encode() if name in SHARED_FIELDS and isinstance(item, dict) else None
-            if raw is not None and len(raw) > 256:
+            if (
+                self.source_stream
+                and name == "source_context"
+                and isinstance(item, dict)
+                and set(item) <= {"ticker", "instrument"}
+                and any(v is not None for v in item.values())
+            ):
+                from .market_storage import context_window
+
+                references[name] = context_window(self.db, self.source_stream, item, self.source_expiry)
+            elif raw is not None and (len(raw) > (128 if self.bounded else 256)):
                 key = self.save_bytes(raw)
-                references[name] = {
-                    "mode": "value",
-                    "ids": [key],
-                    "sha256": key,
-                }
+                references[name] = (
+                    {"mode": "value2", "id": key}
+                    if self.bounded
+                    else {
+                        "mode": "value",
+                        "ids": [key],
+                        "sha256": key,
+                    }
+                )
                 if name == "settings_snapshot":
                     result[name] = {k: item[k] for k in ("profile", "alert_universe_mode") if k in item}
+            elif name in WINDOW_FIELDS and isinstance(item, list) and item and self.source_stream:
+                from .market_storage import window as source_window
+
+                stream = (
+                    self.source_stream
+                    if name == "source_inputs"
+                    else self.source_stream.rsplit("/", 1)[0] + "/1m"
+                )
+                references[name] = source_window(self.db, stream, item, self.source_expiry)
             elif name in WINDOW_FIELDS and isinstance(item, list) and item:
                 parts: list[list[Any]] = []
                 bucket: Any = None
@@ -380,6 +444,7 @@ class Codec:
         return result
 
     def unpack(self, value: Any) -> Any:
+        value = self.record_value(value)
         if isinstance(value, list):
             return [self.unpack(item) for item in value]
         if not isinstance(value, dict):

@@ -14,7 +14,7 @@ from .detector_config import FAMILIES, effective_parameters
 from .detectors import FORMULAS, UNITS, VERSIONS, Detection, DetectorUnavailable, atr14, evaluate, freshness
 from .history_codec import Codec
 from .sources import Candle
-from .storage import RUNTIME_UPSERT, StateError, Store, encode
+from .storage import RUNTIME_UPSERT, StateError, Store, encode, json_payload
 
 PREFIX = "radar:v1:"
 HEAD_SCHEMA = "cryptowatcher.history-head.v1"
@@ -78,6 +78,8 @@ class History:
     def resolve(self, key: str, value: Any) -> Any:
         """Read both legacy full heads and identity-checked compact heads."""
         value = self.codec.unpack(value)
+        if self.store.bounded:
+            value = self._expand_services(value)
         if not isinstance(value, dict) or value.get("schema") != HEAD_SCHEMA:
             return value
         kind, separator, record_id = key.partition("-head:")
@@ -97,26 +99,119 @@ class History:
             or record.get("schema") == HEAD_SCHEMA
             or record.get(f"{kind}_id") != record_id
             or record.get("revision") != revision
-            or encode(self._head(kind, record, value["revision_key"])) != encode(value)
+            or encode(self._head(kind, record, value["revision_key"], bounded=self.store.bounded))
+            != encode(value)
         ):
             raise StateError("Missing or conflicting history head revision")
         return record
 
     @staticmethod
-    def _head(kind: str, value: dict[str, Any], revision_key: str) -> dict[str, Any]:
+    def _head(
+        kind: str, value: dict[str, Any], revision_key: str, *, bounded: bool = False
+    ) -> dict[str, Any]:
         if kind not in HEAD_FIELDS:
             return value
         return {
             "schema": HEAD_SCHEMA,
             "revision_key": revision_key,
-            **{field: value[field] for field in HEAD_FIELDS[kind] if field in value},
+            **{
+                field: value[field]
+                for field in HEAD_FIELDS[kind]
+                if field in value
+                and not (
+                    bounded
+                    and kind == "outcome"
+                    and field in ("metrics", "classification", "noise_threshold_pct")
+                )
+            },
         }
 
+    def _freeze_services(self, value: Any, depth: int = 0) -> Any:
+        if depth > 24:
+            raise StateError("Service snapshot nesting exceeds bound")
+        if isinstance(value, list):
+            return [self._freeze_services(v, depth + 1) for v in value]
+        if not isinstance(value, dict):
+            return value
+        for kind in ("event", "outcome", "episode", "comparison"):
+            if (
+                value.get("schema") == f"cryptowatcher.{kind}.v1"
+                and f"{kind}_id" in value
+                and type(value.get("revision")) is int
+            ):
+                key = f"{kind}:{value[f'{kind}_id']}:{value['revision']:010d}"
+                saved = self.get(key)
+                if saved is not None and encode(saved) == encode(value):
+                    return {"_cw_revision": key, "sha256": hashlib.sha256(encode(value).encode()).hexdigest()}
+        return {k: self._freeze_services(v, depth + 1) for k, v in value.items()}
+
+    def _expand_services(self, value: Any, depth: int = 0) -> Any:
+        if depth > 24:
+            raise StateError("Service snapshot nesting exceeds bound")
+        if isinstance(value, list):
+            return [self._expand_services(v, depth + 1) for v in value]
+        if not isinstance(value, dict):
+            return value
+        if "_cw_revision" in value:
+            if (
+                set(value) != {"_cw_revision", "sha256"}
+                or not isinstance(value["_cw_revision"], str)
+                or not re.fullmatch(
+                    r"(?:event|outcome|episode|comparison):[a-zA-Z0-9-]+:[0-9]{10}", value["_cw_revision"]
+                )
+            ):
+                raise StateError("Invalid service revision reference")
+            raw = self.store.get_runtime(PREFIX + value["_cw_revision"])
+            if raw is None:
+                raise StateError("Missing retained service revision")
+            restored = self.codec.unpack(raw)
+            if hashlib.sha256(encode(restored).encode()).hexdigest() != value["sha256"]:
+                raise StateError("Service revision hash mismatch")
+            return self._expand_services(restored, depth + 1)
+        return {k: self._expand_services(v, depth + 1) for k, v in value.items()}
+
     def put(self, key: str, value: Any) -> None:
+        if (
+            self.store.bounded
+            and isinstance(value, dict)
+            and key.startswith(("agent:outbox:", "outbox:telegram:", "digest-outbox:"))
+            and value.get("state")
+            in ("DELIVERED", "DELIVERED_PRIOR_SETTINGS", "EXPIRED", "CANCELLED", "OBSOLETE_CONFIGURATION")
+        ):
+            parent = (
+                value.get("event_id")
+                or value.get("intent", {}).get("event_id")
+                or next(iter(value.get("event_ids", [])), None)
+            )
+            value = {
+                k: v
+                for k, v in value.items()
+                if k not in ("intent", "body", "episode_snapshot", "snapshot", "text")
+            }
+            if parent:
+                value["event_id"] = parent
+        if self.store.bounded and key.startswith(("agent:", "outbox:")):
+            value = self._freeze_services(value)
         # Transaction is owned by the engine/delivery operation, never commit nested writes.
-        self.store.db.execute(RUNTIME_UPSERT, (PREFIX + key, encode(value)))
+        plain = encode(value)
+        payload: str | bytes = plain
+        if self.store.bounded:
+            from .record_codec import pack_binary
+
+            compact = pack_binary(plain)
+            if len(compact) < len(plain.encode()):
+                payload = compact
+        self.store.db.execute(RUNTIME_UPSERT, (PREFIX + key, payload))
+        if self.store.bounded:
+            from .storage_lifecycle import track
+
+            track(self.store, PREFIX + key, value)
 
     def delete(self, key: str) -> None:
+        if self.store.bounded:
+            from .storage_lifecycle import forget
+
+            forget(self.store, PREFIX + key)
         self.store.db.execute("DELETE FROM runtime WHERE key=?", (PREFIX + key,))
 
     def items(self, prefix: str, limit: int | None = None, *, reverse: bool = False) -> list[tuple[str, Any]]:
@@ -129,7 +224,7 @@ class History:
             sql += " LIMIT ?"
             values += (limit,)
         return [
-            (row[0][len(PREFIX) :], self.resolve(row[0][len(PREFIX) :], json.loads(row[1])))
+            (row[0][len(PREFIX) :], self.resolve(row[0][len(PREFIX) :], json_payload(row[1])))
             for row in self.store.db.execute(sql, values)
         ]
 
@@ -138,7 +233,7 @@ class History:
         for row in self.store.db.execute(
             "SELECT key,payload_json FROM runtime WHERE key>=? AND key<? ORDER BY key", (start, start + "~")
         ):
-            yield row[0][len(PREFIX) :], self.resolve(row[0][len(PREFIX) :], json.loads(row[1]))
+            yield row[0][len(PREFIX) :], self.resolve(row[0][len(PREFIX) :], json_payload(row[1]))
 
     def count(self, prefix: str) -> int:
         start = PREFIX + prefix
@@ -162,9 +257,24 @@ class History:
         ):
             raise StateError("Event outcome reference is immutable")
         if existing is None:
-            self.put(version_key, self.codec.pack(value))
+            if self.store.bounded and kind == "event" and value["revision"] == 1:
+                self.put("event-counter", self.get("event-counter", 0) + 1)
+            if self.store.bounded and kind in ("event", "outcome", "comparison"):
+                event = (
+                    value
+                    if kind == "event"
+                    else self.get(f"event:{value['event_id']}:{value['event_revision']:010d}")
+                )
+                self.codec.source_stream = f"{event['market_type']}/{event['symbol']}/" + (
+                    "1m" if kind == "outcome" else event["timeframe"]
+                )
+                self.codec.source_expiry = event["market_observation_ms"]
+            try:
+                self.put(version_key, self.codec.pack(value))
+            finally:
+                self.codec.source_stream = None
         if head is None or value["revision"] > head["revision"]:
-            self.put(f"{kind}-head:{key}", self._head(kind, value, version_key))
+            self.put(f"{kind}-head:{key}", self._head(kind, value, version_key, bounded=self.store.bounded))
 
     def events(self, limit: int = 20) -> list[dict[str, Any]]:
         return [
@@ -267,6 +377,10 @@ class EventEngine:
             return
         snapshot = self.store.snapshot()
         current = candles[-1]
+        if self.store.bounded and current.end < self.store.get_runtime("history_generation", {}).get(
+            "started_ms", 0
+        ):
+            return
         market, symbol, tf = stream.split("/")
         instrument = f"{market}/{symbol}"
         outputs: list[tuple[str, Detection | Exception]] = []

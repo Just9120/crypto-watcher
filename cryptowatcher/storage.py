@@ -103,6 +103,12 @@ class RevisionConflict(StateError):
     pass
 
 
+def json_payload(payload: Any) -> Any:
+    from .record_codec import sql_payload
+
+    return json.loads(sql_payload(payload))
+
+
 def encode(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
@@ -201,11 +207,12 @@ class Store:
         self.path = path
         self.owner_id = owner_id
         self.readonly = readonly
+        self.clock_ms = lambda: int(time.time() * 1000)
         if path.exists():
             probe = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
             try:
                 version = probe.execute("PRAGMA user_version").fetchone()[0]
-                if version != SCHEMA_VERSION:
+                if version not in (SCHEMA_VERSION, 2):
                     raise StateError("Unsupported database schema; database preserved")
                 binding = probe.execute("SELECT owner_id FROM owner_settings").fetchone()
                 if binding is not None and binding[0] != owner_id:
@@ -223,13 +230,22 @@ class Store:
             uri=readonly,
             timeout=5,
         )
+        from .record_codec import sql_payload
+
+        self.db.create_function("cw_record_json", 1, sql_payload, deterministic=True)
         self.db.row_factory = sqlite3.Row
+        self.bounded = self.db.execute("PRAGMA user_version").fetchone()[0] == 2
+        if self.bounded:
+            from .quality_summary import install
+
+            install(self.db)
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA busy_timeout=5000")
         if not readonly:
             self.db.execute("PRAGMA journal_mode=WAL")
             self.db.execute("PRAGMA synchronous=FULL")
-            create_schema(self.db)
+            if not self.bounded:
+                create_schema(self.db)
             if os.name != "nt":
                 path.chmod(0o600)
 
@@ -305,7 +321,9 @@ class Store:
 
     def get_runtime(self, key: str, default: Any = None) -> Any:
         row = self.db.execute("SELECT payload_json FROM runtime WHERE key=?", (key,)).fetchone()
-        return json.loads(row[0]) if row else default
+        from .record_codec import sql_payload
+
+        return json.loads(sql_payload(row[0])) if row else default
 
     def put_runtime(self, key: str, payload: Any) -> None:
         with self.db:
@@ -412,6 +430,16 @@ class Store:
                         "sqlite_version": str(validation["sqlite_version"]),
                         "apsw_version": str(validation["apsw_version"]),
                     }
+            if validated_hash is None:
+                phase = "HASH"
+                digest = hashlib.sha256()
+                with destination.open("rb") as verified:
+                    for block in iter(lambda: verified.read(1024 * 1024), b""):
+                        if time.monotonic() >= deadline:
+                            raise IntegrityError("TIME_BUDGET_EXCEEDED", "Backup hash time budget exceeded")
+                        digest.update(block)
+                validated_hash = digest.hexdigest()
+                validation_details.update(bytes=destination.stat().st_size, validation_mode="DISK_STREAMING")
         except IntegrityError as exc:
             exc.backup_metrics = metrics()
             raise

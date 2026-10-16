@@ -32,6 +32,8 @@ def main() -> int:
             "check-config",
             "migrate",
             "diagnostics",
+            "storage",
+            "storage-indexes",
             "health",
             "backup",
             "state-check",
@@ -96,6 +98,8 @@ def main() -> int:
             return 0
         if args.command in (
             "diagnostics",
+            "storage",
+            "storage-indexes",
             "health",
             "backup",
             "state-check",
@@ -144,6 +148,11 @@ def main() -> int:
                         raise ConfigError("context requires event-id and cutoff-ms")
                     print(encode(decision_context(History(store), args.event_id, args.cutoff_ms)))
                     return 0
+                if args.command in ("storage", "storage-indexes"):
+                    from .storage_meter import measure_indexes, report
+
+                    print(encode(report(store) if args.command == "storage" else measure_indexes(store)))
+                    return 0
                 snapshot = store.snapshot()
                 heartbeat = store.get_runtime("heartbeat", {})
                 if args.command == "state-check":
@@ -182,7 +191,7 @@ def main() -> int:
                         json.dumps(
                             {
                                 "status": "integrity_ok",
-                                "schema": 1,
+                                "schema": store.db.execute("PRAGMA user_version").fetchone()[0],
                                 "owner_id": store.owner_id,
                                 "configuration_revision": snapshot.revision,
                                 "settings_sha256": hashlib.sha256(
