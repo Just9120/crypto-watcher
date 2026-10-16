@@ -75,9 +75,17 @@ class History:
     def get(self, key: str, default: Any = None) -> Any:
         return self.resolve(key, self.store.get_runtime(PREFIX + key, default))
 
-    def resolve(self, key: str, value: Any) -> Any:
+    def metadata(self, key: str) -> Any:
+        """Stored results/provenance only; does not assert raw-window availability."""
+        return self.resolve(
+            key,
+            self.store.get_runtime(PREFIX + key),
+            omit_fields=frozenset({"source_inputs", "future_inputs", "source_context", "enrichment"}),
+        )
+
+    def resolve(self, key: str, value: Any, *, omit_fields: frozenset[str] = frozenset()) -> Any:
         """Read both legacy full heads and identity-checked compact heads."""
-        value = self.codec.unpack(value)
+        value = self.codec.unpack(value, omit_fields=omit_fields)
         if self.store.bounded:
             value = self._expand_services(value)
         if not isinstance(value, dict) or value.get("schema") != HEAD_SCHEMA:
@@ -93,7 +101,9 @@ class History:
             or value.get("revision_key") != f"{kind}:{record_id}:{revision:010d}"
         ):
             raise StateError("Invalid history head reference")
-        record = self.codec.unpack(self.store.get_runtime(PREFIX + value["revision_key"]))
+        record = self.codec.unpack(
+            self.store.get_runtime(PREFIX + value["revision_key"]), omit_fields=omit_fields
+        )
         if (
             not isinstance(record, dict)
             or record.get("schema") == HEAD_SCHEMA

@@ -41,66 +41,130 @@ def create(db: Any) -> None:
     install(db)
 
 
+def comparator_facts(comparisons: list[dict[str, Any]], horizon: int) -> tuple[list[Any], list[Any]]:
+    metrics: list[Any] = []
+    sets = []
+    for comparison in comparisons:
+        values = [
+            sample["outcomes"][str(horizon)]["metrics"]
+            for sample in comparison.get("samples", [])
+            if str(horizon) in sample["outcomes"]
+        ]
+        sets.append(
+            {
+                "methodology_version": comparison.get("methodology_version", "UNSET"),
+                "offset": len(metrics),
+                "count": len(values),
+                "state": comparison.get("state", "UNSET"),
+                "sample_size": comparison.get("sample_size", len(comparison.get("samples", []))),
+                "population_size": comparison.get("population_size"),
+                "limitations": comparison.get("limitations", []),
+            }
+        )
+        metrics.extend(values)
+    return metrics, sets
+
+
 def archive_event(store: Store, event: dict[str, Any]) -> None:
     """Called in the same transaction as detail deletion. Replay rolls back both."""
-    from .analytics import COMPARATOR_VERSION
-    from .events import History, identity
-    from .outcomes import METHOD
+    from .events import PREFIX, History
+    from .storage import StateError
 
     history = History(store)
-    day = event["market_observation_ms"] // DAY
-    comparison = history.get(
-        "comparison-head:" + identity(f"comparison/{event['event_id']}/{COMPARATOR_VERSION}")
-    )
+    # Owner/event index is bounded to this event; never walk all method heads.
+    owned = store.db.execute(
+        "SELECT key,category FROM market_lifetimes WHERE event_id=? AND category IN ('outcome-head','outcome-job','comparison-head') ORDER BY key",
+        (event["event_id"],),
+    ).fetchall()
+    outcomes: dict[str, dict[str, Any]] = {}
+    jobs = []
+    comparisons = []
+    for row in owned:
+        value = history.metadata(row[0][len(PREFIX) :])
+        if row[1] == "outcome-head":
+            outcomes[value["outcome_id"]] = value
+        elif row[1] == "outcome-job":
+            jobs.append(value)
+        else:
+            comparisons.append(value)
+    for job in jobs:
+        outcomes.setdefault(
+            job["outcome_id"],
+            {
+                "state": job["state"],
+                "metrics": {},
+                "classification": "UNCLASSIFIED",
+                "methodology_version": job["methodology_version"],
+                "event_revision": job["event_revision"],
+                "horizon_min": job["horizon_min"],
+            },
+        )
     for horizon in event["settings_snapshot"].get("outcome_horizons", [5, 15, 30, 60]):
-        oid = identity(f"outcome/{event['event_id']}/{horizon}/{METHOD}")
-        outcome = history.get("outcome-head:" + oid)
-        # Legacy/unfinished horizons are explicit coverage facts, never zero returns.
-        if outcome is None:
-            outcome = {
+        if not any(o["horizon_min"] == horizon for o in outcomes.values()):
+            # No head/job means the original methodology cannot be established.
+            # A newly deployed default must never be attributed to this old event.
+            outcomes[f"missing:{horizon}"] = {
                 "state": "EXPIRED_INCOMPLETE",
                 "metrics": {},
                 "classification": "UNCLASSIFIED",
-                "methodology_version": METHOD,
+                "methodology_version": "UNSET",
+                "event_revision": event["revision"],
+                "horizon_min": horizon,
             }
+    versions = sorted({c.get("methodology_version", "UNSET") for c in comparisons})
+    comparison_definitions = {v: history.get("comparison-method:" + v) for v in versions}
+    revisions = {event["revision"]: event}
+    for outcome in outcomes.values():
+        horizon = outcome["horizon_min"]
+        revision = outcome["event_revision"]
+        if revision not in revisions:
+            revisions[revision] = history.metadata(f"event:{event['event_id']}:{revision:010d}")
+        source = revisions[revision]
+        if source is None:
+            raise StateError("Missing frozen event revision during aggregation")
+        day = source["market_observation_ms"] // DAY
         group = {
-            "detector": event["detector_id"],
-            "version": event["detector_version"],
-            "settings": event["settings_revision"],
-            "profile": event["settings_snapshot"].get("profile", "custom"),
-            "market": event["market_type"],
-            "timeframe": event["timeframe"],
-            "instrument": event["symbol"],
-            "universe": event["settings_snapshot"]["alert_universe_mode"],
-            "direction": event["direction"],
+            "detector": source["detector_id"],
+            "version": source["detector_version"],
+            "settings": source["settings_revision"],
+            "profile": source["settings_snapshot"].get("profile", "custom"),
+            "market": source["market_type"],
+            "timeframe": source["timeframe"],
+            "instrument": source["symbol"],
+            "universe": source["settings_snapshot"]["alert_universe_mode"],
+            "direction": source["direction"],
             "horizon_min": horizon,
             "methodology_version": outcome["methodology_version"],
         }
         provenance = {
-            "settings_snapshot": event["settings_snapshot"],
-            "settings_sha256": hashlib.sha256(encode(event["settings_snapshot"]).encode()).hexdigest(),
+            "settings_snapshot": source["settings_snapshot"],
+            "settings_sha256": hashlib.sha256(encode(source["settings_snapshot"]).encode()).hexdigest(),
             "detector_definition": history.get(
-                f"detector-metadata:{event['detector_id']}:{event['detector_version']}"
+                f"detector-metadata:{source['detector_id']}:{source['detector_version']}"
             ),
             "outcome_definition": history.get("outcome-method:" + outcome["methodology_version"]),
-            "comparison_version": COMPARATOR_VERSION,
-            "comparison_definition": history.get("comparison-method:" + COMPARATOR_VERSION),
+            "comparison_version": versions[0] if len(versions) == 1 else "UNSET",
+            "comparison_definition": comparison_definitions.get(versions[0]) if len(versions) == 1 else None,
+            "comparison_versions": versions,
+            "comparison_definitions": comparison_definitions,
         }
         # Retain every numeric metric and comparator outcome. No event IDs, times,
         # episodes, candles or decision context are retained in numeric summaries.
+        comparator_metrics, comparator_sets = comparator_facts(comparisons, horizon)
         fact = {
-            "strength": event["strength"],
+            "strength": source["strength"],
             "state": outcome["state"] if outcome["state"] == "COMPLETE" else "EXPIRED_RETENTION_INCOMPLETE",
             "previous_state": outcome["state"],
             "metrics": outcome["metrics"],
             "classification": outcome.get("classification", "UNCLASSIFIED"),
             "noise": outcome.get("noise_threshold_pct"),
-            "comparator_metrics": [
-                v["outcomes"][str(horizon)]["metrics"]
-                for v in (comparison or {}).get("samples", [])
-                if str(horizon) in v["outcomes"]
-            ],
-            "limitations": (comparison or {}).get("limitations", ["COMPARISON_UNAVAILABLE"]),
+            "comparator_metrics": comparator_metrics,
+            "comparator_sets": comparator_sets,
+            "limitations": list(
+                dict.fromkeys(reason for c in comparisons for reason in c.get("limitations", []))
+            )
+            if comparisons
+            else ["COMPARISON_UNAVAILABLE"],
             "completeness": {
                 k: outcome[k] for k in ("expected_candles", "observed_candles", "reason") if k in outcome
             },

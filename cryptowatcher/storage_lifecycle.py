@@ -209,7 +209,7 @@ class BoundedRetention:
                 if time.monotonic() >= deadline:
                     break
                 eid = json_payload(row[1])["event_id"]
-                event = history.get("event-head:" + eid)
+                event = history.metadata("event-head:" + eid)
                 if event is not None:
                     archive_event(store, event)
                 owned = store.db.execute(
@@ -229,6 +229,7 @@ class BoundedRetention:
                 "SELECT key,category FROM market_lifetimes WHERE expires<=? AND category NOT IN ('event','event-head','outcome','outcome-head','comparison','comparison-head','history') ORDER BY expires,key LIMIT ?",
                 (now_ms, batch),
             ).fetchall()
+            service_removed = 0
             for row in service:
                 if row[1] in ("episode", "episode-head"):
                     episode_id = row[0].split(":")[3]
@@ -242,11 +243,23 @@ class BoundedRetention:
                         continue
                 # Store a bounded terminal-status counter, instead of retaining whole jobs.
                 raw = store.get_runtime(row[0], {})
+                if (
+                    row[1] in ("outcome-job", "comparison-job")
+                    and isinstance(raw, dict)
+                    and raw.get("event_id")
+                ):
+                    # Preserve original pending methodology/revision until its
+                    # parent is aggregated, even across a split expiry batch.
+                    if store.db.execute(
+                        "SELECT 1 FROM runtime WHERE key=?", (PREFIX + "event-head:" + raw["event_id"],)
+                    ).fetchone():
+                        continue
                 state = raw.get("state") if isinstance(raw, dict) else None
                 if state in ("PENDING", "RETRY", "IN_FLIGHT", "BLOCKED", "INVALID_SOURCE", "INCOMPLETE"):
                     self._terminal(row[1], state)
                 remove(store, row[0])
                 removed += 1
+                service_removed += 1
             removed += history.prune_pending()
             # A source revision survives the ordinary TTL only while a retained detail
             # references it. Old global `protected` records are not a v2 mechanism.
@@ -327,7 +340,7 @@ class BoundedRetention:
                     "at_ms": now_ms,
                     "expired_events": processed,
                     "remaining_due_batch": len(due) - processed,
-                    "removed_services": len(service),
+                    "removed_services": service_removed,
                     "removed_candles": len(candles),
                     "removed_context": len(contexts),
                     "removed_summaries": len(quality),
