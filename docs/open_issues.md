@@ -28,6 +28,30 @@ Canonical spec: [product_scope.md](product_scope.md). Этот план соде
 
 ## Current Goal — MAINTENANCE: завершение backfill/repack и старт24h
 
+PR51 merged444f9c2; CI38974437399 и CD38974896223 PASS355s, full backup50.858s.
+Private/env/config/generation и64immutable revisions equality PASS; RAM без изменения.
+Backfill достиг0 в01:51MSK; новые небольшие очереди самостоятельно разбираются.
+02:20MSK repack497,814records/IN_PROGRESS, observer952484 active/WAITING_STABLE,
+baseline отсутствует. Исторические CD48/50 failures ниже сохраняются.
+Necessary throughput hotfix `codex/repack-steady-duty-20261017`, base
+`444f9c256959fcf7ca92d1c0dea1c139bcad22d5`: один40ms tick после startup слишком
+ограничивает конечный проход. Synthetic Windows/SQLite fixture4000records с теми же
+TTL/codec:1slice17.0s/18ticks/CPU0.6094s;4slices4.0s/5ticks/CPU0.4844s,
+одинаковые public SHA256 и4000expiry rows. Это ожидаемый scheduling effect,
+не production speedup/ETA. Scope: после600s процесса и fresh usable coverage>=95%,
+fresh analytics/ingestion разрешать до4 прежних40ms slices в1s tick,
+общий intended wall cap200ms; live priority/guards перепроверять между slices.
+Startup остается1slice; COMPLETE прекращает burst. RAM/cache/методы/сроки/CI/CD
+gates900s не меняются. Validation: existing startup/equality/fairness/restart tests,
+новые regressions steady eligibility/preemption/deadline/yield REQUIRED; required
+Linux CI/image и обычный CD; actual throughput/alerts и новый observer final source.
+Self-review: прежние codec/checkpoint/retention неизменны; каждый slice сохраняет
+transaction и yield, actual live work/потеря readiness отменяют следующие slices.
+Local targeted maintenance/startup/bot/ingestion/delivery и canonical quality PASS;
+required final Linux CI/image/review и applicable CD еще PENDING до initial push.
+Текущий observer не переиспользовать после смены source; сохранить его records,
+проверить terminal состояние и отсутствие baseline до нового finite observation.
+
 Основание: явное поручение владельца16Oct2026 устранить узкие места backfill и
 repack, сохранить history/analytics/alerts, RAM и ordinary backup/CD<=900s.
 Основной PR48 merged4c3a362; CI38966791666 PASS, CD38967393380 POST_CHECK_FAILED:
@@ -68,9 +92,9 @@ queues приоритетны. New jobs coalesce/max_instances1/grace30s без 
 
 | Задача / DoD | Статус |
 | --- | --- |
-| M01: backfill batch/fairness/retry/restart; сохранность sources и результатов, приоритет live и прежний REST budget | CODE READY; targeted checks PASS, CI/runtime PENDING |
+| M01: backfill batch/fairness/retry/restart; сохранность sources и результатов, приоритет live и прежний REST budget | DONE; CI51/runtime pending0 и повторный lifecycle PASS |
 | M02: независимый repack, конечная граница прохода, public equality/checkpoint/rollback и yield для Telegram | CODE READY; equality/cancel/restart/fairness PASS, runtime completion PENDING |
-| M03: CI/merge/CD<=900s с прежними recovery gates, RAM без увеличения; source/settings/generation и alerts readback | IN_PROGRESS; CD48 post-check FAIL, compatible hotfix validation PENDING |
+| M03: CI/merge/CD<=900s с прежними recovery gates, RAM без увеличения; source/settings/generation и alerts readback | PR51 PASS355s/backup50.858s; throughput hotfix CI/CD PENDING |
 | M04: observed completion очередей, проверенный finite observer новой revision, actual baseline/24h статус | PENDING |
 
 Validation Plan (root): local `python scripts/checks.py quality` REQUIRED; targeted
