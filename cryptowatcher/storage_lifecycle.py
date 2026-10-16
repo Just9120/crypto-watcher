@@ -6,7 +6,7 @@ import re
 import time
 from typing import Any
 
-from .storage import Store, encode, json_payload
+from .storage import RUNTIME_UPSERT, Store, encode, json_payload
 
 DAY = 86400000
 PREFIX = "radar:v1:"
@@ -186,6 +186,7 @@ class BoundedRetention:
         from .quality_summary import archive_event
 
         store = self.store
+        started = time.monotonic()
         history = History(store)
         removed = 0
         # Chronological history index, no scan over the current candle universe.
@@ -340,21 +341,35 @@ class BoundedRetention:
             for row in garbage:
                 store.db.execute("DELETE FROM runtime WHERE key=?", (BLOB_PREFIX + row[0],))
                 store.db.execute("DELETE FROM market_body_counts WHERE body=?", (row[0],))
-            store.put_runtime(
-                "market_retention",
-                {
-                    "at_ms": now_ms,
-                    "expired_events": processed,
-                    "remaining_due_batch": len(due) - processed,
-                    "removed_services": service_removed,
-                    "removed_candles": len(candles),
-                    "removed_context": len(contexts),
-                    "removed_summaries": len(quality),
-                    "removed_bodies": len(garbage),
-                    "batch": batch,
-                    "state": "OK",
-                    "terminal_status": "EXPIRED_RETENTION_INCOMPLETE",
-                },
+            telemetry = {
+                "at_ms": now_ms,
+                "expired_events": processed,
+                "remaining_due_batch": len(due) - processed,
+                "removed_services": service_removed,
+                "removed_candles": len(candles),
+                "removed_context": len(contexts),
+                "removed_summaries": len(quality),
+                "removed_bodies": len(garbage),
+                "batch": batch,
+                "state": "OK",
+                "terminal_status": "EXPIRED_RETENTION_INCOMPLETE",
+            }
+            totals = store.get_runtime("market_retention_totals", {})
+            for key, count in {
+                "runs": 1,
+                "expired_events": processed,
+                "removed_services": service_removed,
+                "removed_candles": len(candles),
+                "removed_context": len(contexts),
+                "removed_summary_blocks": len(quality),
+                "removed_bodies": len(garbage),
+            }.items():
+                totals[key] = totals.get(key, 0) + count
+            totals["at_ms"] = now_ms
+            totals["last_transaction_work_seconds"] = round(time.monotonic() - started, 6)
+            store.db.executemany(
+                RUNTIME_UPSERT,
+                (("market_retention", encode(telemetry)), ("market_retention_totals", encode(totals))),
             )
         if removed and store.db.execute("PRAGMA freelist_count").fetchone()[0] > 256:
             store.db.execute("PRAGMA incremental_vacuum(32)").fetchall()

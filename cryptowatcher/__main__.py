@@ -34,6 +34,7 @@ def main() -> int:
             "diagnostics",
             "storage",
             "storage-indexes",
+            "capacity",
             "health",
             "backup",
             "state-check",
@@ -62,6 +63,8 @@ def main() -> int:
     parser.add_argument("--groups")
     parser.add_argument("--event-id")
     parser.add_argument("--cutoff-ms", type=int)
+    parser.add_argument("--capacity-ledger", action="store_true")
+    parser.add_argument("--capacity-cohorts", action="store_true")
     args = parser.parse_args()
     if args.version:
         revision = os.getenv("SOURCE_REVISION", "UNSET")
@@ -72,6 +75,8 @@ def main() -> int:
     load_dotenv(override=False)
     configure_logging(os.environ.get("TELEGRAM_BOT_TOKEN", ""))
     try:
+        if (args.capacity_ledger or args.capacity_cohorts) and args.command != "capacity":
+            raise ConfigError("capacity flags require capacity command")
         if args.validation_directory is not None and args.command not in ("state-check", "backup"):
             raise ConfigError("validation-directory is only supported for state-check and backup")
         if args.compressed_validation and args.validation_directory is None:
@@ -100,6 +105,7 @@ def main() -> int:
             "diagnostics",
             "storage",
             "storage-indexes",
+            "capacity",
             "health",
             "backup",
             "state-check",
@@ -111,6 +117,15 @@ def main() -> int:
             owner = args.owner_id or int(os.environ.get("OWNER_USER_ID", "0"))
             store = Store(database, owner, readonly=True)
             try:
+                if args.command == "capacity":
+                    from .capacity import snapshot as capacity_snapshot
+
+                    print(
+                        encode(
+                            capacity_snapshot(store, deep=args.capacity_ledger, cohorts=args.capacity_cohorts)
+                        )
+                    )
+                    return 0
                 if args.command == "export":
                     from .export import Selection, csv_summary, ndjson
 

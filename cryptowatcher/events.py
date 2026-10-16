@@ -18,6 +18,7 @@ from .storage import RUNTIME_UPSERT, StateError, Store, encode, json_payload
 
 PREFIX = "radar:v1:"
 HEAD_SCHEMA = "cryptowatcher.history-head.v1"
+DECISION_HEAD = "_cw_decision_revision"
 # SQL summaries use these small fields; public readers dereference the immutable record.
 HEAD_FIELDS = {
     "event": (
@@ -85,6 +86,23 @@ class History:
 
     def resolve(self, key: str, value: Any, *, omit_fields: frozenset[str] = frozenset()) -> Any:
         """Read both legacy full heads and identity-checked compact heads."""
+        if isinstance(value, dict) and DECISION_HEAD in value:
+            revision = value[DECISION_HEAD]
+            if (
+                set(value) != {DECISION_HEAD}
+                or type(revision) is not int
+                or revision < 1
+                or not re.fullmatch(r"decision:telegram:[0-9a-f-]{36}", key)
+            ):
+                raise StateError("Invalid decision head reference")
+            value = self.store.get_runtime(f"{PREFIX}{key}:{revision:010d}")
+            if (
+                not isinstance(value, dict)
+                or value.get("revision") != revision
+                or value.get("event_id") != key.rsplit(":", 1)[1]
+                or DECISION_HEAD in value
+            ):
+                raise StateError("Missing or conflicting decision revision")
         value = self.codec.unpack(value, omit_fields=omit_fields)
         if self.store.bounded:
             value = self._expand_services(value)
@@ -373,7 +391,8 @@ class EventEngine:
         previous = self.history.get(key, {})
         value = {**value, "revision": previous.get("revision", 0) + 1}
         self.history.put(f"{key}:{value['revision']:010d}", value)
-        self.history.put(key, value)
+        compact = self.store.bounded and re.fullmatch(r"[0-9a-f-]{36}", event_id)
+        self.history.put(key, {DECISION_HEAD: value["revision"]} if compact else value)
 
     def _close_due(self, now_ms: int, instrument: str | None = None) -> None:
         prefix = "active:" if instrument is None else f"active:{instrument}/"

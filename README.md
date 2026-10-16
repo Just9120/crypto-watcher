@@ -83,6 +83,8 @@ python -m cryptowatcher --version
 python -m cryptowatcher diagnostics
 python -m cryptowatcher storage
 python -m cryptowatcher storage-indexes
+python -m cryptowatcher capacity
+python -m cryptowatcher capacity --capacity-ledger --capacity-cohorts
 python -m cryptowatcher state-check
 python -m cryptowatcher health
 ```
@@ -99,6 +101,11 @@ python -m ruff format .
 ```
 
 `quality` проверяет canonical doc links/fences, Ruff lint/format и mypy. `test` запускает meaningful regression suite; `all` используется в CI. Во время разработки допустим точечный pytest по затронутому риску. Coverage target не задан. Основной merge gate — GitHub `ci-required` на актуальной PR test merge revision; local PASS его не заменяет.
+
+`capacity` читает counters/files и статус стабилизации без полного обхода данных.
+Explicit flags выполняют ограниченные разовые ledger/cohort/index измерения;
+logical bytes не складываются с physical pages. Автоматический finite24h observer
+и controlled-clock rehearsal описаны в [процедуре хранения](docs/runbooks/bounded-storage-reset.md#измерение-ёмкости-и-конечное24h-наблюдение).
 
 ## Telegram controls
 

@@ -5,7 +5,44 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from .storage import Store, encode
+from .storage import Store, encode, json_payload
+
+
+def decision_heads(store: Store, state: dict[str, Any], batch: int, deadline: float) -> None:
+    from .events import DECISION_HEAD, PREFIX, History
+
+    prefix = PREFIX + "decision:telegram:"
+    rows = store.db.execute(
+        "SELECT key,payload_json FROM runtime WHERE key>? AND key<? AND length(key)=? ORDER BY key LIMIT ?",
+        (state.get("decision_cursor", prefix), prefix + "~", len(prefix) + 36, batch),
+    ).fetchall()
+    processed = 0
+    for key, payload in rows:
+        if time.monotonic() >= deadline:
+            break
+        value = json_payload(payload)
+        revision = value.get("revision") if isinstance(value, dict) else None
+        if type(revision) is int and revision > 0:
+            raw = encode(value)
+            old = store.get_runtime(key + f":{revision:010d}")
+            if encode(old) != raw:
+                raise ValueError("Decision head differs from retained revision")
+            pointer = {DECISION_HEAD: revision}
+            if encode(History(store).resolve(key[len(PREFIX) :], pointer)) != raw:
+                raise ValueError("Decision reference changed public bytes")
+            packed = encode(pointer)
+            size = len(payload.encode() if isinstance(payload, str) else payload)
+            if len(packed) < size:
+                store.db.execute("UPDATE runtime SET payload_json=? WHERE key=?", (packed, key))
+                state["saved_payload_bytes"] += size - len(packed)
+                state["saved_categories"]["services"] = (
+                    state["saved_categories"].get("services", 0) + size - len(packed)
+                )
+                state["decision_heads_compacted"] = state.get("decision_heads_compacted", 0) + 1
+        state["decision_cursor"] = key
+        state["decision_heads_scanned"] = state.get("decision_heads_scanned", 0) + 1
+        processed += 1
+    state["decisions_complete"] = len(rows) < batch and processed == len(rows)
 
 
 def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> dict[str, Any]:
@@ -18,12 +55,14 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
     if not store.bounded:
         return {"state": "N/A_LEGACY"}
     state = store.get_runtime("storage_repack", {})
-    if state.get("version") == 3 and state.get("state") == "COMPLETE":
+    if state.get("version") == 3 and state.get("state") == "COMPLETE" and state.get("decisions_complete"):
         return state
     state = {"version": 3, "cursor": "", "records": 0, "saved_payload_bytes": 0, **state}
     state.setdefault("saved_categories", {})
     deadline = time.monotonic() + seconds
     with store.db:
+        if not state.get("decisions_complete"):
+            decision_heads(store, state, batch, min(deadline, time.monotonic() + seconds / 4))
         # The old expiry table itself is the durable remaining-work queue. A row
         # moves only in the transaction that inserts its checked replacement.
         expiry = drain(store.db, batch=batch, seconds=seconds / 3)
@@ -115,6 +154,7 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
             and quality_moved == 0
             and state.get("records_complete")
             and state.get("quality_complete")
+            and state.get("decisions_complete")
             else "IN_PROGRESS",
             at_ms=now_ms,
             expiry_legacy_empty=expiry["legacy_empty"],
