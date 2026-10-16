@@ -2,11 +2,11 @@
 
 Canonical spec: [product_scope.md](product_scope.md). Этот план содержит текущие AC/Goal/findings/Evidence; подробный audit report, raw logs и исследовательские fixtures не включаются в tracked repository. История предыдущих implementation checkpoints сохранена в Git, отмененная full-history conversion не является текущим обязательством.
 
-## Аудиторская оценка G6 — 2026-10-16
+## Историческая аудиторская оценка G6 — 2026-10-16, до S06
 
 Проверенный `origin/main`: **130225d2f641b4d9d8c616aa791ef6919afd9c31**. Требования: полностью прочитанный S01 modified2026-10-16T08:48:31.536Z (170 paragraphs/t.0, native revision в spec) и последующие owner решения S05. Git/main/protections/Environment, исходные CI/CD и bounded actual runtime records сверены16Oct2026. Audit PR только актуализирует spec/plan; не меняет runtime.
 
-Готовность = **64/65 READY AC = 98.5%**. E09/AC-09-02 остается BLOCKED B02: код/автоматические контракты существуют, но actual authorized delivery не подтверждена без owner credential/binding. READY остальных критериев ограничен перечисленными fixtures/revisions; оценка не означает, что integration уже активна, 20GB steady-state доказаны или defaults прибыльны.
+На момент audit, до разделения проектов S06/D23, готовность = **64/65 READY AC = 98.5%**. Тогда E09/AC-09-02 был BLOCKED B02: код/автоматические контракты существуют, но actual authorized delivery не подтверждена без owner credential/binding. READY остальных критериев ограничен перечисленными fixtures/revisions; оценка не означает, что integration уже активна, 20GB steady-state доказаны или defaults прибыльны.
 
 Предыдущий полный audit:2026-10-10, `8ace3638b9193444948d0beb88e0c49e9f2f068e`, **7/58=12.1%**. Разница+86.4п.п. объясняется поставкой G1–G5 и storage scope после того аудита; denominator увеличен на7 E13 из обновленных требований, прежние58 не исключены. Реализованные незамерженные изменения в готовность не включаются. F35 исправлен до текущей оценки; F36 совместимость receiver проверяется по отдельным primary records EVID-05.
 
@@ -20,34 +20,56 @@ Canonical spec: [product_scope.md](product_scope.md). Этот план соде
 | E06 History/outcomes | 7/7 | 100.0% | Evidence ниже; READY кода не обещает долгосрочную capacity |
 | E07 Telegram/manual | 7/7 | 100.0% | Evidence ниже; READY кода не обещает долгосрочную capacity |
 | E08 Owner settings | 3/3 | 100.0% | Evidence ниже; READY кода не обещает долгосрочную capacity |
-| E09 Trading agent | 5/6 | 83.3% | B02: actual signed delivery не активна |
+| E09 Trading agent | 5/6 | 83.3% | Исторический cross-project scope до S06; actual signed delivery не активна |
 | E10 Persistence/recovery | 4/4 | 100.0% | Evidence ниже; READY кода не обещает долгосрочную capacity |
 | E11 Digest/enrichment | 4/4 | 100.0% | Evidence ниже; READY кода не обещает долгосрочную capacity |
 | E12 CI/CD/operations | 4/4 | 100.0% | Evidence ниже; READY кода не обещает долгосрочную capacity |
 | E13 Bounded storage/reset | 7/7 | 100.0% | Evidence ниже; READY кода не обещает долгосрочную capacity |
 
-## Current Goal — весь согласованный scope
+## Current Goal — самостоятельный manual radar и handoff
 
-Основание: поручение владельца11Oct расширить Goal на всю roadmap;16Oct — исправить новое накопление, отменить сохранение старой тестовой market history, разово начать историю заново; затем свериться с обновленным документом требований. Встроенная Goal остается active. Наличие полномочий на код/CI/CD не разрешает создавать от имени владельца отложенный credential.
+**Основание S06 (16Oct2026):** владелец разделил проекты: здесь готовится CryptoWatcher
+для alerts под ручную торговлю и handoff; подключение в trading agent — задача
+принимающего проекта. D23 в spec заменяет прежний cross-project activation DoD.
+Credentials/binding/consumer activation не являются условием завершения CryptoWatcher.
+Предыдущее BLOCKED B02 относилось к прежним границам; отсутствие ключа не дефект radar.
+Встроенная Goal сохраняет историю поручения; ее завершение — после проверки нового DoD.
 
-**Текущий результат:** storage/reset этап выполнен по коду **7/7 AC E13**, доставлен и проверен. Вся Goal: **64/65 AC полностью подтверждены**, B02 остается. G6 completion review нашел F35/F36; F35 исправлен compatible hotfix39 без нового reset. Полный Goal DoD еще не достигнут из-за authorized integration smoke/configuration; не ожидать месяц статистики и не возобновлять старую conversion.
+**Прогресс по коду/документам текущего CW scope:65/65 AC.** После S06 прежний AC-09-02 оценивается по producer readiness; это не proof живой consumer delivery. Required PR CI/merge остаются gates текущей документации.
 
-**Non-goals:** сокращение markets/TF/detectors/events/качества аналитики, auto calibration, LLM/trading/orders, PostgreSQL/Redis, удаление backups/experiments, увеличение RAM или обычного CW backup/CD deadline, повтор reset, длительное наблюдение в Actions. Отмененные conversion budgets не используются.
+**Результат:** работающий standalone Spot/USDT Perpetual radar,1/3/5/15m,5families,
+episodes/outcomes/history/Telegram и bounded storage; готовый versioned producer,
+контракт, synthetic payload и список внешних acceptance checks в
+[handoff](runbooks/agent-delivery.md#handoff-принимающему-проекту).
+Scope AC IDs сохраняется65; ответственность частей E09 уточнена S06/D23.
+Аудиторские проценты ниже/выше — прошлый snapshot, сейчас не пересчитываются.
 
-**Последовательность и status:**
+**DoD текущего уточнения:** spec/plan/runbook/README согласованы; handoff содержит
+контракт/ownership/configuration/выходные artifacts/ограничения/acceptance checks
+принимающей стороны; пример соответствует producer и не содержит secrets; existing
+HMAC/retry/restart/expiry/isolation fixtures PASS; bounded readonly CW smoke/manual
+path подтверждены; docs CI/merge и safe branch cleanup. Runtime deploy N/A для
+этого docs-only scope. Никакой зависимости от включенного consumer или нового ключа.
 
-| Goal/этап | Результат / status | Зависимости/оставшееся |
+**Non-goals:** конфигурация/активация/изменения trading agent, credentials/binding,
+live joint delivery; сокращение markets/TF/detectors/events/качества аналитики,
+auto calibration, LLM/trading/orders, PostgreSQL/Redis, удаление backups/experiments,
+увеличение RAM/backup/CD deadlines, повтор reset, длительный monitoring в Actions.
+Подключение позднее orchestrates принимающий проект с отдельными permissions и
+согласованием изменения producer infrastructure config.
+
+| Этап | Состояние CryptoWatcher | Передаваемая/последующая работа |
 | --- | --- | --- |
-| G1 | Owner access/config/migration/regression/CI/CD DONE | First migration не повторять; owner prefs/hash сохранены |
-| G2A | Spot+Perpetual metadata/universe/WS/concurrent1/3/5/15m DONE | Gap/reconnect/unknown instrument diagnostic остаются штатным поведением |
-| G2B | Все5 families/profiles/episodes/durable Telegram/history DONE | Данные и formulas не сокращались storage работой |
-| G3 | Outcomes/comparator/cohorts/export/digest DONE по автоматическим fixtures | Малый N/неполнота после reset показываются явно; F35 устранен |
-| G4 | Producer/consumer v2/retry/replay/idempotency реализованы; actual activation BLOCKED | B02, отдельный owner credential/TOTP/draft и binding/max-age900s; F36 compatible receiver hotfix |
-| G5 | Optional enrichment/manual comparison tools DONE | Enrichment OFF допустим; thresholds меняются только владельцем |
-| Storage E13 | Compact new accumulation/retention/metering/one-time reset DONE | 20GB target не доказан; F34 DOCUMENT/DEFER для отдельного репрезентативного observation |
-| G6 | Полный audit актуального scope выполнен, docs PR40 merged; F02 contracts consolidation в delivery | Findings имеют dispositions; external activation не выдается за DONE |
+| G1 | Owner config/migration/tests/CI/CD DONE | Existing backups/private settings сохраняются |
+| G2A/G2B | Два universe/4TF/5families/episodes/Telegram DONE | Routine source diagnostics продолжаются автоматически |
+| G3/G5 | Outcomes/comparator/export/digest/optional enrichment DONE по code/fixtures | Малый N/неполнота/optional OFF видны явно |
+| E13 storage | Compact accumulation/retention/metering/reset DONE | F34:20GB fit пока не доказан; follow-up observation отдельно |
+| E09 producer/handoff | Producer готов; handoff в текущей branch | TA-CW-01…06 — receiving-project integration checklist |
+| G6 | Audit40 и F02 consolidation41 merged | Последняя audit оценка не меняется этим UPDATE |
 
-**DoD остатка G4:** owner создает/сохраняет dedicated radar signing credential штатно; проверяется recovery/binding, consumer max-age900s и producer HTTPS config. Обязательны signed/tampering/idempotency/restart/expired replay checks, фактические producer/consumer revision/health и отсутствие LLM/order side effects. Telegram mute/outage не должен влиять на consumer. Конкретная activation выполняется по [процедуре](runbooks/agent-delivery.md) без изменения иных credentials/trading flags.
+**Branch/base:** `codex/manual-radar-handoff-20261016`, base2e242abf4679f76254e6445e23dd8cf70b1d22a0;
+clean main/remotes/worktrees/protections/open PR проверены до изменений. Только CW
+repository documentation/example; counterpart repository/runtime/config не меняются.
 
 ## Validation Plan
 
@@ -59,15 +81,16 @@ Canonical команды — [README](../README.md#checks); из root repository
 | Auth/config/migration/revision race | Existing pytest bot/config/storage/CLI; strangers/groups/invalid/future/corrupt/empty-list/CAS | local targeted, full PR CI | REQUIRED EVID-02 PASS |
 | Markets/TF/formulas/episodes | Ingestion/universe/detectors/events replay/gap/reconnect/re-arm/coalescing/fault tests | local targeted/full CI/image | REQUIRED PASS; runtime EVID-04 |
 | Analytics/retention/services | Known series, neutral/directed/gaps/late worker, all methods/frozen event revisions, comparator/no future leakage, controlled expiry30/35d/12mo, terminal queues/restart/dedup | targeted local + `python scripts/checks.py all` CI | REQUIRED EVID-02 PASS731 tests; real 30d expiry не ожидался |
-| Export/Telegram/integration | NDJSON completion/pagination/filter/provenance, UI/outcome navigation, independent consumers, signed immutable retries/authority guards | isolated CI/image; live доступный контур | REQUIRED code PASS; actual signed consumer delivery B02 |
+| Export/Telegram/integration | NDJSON completion/pagination/filter/provenance, UI/outcome navigation, independent consumers, signed immutable retries/authority guards | isolated CI/image; live доступный контур | REQUIRED producer/mock contract PASS; live signed consumer acceptance передана receiving project (S06) |
 | Reset/private settings | Exact-target/allowlist/refusal/restore/equality/queues/cursors/generation/no historical alerts | isolated fixture + approved one-time CD37 | REQUIRED EVID-01 PASS; reset permit CONSUMED |
 | Storage/capacity | Synthetic event+4outcomes+services/indexes; cheap counts/files/pages/sample model; bounded index snapshot; category/external inventory | isolated image + bounded readonly VPS | REQUIRED EVID-04 PASS; 20GB fit НЕ доказан, forecast warning виден |
 | Ordinary CD/recovery | Required protection/latest CI/tree/source/image, full source integrity + disk snapshot/hash/readback, target lock, health/ingestion/private equality | production CW CD38/39 | REQUIRED EVID-03 PASS; entire job<=900s, CPU1/RAM4GiB/no swap |
+| Handoff / S06 | Existing producer5+14 targeted fixtures, exact example/schema/hash/source equality, stable65 AC и6TA-CW items, bounded readonly CW smoke | local + required docs CI | REQUIRED local PASS; latest PR CI/merge PENDING; runtime deploy N/A |
 | Representative load / longer trend | Separate owner observation; CPU/RAM/backlog/disk by representative workload, stop criteria до load | не запускался как длительный Actions monitoring | RECOMMENDED; не блокирует завершенный storage/reset scope |
 
 ## Текущее состояние AC
 
-Статусы ниже относятся к проверенному main и EVID-01…06. AC-09-02 operational blocker не превращается в READY из-за mocked transport. Продуктовые и технические AC равноправны.
+Текущие статусы учитывают explicit S06/D23: E09 оценивается по producer и handoff, а actual consumer activation передана в TA-CW checklist. Это изменение ответственности владельцем, не утверждение о выполненном live E2E. Исторический audit snapshot не пересчитывается. Продуктовые и технические AC равноправны.
 
 | AC / критерий | Статус | Evidence / проверка |
 | --- | --- | --- |
@@ -111,12 +134,12 @@ Canonical команды — [README](../README.md#checks); из root repository
 | AC-08-01 Owner configuration | READY | test_config/test_storage/test_bot/test_enrichment_runtime; EVID-02/04 |
 | AC-08-02 Изменение без restart | READY | test_config/test_storage/test_bot/test_enrichment_runtime; EVID-02/04 |
 | AC-08-03 Profiles и manual parameters | READY | test_config/test_storage/test_bot/test_enrichment_runtime; EVID-02/04 |
-| AC-09-01 Structured contract | READY | test_agent_delivery; consumer context/v2 tests; EVID-05; B02 |
-| AC-09-02 Авторизованная независимая доставка | BLOCKED B02 | Auth/retry/isolation code tests PASS; credential/binding/900s config и actual signed delivery PENDING |
-| AC-09-03 Outbox и recovery | READY | test_agent_delivery; consumer context/v2 tests; EVID-05; B02 |
-| AC-09-04 Idempotency revisions | READY | test_agent_delivery; consumer context/v2 tests; EVID-05; B02 |
-| AC-09-05 Delivery diagnostics | READY | test_agent_delivery; consumer context/v2 tests; EVID-05; B02 |
-| AC-09-06 Consumer independence и analytics | READY | test_agent_delivery; consumer context/v2 tests; EVID-05; B02 |
+| AC-09-01 Structured contract | READY | test_agent_delivery; reference consumer qualification EVID-05; current handoff |
+| AC-09-02 Готовность авторизованного producer | READY | Existing HMAC raw-body/retry/restart/expiry/independent-consumer fixtures PASS; config absent сохраняет manual radar; live activation transferred TA-CW-01…06 по S06 |
+| AC-09-03 Outbox и recovery | READY | test_agent_delivery; reference consumer qualification EVID-05; current handoff |
+| AC-09-04 Identity/revisions для consumer | READY | test_agent_delivery; reference consumer qualification EVID-05; current handoff |
+| AC-09-05 Delivery diagnostics | READY | test_agent_delivery; reference consumer qualification EVID-05; current handoff |
+| AC-09-06 Handoff и causal analytics | READY | Canonical handoff в agent-delivery, exact producer example/schema/hash, responsibility+TA-CW checklist, prior contract tests и producer context/export/causal fixtures; receiving runtime acceptance не выполнялась |
 | AC-10-01 Разделение хранения | READY | test_storage/test_history_heads/test_history_codec/test_market_reset_delivery; EVID-01/03/04 |
 | AC-10-02 Расширяемая история | READY | test_storage/test_history_heads/test_history_codec/test_market_reset_delivery; EVID-01/03/04 |
 | AC-10-03 Безопасная миграция/recovery | READY | test_storage/test_history_heads/test_history_codec/test_market_reset_delivery; EVID-01/03/04 |
@@ -148,6 +171,26 @@ Canonical команды — [README](../README.md#checks); из root repository
 - **EVID-05/consumer:** Consumer PR949 merged8c207edf6fc21e050bdca937e8f3bca49380a2ee; required PR CI38898629578 и push CI38899151685 PASS (включая v2 contract/PostgreSQL concurrency). Normal API CD38899376113 PASS12:16:32–12:22:28UTC356s, migration already_at_target_head/source fingerprint matched/DEPLOY_OK. Actual image sha256:d4e16629d6bf44efa9837eb70e0a5dda1b6a0f43f88e884e91d29a8ee089a8a2; readonly parser12:23:54UTC40 producer payloads PASS/40 execution-authority rejects, readyz200; CW/Postgres container IDs unchanged, ни одно event не отправлено. Ранее receiver v2 PR935/936/CI/CD11Oct PASS, current schema checked actual parser16Oct; producer v2 default settings с новыми TTLs потребовал F36. Consumer activation остается owner-deferred; actual ingest OFF/binding false/max-ageUNSET подтверждены16Oct12:13:50UTC. Zero Trust не добавлялся; прежний urllib403/CF1010 не означает Access requirement, HTTPx доходил до503 ingest_disabled.
 - **EVID-06/dependencies/codebase:** 44 app Python modules,41 test modules,241 tracked files/112 vendor files на audit inventory; после добавления fixtures количество test cases731. One entrypoint wrapper, one deployable, native/build scripts, config/hash locks. Source/vendor pins yyjson0.12.0/SQLite3.53.4/Zstd1.5.7 проверяются build. Actual CPython3.11.17/SQLite3.46.1 inventory21 distributions/OSV query16Oct: runtime app deps matches0; pip24.0 шесть advisories (GHSA-4xh5-x5gv-qwph/58qw-9mgm-455v/6vgw-5pg2-w6jp/jp4c-xjxw-mgf9/qwm4-qh6w-59xr/wf93-45jw-7689), setuptools79.0.1 GHSA-h35f-9h28-mq5c. F26 reachability/disposition ниже, отсутствие matching advisory не доказывает отсутствие всех vulnerabilities.
 
+### EVID-07 — S06 handoff readiness
+
+- Source/base2e242abf; producer five positive HMAC/restart/expiry/isolation/projection
+  scenarios PASS,14 invalid-config/ack/header-isolation cases PASS. Все controlled,
+  без production requests/credentials. Новые runtime tests/code не добавлялись.
+- Example7716bytes/SHA256 `2a65a5d0de157deb6039c0dfb9c4551ded95f89d00135604d36a483c88bc6bbf`,
+  exact output текущего40-envelope producer fixture; canonical settings hash и
+  false authority проверены; secret/config credential fields отсутствуют.
+  Contract/example/ownership/checklist источники связаны относительными ссылками.
+- Readonly CW smoke16Oct2026T14:42:55UTC (17:42:55МСК): source130225d2/image26b64aee…,
+  healthy/config revision3/same history generation/alertsON/custom/composite preference.
+ 1248streams/4TF/оба рынка, bootstrap/recovery/blocked0; poll1245/1248 с3 явно
+ insufficient-history/zero-baseline. AnalyticsOK, TelegramDELIVERED; sample200outcome
+ heads truncated:197COMPLETE/3INCOMPLETE. AgentUNSET/OFF не мешает manual работе.
+ Ни сообщения, ни config/DB writes, ни обращения к consumer не выполнялись.
+- Working625864056bytes (DB605556736/WAL20274552/SHM32768), net2.748MB/min over13580s;
+  forecast425.12GB — model extrapolation,20GB fit не доказан. Автоматические sampler/
+  retention timestamps свежие. Это ограниченный smoke, не новое длительное наблюдение
+  и не пересчет аудиторских процентов.
+
 ## Полный реестр findings
 
 Исходные проблемы F01…33 относятся к audit8ace3638 и сохранены для трассировки; Evidence ниже заменяет устаревшие «IN_BRANCH/PENDING». Confidence HIGH — код/fixtures/primary records; MEDIUM — неподтвержденные orphan/hardening/UX candidates. DEFER/DOCUMENT не означает исправление или новое требование. Detailed historical logs/snapshots остаются вне tracked документов.
@@ -155,7 +198,7 @@ Canonical команды — [README](../README.md#checks); из root repository
 | ID | Проблема / область / исходный объект | Влияние / priority | Действие / обоснование / зависимости | Evidence | Confidence / disposition |
 | --- | --- | --- | --- | --- | --- |
 | F01 DOC/SPEC | S01 полностью меняет прежний Spot MVP; отсутствовали AC и трассировка; product_scope.md / все эпики | P1 | CONSOLIDATE: Scope источника, без новых features. | S01/S05 полностью сверены; D22/E13,65 stable AC; PR19 и PR37/39. | HIGH / CLOSED |
-| F02 DOC | Legacy schema1/storage/recovery формулировки противоречили current schema2; README/state_contract/architecture/agent-delivery | P2: риск выбора неверного backup/rollback path | CONSOLIDATE: current contract поднят перед legacy, logical v1 отделен от physical2, routine disk backup имеет один canonical runbook; useful historical anchors/tooling сохранены | G1/PR37 адаптация + текущая branch codex/current-storage-contracts-20261016/base6799395. Сверка Store/Sources/History/receiver dispatch, relative links и local docs PASS; required docs CI/merge PENDING | HIGH / FIX_IMPLEMENTED_DELIVERY_PENDING |
+| F02 DOC | Legacy schema1/storage/recovery формулировки противоречили current schema2; README/state_contract/architecture/agent-delivery | P2: риск выбора неверного backup/rollback path | CONSOLIDATE: current contract поднят перед legacy, logical v1 отделен от physical2, routine disk backup имеет один canonical runbook; useful historical anchors/tooling сохранены | G1/PR37 адаптация + PR41/main2e242abf. Сверка Store/Sources/History/receiver dispatch, relative links и local docs PASS; CI38901694618 PASS, merged41, postmerge38901939152 docs-only PASS | HIGH / CLOSED |
 | F03 DOC/PROCEDURE | AGENTS.md и ci-cd-rules.md отсутствуют в repository; root; AC-12-02 | P1 | DOCUMENT: Процедуры существуют и используются. | Root AGENTS/ci-cd-rules/router tracked; strict ci-required и production Environment подтверждены16Oct. | HIGH / CLOSED |
 | F04 DOC/COMMANDS | Quickstart обрывается, нет canonical install/validation/environment процедуры; README.md: конец незакрытого bash fence; requirements/Dockerfile | P2 | DOCUMENT: Format/links/fences проверены; команды не дублируются в плане. | README canonical Python3.11/hash-lock/CLI/Docker commands; validate_docs и image checks CI38897051479 PASS. | HIGH / CLOSED |
 | F05 SECURITY | Access policy fail-open и неполный guard; код 261–277, 1408–1415; AC-01-04 | P1 | FIX: Owner private233382575; доступ не открывается при missing config. | config.authorized + единый Controller.handle guard; stranger/group/empty/invalid/bot identity fixtures, full CI731 PASS. | HIGH / CLOSED |
@@ -170,7 +213,7 @@ Canonical команды — [README](../README.md#checks); из root repository
 | F14 DELIVERY | Failed Telegram send расходует cooldown без retry; код 2101–2120; AC-07-01/05 | P1 | FIX: Failed send не расходует successful notification state. | TelegramDelivery durable retries/retry_after/ambiguous ACK/permanent target и success-baseline fixtures; runtime DELIVERED. | HIGH / CLOSED |
 | F15 ANALYTICS | Нет event history, outcome worker, analytics/export; state 331–450, весь tracked inventory; E06 | P1 | IMPLEMENT: История ограничена D22; после detail expiry явно только summaries. | G3 outcomes/cohorts/export/digest + PR37 retention + PR39 F35; original reference/method/revisions preserved, controlled-time equality PASS. | HIGH / CLOSED |
 | F16 OWNER SETTINGS | Market domain зависит от chat; profiles/manual settings не реализованы; код 302–399, 1084–1133, 1759–1795; E08/AC-02-04 | P1 | IMPLEMENT: CAS/no-op/invalid settings tests и hash readback PASS. | Owner revision3 private preservation; profiles/manual/typed watchlist/enrichment/horizons/retention отдельно от delivery preferences/secrets. | HIGH / CLOSED |
-| F17 INTEGRATION | Нет advisory API/автоматической передачи trading agent; все entrypoints/dependencies; E09 | P1 | IMPLEMENT: Code/contract отдельно от реальной signed delivery; не создавать credential за владельца. | Producer v2/HMAC/immutable outbox/retry/replay и consumer receiver существуют; F36 выявлен actual parser и исправляется отдельным compatible hotfix. Ingest/binding OFF/UNSET по owner-deferred credential. | HIGH / BLOCKED B02 |
+| F17 INTEGRATION | Исторически отсутствовали advisory contract/delivery; E09 | P1 | IMPLEMENT/DOCUMENT: producer готов и передается через handoff; activation принадлежит принимающему проекту по S06/D23 | Producer v2/HMAC/outbox/retry/replay/diagnostics fixtures PASS; receiver snapshots/CI/CD в EVID-05; contract/example/TA-CW-01…06 handoff в текущей branch. Credential/binding не создавались | HIGH / PRODUCER_READY_HANDOFF; external activation transferred |
 | F18 DIGEST | Нет periodic digest и независимых delivery toggles; код 2171 и handlers; AC-11-01/02/07-05 | P2 | IMPLEMENT: Default digest OFF не является дефектом. | Digest fixed-period identity/latest-only restart/frozen bytes/retry/preferences race; tests_digest PASS, alerts независимы. | HIGH / CLOSED |
 | F19 ENRICHMENT | Нет derivatives context для Spot; весь fetch layer; AC-11-03/04 | P2 | IMPLEMENT: Optional feature может быть OFF; new market source не добавлен. | G5 exact asset mapping/OI/funding/basis/source timestamps/cadence/fault isolation; CI/CD27 PASS, current suite includes enrichment regressions. | HIGH / CLOSED |
 | F20 OBSERVABILITY | Symbol errors/timeouts скрываются как отсутствующие данные; код 963–1023; AC-04-04/12-03 | P1 | FIX: 3 insufficient-history/zero-baseline streams показываются DEGRADED отдельно от missing feed. | Bounded readonly CLI/Telegram diagnostics, independent stream reporter, per-family/source/consumer errors, ingestion age and PENDING-on-budget; CI/actual readback PASS. | HIGH / CLOSED |
@@ -195,14 +238,14 @@ Canonical команды — [README](../README.md#checks); из root repository
 
 Canonical README — назначение/commands/navigation; spec — requirements/decisions/AC; этот plan — statuses/findings/Goal/Evidence; state_contract — ownership/schema1 compatibility и schema2; bounded-storage-reset — current retention/reset/routine disk backup. Полезные historical converter/native CLI и source licenses сохраняются: их наличие не означает текущую обязанность конвертировать discarded history.
 
-F02 consolidation выполнена в текущей branch: canonical paths и полезные historical anchors сохранены; schema2 contract перенесен в начало state_contract, architecture и agent runbook описывают actual normalized/disk flow. Destination — existing state_contract schema2 + bounded runbook; links README/architecture/agent-delivery проверены. Новый конкурирующий документ не создан. Исторические rules D12/raw90/indefinite details явно superseded D22. F24 private duplicate helpers — DOCUMENT/DEFER, удаления только из-за отсутствия imports не выполнялись. Local ignored `.cache-g1`, env/caches/pycache и прежние branches/worktrees учитываются отдельно от tracked source; статус ignored не означает ненужность.
+F02 consolidation выполнена PR41: canonical paths и полезные historical anchors сохранены; schema2 contract перенесен в начало state_contract, architecture и agent runbook описывают actual normalized/disk flow. Destination — existing state_contract schema2 + bounded runbook; links README/architecture/agent-delivery проверены. Новый конкурирующий документ не создан. Исторические rules D12/raw90/indefinite details явно superseded D22. F24 private duplicate helpers — DOCUMENT/DEFER, удаления только из-за отсутствия imports не выполнялись. Local ignored `.cache-g1`, env/caches/pycache и прежние branches/worktrees учитываются отдельно от tracked source; статус ignored не означает ненужность.
 
 ## Blockers и следующий шаг
 
 | ID | Состояние | Необходимое действие |
 | --- | --- | --- |
 | B01 | RESOLVED: first migration/reset и ordinary current source/backup/CD подтверждены | Не повторять reset/ручную передачу образа |
-| B02 | BLOCKED owner-deferred: dedicated radar credential/binding отсутствует; ingestOFF/max-ageUNSET | Owner TOTP/draft по штатной форме; после recovery/binding checks применить согласованные900s и выполнить signed smoke/replay без торговых side effects |
+| B02 | Передан принимающему проекту по S06/D23; не блокер manual radar/handoff. Live integration по последней проверке OFF/UNSET | TA-CW-01…06 в handoff: receiver credential/recovery/binding/max-age900s, coordinated producer config, signed acceptance; актуализировать внешнее Evidence при подключении |
 | B03 | RESOLVED: numeric policies/owner mapping/retention определены D09-D22 | Сохранять актуальные правила и settings equality |
 | B04 | RESOLVED: GitHub admin, strict ci-required/production Environment/DEPLOY_ENABLEDtrue, restricted SSH | Перед каждым merge reread head/protections; не обходить gates |
 
@@ -210,41 +253,20 @@ F34 budget/capacity — ограничение Evidence и отдельный fo
 
 ## Audit quality review
 
-Охват: весь updated S01/S05,65AC и обратная трассировка active features; entrypoint/routers/config/lock/source schema/queues/delivery/analytics/WS/REST/TG/agent boundaries; tracked и vendor/native/generation/scripts/workflows; separate ignored/runtime backups/experiments; primary GitHub gates/CI/CD/actual image/private hashes. Required code gates PASS; operating integration B02 не выдается за PASS. Обнаруженные F35 и F36 показывают предел прежних single-method/producer-only fixtures; исправления проверяются на смешанных версиях и фактическом consumer parser.
+Охват: весь updated S01/S05,65AC и обратная трассировка active features; entrypoint/routers/config/lock/source schema/queues/delivery/analytics/WS/REST/TG/agent boundaries; tracked и vendor/native/generation/scripts/workflows; separate ignored/runtime backups/experiments; primary GitHub gates/CI/CD/actual image/private hashes. Required code gates PASS; operating integration не выдается за PASS; по S06 она вне CW DoD и передана принимающему проекту. Обнаруженные F35 и F36 показывают предел прежних single-method/producer-only fixtures; исправления проверяются на смешанных версиях и фактическом consumer parser.
 
 False positives проверены: optional enrichment/digest OFF — preference; три insufficient-history/zero-baseline streams не названы outage; совпадающие symbols разделены market identity; runtime hard limits не объявлены обязательными без requirement; old converter/vendor не назван мусором; package advisory match не равен exploit; 20GB не объявлены доказанными initial small DB; сохранение точных numeric summary metrics не названо хранением полной старой event history.
 
-Confidence HIGH по auth/config/atomic persistence/formulas/retention/replay/CI/source identity на проверенных fixtures. MEDIUM по long-term capacity/оптимальной частоте/optional UX/external private helper usage. Limitations/possible false negatives: steady-state annual/dense cohort layout и новый реальный30d expiry еще не наблюдались; controlled-clock tests их моделируют. Полный stream load/SLO, третьесторонние native/dependency undisclosed bugs и все Telegram/browser/client paths не доказаны этим аудитом. Этот audit не заменяет отдельный exhaustive security scan. Real integration signed receipt/consumer cutoff smoke остается B02.
+Confidence HIGH по auth/config/atomic persistence/formulas/retention/replay/CI/source identity на проверенных fixtures. MEDIUM по long-term capacity/оптимальной частоте/optional UX/external private helper usage. Limitations/possible false negatives: steady-state annual/dense cohort layout и новый реальный30d expiry еще не наблюдались; controlled-clock tests их моделируют. Полный stream load/SLO, третьесторонние native/dependency undisclosed bugs и все Telegram/browser/client paths не доказаны этим аудитом. Этот audit не заменяет отдельный exhaustive security scan. Real signed receipt/consumer cutoff smoke передан принимающему проекту; отсутствие этого Evidence не мешает standalone use и готовности handoff по S06.
 
 ## Checkpoint
 
-2026-10-16: audit PR40 merged679939593b82e8a07139bf60d92bc00fed57beb0,
-required docs CI38900513591 PASS, postmerge38900699749 selectPASS/build+productionSKIPPED
-по docs-only scope. Local main синхронизирован; прежний audit baseline64/65 на
-130225d2 не пересчитывается. Runtime39 и consumer949 доставлены/проверены, B02 остается.
+2026-10-16 S06: явное разделение ответственности manual radar/producer handoff и
+receiving-project activation. PR41 merged2e242abf, CI38901694618 и postmerge38901939152
+PASS/docs-only; F02 закрыт. Предыдущая runtime source130225d2 и reset generation
+не меняются. B02 сохранен как external receiving-project dependency, а не CW blocker.
 
-Current F02 branch `codex/current-storage-contracts-20261016`, base6799395;
-пять затронутых docs, без code/config/policy changes. Local docs/links/manual
-source alignment/self-review PASS; required docs CI/merge PENDING. Runtime CD N/A.
-Parent Goal active. Собственные текущие PR branches/worktrees очищаются после
-merge/proof; старые user/unknown branches и private evidence сохраняются.
-
-## F02 — консолидация текущих storage/recovery contracts
-
-Разрешенный scope всей Goal включает F02. Completion review после audit40 выявил
-конкретные опасные противоречия: architecture/state contract называют physical
-schema1 текущей, agent runbook обещает schema1/NONE, architecture описывает RAM/VFS
-как обычный backup schema2. Код receiver уже выбирает disk source/backup для schema2.
-Branch `codex/current-storage-contracts-20261016`, base679939593b82e8a07139bf60d92bc00fed57beb0;
-clean main/GitHub/protections/open PR проверены до изменений.
-
-Результат/DoD: текущие physical schema2, logical v1 и historical schema1 явно
-разделены; единственная действующая процедура routine disk backup/reset остается
-в bounded-storage-reset, useful legacy qualification/commands/anchors сохраняются.
-Новые settings snapshot TTL fields объяснены как provenance, не consumer freshness.
-Non-goals: runtime/schema/CI/CD changes, новый reset/conversion, cleanup данных,
-credential activation и увеличение budgets. Validation REQUIRED: сверка с
-Store/History/Sources/receiver dispatch, относительные links/anchors и canonical
-`python scripts/checks.py docs`; self-review/required docs CI/merge. Runtime deploy
-N/A: только документация, без изменения delivery policy или команд исполнения.
-Документы исправлены; сверка с actual bounded/schema dispatch и relative links PASS, self-review PASS. Required docs CI/merge PENDING; аудиторский snapshot64/65 на130225d2 не пересчитывается. После merge останется owner-deferred B02; новую storage migration/reset не запускать.
+Current branch `codex/manual-radar-handoff-20261016`, base2e242abf. Scope: spec/plan,
+existing agent runbook/README navigation, synthetic example. Local producer5+14 targeted tests PASS; docs/example/hash/source alignment и bounded readonly CW smoke PASS (EVID-07). Self-review PASS; latest required docs PR CI/merge PENDING. Runtime CD N/A.
+Новых consumer API/credential/config operations не выполнять. New audit percentages
+не рассчитывать; old64/65 snapshot остается историческим до S06.

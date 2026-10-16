@@ -6,7 +6,7 @@ Canonical spec: этот файл. Canonical delivery plan: [open_issues.md](ope
 
 CryptoWatcher — личный deterministic market radar владельца для широкого мониторинга Bybit Spot USDT и USDT Perpetual, поиска краткосрочной необычной активности, ручного просмотра рынка и advisory context основного trading agent. Radar описывает наблюдаемые события и не принимает торговых решений.
 
-Первая версия использует только Bybit. LLM, news/macro ingestion, торговый аккаунт/portfolio, execution/risk management, multi-exchange, собственный SPA/PWA и доступ других пользователей исключены. Trading agent остаётся независимым приложением; дополнительный просмотр возможен в его Web Admin.
+Первая версия использует только Bybit. LLM, news/macro ingestion, торговый аккаунт/portfolio, execution/risk management, multi-exchange, собственный SPA/PWA и доступ других пользователей исключены. Trading agent остаётся независимым приложением; здесь готовятся standalone manual radar и handoff. Подключение, credentials/binding/receiver activation и приемочная проверка живой интеграции принадлежат принимающему проекту по S06/D23.
 
 ## Источники и приоритет
 
@@ -16,6 +16,7 @@ CryptoWatcher — личный deterministic market radar владельца д�
 | S02 | Запрос владельца AUDIT от 2026-10-10 и приложенный комплект AGENTS.md / ci-cd-rules.md | Scope audit PR: только canonical spec/plan; правила AC/Evidence/Goal/Git/delivery; pipeline не меняется аудитом |
 | S03 | Предыдущий product scope, [state_contract.md](state_contract.md), README и код на `8ace3638b9193444948d0beb88e0c49e9f2f068e` | Legacy behavior и compatibility evidence; не отменяют S01 |
 | S05 | Явное поручение владельца 2026-10-16: исправить новое накопление, bounded retention и контроль 20 GB, затем разово сбросить старую тестовую рыночную историю | Отменяет сохранение/полную конвертацию этой истории; сохраняет owner config, credentials, инфраструктуру, все markets/TF/detectors и аналитику |
+| S06 | Явное решение владельца16Oct2026: CryptoWatcher готовится для alerts под ручную торговлю и handoff; подключение — ответственность trading agent проекта | Меняет project boundary/DoD E09: producer readiness/contract handoff здесь; credentials/binding/receiver activation/live acceptance снаружи |
 | S04 | Уточнение владельца 2026-10-10: бот работает на VPS Contabo; Telegram owner — владелец | Deployment context; assertion владельца не доказывает deployed revision или gates |
 
 S01 и последующие явные решения владельца задают intent. Этот файл фиксирует его декомпозицию. Старый state contract описывает существующий chat-based MVP и подлежит консолидации по плану; при противоречии актуальным требованиям приоритет у этого spec. Код сам по себе не создаёт требования. Внешние hyperlinks в repository documentation не добавляются; source IDs и названия позволяют восстановить evidence.
@@ -37,7 +38,7 @@ S01 и последующие явные решения владельца за�
 
 Event содержит ID/revision, Episode ID, instrument/market, detector/version/settings snapshot, direction, исходные timeframes, reproducible metrics/units/data provenance, market/detection/receipt timestamps и freshness. Episode хранит начало, последнее обновление, strength и связь с исходными events/revisions. Outcome содержит immutable observation time/reference price, horizon, dataset completeness и calculated metrics. Context первоначального решения не дополняется будущими outcomes/max strength.
 
-Telegram и trading agent — независимые consumers общей event history. Mute меняет Telegram delivery, не domain detection/history/agent delivery. Agent delivery требует authorization, durable pending state, retry/replay и idempotency по Event ID/revision; owner diagnostics доступны независимо от Telegram. API/webhook contract согласован в D18; production availability prepared receiver остаётся prerequisite G4.
+Telegram и trading agent — независимые consumers общей event history. Mute меняет Telegram delivery, не domain detection/history/agent delivery. Agent delivery требует authorization, durable pending state, retry/replay и idempotency по Event ID/revision; owner diagnostics доступны независимо от Telegram. API/webhook contract согласован в D18. По S06/D23 доступность production receiver и его credentials не являются prerequisite завершения manual radar/producer handoff; это receiving-project integration scope.
 
 Owner configuration отделяется от secrets/infrastructure (.env), chat delivery state, runtime cursors и analytics. Persistent store — SQLite WAL по D10; versioned migration сохраняет существующие данные по state contract. Текущий runtime — Python 3.11 Docker, dependency manifest requirements.txt, Compose service crypto_watcher; фактическая VPS version отдельно требует evidence. Настройка Actions выполняется только в выбранной Goal по ci-cd-rules.md.
 
@@ -157,20 +158,20 @@ Market domain принадлежит owner persisted configuration. Telegram cha
 | AC-08-02 — Изменение без restart | Owner меняет обычные settings, validated revision применяется в runtime без .env editing/restart; invalid/NaN/negative значения не ломают state. Проверка: concurrent update и validation tests. |
 | AC-08-03 — Profiles и manual parameters | Несколько готовых sensitivity profiles показывают изменяемые thresholds; owner может отдельно настроить параметры и увидеть фактические активные значения. Проверка: apply/edit/reset profile fixtures. |
 
-### E09 — Интеграция trading agent
+### E09 — Producer и handoff для trading agent
 
-Requirement `REQ-E09`; трассировка: S01 / ИНТЕГРАЦИЯ С TRADING AGENT / STRUCTURED MARKET CONTEXT; INTEGRATION BOUNDARY; ДОСТАВКА EVENTS.
+Requirement `REQ-E09`; трассировка: S01 / ИНТЕГРАЦИЯ С TRADING AGENT / STRUCTURED MARKET CONTEXT; INTEGRATION BOUNDARY; ДОСТАВКА EVENTS; ownership уточнен S06/D23.
 
-Advisory source в отдельном runtime. HTTP API/webhook предпочтителен, транспорт не меняет contract. Доставка автоматическая, авторизованная, независимая от Telegram. Consumer сам выбирает использование; radar outage не блокирует его базовую работу и event receipt не инициирует LLM/trade.
+Advisory source в отдельном runtime. Здесь реализованы независимый от Telegram signed producer и handoff; activation/приемка внешнего consumer выполняется в принимающем проекте. HTTP API/webhook transport не меняет contract. Consumer сам выбирает использование; его автономность, auth rejection и отсутствие model/trade side effects — обязательства принимающей стороны, переданные в checklist, а не prerequisites manual radar.
 
 | AC | Критерий и способ проверки |
 | --- | --- |
 | AC-09-01 — Structured contract | Event/update содержит Event ID/revision, Episode ID, Instrument/Market Type, detector/version/settings/direction/TF, timestamps/freshness и reproducible metrics/units; нет execution fields. Проверка: schema/consumer contract tests. |
-| AC-09-02 — Авторизованная независимая доставка | Market events/meaningful updates доставляются автоматически с authorization; mute/Telegram outage не останавливают consumer. Unauthorized запрос отклонён. Проверка: auth/fault-injection integration tests. |
+| AC-09-02 — Готовность авторизованного producer | При явной валидной transport configuration producer автоматически подписывает и отправляет events/meaningful updates независимо от Telegram mute/outage. Missing/invalid config ограничивает agent delivery и сохраняет standalone radar. Проверка: controlled receiver HMAC/ack/fault/retry/restart fixtures. Credential/binding/отклонение unauthorized на production receiver и live acceptance переданы принимающему проекту по D23. |
 | AC-09-03 — Outbox и recovery | Restart/consumer outage сохраняет undelivered и позволяет replay последних актуальных events; retries разрешены, stale/expired помечены и не выдаются за fresh. Проверка: outage/restart/expiry tests. |
-| AC-09-04 — Idempotency revisions | Повтор Event ID/revision не дублирует данные; новая revision обновляет тот же event/episode с сохранением истории. Проверка: replay/reorder/consumer contract. |
+| AC-09-04 — Identity/revisions для consumer | Producer сохраняет Event ID, source/transport revisions и неизменные bytes при повторных попытках одной transport revision; новые revisions сохраняют event/episode identity и source history. Проверка: replay/reorder/ack/contract fixtures; consumer обязан реализовать dedup/conflict/history по переданному контракту, его live приемка вне этого проекта. |
 | AC-09-05 — Delivery diagnostics | Owner видит pending/delivered/error состояние agent delivery независимо от Telegram. Проверка: diagnostics/readback и fault injection. |
-| AC-09-06 — Consumer independence и analytics | Consumer базово работает без radar и не вызывает LLM/trade только из-за получения event; ему доступны history/episodes/outcomes без future leakage. Проверка: совместные consumer-side contract/outage tests. |
+| AC-09-06 — Handoff и causal analytics | Переданы versioned contract, synthetic payload, config/authorization/retry/freshness/retention boundaries, evidence/limitations и receiving-project checklist. Producer предоставляет history/episodes/outcomes/export без future leakage; manual radar полезен без consumer. Проверка: artifact/source alignment, example/producer fixtures и causal export/context tests. Consumer autonomy/no model/order side effects/live delivery проверяет принимающий проект по checklist D23. |
 
 Уточнение accepted interface v2: `cryptowatcher.market_event.v2`, backward-compatible приём v1;
 source event revision отделён от transport revision. Полный raw settings hash/snapshot и effective
@@ -239,7 +240,7 @@ Requirement `REQ-E13`; трассировка: S01 / DATA И DIAGNOSTICS / ХР�
 | ID | Действующее правило | Источник / эксплуатационная зависимость |
 | --- | --- | --- |
 | Q01 | Формулы, profiles, episodes и freshness заданы D11–D15; эффективность defaults оценивается описательной статистикой, без обещания прибыльности. | Согласованный план10Oct; изменение production thresholds — явная owner операция. |
-| Q02 | Отдельный claude-bybit-trading-agent принимает backward-compatible v1/v2 по D18; полный settings snapshot/hash сохраняется, включая известные retention metadata. | Endpoint/binding/current revision и signed delivery проверяются по плану. Создание отдельного credential владельцем остается предпосылкой activation. |
+| Q02 | Отдельный claude-bybit-trading-agent принимает backward-compatible v1/v2 по D18; полный settings snapshot/hash сохраняется, включая известные retention metadata. | Producer contract/controlled tests/handoff проверяются здесь; endpoint/binding/current consumer revision/owner credential и signed live delivery — в задаче принимающего проекта. Отсутствие credential не блокирует standalone radar/handoff. |
 | Q03 | JSON import относится только к private owner233382575; прочие chats архивируются без объединения. Явный пустой список сохраняется. | D11; actual migration/recovery Evidence находится в плане. Новый reset по D22 не повторяет JSON import. |
 | Q04 | Horizons, neutral outcomes, no-signal comparator и export определены D16; сроки хранения изменены D22. | Прежние raw90days/indefinite details отменены; expiry не меняет записанные методики/settings/results. |
 | Q05 | Target — Contabo167.86.68.98, /opt/crypto_watcher, Compose project crypto_watcher/service crypto_watcher, один production Environment. | Точный runtime, approvals, artifact/backup/recovery и post-checks — в действующей процедуре delivery и Evidence плана. |
@@ -260,7 +261,7 @@ Requirement `REQ-E13`; трассировка: S01 / DATA И DIAGNOSTICS / ХР�
 - D15: episodes instrument/market/direction, new detector family/TF confirmation либо strength×1.5 разрешают meaningful notification; coalesce2s. Inactivity2×longest episodeTF, maxlife60min; re-arm detector/TF после2 complete non-signal bars. Suppressed observations сохранены. Fresh price/spike/volatility/composite1TF, expire2TF; breakout fresh2TF/expire4TF; receipt/retry/outcome исходный event не освежают.
 - D16: immutable outcome reference close/time; horizons5/15/30/60min, complete subsequent1m window; returns/MFE/MAE, neutral без directional label. Continuation/reversal noise=max(2ticks/reference×100,0.1ATR14/reference×100), snapshot versioned. Comparators sameinstrument/market/TF, previous28days matched UTC hour/ATR% quartile, до20 closest nonoverlapping windows, no signal по frozen detector/settings, complete outcome заканчивается до event observation. Insufficient N/completeness явны; statistics не являются Strategy profitability. NDJSON versioned streaming export и CSV aggregates; no silent recomputation/future leakage.
 - D17: Telegram alerts/digest независимы, digest60min initiallyOFF. Mute меняет Telegram delivery, history/agent продолжаются. New detectors могут работать silent до owner enable; actual settings/capabilities видны. BotAPI ambiguity не позволяет обещать exactly-once messages.
-- D18: использовать prepared trading-agent receiver POST /integrations/cryptowatcher/events после его merge/CD. Backward-compatible v2 с settings/profile/provenance/freshness/episode/completeness/enrichment и explicit live/historical update kind; v1 поддерживается. HMAC-SHA256 raw immutable body, receiver limit65536bytes, outbox retry1–300s, expiry и cutoff independent of receipt. No execution fields; receiver не запускает model/trade. Full used inputs доступны producer-side для export в пределах сроков хранения. Primary source prepared counterpart branch43c7e88f; counterpart main40a3147172 на момент проверки ещё не содержит receiver.
+- D18: contract receiver POST /integrations/cryptowatcher/events; activation после его проверки принадлежит принимающему проекту по D23. Backward-compatible v2 с settings/profile/provenance/freshness/episode/completeness/enrichment и explicit live/historical update kind; v1 поддерживается. HMAC-SHA256 raw immutable body, receiver limit65536bytes, outbox retry1–300s, expiry и cutoff independent of receipt. No execution fields; receiver не запускает model/trade. Full used inputs доступны producer-side для export в пределах сроков хранения. Primary source prepared counterpart branch43c7e88f; counterpart main40a3147172 на момент проверки ещё не содержит receiver.
 - D19: optional asset-matched Spot derivatives context после core; ticker1min/OI5min cadence, explicit source/units/timestamps, missing/stale data nonblocking. Separate Perpetual detection сохраняется.
 - D19a: enrichment default OFF, strict persisted owner bool; exact eligible Bybit base identity и один USDT Perpetual match, zero/multiple/alias/scaled candidates не угадываются. OI linear BASE/asset (both sides),5min change по двум точкам ровно5min apart, нулевая baseline без pct; funding raw fraction×100%, next funding UTCms. Basis100×(perp_last/spot_last−1)% по двум доступным REST snapshots≤1min с timestamps/skew≤1min; не simultaneous trade prices. Per-metric source age≤cadence FRESH, затем STALE; missing/future/invalid явно помечены. Общий budget/current recovery приоритетны; optional failures не меняют core signals. Event context frozen по availability≤observation cutoff, latest owner view отдельно.
 - D16a: explicit owner recompare может добавить comparator revision на новых prior inputs/availability, сохраняя original event/settings/reference и прежние results. Completed comparisons не меняются без действия владельца; methodological change получает новую version. Profile/version/settings comparisons используют реально записанные outcomes с N/limitations; automatic threshold writes отсутствуют.
@@ -280,3 +281,25 @@ S01 обновлен и S05 явно заменяют D12: подробные ev
 Working DB+indexes+journals target20GB — проверяемая цель. Факты и extrapolation разделены; причина превышения и варианты решения видны владельцу. Постоянный full scan не является механизмом контроля. Не сокращать события/detectors/markets/TF/аналитику/retention скрытно.
 
 Прежняя тестовая market history подлежит разовому reset после исправлений/tests; ее перенос, сжатие, полная конвертация и qualification исключены из текущей задачи. Owner settings/watchlist/thresholds/notification preferences/mutes/user config и secrets/infra сохраняются и проверяются. Reset имеет exact перечень, generation boundary и совместимые queues/cursors; не выполняется при обычном startup/deploy. Удаление backups/experiments не разрешено этим reset. Обычные backup/CD остаются<=900s, RAM не увеличивается; последующее наблюдение отделено от закрытия исправлений/reset.
+
+## D23 — Разделение проектов и handoff (S06, 2026-10-16)
+
+CryptoWatcher отвечает за manual Telegram radar, свои market data/detectors/episodes/
+analytics/storage, готовность подписанного producer и воспроизводимый handoff.
+Trading agent отвечает за подключение: credential/recovery/binding, receiver policy,
+согласованную producer infrastructure configuration и end-to-end acceptance.
+Наличие receiver binary и прежние cross-project fixes сохраняются как Evidence;
+они не означают, что live integration уже включена.
+
+Стабильные AC-09-01…06 сохранены. 09-02/04/06 уточнены по новой границе, а прежние
+обязательства production auth rejection/idempotency/consumer independence/causal
+cutoff не объявлены выполненными и не потеряны: они переданы в TA-CW-01…06
+[canonical handoff](runbooks/agent-delivery.md#handoff-принимающему-проекту).
+Прежний B02 и требование activation до CW Goal DONE superseded в части границ
+этого проекта. D18 transport/authority/freshness semantics и согласованные900s
+consumer cap сохраняются как контракт принимающей стороны.
+
+Для CW DoD достаточно validated producer/contract/handoff и проверенного manual
+runtime; доступность/активация внешнего приложения не блокирует его поставку.
+Новая оценка процентов этим UPDATE не проводится; исторический audit snapshot
+остается на своей revision и прежних границах.
