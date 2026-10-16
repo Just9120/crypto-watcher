@@ -71,11 +71,12 @@ def setup(tmp_path, monkeypatch):
     usr.mkdir(parents=True)
     etc.mkdir()
     receiver, target = usr / "cryptowatcher/deploy_receiver.py", etc / "cryptowatcher/deploy-target.json"
-    (incoming / "deploy_receiver.py").write_bytes(
-        (Path(__file__).resolve().parents[1] / "scripts/deploy_receiver.py")
-        .read_bytes()
-        .replace(b"\r\n", b"\n")
-    )
+    # This is a frozen historical bootstrap, not the routine receiver updater.
+    # Model its independently pinned artifact; current receiver needs an adjacent
+    # reset helper and must never silently replace this old bootstrap input.
+    artifact = b"# isolated reviewed bootstrap receiver fixture\n"
+    (incoming / "deploy_receiver.py").write_bytes(artifact)
+    monkeypatch.setattr(m, "RECEIVER_HASH", m.sha(artifact))
     pub = PUBLIC
     (incoming / "cryptowatcher-cd.pub").write_bytes(pub)
     host = etc / "host.pub"
@@ -407,3 +408,12 @@ def test_unusable_or_other_runtime_cannot_authorize_bootstrap(setup, change, cap
     assert m.main(execute_args()) == 1
     assert not setup.receiver.exists() and setup.keys.read_bytes() == original
     assert json.loads(capsys.readouterr().out)["state"] == "BLOCKED"
+
+
+def test_changed_bootstrap_artifact_is_refused_before_any_install(setup, capsys):
+    incoming = Path(m.__file__).with_name("deploy_receiver.py")
+    incoming.write_bytes(incoming.read_bytes() + b"# unreviewed change\n")
+    original = setup.keys.read_bytes()
+    assert m.main(execute_args()) == 1
+    assert json.loads(capsys.readouterr().out)["reason"] == "Bootstrap artifact changed"
+    assert setup.keys.read_bytes() == original and not setup.receiver.exists()

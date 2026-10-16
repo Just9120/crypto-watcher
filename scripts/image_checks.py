@@ -421,6 +421,24 @@ s.close()
         )["backup"]
         assert disk["phase"] == "COMPLETE" and disk["validation_mode"] == "DISK_STREAMING"
         assert disk["bytes"] > 0 and len(disk["sha256"]) == 64
+        # Execute the same canonical fixture with the actual product SQLite/codecs.
+        # Only this disposable source file is mounted; no production data or APIs.
+        (directory / "measure.py").write_bytes(
+            Path(__file__).with_name("measure_market_storage.py").read_bytes()
+        )
+        measurement = json.loads(
+            run(
+                args.image,
+                directory,
+                "-B",
+                "-c",
+                "import runpy,sys; sys.argv=['measure','--database','/data/measured.db','--instruments','5']; "
+                "runpy.run_path('/data/measure.py',run_name='__main__')",
+            )
+        )
+        assert measurement["events"] == 200 and measurement["all_outcomes_complete"]
+        assert measurement["analytics_equality"] == "PASS" and measurement["indexes"]["state"] == "PASS"
+        print(json.dumps({"image_storage_measurement": measurement}, sort_keys=True))
         source.write_text('{"version":99,"chats":{}}')
         run(args.image, directory, *migration, success=False)
         assert source.read_text() == '{"version":99,"chats":{}}'
