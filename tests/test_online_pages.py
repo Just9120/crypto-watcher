@@ -31,7 +31,7 @@ def prepared(store, tmp_path):
     store.put_runtime("included", {"useful": "history" * 10000})
     descriptor = directory / "base.json"
     output = (tmp_path / "out").resolve()
-    output.mkdir()
+    output.mkdir(mode=0o700)
     return (
         base,
         output,

@@ -130,7 +130,7 @@ def test_initial_key_archive_requires_proof_and_fresh_snapshot_retains_all_value
     assert store.get_runtime("old") == {"useful": 1} and store.get_runtime("unchanged") == {"useful": 2}
     store.put_runtime("after-preparation", 3)
     output = (tmp_path / "output").resolve()
-    output.mkdir()
+    output.mkdir(mode=0o700)
     stream = io.BytesIO()
     result = online_pages.capture(
         store.path.resolve(),
