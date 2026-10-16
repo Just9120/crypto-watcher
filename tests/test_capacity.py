@@ -10,7 +10,7 @@ from cryptowatcher.capacity import explain_forecast, interval, prospective_cohor
 from cryptowatcher.events import DECISION_HEAD, PREFIX, EventEngine, History, identity
 from cryptowatcher.market_storage import enable
 from cryptowatcher.storage import StateError, Store
-from cryptowatcher.storage_repack import work
+from cryptowatcher.storage_repack import async_work, work
 from scripts.observe_capacity import advance, atomic
 
 from .test_outcomes import DAY, NOW, OutcomeWorker, Retention, Sources, future, observe
@@ -92,6 +92,31 @@ def test_completed_repack_resumes_decision_pass_without_discarding_progress(stor
     assert state["saved_payload_bytes"] > 123
     assert h.get(key) == value and store.get_runtime(PREFIX + key) == {DECISION_HEAD: 1}
     assert work(store, NOW + 1) == state
+
+
+@pytest.mark.asyncio
+async def test_repack_slices_yield_and_stop_when_finite_queue_completes(store):
+    import asyncio
+
+    bounded(store)
+    scheduled = []
+
+    async def telegram_like_task():
+        for _ in range(12):
+            scheduled.append("delivery")
+            await asyncio.sleep(0)
+
+    task = asyncio.create_task(telegram_like_task())
+    try:
+        with patch("cryptowatcher.storage_repack.work", return_value={"state": "IN_PROGRESS"}) as tick:
+            result = await async_work(store, NOW)
+        assert tick.call_count == 8 and result["state"] == "IN_PROGRESS"
+        assert len(scheduled) >= 7  # Delivery can run between maintenance transactions.
+        with patch("cryptowatcher.storage_repack.work", return_value={"state": "COMPLETE"}) as tick:
+            assert (await async_work(store, NOW))["state"] == "COMPLETE"
+        assert tick.call_count == 1
+    finally:
+        await task
 
 
 def test_ledger_is_exact_no_sql_temp_sort_and_cohort_ablation_matches_frozen_events(store):

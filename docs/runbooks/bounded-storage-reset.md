@@ -81,6 +81,11 @@ settings, плотность cohorts, реальные no-signal windows и sour
 ограничения прогноза. Использованные исходники сравнений могут переживать raw35d
 до истечения30d parent detail; это subset необходимых revisions, не indefinite hold.
 
+Runtime repack получает до восьми прежних40ms slices за analytics cycle, с отдельным
+transaction/checkpoint и scheduler yield между ними. Intended work<=320ms/cycle;
+отдельный SQLite I/O/commit может выйти за time check. COMPLETE прекращает slices.
+Это не полный scan внутри одной транзакции, не CI job и не изменение900s CD gate.
+
 Для24h используется reviewed `scripts/observe_capacity.py`, также включенный в image
 как `/app/operator/observe_capacity.py`. После PASS CD operator копирует его из
 точного running artifact, проверяет SHA256 против merged source и запускает один

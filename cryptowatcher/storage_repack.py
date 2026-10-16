@@ -8,6 +8,24 @@ from typing import Any
 from .storage import Store, encode, json_payload
 
 
+async def async_work(store: Store, now_ms: int, slices: int = 8) -> dict[str, Any]:
+    """Advance a finite queue without one long transaction or event-loop stall.
+
+    Each existing40ms slice commits its own checkpoint. Eight slices add at
+    most320ms of intended work per analytics cycle, with a scheduler yield
+    between slices; SQL/commit I/O can overrun an individual time check.
+    """
+    import asyncio
+
+    state = store.get_runtime("storage_repack", {})
+    for _ in range(slices):
+        state = work(store, now_ms)
+        if state.get("state") in ("COMPLETE", "N/A_LEGACY"):
+            break
+        await asyncio.sleep(0)
+    return state
+
+
 def decision_heads(store: Store, state: dict[str, Any], batch: int, deadline: float) -> None:
     from .events import DECISION_HEAD, PREFIX, History
 

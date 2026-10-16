@@ -38,7 +38,7 @@ Base `c922700c6db7a9cc6cb543f3170d0d83917b547b`, branch
 | Задача / критерий завершения | Статус |
 | --- | --- |
 | CAP-01: ledger физических bytes/индексов/WAL отдельно от payloads; counts/TTL/formulas, cohorts/revisions/comparators/jobs и limits | CODE READY; exact runtime ledger и full prospective cohort study PASS |
-| CAP-02: подтвержденные повторы исправлены с equality/restart/retry/causal evidence; новые codec/batching только после оценки эффекта | CODE READY; decision pointer / ownerless recovery / terminal re-arm tests PASS |
+| CAP-02: подтвержденные повторы исправлены с equality/restart/retry/causal evidence; новые codec/batching только после оценки эффекта | CODE READY; decision pointer / ownerless recovery / terminal re-arm / sliced repack tests PASS |
 | CAP-03: репрезентативный controlled-clock полный цикл30/35d/12mo, GC/dependencies/аналитика/plateau | CODE READY;62week fixture и20-comparator/multiple-method boundaries PASS |
 | CAP-04: auto24h после ingestion/bootstrap/repack stability, размер/прирост/data/index/WAL/cleanup; finite sampling, без Actions ожидания | CODE READY; unit/start после applicable CD, actual24h PENDING |
 | CAP-05: validation/self-review/CI/merge/CD<=900s, отчет actual/model/range и оставшиеся причины >20GB | IN_PROGRESS; local quality/self-review PASS, required CI/CD PENDING |
@@ -279,6 +279,7 @@ Canonical команды — [README](../README.md#checks); из root repository
 | F41 DECISION DUPLICATE | Актуальная decision и immutable revision полностью дублируются;104,860rows на52,430events | P2: лишний payload и writes | FIX: bounded checked pointer на latest immutable revision; отдельный durable repack cursor, public read/retry/restart/expiry unchanged | Exact ledger18:36UTC; sample128heads17,071→3,456bytes до реализации | HIGH / CODE READY; CI/CD PENDING |
 | F42 CAPACITY EVIDENCE | Нет полноценного per-namespace ledger/24h physical deltas; старая annual density синтетическая | P1:20GB не подтверждены | IMPLEMENT: explicit readonly ledger/cardinality/formulas и finite stable24h observation, не менять scope | Actual summaries0; prospective20,684cohort-days/211,000facts, median5; historical110.55GB/model, not daily measurement | HIGH / IN_PROGRESS; observation/result PENDING |
 | F43 RETENTION PROOF | Прежний малый fixture не доказывал rolling filled-window/restart и реальные20 comparator arrays вместе с methods | P1: lifecycle/capacity evidence gap | IMPLEMENT: controlled62week population plateau, exact facts/group equality и full GC; separate richer comparator/method boundary fixture | Local tests/rehearsal PASS; production annual mix unobserved | HIGH / CODE READY; CI PENDING |
+| F45 MAINTENANCE THROUGHPUT | Один40ms repack после долгого analytics cycle оставляет старые payload/index structures надолго; E13 | P1: repack мешает stable24h baseline | FIX: до8 самостоятельных40ms slices с yield/commit между ними, без изменения source/TTL | Readbacks18:28→19:28UTC:31,869→47,710records, legacy expiry не завершена,1,073,959runtime rows; local76 capacity/bot/storage tests PASS, актуальный CI/runtime throughput PENDING | HIGH / CODE READY |
 | F44 RECOVERY TERMINAL REUSE | Ownerless requests читают candles до owner check; terminal receipt блокирует новый valid owner до cleanup | P1: лишний scan/backlog и задержка repair | FIX: owner-first terminal retirement без source mutation; terminal job re-arm при valid retained owner; dedup/retry preserved |65/128pending без owner; regression re-arm/arrived data/noREST PASS | HIGH / CODE READY; CI/CD PENDING |
 
 ## Документы, legacy и artifacts
@@ -345,6 +346,13 @@ Latest local quality/docs/Ruff/mypy PASS;24 focused tests PASS после compat
 guard. Self-review: tiny decision heads сохраняют immutable revisions/public bytes;
 atomic repack/checkpoint и retention counters rollback проверены fault injection.
 Source/gen/config changes и probe interruptions исключают stable-day extrapolation.
+Runtime readback19:28UTC: bootstrap/recovery0, полные1192ACK; repack47,710records,
+за час+15,841 при>1m runtime rows. Added bounded asynchronous8x40ms slices, yield
+между отдельными transactions/checkpoints; общий intended work320ms/cycle, no long
+single lock. Local76 capacity/bot/storage checks и canonical quality PASS; fairness,
+finite completion и действующие bot paths проверены. Actual throughput после CD
+измеряется отдельно, ускорение8x заранее не объявляется фактом.
+
 CI38954699435: tests PASS, image build FAIL — новый observer был исключен Docker
 allowlist. Добавлено разрешение только `scripts/observe_capacity.py`; прочие scripts,
 private experiments и runtime data в build context не включаются. Required latest
