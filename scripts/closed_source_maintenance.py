@@ -234,9 +234,14 @@ class DockerOperations:
         *,
         result_name: str = "qualification.json",
         mount_input: bool = False,
+        prepare_journal: bool = False,
     ) -> dict[str, Any]:
-        if result_name not in ("qualification.json", "capture.json"):
+        if result_name not in ("qualification.json", "capture.json", "journal-rearm.json"):
             raise RuntimeError("Unknown worker result type")
+        if prepare_journal != (result_name == "journal-rearm.json") or (
+            prepare_journal and (not mount_input or self.one_time_maintenance)
+        ):
+            raise RuntimeError("Explicit initial journal preparation required")
         if mount_input:
             private_directory(self.root / "input", uid=10001)
         if exact_unit(expected)["State"]["Running"]:
@@ -271,7 +276,10 @@ class DockerOperations:
             "--env",
             "PYTHONPATH=/code:/app",
             "--mount",
-            "type=bind,src=" + str(DATABASE.parent) + ",dst=/history,readonly",
+            "type=bind,src="
+            + str(DATABASE.parent)
+            + ",dst=/history"
+            + ("" if prepare_journal else ",readonly"),
             "--mount",
             "type=bind,src=" + str(self.code) + ",dst=/code,readonly",
             "--mount",
@@ -283,6 +291,7 @@ class DockerOperations:
             "/code/driver.py",
             str(seconds),
             *(["--one-time-maintenance"] if self.one_time_maintenance else []),
+            *(["--rearm-journal"] if prepare_journal else []),
         ]
         if mount_input:
             # This is the only extra mount: a private, read-only capture input.
@@ -293,8 +302,9 @@ class DockerOperations:
             ]
         # Persist bounded worker diagnostics before cleanup removes its container.
         # This private worker has no network, env file or production secrets.
-        with (self.root / "worker.log").open("x", encoding="utf-8") as output:
-            os.chmod(self.root / "worker.log", 0o600)
+        log = self.root / ("journal-worker.log" if prepare_journal else "worker.log")
+        with log.open("x", encoding="utf-8") as output:
+            os.chmod(log, 0o600)
             subprocess.run(
                 command, text=True, stdout=output, stderr=subprocess.STDOUT, timeout=seconds, check=True
             )

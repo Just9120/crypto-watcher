@@ -60,7 +60,10 @@ Preservation: временный bounded change-key journal установлен
 bytes, expiry1792111975. Updates/deletes/rename и rollback атомарны с app write;
 overflow/expiry запрещают promotion без остановки alerts. При RESUME сначала
 читать actual valid/keys/expiry, не reset старый epoch. Exact5-table schema и
-owner233382575 проверены. Journal остаётся opt-in operator feature.
+owner233382575 проверены. Journal остаётся opt-in operator feature. Actual
+16Oct00:16:33UTC: valid0/CAPACITY,500000keys/97,737,250charged bytes. Это
+запрещает использовать его как complete tail; application writes сохранены
+в исходной DB. Свежая source point ещё не захвачена, blind reset запрещён.
 
 Current-data row export на VPS остановлен как непригодный для900s:526.002s,
 3.686M/20.247M rows, exit130 по operator SIGINT; source WAL snapshot закрыт,
@@ -88,24 +91,38 @@ source read-only copy, independent systemd watchdog900s/restore reserve150s,
 тот же container после stop/checkpoint/capture. Capture возвращает только
 CAPTURED_RUNTIME_RESTORED с SQL integrity PENDING; не может заимствовать3600s
 qualification exception. Default full qualification сохраняет12.5GiB disk gate
-и прежние checks. Local75 controller/operator/dataflow/limits regressions PASS;
-Linux CI новой revision ещё REQUIRED до использования. Production launch NOT_RUN.
+и прежние checks. Required Linux CI38825714731/headbdadeaa PASS для исходного
+controller. Default actual preflight15Oct23:52:30UTC REFUSED из-за disk admission,
+до stop; primary `rehearsals/closed-page-capture-uur2n04e/preflight.json`.
+Production launch NOT_RUN.
 
-Последний runtime readback15Oct23:19:53UTC: same container7723a326…/main2efd9093,
-DB39,452,344,320bytes, free3,451,576,320bytes, alerts enabled/config revision3,
-1324active streams/recovery0, available1321/1324, poll WARMING, Telegram DELIVERED.
-Журнал valid1/195018keys/38,116,762 charged bytes. WAL checkpoint с timeout200ms
-вернул BUSY[1,1480,457], size1,004,307,712bytes не уменьшился; строк не удаляли,
-бот не останавливали. Не выдавать эту попытку за shrink. Source feeds частично
-недоступны; не утверждать total healthy по одному heartbeat.
-Последний read-only capture readiness15Oct23:43:13UTC: same running source,
-journal valid1/376608keys/73,637,434charged bytes, DB39,580,311,552bytes,
-WAL1,004,307,712bytes, free3,301,773,312bytes. Перед исполнением вновь проверить
-resource/journal bounds; при invalid/expired полнота tail не утверждается.
+Дополнение16Oct: initial capture plan v2 требует явного reviewed основания,
+что prior epoch не обслуживает уже снятый snapshot. Зафиксированная capture
+point блокирует rearm даже до SQL qualification. После fenced stop/checkpoint
+отдельный worker архивирует все старые journal keys, независимо декодирует
+и сверяет bytes/hashes/counts, затем одной transaction начинает новый epoch.
+SQL authorizer разрешает DML только двух служебных tables; пять app tables
+сохраняются. Вторая checkpoint и read-only page capture входят в тот же900s,
+CPU1/RAM4GiB/no-swap и restore reserve150s. Helper имеет предел90s; эти seconds
+вычитаются из оставшегося capture budget. Новая source point содержит все app
+writes периода invalid journal; subsequent writes относятся новому epoch.
+Старую captured point переиспользовать нельзя. Это подготовка к переносу,
+не замена DB и не ослабление ordinary backup/CD checks. Local147 affected
+journal/capture/maintenance/page/delta/backup regressions PASS; canonical quality
+PASS. Fresh required CI этого дополнения REQUIRED до использования.
 
-Validation Plan: local disk/indexed/journal/CLI42 и delta9 scenarios PASS;
-canonical docs/Ruff/mypy46 PASS. Full required Linux CI38820426158/head63c4018
-PASS для этих modules и image; новые page transport files требуют fresh CI.
+Последний runtime readback16Oct00:16:33UTC: same container7723a326…/main2efd9093,
+running/healthy, free3,077,672,960bytes; capture worker отсутствует, production
+stop/replacement NOT_RUN. Последний size sample15Oct23:43:13UTC:
+DB39,580,311,552/WAL1,004,307,712bytes. Более ранний ingestion readback15Oct23:19:
+1324active streams/recovery0, available1321/1324, poll WARMING, Telegram DELIVERED,
+alerts enabled/config revision3. Это не утверждение total feed health сейчас.
+WAL checkpoint с timeout200ms вернул BUSY[1,1480,457], место не освободил;
+не выдавать его за shrink. Перед исполнением вновь проверить resources/runtime.
+
+Validation Plan: local147 targeted scenarios PASS; canonical docs/Ruff/mypy47
+PASS. Fresh required Linux suite/native/Docker/ci-required для последнего diff
+PENDING; предыдущий PASS не переносить на новое дополнение автоматически.
 REQUIRED pending: whole ordinary backup/CD≤900s на target при CPU1/4GiB;
 проверенная актуальная source/history/private-state reconciliation и newer tail;
 reviewed promotion/merge/CD с точной image/config identity и runtime checks.

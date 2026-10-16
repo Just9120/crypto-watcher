@@ -12,6 +12,7 @@ import sqlite3
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
 from .history_rebuild import TABLES
@@ -192,3 +193,178 @@ def changes(
         yield snapshot, rows()
     finally:
         db.rollback()
+
+
+def rearm_before_initial_snapshot(
+    db: sqlite3.Connection,
+    *,
+    prior_epoch: str,
+    epoch: str,
+    owner: int,
+    archive_directory: Path,
+    expires: int,
+    deadline: float,
+    no_prior_capture: bool = False,
+) -> dict[str, Any]:
+    """Fenced, dedicated connection only; retain every old key before a fresh epoch.
+
+    The operator must prove no earlier snapshot consumes this journal. This is
+    never valid for an interrupted tail of an already captured source point.
+    The caller owns this connection and its authorizer/progress callbacks.
+    """
+    import hashlib
+    import os
+    from typing import IO, cast
+
+    import zstandard
+
+    from .compressed_validation import budget
+    from .disk_backup import ArchiveSink, private_disk
+    from .storage import encode
+    from .validation import fingerprint
+
+    if (
+        no_prior_capture is not True
+        or db.in_transaction
+        or epoch == prior_epoch
+        or not isinstance(epoch, str)
+        or not isinstance(prior_epoch, str)
+        or re.fullmatch(r"[a-f0-9]{32}", epoch) is None
+        or re.fullmatch(r"[a-f0-9]{32}", prior_epoch) is None
+        or type(owner) is not int
+        or owner <= 0
+        or type(expires) is not int
+        or expires < time.time() + 900
+        or not math.isfinite(deadline)
+        or deadline > time.monotonic() + 900
+    ):
+        raise StateError("Explicit uncaptured journal rearm required")
+    if db.execute("PRAGMA synchronous").fetchone()[0] < 2:
+        raise StateError("Durable journal rearm required")
+    budget(deadline)
+    _canonical(db, journal=True)
+    archive_directory.mkdir(mode=0o700)
+    private_disk(archive_directory)
+    archive = archive_directory / "journal.zst"
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        names = (
+            "epoch",
+            "owner",
+            "last_seq",
+            "key_count",
+            "key_bytes",
+            "max_keys",
+            "max_bytes",
+            "expires",
+            "valid",
+            "reason",
+        )
+        row = db.execute(f"SELECT {','.join(names)} FROM {META} WHERE id=1").fetchone()
+        if row is None or tuple(row[:2]) != (prior_epoch, owner):
+            raise StateError("Prior journal identity refused")
+        previous = dict(zip(names, row, strict=True))
+        if (
+            previous["max_keys"] <= 0
+            or previous["max_bytes"] <= 0
+            or not 0 <= previous["key_count"] <= previous["max_keys"]
+            or not 0 <= previous["key_bytes"] <= previous["max_bytes"]
+            or previous["reason"] not in ("OK", "CAPACITY", "EXPIRED")
+        ):
+            raise StateError("Prior journal bounds refused")
+        raw = hashlib.sha256()
+        raw_bytes = count = charged = 0
+        with archive.open("xb") as output:
+            os.chmod(archive, 0o600)
+            sink = ArchiveSink(output, archive_directory, deadline)
+            with zstandard.ZstdCompressor(level=1, write_checksum=True, threads=0).stream_writer(
+                cast(IO[bytes], sink), closefd=False
+            ) as writer:
+
+                def line(value: Any) -> None:
+                    nonlocal raw_bytes
+                    budget(deadline)
+                    data = (encode(value) + "\n").encode()
+                    if raw_bytes + len(data) > previous["max_bytes"] + 1024**2:
+                        raise StateError("Prior journal archive capacity exceeded")
+                    raw.update(data)
+                    raw_bytes += len(data)
+                    writer.write(data)
+
+                line({"schema": "cryptowatcher.retired-journal.v1", "prior": previous})
+                for item in db.execute(f"SELECT table_name,key,seq FROM {KEYS} ORDER BY table_name,key"):
+                    line(tuple(item))
+                    count += 1
+                    charged += len(item[1].encode()) + 128
+                line({"rows": count, "key_bytes": charged})
+            output.flush()
+            os.fsync(output.fileno())
+        if count != previous["key_count"] or charged != previous["key_bytes"]:
+            raise StateError("Prior journal counters do not match keys")
+        verified = hashlib.sha256()
+        size = 0
+        with archive.open("rb") as source, zstandard.ZstdDecompressor().stream_reader(source) as reader:
+            for block in iter(lambda: reader.read(1024**2), b""):
+                budget(deadline)
+                verified.update(block)
+                size += len(block)
+        if size != raw_bytes or verified.digest() != raw.digest():
+            raise StateError("Prior journal archive readback refused")
+        encoded = fingerprint(archive, deadline)
+        if encoded != (sink.digest.hexdigest(), sink.size):
+            raise StateError("Prior journal archive identity changed")
+        proof = {
+            "state": "OLD_JOURNAL_ARCHIVED",
+            "prior": previous,
+            "rows": count,
+            "raw_sha256": raw.hexdigest(),
+            "raw_bytes": size,
+            "archive_sha256": encoded[0],
+            "archive_bytes": encoded[1],
+        }
+        with (archive_directory / "archive.json").open("x", encoding="utf-8") as receipt:
+            os.chmod(archive_directory / "archive.json", 0o600)
+            receipt.write(encode(proof))
+            receipt.flush()
+            os.fsync(receipt.fileno())
+        if os.name == "posix":
+            fd = os.open(archive_directory, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        budget(deadline)
+
+        def authorize(action: int, table: str | None, *args: Any) -> int:
+            if action in (
+                sqlite3.SQLITE_INSERT,
+                sqlite3.SQLITE_UPDATE,
+                sqlite3.SQLITE_DELETE,
+            ) and table not in (META, KEYS):
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+
+        db.set_authorizer(authorize)
+        db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+        try:
+            db.execute(f"DELETE FROM {KEYS}")
+            db.execute(
+                f"UPDATE {META} SET epoch=?,last_seq=0,key_count=0,key_bytes=0,expires=?,valid=1,reason='OK' WHERE id=1",
+                (epoch, expires),
+            )
+            budget(deadline)
+            db.commit()
+        finally:
+            db.set_authorizer(None)
+            db.set_progress_handler(None, 0)
+        return {
+            "state": "JOURNAL_REARMED_BEFORE_INITIAL_SNAPSHOT",
+            "epoch": epoch,
+            "owner": owner,
+            "archive": proof,
+            "application_rows_deleted": 0,
+            "prior_snapshot_reused": False,
+        }
+    except BaseException:
+        db.rollback()
+        raise

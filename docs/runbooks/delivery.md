@@ -713,3 +713,35 @@ pinned native helper ожидаемого image, closed source и оставши
 После неизвестного результата dispatch проверять exact unit/operation record;
 повторный launch без readback запрещён. Source dataset fit и actual promotion
 не доказываются успехом launcher tests.
+
+### Fresh source point после переполнения temporary journal
+
+`scripts/closed_page_capture.py` использует тот же900s watchdog и возврат
+исходного container, но собирает только changed pages относительно retained
+raw baseline. Capture receipt всегда оставляет full source SQL integrity
+PENDING; byte identity не заменяет SQL/history qualification и не разрешает
+promotion. Обычные backup/CD и default full qualification gates не меняются.
+
+При valid journal используется plan v1. Если до первой source point journal
+переполнился, plan v2 явно задаёт `initial_snapshot.prior_epoch`, новый
+`journal_epoch` и reviewed `no_prior_capture=true`. Это допустимо только при
+подтверждённом отсутствии snapshot, использующего prior epoch. Проверять
+первичные records всех prior attempts; отсутствие файлов само по себе не
+доказывает это условие. Найденный capture.json или operation capture с prior
+epoch запрещает rearm даже при ещё не завершённой SQL qualification.
+
+После stop/checkpoint отдельный fenced UID10001 worker получает source RW
+только для служебного journal step. Он держит exclusive RuntimeLease,
+архивирует все старые ключи и counters, независимо проверяет decoded bytes,
+encoded/raw hashes и counts, fsync archive/receipt. Затем SQL authorizer
+разрешает одной transaction изменить только две journal tables. Пять app tables
+не изменяются; invalid-period writes остаются в полном текущем source. Ошибка
+до commit откатывает mutation; неоднозначный acknowledgement требует readback,
+а не повторного reset. Retired journal archive сохраняется в private work.
+
+Новый epoch начинает работу до fresh full source capture; его500k/128MiB bounds
+не увеличиваются. После второго checkpoint page capture снова имеет source
+read-only. Rearm≤90s и повторный checkpoint вычитаются из общего900s budget,
+restore reserve150s и CPU1/RAM4GiB/no-swap сохраняются. Overflow нового epoch
+снова запрещает complete-tail proof, сохраняя alerts/application writes.
+Старый подготовленный v1 capsule после overflow исполнять нельзя.
