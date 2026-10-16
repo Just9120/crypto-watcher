@@ -164,7 +164,7 @@ journal keys/counters в согласованном WAL snapshot; только �
 SQL authorizer запрещает DML пяти app tables, max500k/128MiB/expiry/epoch не
 расширяются. Архив prefix сохраняется как recovery evidence. Ни при overflow,
 ни при expiry completeness не возобновляется вслепую. Ранее принятая source point
-любой capture method блокирует reset journal. Local172 affected scenarios PASS,
+любой capture method блокирует reset journal. Local173 affected scenarios PASS,
 включая online/ack/receiver fixtures; canonical quality49 modules PASS.
 Fresh required CI и real source capture/whole900s backup proof ещё REQUIRED.
 

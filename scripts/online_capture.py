@@ -31,7 +31,12 @@ def fingerprint(path: Path, deadline: float) -> tuple[str, int]:
                 raise RuntimeError("Operator hash deadline exhausted")
             digest.update(body)
             size += len(body)
-    if path.stat() != meta or size != meta.st_size:
+    current = path.stat()
+    fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_mode", "st_nlink")
+    if (
+        tuple(getattr(current, k) for k in fields) != tuple(getattr(meta, k) for k in fields)
+        or size != meta.st_size
+    ):
         raise RuntimeError("Operator hash identity changed")
     return digest.hexdigest(), size
 

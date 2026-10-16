@@ -3,11 +3,34 @@ import io
 import json
 import subprocess
 import sys
+import time
 from types import SimpleNamespace
 
 import pytest
 
 from scripts import online_capture, receive_online_pages
+
+
+def test_operator_hash_allows_read_access_time_but_binds_file_identity(tmp_path, monkeypatch):
+    path = tmp_path / "baseline"
+    path.write_bytes(b"stable input")
+    real = type(path).stat
+
+    def stat(p, *args, **kwargs):
+        value = real(p, *args, **kwargs)
+        return SimpleNamespace(
+            **{
+                k: getattr(value, k)
+                for k in ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_mode", "st_nlink")
+            },
+            st_atime=time.time(),
+        )
+
+    monkeypatch.setattr(type(path), "stat", stat)
+    assert online_capture.fingerprint(path, time.monotonic() + 5) == (
+        hashlib.sha256(b"stable input").hexdigest(),
+        12,
+    )
 
 
 def test_root_launcher_imports_with_no_installed_third_party_dependencies():
