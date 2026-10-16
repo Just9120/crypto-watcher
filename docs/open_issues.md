@@ -345,7 +345,10 @@ Latest local quality/docs/Ruff/mypy PASS;24 focused tests PASS после compat
 guard. Self-review: tiny decision heads сохраняют immutable revisions/public bytes;
 atomic repack/checkpoint и retention counters rollback проверены fault injection.
 Source/gen/config changes и probe interruptions исключают stable-day extrapolation.
-Required full Linux CI+image, merge и ordinary CD пока PENDING.
+CI38954699435: tests PASS, image build FAIL — новый observer был исключен Docker
+allowlist. Добавлено разрешение только `scripts/observe_capacity.py`; прочие scripts,
+private experiments и runtime data в build context не включаются. Required latest
+CI/image, merge и ordinary CD пока PENDING.
 
 Next: required full Linux CI+image, merge, normal CD900s,
 primary source/image/private readback, then finite readonly observer on exact artifact.
