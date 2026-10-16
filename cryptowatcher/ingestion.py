@@ -312,6 +312,35 @@ class BybitRadar(BybitREST):
         self._pending[stream] = (priority, self._sequence)
         self._work_ready.set()
 
+    def restore_current_window(self, stream: str) -> bool:
+        """Reuse a complete closed local window, without producing an observation."""
+        self.sources.load(stream)
+        blocked = self.sources.blocked.get(stream)
+        if blocked not in (None, "stream_disconnected"):
+            return False
+        settings = self.store.snapshot().settings
+        parameters = effective_parameters(settings, stream.rsplit("/", 1)[0])
+        needed = min(
+            WINDOW_SIZE,
+            max(
+                16,
+                settings.sma_periods + 1,
+                int(max(v for k, v in parameters.items() if k.endswith("lookback"))) + 2,
+            ),
+        )
+        window = self.sources.windows[stream]
+        ordered = sorted(window)
+        step = int(stream.rsplit("/", 1)[1][:-1]) * 60_000
+        if (
+            len(ordered) < needed
+            or window[ordered[-1]].end != (self.server_now() // step) * step
+            or any(b - a != step for a, b in zip(ordered, ordered[1:]))
+        ):
+            return False
+        if blocked == "stream_disconnected":
+            self.sources.blocked.pop(stream)
+        return True
+
     async def backfill(self, stream: str) -> None:
         market, symbol, tf = stream.split("/")
         needed = WINDOW_SIZE
@@ -452,7 +481,7 @@ class BybitRadar(BybitREST):
                 try:
                     if priority == 20 and stream in self._history:
                         await self.history_page(stream)
-                    else:
+                    elif not self.restore_current_window(stream):
                         await self.backfill(stream)
                 except (MarketError, KeyError, TypeError, ValueError):
                     if priority == 20:
@@ -467,6 +496,9 @@ class BybitRadar(BybitREST):
                 self._working.discard(stream)
                 if stream in self._history:
                     self.request_recovery(stream, 20)
+                # Local restores have no network await. Give subscription ACKs,
+                # heartbeat and Telegram a turn after each bounded window.
+                await asyncio.sleep(0)
 
     def accept_message(
         self,
