@@ -1,6 +1,34 @@
 # CryptoWatcher — state contract
 
+Текущий runtime использует **physical SQLite schema2**. Версии public event/history
+и logical `radar:v1`/`source:v1` namespaces независимы от physical user_version.
+Сначала приведен действующий market layout; последующий compact schema1 раздел
+сохраняет historical compatibility и не задает routine schema2 backup/retention.
+
+## Новая policy хранения и разовый reset (D22)
+
+Updated S01/owner request2026-10-16 отменяют raw90d и бессрочное хранение event/outcome/comparator inputs. Актуальные сроки/AC: [E13](product_scope.md#e13--компактное-хранение-сроки-и-новый-период-истории). Implementation state и gates: [Current Goal](open_issues.md#current-goal--весь-scope-текущий-этап-новое-накопление-и-reset). Полная конвертация прежней тестовой market history больше не задача. Описания прежних converter/qualification tools относятся к историческому tooling и не являются precondition нового reset.
+
+Reset — отдельная разовая процедура с exact market-data allowlist/target и private preservation/restore/equality proof; не startup migration. Owner settings/watchlist/thresholds/notifications/mutes сохраняются; credentials/infra не меняются. Старые market queues/cursors не импортируются; новая generation/start явно показывает нехватку истории и исключает old live replay. Backups/experiments исключены. Обычные backup/CD<=900s и RAM4GiB сохраняются. Формат и проверенная reset процедура определены ниже и в runbook; факт поставки/reset подтверждается только primary Evidence плана, не самим описанием.
+
+### Market layout v2: новый период
+
+Format2 включается только для нового reset candidate; schema1 не переписывается обычным open. Private tables сохраняются побайтно по значениям SQL rows; `reset_history.prepare` читает только private state, сохраняет private JSON recovery, проверяет restore на отдельном файле и integrity нового candidate. Он не удаляет и не переключает production. Host cutover/CI/artifact/unit/locks остаются отдельной обязательной процедурой.
+
+`market_candles` хранит один closed value/revision с compact numeric payload и source/provenance. Source correction создает новую revision, не меняет used inputs. Coordinate windows с checksum ссылаются на точные revisions. `needed_until` в этом layout — anchor observation time последнего использующего detail; effective expiry вычисляется по актуальной detail policy. `purge_after` — indexed scheduling hint, перепроверяемый перед удалением. Pending holds имеют конечную owner dependency. `market_context` отделяет availability timestamps от shared stable bodies; used context также имеет anchor lease. Старые permanent protected markers в v2 не пишутся.
+
+`runtime` остается rowid table для достаточно крупных JSON envelopes: WITHOUT ROWID вызывал лишние overflow pages. Narrow normalized tables используют WITHOUT ROWID. Frozen `CW2` dictionary + Zstd frame/checksum и SHA256 сохраняют точные исходные JSON bytes; public readers/SQL filters декодируют format. Все изменяемые state/index/counter updates происходят в той же writer transaction. Удаление detail и admission numeric summary атомарны; повтор cleanup не создает duplicate summary. Summary сохраняет все записанные outcome/comparator versions и полный settings/methodology provenance исходной event revision, а не последнего head/default. Численные metrics/comparator outcomes/strength/N/completeness сохраняются без старой event identity, candle/source/context arrays; cohorts/NDJSON/CSV обозначают отсутствие старых details, calendar12mo и UTC-day resolution.
+
+Completed outcome/comparison jobs не дублируют результаты. Bootstrap проверяет immutable heads, explicit recompare восстанавливает job из исходной event revision. Job сохраняет frozen method; недоступная старая формула дает явный INVALID_SOURCE, а не расчет новой формулой под прежним номером. Retention читает metadata без материализации уже истекших raw windows; обычные public readers по-прежнему проверяют полные references. Retry/IN_FLIGHT payload остается immutable; terminal delivery receipt сокращается, успешные attempts/receipts диагностируются1day, event/episode/transport sequence сохраняют dedup в подробном сроке. Pending recovery проверяет существование активного owner hold; отсутствие владельца дает EXPIRED_RETENTION_INCOMPLETE, а не бесконечный backfill.
+
+Category counters обновляются triggers и rollback вместе с данными. Initial small DB index walk bounded; дальше runtime использует cheap counters/files/pages/samples и явно помеченную модель до появления годовых summaries. Exact later index snapshot — отдельная bounded read-only команда. Physical target20GB/forecast не доказан fixture, backups/experiments отдельно. После expiry incremental vacuum освобождает pages небольшими порциями; полный VACUUM живой истории не запускается.
+
+
 ## Compact history representation
+
+Этот раздел описывает **legacy physical schema1** и retained archive tooling.
+Текущий normalized schema2 contract приведен выше; full-history conversion старой
+тестовой истории отменена и не запускается для нового накопления.
 
 Mutable runtime обновляется на месте по existing key; byte-identical canonical
 payload не вызывает повторной записи. Source recovery сохраняет ключ свечи и
@@ -37,7 +65,7 @@ decoded SHA256 и canonical JSON обязательны. Unknown schema и лю�
 
 Разовая history conversion создаёт новые bodies вV2 по измеренному cost/size
 выигрышу. Existing V1/V2 bodies и остальные исходные private rows сохраняются;
-live writer по-прежнему создаётV1 и использует UTC-aligned16-candle blocks.
+Legacy schema1 writer создаётV1 и использует UTC-aligned16-candle blocks; schema2 использует normalized revisions, а не эти полные blocks.
 Historical conversion хранит целые frozen windows как shared values, не удаляя
 исходные candles/provenance. Одинаковые decoded bytes имеют тот же key; более
 новый codec не перезаписывает existing body только ради compression encoding.
@@ -54,7 +82,7 @@ NONE/physical schema1 не разрешает app downgrade или restore по�
 
 ## Advisory agent state
 
-Logical `radar:v1:agent:*` namespaces сохраняют schema1 preference (default OFF),
+Logical `radar:v1:agent:*` namespaces сохраняют logical preference v1 (default OFF),
 episode/outcome intents и due indexes, monotonic per-event transport sequence,
 immutable canonical serialized bodies/hash, attempts, pending due, target diagnostics
 и successful episode notification baseline. Source event revision отделён от transport
@@ -62,7 +90,7 @@ revision; original settings/reference/source snapshots не переписыва
 Secret/HMAC headers/Access credentials в DB не сохраняются. Unknown preference fail-closed.
 Source event/episode/outcome и intent записываются одной транзакцией; frozen body появляется
 до request. Crash IN_FLIGHT повторяет same bytes/identity с диагностируемой ambiguity.
-Existing online all-row backup включает эти namespaces; physical schema остаётся1.
+Logical agent state включен в полный SQLite backup. Это не меняет physical schema2; legacy schema1 reader сохранен отдельно. Routine backup — disk path действующей bounded-storage процедуры.
 Compatibility и operational flow — в [agent procedure](runbooks/agent-delivery.md).
 
 ## Владение и precedence
@@ -74,6 +102,10 @@ Product requirements задаёт [spec](product_scope.md); текущие за�
 Retired `.env` keys: ALLOWED_CHAT_IDS, PRICER/CMC, BYBIT_PAIRS/WATCHLIST seeds. Они не включают второй chat и не перезаписывают существующий список. Infrastructure defaults отсутствующих обычных settings описаны `.env.example`; raw legacy payload определяет migration behavior.
 
 ## SQLite schema1
+
+Историческая physical schema первой JSON→SQLite migration. Ordinary open не
+конвертирует ее в schema2; приведенная таблица не заменяет current market tables
+выше. Path, lease и WAL integrity правила общие, physical layouts различны.
 
 Persistent DB: container `/data/sqlite/cryptowatcher.sqlite3`, host `/opt/crypto_watcher/data/sqlite/cryptowatcher.sqlite3`. WAL + synchronous FULL + busy_timeout5000ms + foreign keys; приложение имеет process lease по sidecar `.lock`, один writer. Network I/O вне транзакций. Online backup использует SQLite backup API, включая согласованный WAL state; простое копирование основного `.sqlite3` активного writer недостаточно.
 
@@ -123,11 +155,11 @@ python -m cryptowatcher backup --database PATH_TO_DB --destination PATH_TO_NEW_B
 
 D22 заменяет прежнюю indefinite policy: details30d, small-TF35d плюс ограниченные used dependencies сохраняемых расчетов, quality summaries12mo. Сначала агрегаты, затем automatic bounded cleanup. Settings/methodology provenance summaries сохраняется без raw arrays. Legacy private source/archived chats и backups не входят в market retention/reset; их удаление требует отдельного точного перечня. Backup names уникальны.
 
-До new-runtime write можно восстановить прежний application с сохранённым JSON по approved sequence. После write legacy JSON отстаёт от SQLite: blind rollback приложения теряет новые settings/runtime. Нужен compatible schema1 rollback или forward-fix; DB restore поверх live данных требует отдельного scoped approval и writer quiescence. Наличие файла `.bak` само по себе не подтверждает пригодность восстановления.
+До new-runtime write можно восстановить прежний application с сохранённым JSON по approved sequence. После write legacy JSON отстаёт от SQLite: blind rollback приложения теряет новые settings/runtime. Для legacy schema1 нужен verified compatible reader либо forward-fix; для current schema2 schema1 binary запрещен и допустим только verified schema2 reader/forward-fix; DB restore поверх live данных требует отдельного scoped approval и writer quiescence. Наличие файла `.bak` само по себе не подтверждает пригодность восстановления.
 
 ## G2A source record contract
 
-Physical SQLite user_version1 не меняется. Логически независимые record families существуют в key/value `runtime`, owner settings и delivery preferences остаются в своих таблицах. Index по primary key поддерживает prefix range + ORDER BY key DESC LIMIT256; source keys имеют padded start timestamp, поэтому не требуется читать всю историю для detector window.
+`Sources` сохраняет logical source:v1 identity в обоих layouts. В legacy schema1 candle rows находятся в runtime с padded timestamp/prefix index; в current schema2 они хранятся в market_candles с stream/start/revision indexes. Metadata/quarantine/recovery и private owner tables сохраняют отдельное владение. Таблица ниже показывает logical addresses, не обязанность писать raw candles в runtime. Detector memory window ограничен256 закрытыми candles.
 
 | Namespace | Значение |
 | --- | --- |
@@ -145,7 +177,7 @@ Settings дополняются typed `watchlist` и `watchlist_multiplier` (def
 
 ## G2B radar logical schema v1
 
-SQLite user_version остаётся1; existing runtime primary key обеспечивает prefix queries. Logical record schema `cryptowatcher.radar.v1`, event `cryptowatcher.event.v1`. Online backup включает все namespaces и проверяется all-row readback на isolated copy.
+Physical schema2 использует indexed runtime и normalized source tables; legacy schema1 reader сохранен. Logical record schema `cryptowatcher.radar.v1`, event `cryptowatcher.event.v1`. Online backup включает все namespaces и проверяется all-row readback на isolated copy.
 
 | `radar:v1:` namespace | Контракт |
 | --- | --- |
@@ -160,13 +192,13 @@ SQLite user_version остаётся1; existing runtime primary key обеспе
 
 Event identity включает stream/family/version/settings revision/candle start; episode identity основана на первом event. Episode grouping имеет market identity и direction. История сохраняет все detected events, включая historical/suppressed и muted; updates событий/episodes append-only, current heads отдельно. Каждый используемый input заморожен в event, поэтому последующая REST correction обычного source row не меняет исходную методику. ATR availability для будущего outcome помечается отдельно; недостающий контекст не превращается в нулевое значение.
 
-Event + episode + decision + initial outbox сохраняются одной transaction до отправки. Consumer замораживает exact event revisions и text; receipt/retry не меняют observation time или TTL. Failed/expired/obsolete attempts остаются history; successful-notification baseline меняется только после ack. Unknown ack отмечается AMBIGUOUS_AFTER_RESTART/UNKNOWN, повтор сохраняет identity. Новое подтверждение во время I/O может создать отдельный follow-up после ack; future event revisions не включаются в прежний payload.
+Event + episode + decision + initial outbox сохраняются одной transaction до отправки. Consumer замораживает exact event revisions и text; receipt/retry не меняют observation time или TTL. Failed/expired/obsolete attempts остаются history; successful-notification baseline меняется только после ack. Unknown ack отмечается AMBIGUOUS_AFTER_RESTART/UNKNOWN, повтор сохраняет identity. Сохранение attempts/history ограничено D22: terminal receipt сокращается, event/revision/detail retention и dedup сохраняются в пределах соответствующих сроков. Новое подтверждение во время I/O может создать отдельный follow-up после ack; future event revisions не включаются в прежний payload.
 
-Отсутствующие profile/parameters/alert_detectors читаются compatible defaults: custom legacy thresholds и Telegram composite only. Upgrade не записывает новый preset автоматически. Явная owner операция создаёт revision; preset definition полностью validated, manual edit переводит profile в custom. После записи этих fields G1/G2A images не считаются compatible rollback; recovery только forward-fix либо verified compatible G2B application. JSON import не повторяется, physical DDL/DB downgrade отсутствуют.
+Отсутствующие profile/parameters/alert_detectors читаются compatible defaults: custom legacy thresholds и Telegram composite only. Upgrade не записывает новый preset автоматически. Явная owner операция создаёт revision; preset definition полностью validated, manual edit переводит profile в custom. После записи этих fields G1/G2A images не считаются compatible rollback; recovery только forward-fix либо verified compatible G2B application. JSON import не повторяется, эта операция не меняет physical schema и не разрешает DB downgrade.
 
 ## G3 outcomes, comparisons и digest — logical schemas v1
 
-Physical schema1/NONE, один writer. `outcome-method:1` / `comparison-method:1` immutable; изменение методики без новой version блокирует работу. `outcome-job:UUID` / timestamp-length-ordered `outcome-pending:` фиксируют event revision, horizon, immutable reference и retries; `comparison-job:event` / `comparison-pending:` — отдельный bounded comparator worker. `outcome-admission` idempotently проходит прежнюю indexed history и блокирует retention до завершения. Event transaction включает initial jobs/holds до consumers. Старые snapshots без новых fields читаются agreed defaults5/15/30/60, не будущими текущими owner settings.
+Один application writer; logical v1 records работают в current physical schema2 и legacy schema1. `outcome-method:1` / `comparison-method:1` immutable; изменение методики без новой version блокирует работу. `outcome-job:UUID` / timestamp-length-ordered `outcome-pending:` фиксируют event revision, horizon, immutable reference и retries; `comparison-job:event` / `comparison-pending:` — отдельный bounded comparator worker. `outcome-admission` idempotently проходит indexed history; в schema2 admission ограничен текущим подробным сроком и не удерживает всю историю бессрочно. Event transaction включает initial jobs/holds до consumers. Старые snapshots без новых fields читаются agreed defaults5/15/30/60, не будущими текущими owner settings.
 
 `outcome:UUID:revision` / `outcome-head:UUID` и `comparison:UUID:revision` / head сохраняют прежние versions/results и availability timestamps. Неполные outcomes могут получить новую COMPLETE revision после recovery; завершённые results не пересчитываются автоматически. Complete result и references на used inputs записываются атомарно. D22 требует bounded holds только нужных inputs еще сохраняемых details; pending при истечении допустимого срока получает terminal incomplete/expired status и освобождает hold. Aggregate-before-delete retention удаляет expired details/services/references; legacy private JSON/backups не входят в market cleanup.
 
@@ -181,9 +213,7 @@ causal cutoff и public event/outcome/export schema не меняются.
 
 Legacy full heads читаются в той же базе; upgrade не запускает bulk rewrite.
 Только новая revision получает compact head в той же transaction. Existing raw
-source/outcome snapshots и history хранятся по D22; прежний запрет автоматического удаления отменен. Physical schema
-остаётся1, но старый binary после compact head writes не является совместимым
-reader: recovery требует forward-fix либо проверенную версию с этим reader.
+source/outcome snapshots и history хранятся по D22; прежний запрет автоматического удаления отменен. Legacy schema1 и current schema2 различаются; старый binary после compact head writes не является совместимым reader: recovery требует forward-fix либо проверенную версию с этим reader.
 
 `source-context:v1:ticker|instrument:market/symbol:availableTime` содержит public values/metadata, units/source и actual observation/availability timestamps. Event и выбранные comparator windows включают полный использованный context snapshot. Historical composite без prior ticker≤5min не считается no-signal; future liquidity/noise исходного event не используются. `analytics-gap:` / due index персистентно восстанавливает referenced closed ranges без изменения live subscriptions/notification state. Conflicting existing source сохраняется и диагностируется; recovery не перезаписывает его и не создаёт historical live alerts.
 
@@ -199,22 +229,4 @@ Owner `enrichment_enabled` — строгий bool, default OFF при отсу�
 
 Event `enrichment` — frozen optional context, выбранный по availability≤observation cutoff, с method/mapping revision, instrument identities и per-metric values/units/source/observation/availability/cadence. Historical observation не получает future mapping/OI/ticker; malformed/missing/stale metric остаётся маркированным. Current owner view рассчитывает latest freshness отдельно. Использованные snapshots доступны в event/export в пределах подробного срока; после expiry остаются quality summaries/settings/methodology, без бессрочных source arrays.
 
-Explicit `recompare` сохраняет comparison job original event_revision, повторно удерживает prior input ranges до completion и добавляет recalculation_requested_ms. Предыдущие result revisions доступны по as-of cutoff и export; event/settings/reference не изменяются. Автоматической recalibration/threshold mutation нет. При записи owner payload с enrichment field G3 reader несовместим: разрешён forward-fix/verified G5, без DB downgrade или restore поверх живых данных. Physical user_version1/NONE не изменяется.
-
-## Новая policy хранения и разовый reset (D22)
-
-Updated S01/owner request2026-10-16 отменяют raw90d и бессрочное хранение event/outcome/comparator inputs. Актуальные сроки/AC: [E13](product_scope.md#e13--компактное-хранение-сроки-и-новый-период-истории). Implementation state и gates: [Current Goal](open_issues.md#current-goal--весь-scope-текущий-этап-новое-накопление-и-reset). Полная конвертация прежней тестовой market history больше не задача. Описания прежних converter/qualification tools относятся к историческому tooling и не являются precondition нового reset.
-
-Reset — отдельная разовая процедура с exact market-data allowlist/target и private preservation/restore/equality proof; не startup migration. Owner settings/watchlist/thresholds/notifications/mutes сохраняются; credentials/infra не меняются. Старые market queues/cursors не импортируются; новая generation/start явно показывает нехватку истории и исключает old live replay. Backups/experiments исключены. Обычные backup/CD<=900s и RAM4GiB сохраняются. Фактический новый формат/проверенная reset процедура фиксируются до поставки; этот раздел не утверждает их реализацию.
-
-### Market layout v2: новый период
-
-Format2 включается только для нового reset candidate; schema1 не переписывается обычным open. Private tables сохраняются побайтно по значениям SQL rows; `reset_history.prepare` читает только private state, сохраняет private JSON recovery, проверяет restore на отдельном файле и integrity нового candidate. Он не удаляет и не переключает production. Host cutover/CI/artifact/unit/locks остаются отдельной обязательной процедурой.
-
-`market_candles` хранит один closed value/revision с compact numeric payload и source/provenance. Source correction создает новую revision, не меняет used inputs. Coordinate windows с checksum ссылаются на точные revisions. `needed_until` в этом layout — anchor observation time последнего использующего detail; effective expiry вычисляется по актуальной detail policy. `purge_after` — indexed scheduling hint, перепроверяемый перед удалением. Pending holds имеют конечную owner dependency. `market_context` отделяет availability timestamps от shared stable bodies; used context также имеет anchor lease. Старые permanent protected markers в v2 не пишутся.
-
-`runtime` остается rowid table для достаточно крупных JSON envelopes: WITHOUT ROWID вызывал лишние overflow pages. Narrow normalized tables используют WITHOUT ROWID. Frozen `CW2` dictionary + Zstd frame/checksum и SHA256 сохраняют точные исходные JSON bytes; public readers/SQL filters декодируют format. Все изменяемые state/index/counter updates происходят в той же writer transaction. Удаление detail и admission numeric summary атомарны; повтор cleanup не создает duplicate summary. Summary сохраняет version/settings/methodology и численные результаты без event identity/raw arrays; cohorts/NDJSON/CSV обозначают отсутствие старых details, calendar12mo и UTC-day resolution.
-
-Completed outcome/comparison jobs не дублируют результаты. Bootstrap проверяет immutable heads, explicit recompare восстанавливает job из сохраненного event. Retry/IN_FLIGHT payload остается immutable; terminal delivery receipt сокращается, успешные attempts/receipts диагностируются1day, event/episode/transport sequence сохраняют dedup в подробном сроке. Pending recovery проверяет существование активного owner hold; отсутствие владельца дает EXPIRED_RETENTION_INCOMPLETE, а не бесконечный backfill.
-
-Category counters обновляются triggers и rollback вместе с данными. Initial small DB index walk bounded; дальше runtime использует cheap counters/files/pages/samples и явно помеченную модель до появления годовых summaries. Exact later index snapshot — отдельная bounded read-only команда. Physical target20GB/forecast не доказан fixture, backups/experiments отдельно. После expiry incremental vacuum освобождает pages небольшими порциями; полный VACUUM живой истории не запускается.
+Explicit `recompare` сохраняет comparison job original event_revision, повторно удерживает prior input ranges до completion и добавляет recalculation_requested_ms. Предыдущие result revisions доступны по as-of cutoff и export; event/settings/reference не изменяются. Автоматической recalibration/threshold mutation нет. При записи owner payload с enrichment field G3 reader несовместим: разрешён forward-fix/verified G5, без DB downgrade или restore поверх живых данных. Enrichment/recompare не меняют текущую physical schema2; logical v1 не разрешает запуск schema1 binary на schema2.

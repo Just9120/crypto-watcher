@@ -45,7 +45,7 @@ Canonical spec: [product_scope.md](product_scope.md). Этот план соде
 | G4 | Producer/consumer v2/retry/replay/idempotency реализованы; actual activation BLOCKED | B02, отдельный owner credential/TOTP/draft и binding/max-age900s; F36 compatible receiver hotfix |
 | G5 | Optional enrichment/manual comparison tools DONE | Enrichment OFF допустим; thresholds меняются только владельцем |
 | Storage E13 | Compact new accumulation/retention/metering/one-time reset DONE | 20GB target не доказан; F34 DOCUMENT/DEFER для отдельного репрезентативного observation |
-| G6 | Полный audit актуального scope выполнен, docs PR в delivery | Findings имеют dispositions; external activation не выдается за DONE |
+| G6 | Полный audit актуального scope выполнен, docs PR40 merged; F02 contracts consolidation в delivery | Findings имеют dispositions; external activation не выдается за DONE |
 
 **DoD остатка G4:** owner создает/сохраняет dedicated radar signing credential штатно; проверяется recovery/binding, consumer max-age900s и producer HTTPS config. Обязательны signed/tampering/idempotency/restart/expired replay checks, фактические producer/consumer revision/health и отсутствие LLM/order side effects. Telegram mute/outage не должен влиять на consumer. Конкретная activation выполняется по [процедуре](runbooks/agent-delivery.md) без изменения иных credentials/trading flags.
 
@@ -155,7 +155,7 @@ Canonical команды — [README](../README.md#checks); из root repository
 | ID | Проблема / область / исходный объект | Влияние / priority | Действие / обоснование / зависимости | Evidence | Confidence / disposition |
 | --- | --- | --- | --- | --- | --- |
 | F01 DOC/SPEC | S01 полностью меняет прежний Spot MVP; отсутствовали AC и трассировка; product_scope.md / все эпики | P1 | CONSOLIDATE: Scope источника, без новых features. | S01/S05 полностью сверены; D22/E13,65 stable AC; PR19 и PR37/39. | HIGH / CLOSED |
-| F02 DOC | README/state_contract остаются на старом Spot/chat-based контракте; README.md, docs/state_contract.md; D01–D04 | P1 | CONSOLIDATE: Не копировать runtime rules. При следующем содержательном doc change отделить legacy schema1/old converter; links README/state_contract/architecture/agent-delivery сохранить. | README/state_contract/rules/runbooks адаптированы G1 и PR37. В architecture первый абзац schema1 и отдельные agent runbook формулировки еще исторические; v2 contract и bounded runbook определяют фактическую схему. | HIGH / DOCUMENT / DEFER |
+| F02 DOC | Legacy schema1/storage/recovery формулировки противоречили current schema2; README/state_contract/architecture/agent-delivery | P2: риск выбора неверного backup/rollback path | CONSOLIDATE: current contract поднят перед legacy, logical v1 отделен от physical2, routine disk backup имеет один canonical runbook; useful historical anchors/tooling сохранены | G1/PR37 адаптация + текущая branch codex/current-storage-contracts-20261016/base6799395. Сверка Store/Sources/History/receiver dispatch, relative links и local docs PASS; required docs CI/merge PENDING | HIGH / FIX_IMPLEMENTED_DELIVERY_PENDING |
 | F03 DOC/PROCEDURE | AGENTS.md и ci-cd-rules.md отсутствуют в repository; root; AC-12-02 | P1 | DOCUMENT: Процедуры существуют и используются. | Root AGENTS/ci-cd-rules/router tracked; strict ci-required и production Environment подтверждены16Oct. | HIGH / CLOSED |
 | F04 DOC/COMMANDS | Quickstart обрывается, нет canonical install/validation/environment процедуры; README.md: конец незакрытого bash fence; requirements/Dockerfile | P2 | DOCUMENT: Format/links/fences проверены; команды не дублируются в плане. | README canonical Python3.11/hash-lock/CLI/Docker commands; validate_docs и image checks CI38897051479 PASS. | HIGH / CLOSED |
 | F05 SECURITY | Access policy fail-open и неполный guard; код 261–277, 1408–1415; AC-01-04 | P1 | FIX: Owner private233382575; доступ не открывается при missing config. | config.authorized + единый Controller.handle guard; stranger/group/empty/invalid/bot identity fixtures, full CI731 PASS. | HIGH / CLOSED |
@@ -195,7 +195,7 @@ Canonical команды — [README](../README.md#checks); из root repository
 
 Canonical README — назначение/commands/navigation; spec — requirements/decisions/AC; этот plan — statuses/findings/Goal/Evidence; state_contract — ownership/schema1 compatibility и schema2; bounded-storage-reset — current retention/reset/routine disk backup. Полезные historical converter/native CLI и source licenses сохраняются: их наличие не означает текущую обязанность конвертировать discarded history.
 
-F02 consolidation: сохранить перечисленные canonical paths; при содержательной актуализации отделить architecture schema1 intro и agent runbook old schema wording от current schema2. Destination — existing state_contract schema2 + bounded runbook, affected links README/architecture/agent-delivery; нового конкурирующего документа не создавать. Исторические rules D12/raw90/indefinite details явно superseded D22. F24 private duplicate helpers — DOCUMENT/DEFER, удаления только из-за отсутствия imports не выполнялись. Local ignored `.cache-g1`, env/caches/pycache и прежние branches/worktrees учитываются отдельно от tracked source; статус ignored не означает ненужность.
+F02 consolidation выполнена в текущей branch: canonical paths и полезные historical anchors сохранены; schema2 contract перенесен в начало state_contract, architecture и agent runbook описывают actual normalized/disk flow. Destination — existing state_contract schema2 + bounded runbook; links README/architecture/agent-delivery проверены. Новый конкурирующий документ не создан. Исторические rules D12/raw90/indefinite details явно superseded D22. F24 private duplicate helpers — DOCUMENT/DEFER, удаления только из-за отсутствия imports не выполнялись. Local ignored `.cache-g1`, env/caches/pycache и прежние branches/worktrees учитываются отдельно от tracked source; статус ignored не означает ненужность.
 
 ## Blockers и следующий шаг
 
@@ -218,6 +218,33 @@ Confidence HIGH по auth/config/atomic persistence/formulas/retention/replay/CI
 
 ## Checkpoint
 
-Audit branch `codex/final-scope-audit-20261016`, base130225d2f641b4d9d8c616aa791ef6919afd9c31; только spec/plan. Required docs checks/self-review/PR CI/merge PENDING до публикации. Runtime PR39 уже merged/normal CD PASS; audit docs не требуют deploy. Parent Goal active, storage/reset завершены; после docs delivery остается B02. Никакого full-history converter, cleanup backups или повторного reset не запускать.
+2026-10-16: audit PR40 merged679939593b82e8a07139bf60d92bc00fed57beb0,
+required docs CI38900513591 PASS, postmerge38900699749 selectPASS/build+productionSKIPPED
+по docs-only scope. Local main синхронизирован; прежний audit baseline64/65 на
+130225d2 не пересчитывается. Runtime39 и consumer949 доставлены/проверены, B02 остается.
 
-Старые user/unknown branches/worktrees сохранены. Собственные PR37/38/39 branches удалены после merge/tree/delivery checks; consumer hotfix CI/CD/readback PASS; собственный clean worktree удален после tree equality/merge verification, private env/evidence вне worktree сохранены. После runtime fixes повторный deploy ради статуса не нужен. Следующее зависимое действие — owner credential, затем ограниченная activation, а не бесконечный monitoring статистики.
+Current F02 branch `codex/current-storage-contracts-20261016`, base6799395;
+пять затронутых docs, без code/config/policy changes. Local docs/links/manual
+source alignment/self-review PASS; required docs CI/merge PENDING. Runtime CD N/A.
+Parent Goal active. Собственные текущие PR branches/worktrees очищаются после
+merge/proof; старые user/unknown branches и private evidence сохраняются.
+
+## F02 — консолидация текущих storage/recovery contracts
+
+Разрешенный scope всей Goal включает F02. Completion review после audit40 выявил
+конкретные опасные противоречия: architecture/state contract называют physical
+schema1 текущей, agent runbook обещает schema1/NONE, architecture описывает RAM/VFS
+как обычный backup schema2. Код receiver уже выбирает disk source/backup для schema2.
+Branch `codex/current-storage-contracts-20261016`, base679939593b82e8a07139bf60d92bc00fed57beb0;
+clean main/GitHub/protections/open PR проверены до изменений.
+
+Результат/DoD: текущие physical schema2, logical v1 и historical schema1 явно
+разделены; единственная действующая процедура routine disk backup/reset остается
+в bounded-storage-reset, useful legacy qualification/commands/anchors сохраняются.
+Новые settings snapshot TTL fields объяснены как provenance, не consumer freshness.
+Non-goals: runtime/schema/CI/CD changes, новый reset/conversion, cleanup данных,
+credential activation и увеличение budgets. Validation REQUIRED: сверка с
+Store/History/Sources/receiver dispatch, относительные links/anchors и canonical
+`python scripts/checks.py docs`; self-review/required docs CI/merge. Runtime deploy
+N/A: только документация, без изменения delivery policy или команд исполнения.
+Документы исправлены; сверка с actual bounded/schema dispatch и relative links PASS, self-review PASS. Required docs CI/merge PENDING; аудиторский snapshot64/65 на130225d2 не пересчитывается. После merge останется owner-deferred B02; новую storage migration/reset не запускать.
