@@ -61,3 +61,19 @@ async def test_digest_toggle_is_independent_and_status_button_is_readonly(infras
         before = store.db.total_changes
         await controller.handle(update(bad), None)
         assert store.db.total_changes == before
+
+
+async def test_new_generation_history_explains_missing_old_detail_and_limited_sample(infrastructure, store):
+    from cryptowatcher.market_storage import enable
+
+    enable(store.db)
+    store.bounded = True
+    store.put_runtime("history_generation", {"id": "fresh", "started_ms": NOW})
+    controller = Controller(
+        infrastructure, store, SimpleNamespace(snapshot=AsyncMock(return_value=RadarResult({}, {}, 0)))
+    )
+    request = update("/history")
+    await controller.handle(request, None)
+    text = request.effective_message.reply_text.call_args.args[0]
+    assert "Старая тестовая история недоступна" in text and "N ограничены" in text
+    assert "30 дней" in text and "История пока пуста" in text
