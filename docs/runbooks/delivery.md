@@ -763,6 +763,11 @@ ephemeral worker, не запускает/останавливает production.
 host/account, exact image/container/revision, owner3, code manifests, baseline
 hashes и active journal bounds. Единственный target lock исключает concurrent
 deployment. Неоднозначный dispatch сначала проверяется по unit/primary records.
+Fresh-feed preflight обязателен; independent guard проверяет live data во время
+подготовки/переноса и прекращает только helper после двух failed samples. Source
+mmap — virtual addressing при неизменном kernel4GiB/no-swap cap. В результате
+фиксируется фактический mmap размер; target fit доказывается отдельным запуском.
+Live initial rearm запрещён: online mode принимает только existing valid epoch.
 
 Подготовка journal — отдельная явная роль с source RW только для двух
 служебных tables. До первой source point она сохраняет pending keys/counters
@@ -790,3 +795,17 @@ SQLite backup может нормализовать file header: page-root от�
 backup snapshot, а не к изменяющемуся main file на VPS. Full source SQL/history
 qualification, actual900s backup/CD proof и reviewed fresh-tail-preserving
 production promotion остаются отдельными обязательными gates.
+
+### Incremental refresh qualified PC candidate
+
+`cryptowatcher/refresh_candidate.py` обновляет только isolated disposable compact
+copy при сохранённом original/recovery. Source и baseline hashes, полный source
+SQL CHECK и полный row manifest обязательны. Discovery сравнивает все source rows,
+обрабатывает deletion и rowid reuse, затем применяет все удаления перед upserts.
+Используются прежние lossless head/candle/record transformations. Состояние
+прогресса и candidate writes коммитятся вместе с attached DELETE-journal ledger
+через SQLite super-journal; inputs/algorithm identity проверяются при resume.
+Unfinished candidate имеет user_version0. Итоговый readback охватывает все rows,
+private tables и full integrity/CHECK; ledger сохраняется для Evidence. Это не
+promotion и не заменяет target ordinary backup/CD900s qualification. Каждый запуск
+ограничен900s; interrupted progress сохраняется без объявления partial copy READY.

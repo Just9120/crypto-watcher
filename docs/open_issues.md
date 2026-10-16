@@ -168,10 +168,33 @@ SQL authorizer запрещает DML пяти app tables, max500k/128MiB/expiry
 включая online/ack/receiver fixtures; canonical quality49 modules PASS.
 Fresh required CI и real source capture/whole900s backup proof ещё REQUIRED.
 
-Если initial journal уже invalid до первой source point, разрешён только
-проверенный initial rearm с архивом всех прежних keys и no-prior-capture guard;
-новый epoch сохраняет прежние max bounds и expiry. Это не восстановление tail
-принятого снимка. Online capture не останавливает/restarts production.
+Online mode требует уже действующий valid journal. Live initial rearm запрещён:
+его длительная writer transaction несовместима с сохранением работы ingestion.
+Closed initial rearm остаётся только в отдельной согласованной процедуре с
+остановленным writer; accepted source point никогда не сбрасывается.
+
+Actual online attempt16Oct `rehearsals/online-snapshot-h4_6_m50`, code0dda52f /
+required CI38861414843 PASS: передано около196MB, полного snapshot footer нет.
+В06:38:25UTC owned helper остановлен из-за stale ingestion. Новых app rows не
+удалялось, snapshot не qualified, working DB не заменена. После отмены component
+health оставался false; recovery06:43:01UTC перезапустил тот же7723a326/image da9e2e…
+без изменения config/history, API/Postgres unchanged. Readback06:45:10UTC:
+health/components PASS, ingestion age4.5s; full dual-market readiness ещё проверяется.
+Epoch6c5a6dde…/expiry1792135396 сохранён, partial PC bytes не используются.
+
+Исправление перед следующим запуском: only short prefix acknowledgement,
+fresh-feed preflight и independent guard прекращают только owned helper при
+устойчивом failure. Worker использует mmap как virtual address space при прежнем
+kernel4GiB/no-swap; это не увеличение resident RAM. Новый real fit ещё не доказан.
+Local182 affected regressions/canonical quality50 modules PASS, fresh CI REQUIRED.
+
+Incremental PC refresh не повторяет старую conversion: полный frozen source scan
+сравнивается с verified row manifest; deletions предшествуют upserts. Attached
+DELETE-journal ledger атомарно сохраняет candidate writes и checkpoint через SQLite
+super-journal. Каждый итоговый row проверяется по baseline либо changed-row hashes,
+private tables и full SQL CHECK проверяются целиком. Interrupted candidate не
+применима приложением (user_version0), source/candidate fingerprints обязательны.
+Это isolated preparation, production replacement/ordinary900s proof ещё REQUIRED.
 
 PC preservation preparation16Oct05:29:46UTC: retained D raw и disposable C raw
 SHA24314f94… повторно PASS, empty C WAL housekeeping raw bytes не изменил,

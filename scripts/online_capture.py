@@ -11,6 +11,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -18,6 +19,68 @@ from cryptowatcher.maintenance import Unit
 from cryptowatcher.storage import encode
 from scripts import closed_source_maintenance as common
 from scripts.closed_page_capture import JOURNAL_READBACK, uncaptured_epoch
+
+
+def require_live_feed(expected: Unit) -> None:
+    value = common.exact_unit(expected, seconds=10)
+    state = json.loads(
+        common.call(
+            [*common.DOCKER, "exec", "-i", expected.container, "python", "-B", "-"],
+            seconds=10,
+            data=common.RUNTIME_READBACK,
+        )
+    )
+    if value["State"].get("Health", {}).get("Status") != "healthy" or not common.restored_data(
+        state, 0, time.time()
+    ):
+        raise RuntimeError("Fresh radar data required during online capture")
+
+
+def checked_worker(
+    command: list[str],
+    expected: Unit,
+    ops: common.DockerOperations,
+    value: dict,
+    *,
+    seconds: float,
+    stdout,
+    interval: float = 15,
+) -> None:
+    """Release only this helper if live feed health stops being confirmed."""
+    done = threading.Event()
+    failed = threading.Event()
+
+    def watch() -> None:
+        bad = 0
+        while not done.wait(interval):
+            try:
+                require_live_feed(expected)
+                bad = 0
+            except Exception:
+                bad += 1
+            if bad >= 2:
+                failed.set()
+                ops.remove_owned(value["worker"], value["image"])
+                return
+
+    require_live_feed(expected)
+    thread = threading.Thread(target=watch, daemon=True)
+    thread.start()
+    try:
+        subprocess.run(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=stdout,
+            stderr=sys.stderr.buffer,
+            check=True,
+            timeout=seconds,
+        )
+    finally:
+        done.set()
+        thread.join(timeout=12)
+        if failed.is_set():
+            raise RuntimeError("Online helper stopped to protect radar feed")
+    require_live_feed(expected)
 
 
 def fingerprint(path: Path, deadline: float) -> tuple[str, int]:
@@ -53,14 +116,8 @@ def configuration(root: Path) -> dict:
             raise RuntimeError("Online identity refused")
     if re.fullmatch("cw-online-snapshot-[a-f0-9]{32}", value["worker"]) is None:
         raise RuntimeError("Online worker identity refused")
-    initial = value.get("initial_snapshot")
-    if initial is not None and (
-        set(initial) != {"prior_epoch", "expires"}
-        or re.fullmatch("[a-f0-9]{32}", initial["prior_epoch"]) is None
-        or initial["prior_epoch"] == value["journal_epoch"]
-        or type(initial["expires"]) is not int
-    ):
-        raise RuntimeError("Uncaptured initial journal plan refused")
+    if "initial_snapshot" in value:
+        raise RuntimeError("Live journal rearm forbidden")
     if (
         re.fullmatch("sha256:[a-f0-9]{64}", value["image"]) is None
         or re.fullmatch("[a-f0-9]{40}", value["revision"]) is None
@@ -92,7 +149,6 @@ def preflight(root: Path, value: dict) -> dict:
         "baseline_sha256": value["baseline_sha256"],
         "journal_epoch": value["journal_epoch"],
         "maximum": 8 * 1024**3,
-        **({"initial_snapshot": value["initial_snapshot"]} if "initial_snapshot" in value else {}),
     }:
         raise RuntimeError("Online worker plan changed")
     descriptor = root / "input/base.json"
@@ -116,19 +172,15 @@ def preflight(root: Path, value: dict) -> dict:
             [*common.DOCKER, "exec", "-i", expected.container, "python", "-B", "-"], data=JOURNAL_READBACK
         )
     )
-    initial = value.get("initial_snapshot")
-    if initial:
-        uncaptured_epoch(initial["prior_epoch"])
     if (
-        journal.get("epoch") != (initial["prior_epoch"] if initial else value["journal_epoch"])
-        or (not initial and journal.get("valid") != 1)
-        or (initial and journal.get("reason") not in ("OK", "CAPACITY", "EXPIRED"))
-        or (initial and journal.get("expires") != initial["expires"])
+        journal.get("epoch") != value["journal_epoch"]
+        or journal.get("valid") != 1
         or journal.get("expires", 0) < time.time() + 900
         or journal.get("max_keys") != 500000
         or journal.get("max_bytes") != 128 * 1024**2
     ):
         raise RuntimeError("Current online journal cannot preserve newer writes")
+    require_live_feed(expected)
     return baseline
 
 
@@ -248,34 +300,22 @@ def run(root: Path, value: dict) -> int:
         seconds = common.remaining_seconds(deadline, cap=900)
         command = worker_command(root, value, seconds)
         try:
-            uncaptured_epoch(value.get("initial_snapshot", {}).get("prior_epoch", value["journal_epoch"]))
+            uncaptured_epoch(value["journal_epoch"])
             preparation_seconds = min(90, common.remaining_seconds(deadline, cap=900))
-            subprocess.run(
+            checked_worker(
                 worker_command(root, value, preparation_seconds, archive_journal=True),
-                stdin=subprocess.DEVNULL,
+                expected,
+                ops,
+                value,
+                seconds=preparation_seconds,
                 stdout=sys.stderr.buffer,
-                stderr=sys.stderr.buffer,
-                check=True,
-                timeout=preparation_seconds,
             )
-            initial = "initial_snapshot" in value
-            prefix = json.loads(
-                (
-                    root
-                    / ("work/journal-rearm.json" if initial else "work/journal-prefix/acknowledgement.json")
-                ).read_text()
-            )
+            prefix = json.loads((root / "work/journal-prefix/acknowledgement.json").read_text())
             if (
-                prefix.get("state")
-                != (
-                    "JOURNAL_REARMED_BEFORE_INITIAL_SNAPSHOT"
-                    if initial
-                    else "PREPARED_UNCONSUMED_JOURNAL_PREFIX"
-                )
+                prefix.get("state") != "PREPARED_UNCONSUMED_JOURNAL_PREFIX"
                 or prefix.get("epoch") != value["journal_epoch"]
                 or prefix.get("application_rows_deleted") != 0
-                or (not initial and prefix.get("requires_fresh_full_source_snapshot") is not True)
-                or (initial and prefix.get("prior_snapshot_reused") is not False)
+                or prefix.get("requires_fresh_full_source_snapshot") is not True
             ):
                 raise RuntimeError("Durable journal-prefix acknowledgement missing")
             report["journal_prefix"] = prefix
@@ -283,13 +323,13 @@ def run(root: Path, value: dict) -> int:
             ops.remove_owned(value["worker"], value["image"])
             seconds = common.remaining_seconds(deadline, cap=900)
             command = worker_command(root, value, seconds)
-            subprocess.run(
+            checked_worker(
                 command,
-                stdin=subprocess.DEVNULL,
+                expected,
+                ops,
+                value,
+                seconds=seconds,
                 stdout=sys.stdout.buffer,
-                stderr=sys.stderr.buffer,
-                check=True,
-                timeout=seconds,
             )
             result = json.loads((root / "work/snapshot.json").read_text())
             if (

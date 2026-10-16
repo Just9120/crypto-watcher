@@ -11,6 +11,33 @@ import pytest
 from scripts import online_capture, receive_online_pages
 
 
+def test_feed_guard_stops_only_owned_helper_when_feed_stays_unconfirmed(monkeypatch):
+    from cryptowatcher.maintenance import Unit
+
+    removed = []
+    checked = 0
+
+    def check(expected):
+        nonlocal checked
+        checked += 1
+        if checked > 1:
+            raise RuntimeError("fixture stale feed")
+
+    monkeypatch.setattr(online_capture, "require_live_feed", check)
+    monkeypatch.setattr(online_capture.subprocess, "run", lambda *args, **kwargs: time.sleep(0.06))
+    with pytest.raises(RuntimeError, match="protect radar"):
+        online_capture.checked_worker(
+            ["owned-helper"],
+            Unit("a" * 64, "sha256:" + "b" * 64, "c" * 40),
+            SimpleNamespace(remove_owned=lambda *args: removed.append(args)),
+            {"worker": "owned-helper", "image": "sha256:" + "b" * 64},
+            seconds=1,
+            stdout=None,
+            interval=0.01,
+        )
+    assert removed == [("owned-helper", "sha256:" + "b" * 64)]
+
+
 def test_operator_hash_allows_read_access_time_but_binds_file_identity(tmp_path, monkeypatch):
     path = tmp_path / "baseline"
     path.write_bytes(b"stable input")
@@ -95,8 +122,7 @@ def test_pc_receiver_binds_primary_snapshot_to_same_operation_and_journal(tmp_pa
     assert json.loads((tmp_path / "private/producer.json").read_text())["operation"] == operation
 
 
-def test_initial_rearm_worker_preserves_expiry_and_application_tables(tmp_path, monkeypatch):
-    import sqlite3
+def test_initial_rearm_worker_is_refused_before_any_write(tmp_path, monkeypatch):
     import time
 
     from scripts import online_capture_worker
@@ -116,25 +142,15 @@ def test_initial_rearm_worker_preserves_expiry_and_application_tables(tmp_path, 
             "/input/capture-plan.json": json.dumps(plan),
         }.get(path.as_posix(), "")
 
-    seen = []
     monkeypatch.setattr(type(tmp_path), "read_text", read)
     monkeypatch.setattr(online_capture_worker.os, "geteuid", lambda: 10001, raising=False)
-    connect = sqlite3.connect
-    monkeypatch.setattr(online_capture_worker.sqlite3, "connect", lambda *a, **kw: connect(":memory:"))
 
-    def rearm(db, **kw):
-        seen.append(kw)
-        return {
-            "state": "JOURNAL_REARMED_BEFORE_INITIAL_SNAPSHOT",
-            "epoch": kw["epoch"],
-            "application_rows_deleted": 0,
-            "prior_snapshot_reused": False,
-        }
+    def refuse_connect(*args, **kwargs):
+        raise AssertionError("Live rearm must not open a write connection")
 
-    monkeypatch.setattr(online_capture_worker, "rearm_before_initial_snapshot", rearm)
-    monkeypatch.setattr(online_capture_worker, "_json", lambda p, v: None)
-    assert online_capture_worker.run(90, archive_journal=True)["application_rows_deleted"] == 0
-    assert seen[0]["expires"] == plan["initial_snapshot"]["expires"] and seen[0]["no_prior_capture"] is True
+    monkeypatch.setattr(online_capture_worker.sqlite3, "connect", refuse_connect)
+    with pytest.raises(RuntimeError, match="Live journal rearm forbidden"):
+        online_capture_worker.run(90, archive_journal=True)
     monkeypatch.setattr(type(tmp_path), "read_text", original_read)
 
 

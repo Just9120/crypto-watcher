@@ -200,6 +200,8 @@ def capture(
                 source.as_uri() + "?mode=ro", flags=apsw.SQLITE_OPEN_READONLY | apsw.SQLITE_OPEN_URI
             )
         ) as reader:
+            reader.execute(f"PRAGMA mmap_size={MAX_BYTES}")
+            mapped = reader.execute("PRAGMA mmap_size").fetchone()
             reader.execute("BEGIN")
             # The first read pins one WAL snapshot; journal metadata and every
             # copied row belong to this source point, regardless of later writes.
@@ -262,6 +264,7 @@ def capture(
         application_stopped=False,
         source_schema_version=version,
         snapshot_observed_at_utc=observed_at,
+        source_mmap_bytes=0 if mapped is None else mapped[0],
     )
     _json(directory / "snapshot.json", result)
     return result

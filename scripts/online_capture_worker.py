@@ -10,10 +10,8 @@ import threading
 import time
 from pathlib import Path
 
-from cryptowatcher.change_journal import rearm_before_initial_snapshot
 from cryptowatcher.journal_archive import archive_and_ack
 from cryptowatcher.online_pages import capture
-from cryptowatcher.page_delta import _json
 from cryptowatcher.storage import encode
 
 
@@ -31,6 +29,8 @@ def run(seconds: float, *, archive_journal: bool = False) -> dict:
     plan = json.loads(Path("/input/capture-plan.json").read_text())
     if plan.get("schema") != "cryptowatcher.online-capture-plan.v1":
         raise RuntimeError("Online capture plan refused")
+    if "initial_snapshot" in plan:
+        raise RuntimeError("Live journal rearm forbidden; use an existing valid epoch")
     last = time.monotonic()
 
     def progress(**fields):
@@ -45,20 +45,6 @@ def run(seconds: float, *, archive_journal: bool = False) -> dict:
         with closing(sqlite3.connect("/history/cryptowatcher.sqlite3", timeout=2)) as db:
             db.execute("PRAGMA synchronous=FULL")
             db.execute("PRAGMA busy_timeout=2000")
-            if "initial_snapshot" in plan:
-                initial = plan["initial_snapshot"]
-                result = rearm_before_initial_snapshot(
-                    db,
-                    prior_epoch=initial["prior_epoch"],
-                    epoch=plan["journal_epoch"],
-                    owner=233382575,
-                    archive_directory=Path("/scratch/journal-retired"),
-                    expires=initial["expires"],
-                    deadline=time.monotonic() + seconds - 10,
-                    no_prior_capture=True,
-                )
-                _json(Path("/scratch/journal-rearm.json"), result)
-                return result
             result = archive_and_ack(
                 db,
                 Path("/scratch/journal-prefix"),
@@ -70,6 +56,14 @@ def run(seconds: float, *, archive_journal: bool = False) -> dict:
             )
         return result
 
+    import apsw
+
+    # This is a dedicated process with no open APSW connections. Virtual mapping
+    # avoids per-page reads; Docker's existing 4GiB/no-swap cap still bounds all
+    # resident pages, caches and hash arrays. No RAM allocation is enlarged.
+    apsw.shutdown()
+    apsw.config(apsw.SQLITE_CONFIG_MMAP_SIZE, 64 * 1024**3, 64 * 1024**3)
+    apsw.initialize()
     return capture(
         Path("/history/cryptowatcher.sqlite3"),
         Path("/input/base.json"),
