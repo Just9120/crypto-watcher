@@ -88,10 +88,15 @@ settings, плотность cohorts, реальные no-signal windows и sour
 ограничения прогноза. Использованные исходники сравнений могут переживать raw35d
 до истечения30d parent detail; это subset необходимых revisions, не indefinite hold.
 
-Runtime repack получает до восьми прежних40ms slices за analytics cycle, с отдельным
+Runtime repack получает до восьми прежних40ms slices за независимый1s tick, с отдельным
 transaction/checkpoint и scheduler yield между ними. Intended work<=320ms/cycle;
 отдельный SQLite I/O/commit может выйти за time check. COMPLETE прекращает slices.
 Это не полный scan внутри одной транзакции, не CI job и не изменение900s CD gate.
+Backfill имеет отдельный bounded batch job и прежний shared REST limiter/live priority.
+Новый PASS CD меняет expected source observer: завершить только прежний identified
+WAITING_STABLE unit после readback, сохранить его records, запустить один observer
+из нового exact image в новой private folder. Существующую baseline другого source
+не продолжать; gates stability/12h wait/24h observation остаются прежними.
 
 Для24h используется reviewed `scripts/observe_capacity.py`, также включенный в image
 как `/app/operator/observe_capacity.py`. После PASS CD operator копирует его из

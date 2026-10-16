@@ -1,0 +1,222 @@
+import asyncio
+from contextlib import closing
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+from cryptowatcher.analytics_recovery import AnalyticsRecovery
+from cryptowatcher.bot import Controller, application
+from cryptowatcher.events import History
+from cryptowatcher.ingestion import BybitRadar
+from cryptowatcher.market import MarketError
+from cryptowatcher.market_storage import enable
+from cryptowatcher.record_codec import TYPED_MAGIC, pack_binary, pack_binary_v2
+from cryptowatcher.storage import StateError, Store, encode
+from cryptowatcher.storage_repack import work
+
+from .test_outcomes import MINUTE, NOW
+
+
+def seed(store, monkeypatch, count=6):
+    enable(store.db)
+    store.bounded = True
+    store.clock_ms = lambda: NOW
+    radar = BybitRadar(store)
+    monkeypatch.setattr(radar, "server_now", lambda: NOW + 10 * MINUTE)
+    recovery = AnalyticsRecovery(store, radar)
+    h = History(store)
+    for i in range(count):
+        stream = f"spot/TEST{i}USDT/1m"
+        with store.db:
+            h.put("hold:" + stream + ":owner", {"start": NOW, "end": NOW + MINUTE})
+        recovery.request(stream, NOW, NOW + MINUTE)
+
+    async def fetch(endpoint, params):
+        return {"time": NOW + 10 * MINUTE, "result": {"list": [[NOW, 100, 101, 99, 100, 1, 10]]}}
+
+    radar._get = AsyncMock(side_effect=fetch)
+    return radar, recovery, h, fetch
+
+
+async def test_backfill_batches_retry_restart_and_preserves_exact_sources(store, monkeypatch):
+    radar, recovery, h, fetch = seed(store, monkeypatch)
+    failed = False
+
+    async def fail_first(endpoint, params):
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise MarketError("rate_limited")
+        return await fetch(endpoint, params)
+
+    radar._get.side_effect = fail_first
+    await recovery.work(NOW + 10 * MINUTE, batch=4, seconds=10)
+    assert radar._get.await_count == 4
+    assert h.count("analytics-gap-pending:") == 3
+    assert sorted(v["state"] for _, v in h.items("analytics-gap:")) == [
+        "COMPLETE",
+        "COMPLETE",
+        "COMPLETE",
+        "PENDING",
+        "PENDING",
+        "RETRY",
+    ]
+    stored = [
+        tuple(r) for r in store.db.execute("SELECT * FROM market_candles ORDER BY stream,start,revision")
+    ]
+    with closing(Store(store.path, store.owner_id)) as reopened:
+        worker = AnalyticsRecovery(reopened, radar)
+        await worker.work(NOW + 10 * MINUTE, seconds=10)
+        assert worker.history.count("analytics-gap-pending:") == 1  # Retry is still in the future.
+        await worker.work(NOW + 11 * MINUTE, seconds=10)
+        assert worker.history.count("analytics-gap-pending:") == 0
+        for row in stored:
+            assert (
+                tuple(
+                    reopened.db.execute(
+                        "SELECT * FROM market_candles WHERE stream=? AND start=? AND revision=?", row[:3]
+                    ).fetchone()
+                )
+                == row
+            )
+        calls = radar._get.await_count
+        await worker.work(NOW + 12 * MINUTE)
+        assert radar._get.await_count == calls
+    await radar.close()
+
+
+async def test_backfill_yields_to_new_live_gap_and_cancellation_preserves_pending(store, monkeypatch):
+    radar, recovery, h, fetch = seed(store, monkeypatch)
+
+    async def live_gap(endpoint, params):
+        radar._pending["linear/BTCUSDT/1m"] = (0, 1)
+        return await fetch(endpoint, params)
+
+    radar._get.side_effect = live_gap
+    await recovery.work(NOW + 10 * MINUTE, seconds=10)
+    assert radar._get.await_count == 1 and h.count("analytics-gap-pending:") == 5
+    radar._pending.clear()
+    entered = asyncio.Event()
+
+    async def blocked(endpoint, params):
+        entered.set()
+        await asyncio.Event().wait()
+
+    radar._get.side_effect = blocked
+    before = h.items("analytics-gap:")
+    task = asyncio.create_task(recovery.work(NOW + 10 * MINUTE))
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert h.items("analytics-gap:") == before and not store.db.in_transaction
+    await radar.close()
+
+
+async def test_inflight_superseded_backfill_cannot_resurrect_old_pending(store, monkeypatch):
+    radar, recovery, h, fetch = seed(store, monkeypatch, 1)
+
+    async def supersede(endpoint, params):
+        name, job = h.items("analytics-gap:")[0]
+        with store.db:
+            h.delete(job["pending_key"])
+            h.put(name, {**job, "state": "SUPERSEDED"})
+        return await fetch(endpoint, params)
+
+    radar._get.side_effect = supersede
+    await recovery.work(NOW + 10 * MINUTE, seconds=10)
+    assert h.count("analytics-gap-pending:") == 0
+    assert h.items("analytics-gap:")[0][1]["state"] == "SUPERSEDED"
+    assert store.db.execute("SELECT count(*) FROM market_candles").fetchone()[0] == 0
+    await radar.close()
+
+
+async def test_stale_pending_binding_is_retired_without_reopening_terminal_job(store, monkeypatch):
+    radar, recovery, h, _ = seed(store, monkeypatch, 1)
+    key, job = h.items("analytics-gap:")[0]
+    with store.db:
+        h.put(key, {**job, "state": "SUPERSEDED", "next_attempt_ms": NOW + 20 * MINUTE})
+    await recovery.work(NOW + 10 * MINUTE)
+    radar._get.assert_not_awaited()
+    assert h.count("analytics-gap-pending:") == 0 and h.get(key)["state"] == "SUPERSEDED"
+    await radar.close()
+
+
+def test_repack_finishes_captured_range_despite_new_writes_and_keeps_progress(store):
+    enable(store.db)
+    store.bounded = True
+    original = encode({"metrics": {"price_return_pct": -0.0}, "source": "retained"})
+    with store.db:
+        for i in range(8):
+            store.db.execute(
+                "INSERT INTO runtime VALUES (?,?)", (f"radar:v1:fixture:{i}", pack_binary_v2(original))
+            )
+    first = work(store, NOW, batch=1, seconds=1)
+    assert not first["records_complete"]
+    upper = first["records_upper"]
+    with closing(Store(store.path, store.owner_id)) as reopened:
+        for i in range(30):
+            with reopened.db:
+                History(reopened).put(f"zzz-new:{i:04}", {"new": i})
+            state = work(reopened, NOW + i, batch=1, seconds=1)
+            assert state["records_upper"] == upper and state["records"] >= first["records"]
+            if state["state"] == "COMPLETE":
+                break
+        assert state["state"] == "COMPLETE" and state["records"] == 8
+        assert [encode(reopened.get_runtime(f"radar:v1:fixture:{i}")) for i in range(8)] == [original] * 8
+        assert History(reopened).get(f"zzz-new:{i:04}") == {"new": i}
+
+
+def test_repack_validates_typed_envelopes_without_recompressing_them(store):
+    enable(store.db)
+    store.bounded = True
+    raw = encode({"source_inputs": [], "settings_revision": 1, "metrics": {"price_return_pct": 1.25}})
+    packed = pack_binary(raw)
+    assert packed.startswith(TYPED_MAGIC)
+    with store.db:
+        store.db.execute("INSERT INTO runtime VALUES (?,?)", ("radar:v1:fixture", packed))
+    with patch("cryptowatcher.record_codec.pack_binary", side_effect=AssertionError("Recompressed target")):
+        assert work(store, NOW, seconds=1)["state"] == "COMPLETE"
+    assert (
+        store.db.execute("SELECT payload_json FROM runtime WHERE key='radar:v1:fixture'").fetchone()[0]
+        == packed
+    )
+    with store.db:
+        store.db.execute("DELETE FROM runtime WHERE key='storage_repack'")
+        store.db.execute("UPDATE runtime SET payload_json=? WHERE key='radar:v1:fixture'", (packed[:-1],))
+    with pytest.raises(StateError):
+        work(store, NOW, seconds=1)
+    assert store.get_runtime("storage_repack") is None
+
+
+async def test_maintenance_and_heartbeat_continue_while_analytics_is_waiting(
+    store, infrastructure, monkeypatch
+):
+    radar, _, h, _ = seed(store, monkeypatch, 3)
+    controller = Controller(infrastructure, store, radar)
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def slow_outcomes(clock):
+        entered.set()
+        await release.wait()
+        return 0
+
+    monkeypatch.setattr(controller.outcomes, "async_work", slow_outcomes)
+    with patch("cryptowatcher.bot.ComparisonWorker.async_work", new=AsyncMock(return_value=0)):
+        task = asyncio.create_task(controller.analytics_job(None))
+        await entered.wait()
+        try:
+            await controller.repack_job(None)
+            await controller.backfill_job(None)
+            await controller.heartbeat(None)
+            assert not task.done() and controller.analytics_lock.locked()
+            assert h.count("analytics-gap-pending:") == 0
+            assert store.get_runtime("repack_worker")["state"] == "OK"
+            assert store.get_runtime("heartbeat")["components_healthy"]
+        finally:
+            release.set()
+            await task
+    app = application(controller)
+    callbacks = {job.callback for job in app.job_queue.jobs()}
+    assert {controller.repack_job, controller.backfill_job, controller.analytics_job} <= callbacks
+    await radar.close()

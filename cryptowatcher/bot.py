@@ -153,6 +153,8 @@ class Controller:
         self.retention = Retention(store)
         self.digest = Digest(store, infrastructure.delivery_chat_id)
         self.analytics_lock = asyncio.Lock()
+        self.repack_lock = asyncio.Lock()
+        self.recovery_lock = asyncio.Lock()
         self.enrichment = Enrichment(store, market) if isinstance(market, BybitRadar) else None
         self.engine = (
             EventEngine(
@@ -842,11 +844,8 @@ class Controller:
                 processed_comparisons = await ComparisonWorker(self.store).async_work(self.market.server_now)
                 self.retention.work(now)
                 from .storage_meter import sample
-                from .storage_repack import async_work as repack
 
-                await repack(self.store, now)
                 sample(self.store, now)
-                await self.recovery.work(now)
                 self.store.put_runtime(
                     "analytics",
                     {
@@ -862,6 +861,44 @@ class Controller:
                     "analytics", {"state": "FAILED", "error_class": type(exc).__name__, "at_ms": now}
                 )
                 logger.error("Analytics worker failure: %s", type(exc).__name__)
+
+    async def repack_job(self, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not isinstance(self.market, BybitRadar) or self.repack_lock.locked():
+            return
+        now = self.market.server_now()
+        if now <= 0:
+            return
+        from .storage_repack import async_work
+
+        async with self.repack_lock:
+            try:
+                await async_work(self.store, now)
+                self.store.put_runtime("repack_worker", {"state": "OK", "at_ms": self.market.server_now()})
+            except Exception as exc:
+                self.store.put_runtime(
+                    "repack_worker",
+                    {"state": "FAILED", "error_class": type(exc).__name__, "at_ms": now},
+                )
+                logger.error("Repack worker failure: %s", type(exc).__name__)
+
+    async def backfill_job(self, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if self.recovery is None or not isinstance(self.market, BybitRadar) or self.recovery_lock.locked():
+            return
+        now = self.market.server_now()
+        if now <= 0:
+            return
+        async with self.recovery_lock:
+            try:
+                await self.recovery.work(now)
+                self.store.put_runtime(
+                    "analytics_recovery_worker", {"state": "OK", "at_ms": self.market.server_now()}
+                )
+            except Exception as exc:
+                self.store.put_runtime(
+                    "analytics_recovery_worker",
+                    {"state": "FAILED", "error_class": type(exc).__name__, "at_ms": now},
+                )
+                logger.error("Backfill worker failure: %s", type(exc).__name__)
 
     async def enrichment_job(self, context: ContextTypes.DEFAULT_TYPE) -> None:
         if self.enrichment is None or not isinstance(self.market, BybitRadar):
@@ -940,6 +977,12 @@ def application(controller: Controller) -> Application[Any, Any, Any, Any, Any, 
     app.job_queue.run_repeating(controller.heartbeat, interval=20, first=1)
     app.job_queue.run_repeating(controller.deliver, interval=2, first=2)
     app.job_queue.run_repeating(controller.analytics_job, interval=5, first=5)
+    app.job_queue.run_repeating(
+        controller.repack_job, interval=1, first=3, job_kwargs={"max_instances": 1, "coalesce": True}
+    )
+    app.job_queue.run_repeating(
+        controller.backfill_job, interval=1, first=4, job_kwargs={"max_instances": 1, "coalesce": True}
+    )
     app.job_queue.run_repeating(controller.enrichment_job, interval=2, first=6)
     app.job_queue.run_repeating(controller.agent_job, interval=2, first=3)
     return app

@@ -347,3 +347,11 @@ boundary ledger/indexes; без ожидания агента/Actions и без 
 имеет явные completion/partial/failure states; tests/CD PASS не означают capacity PASS.
 Новые codec/batching выбираются после измерения ожидаемого эффекта. Сокращение
 retention, coverage, точности или возможностей аналитики требует решения владельца.
+
+Уточнение по поручению владельца17Oct2026: backfill/repack не должны зависеть от
+завершения долгого analytics cycle; обработка ограничена, уступает ingestion и
+Telegram, сохраняет retry/cursor/restart и исходные данные. Repack завершается на
+зафиксированной границе накопленного; новые compact writes не продлевают его
+бесконечно. После фактического завершения bootstrap/backfill/repack automatic finite
+observer начинает24h только на стабильной revision/config/generation. RAM и обычные
+backup/CD<=15min сохраняются. Полный24h итог отделен от завершения реализации.

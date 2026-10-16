@@ -259,6 +259,9 @@ def stable_reason(store: Store) -> list[str]:
         reasons.append("ANALYTICS_RECOVERY_PENDING")
     if store.get_runtime("storage_repack", {}).get("state") != "COMPLETE":
         reasons.append("REPACK")
+    for key in ("repack_worker", "analytics_recovery_worker"):
+        if store.get_runtime(key, {}).get("state") == "FAILED":
+            reasons.append(key.upper() + "_FAILED")
     analytics = store.get_runtime("analytics", {})
     if analytics.get("state") != "OK" or time.time() * 1000 - analytics.get("at_ms", 0) > 60000:
         reasons.append("ANALYTICS_NOT_CURRENT")

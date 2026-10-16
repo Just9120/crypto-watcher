@@ -201,6 +201,12 @@ def test_stable_baseline_distinguishes_referenced_backfill_from_normal_pending_h
         with store.db:
             History(store).delete("analytics-gap-pending:queued")
         assert stable_reason(store) == []
+        with store.db:
+            store.put_runtime("analytics_recovery_worker", {"state": "FAILED"})
+        assert stable_reason(store) == ["ANALYTICS_RECOVERY_WORKER_FAILED"]
+        with store.db:
+            store.put_runtime("analytics_recovery_worker", {"state": "OK"})
+        assert stable_reason(store) == []
 
 
 def test_forecast_attribution_does_not_add_indexes_twice_and_sampling_is_finite():

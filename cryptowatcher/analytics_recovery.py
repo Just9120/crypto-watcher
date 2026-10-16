@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from dataclasses import asdict
@@ -122,17 +123,44 @@ class AnalyticsRecovery:
         ).fetchone()
         return row[0] if row else None
 
-    async def work(self, now: int) -> None:
+    async def work(self, now: int, batch: int = 32, seconds: float = 1) -> None:
+        """Drain due work independently of expensive outcome/comparator cycles.
+
+        Requests still pass through the radar's shared rate/concurrency limiter.
+        Every page commits before yielding; cancellation never consumes a job.
+        """
+        deadline = time.monotonic() + seconds
         # Retire already satisfied/obsolete jobs even while live bootstrap owns
         # the REST budget. Their pending index is not useful historical evidence.
         if self.store.bounded:
             await self.retire_satisfied(now)
+        for _ in range(batch):
+            if time.monotonic() >= deadline:
+                break
+            # Recheck live priority between pages, not just at batch admission.
+            if any(v[0] < 20 for v in self.market._pending.values()) or self.market._working:
+                break
+            due = self.history.items("analytics-gap-pending:", 1)
+            if not due:
+                break
+            job = self.history.get("analytics-gap:" + due[0][1]["id"])
+            current = max(now, self.market.server_now())
+            if job is not None and job["state"] in ("PENDING", "RETRY") and job["next_attempt_ms"] > current:
+                break
+            await self.one(current)
+            await asyncio.sleep(0)
+
+    async def one(self, now: int) -> None:
         # Live gaps and bootstrap keep priority over historical analytics in the same REST budget.
         if any(v[0] < 20 for v in self.market._pending.values()) or self.market._working:
             return
         for pending, binding in self.history.items("analytics-gap-pending:", 1):
             job = self.history.get("analytics-gap:" + binding["id"])
-            if job is None:
+            if (
+                job is None
+                or job["state"] in ("COMPLETE", "SUPERSEDED", "EXPIRED_RETENTION_INCOMPLETE")
+                or job.get("pending_key") != pending
+            ):
                 with self.store.db:
                     self.history.delete(pending)
                 continue
@@ -161,6 +189,19 @@ class AnalyticsRecovery:
                         "end": job["cursor_end"] - 1,
                     },
                 )
+                # A live calculation can supersede/extend this job during I/O.
+                # Never resurrect its pending index or overwrite a newer cursor.
+                if self.history.get("analytics-gap:" + job["id"]) != job:
+                    return
+                if (
+                    self.store.bounded
+                    and self.owner_deadline(
+                        job["stream"], job["start"], job["end"], max(now, self.market.server_now())
+                    )
+                    is None
+                ):
+                    self.finish_unowned(job, pending, now)
+                    return
                 candles = sorted(
                     (
                         Candle.parse(
@@ -217,6 +258,8 @@ class AnalyticsRecovery:
                     self.history.put("analytics-gap:" + job["id"], job)
 
             except (MarketError, KeyError, TypeError, ValueError, OverflowError) as exc:
+                if self.history.get("analytics-gap:" + job["id"]) != job:
+                    return
                 job.update(
                     state="RETRY",
                     attempts=job["attempts"] + 1,
@@ -250,8 +293,6 @@ class AnalyticsRecovery:
             self.history.put("analytics-gap:" + job["id"], job)
 
     async def retire_satisfied(self, now: int, batch: int = 64) -> None:
-        import asyncio
-
         cursor = self.history.get("recovery-retire-cursor", "")
         prefix = "radar:v1:analytics-gap-pending:"
         rows = self.store.db.execute(
