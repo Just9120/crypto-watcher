@@ -1,7 +1,8 @@
 import asyncio
 import time
 from contextlib import closing
-from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -9,7 +10,7 @@ from cryptowatcher.analytics_recovery import AnalyticsRecovery
 from cryptowatcher.bot import Controller, application
 from cryptowatcher.events import History
 from cryptowatcher.ingestion import BybitRadar
-from cryptowatcher.market import MarketError
+from cryptowatcher.market import MarketError, RadarResult
 from cryptowatcher.market_storage import enable
 from cryptowatcher.record_codec import TYPED_MAGIC, pack_binary, pack_binary_v2
 from cryptowatcher.storage import StateError, Store, encode
@@ -289,6 +290,33 @@ async def test_usable_degraded_poll_does_not_starve_maintenance(store, infrastru
             "last_poll_status", {"state": "DEGRADED", "at": time.time(), "available": 0, "requested": 10}
         )
     assert not controller.maintenance_ready()
+    await radar.close()
+
+
+async def test_warmup_refreshes_cached_readiness_before_normal_poll_and_stops(
+    store, infrastructure, monkeypatch
+):
+    radar, _, _, _ = seed(store, monkeypatch, 0)
+    controller = Controller(infrastructure, store, radar)
+    before = store.snapshot()
+    clock = [time.time()]
+    monkeypatch.setattr("cryptowatcher.bot.time.time", lambda: clock[0])
+    radar.snapshot = AsyncMock(return_value=RadarResult({"spot/BTCUSDT/1m": {}}, {}, 1))
+    radar.delivery_ready = Mock(side_effect=[False, True])
+    context = SimpleNamespace(bot=SimpleNamespace(send_message=AsyncMock()))
+    await controller.poll(context)
+    assert store.get_runtime("last_poll_status")["state"] == "WARMING"
+    clock[0] += 6
+    await controller.warmup_poll(context)
+    assert radar.snapshot.await_count == 2 and store.get_runtime("last_poll_status")["state"] == "OK"
+    assert controller.first_ready_poll
+    clock[0] += 6
+    await controller.warmup_poll(context)
+    await controller.poll(context)
+    assert radar.snapshot.await_count == 2  # Normal60s owner cadence is unchanged.
+    assert store.snapshot() == before
+    radar._get.assert_not_awaited()
+    context.bot.send_message.assert_not_awaited()
     await radar.close()
 
 

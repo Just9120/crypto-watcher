@@ -129,6 +129,10 @@ bootstrap/recovery/blocked queue; старый сохраненный OK не р
 Production repack использует один40ms slice/1s tick, без восьми fsync bursts в секунду.
 Фазы records/decisions/expiry/quality имеют один deadline и сохраняют очередность
 первого хода. Slow SQL может превысить time check, но не вытесняет всегда одну фазу.
+Readiness в начале процесса обновляется отдельным5s job до первого OK/usable
+DEGRADED poll; затем job no-op. BybitRadar.snapshot читает shared cached observations,
+не выполняет REST и не публикует events. Normal owner poll cadence и legacy REST
+adapter не ускоряются; first-ready marker не переносится между restart.
 
 Storage extension3 сохраняет physical schema2 и public contracts. Legacy expiry/quality
 rows остаются видимыми через compatibility views до bounded in-place drain. Internal
