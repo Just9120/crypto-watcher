@@ -809,3 +809,32 @@ Unfinished candidate имеет user_version0. Итоговый readback охв�
 private tables и full integrity/CHECK; ledger сохраняется для Evidence. Это не
 promotion и не заменяет target ordinary backup/CD900s qualification. Каждый запуск
 ограничен900s; interrupted progress сохраняется без объявления partial copy READY.
+
+### Native snapshot transport для private PC
+
+[Native launcher](../../scripts/native_snapshot.py) использует те же exact binding,
+root manifests, preflight/live-feed guard и independent RuntimeMaxSec900 cleanup.
+В `tools/sqlite3_rsync` нужен executable3.54.0 с pinned SHA256 из
+[bridge](../../scripts/native_snapshot_bridge.py); произвольная версия отклоняется.
+DB и WAL остаются на read-only mount. Единственное отдельное source RW mount —
+существующий SHM для SQLite read-lock coordination; application tables не пишутся.
+Worker UID10001, CPU1/4GiB/no-swap; temporary native hash table также входит в4GiB.
+Тот же target lock исключает deployment, production не останавливается.
+
+Windows команда из root в locked environment:
+`python -m scripts.receive_native_snapshot CONFIG ROOT WORKING_COPY EXECUTABLE RECEIPT_DIR --baseline-sha256 QUALIFIED_RAW_SHA256`.
+Все paths absolute/private; ROOT — подготовленный root capsule на Contabo.
+WORKING_COPY — только disposable closed replica при сохранённом original recovery.
+Receiver проверяет baseline hash до записи и использует exclusive lease. Receiver,
+SQLite child и SSH делят прежний total4GiB Job и CPU1. Общий deadline900s не
+сбрасывается между hash/transfer/readback; нехватка disk reserve1.5GiB прекращает
+только helper. Native transaction сохраняет прежний replica point при interruption;
+partial run не принимается за актуальный snapshot. Состояние сначала перечитывается.
+
+Native exit0 недостаточен: bridge требует полный v2 BEGIN/pages/COMMIT/END,
+валидную compressed frame, совпадающий transcript SHA256/encoded counts, exact
+source receipt и healthy unchanged runtime. PC readback проверяет closed files,
+raw SHA256/extent, owner/schema и journal watermark из самой captured point.
+Результат только CAPTURED_SNAPSHOT_NOT_QUALIFIED. Full SQL/history comparison,
+полный newer tail, ordinary backup/CD≤900s и reviewed production promotion остаются
+обязательными; этот transport не выполняет замену рабочей базы и не расширяет budgets.

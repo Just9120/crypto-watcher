@@ -19,8 +19,10 @@ from pathlib import Path, PurePosixPath
 _JOB = None
 
 
-def windows_limits() -> None:
+def windows_limits(*, processes: int = 2) -> None:
     global _JOB
+    if processes not in (2, 3):
+        raise RuntimeError("Reviewed receiver process bound required")
     if sys.platform != "win32":
         raise RuntimeError("This receiver requires the reviewed Windows host")
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -77,7 +79,7 @@ def windows_limits() -> None:
     job = kernel.CreateJobObjectW(None, None)
     settings = Extended()
     settings.basic.flags = 0x100 | 0x200 | 0x2000 | 0x8
-    settings.basic.active = 2
+    settings.basic.active = processes
     settings.process_memory = settings.job_memory = 4 * 1024**3
     process = kernel.GetCurrentProcess()
     if (
@@ -92,6 +94,7 @@ def windows_limits() -> None:
     if (
         not kernel.QueryInformationJobObject(job, 9, ctypes.byref(checked), ctypes.sizeof(checked), None)
         or not kernel.GetProcessAffinityMask(process, ctypes.byref(mask), ctypes.byref(total))
+        or checked.basic.active != processes
         or checked.job_memory != 4 * 1024**3
         or mask.value != 1
     ):

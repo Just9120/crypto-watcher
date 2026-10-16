@@ -188,6 +188,33 @@ fresh-feed preflight и independent guard прекращают только owne
 kernel4GiB/no-swap; это не увеличение resident RAM. Новый real fit ещё не доказан.
 Local183 affected regressions/canonical quality50 modules PASS, fresh CI REQUIRED.
 
+Actual protected attempt16Oct07:00–07:04UTC, code31a03cb / required CI38864127165
+PASS: helper остановлен guard после двух failed live-feed samples, полного footer
+нет; source point не принята. Unit dead, receiver exit1. Readback07:10:12UTC:
+тот же container/image healthy, components true, ingestion age4.9s и1208/1208 OK,
+Telegram DELIVERED. Working DB и app history не менялись; этот scan не повторять
+без изменения подхода. Причина замедления mmap/потери freshness не доказана.
+
+Owner16Oct разрешил однократное продление validity до12:23MSK. Actual07:19:08UTC
+PASS: epoch6c5a6dde…/expires1792142596; изменено только expires. Last_seq551340,
+keys109912/21,306,649charged bytes до/после одинаковы, bounds500k/128MiB прежние.
+Primary `rehearsals/online-snapshot-ixqi0g1j/journal-window-extension.json`.
+Container не перезапускался; ordinary backup/CD900s и RAM4GiB сохранены.
+
+Альтернативный native transport подготовлен в [native_snapshot.py](../scripts/native_snapshot.py)
+и [receive_native_snapshot.py](../scripts/receive_native_snapshot.py). Pinned SQLite
+rsync3.54.0 выполняет page comparison в native code; compressed full-duplex поток
+не создаёт второй большой spool на VPS. DB/WAL mount read-only; существующий SHM
+доступен только для обычной SQLite read coordination. Это не разрешает DB writes.
+Полнота BEGIN/pages/COMMIT/END проверяется отдельно от exit0; origin transcript
+SHA256 и encoded counts должны совпасть на обеих сторонах. Full SQL/history CHECK,
+newer tail и final900s qualification не заменены transport proof. Managed watchdog,
+target lock, CPU1/total4GiB/no-swap и live-feed guard сохраняются. На ПК три
+процесса делят один прежний4GiB Job/CPU1. Новый полученный source ещё не qualified.
+Local19 новых regressions PASS; small native local full/incremental и remote
+read-only WAL/SHM + compressed full SQL fixture PASS. Real current-data/native fit
+и fresh required CI дополнения PENDING; production native capture ещё NOT_RUN.
+
 Incremental PC refresh не повторяет старую conversion: полный frozen source scan
 сравнивается с verified row manifest; deletions предшествуют upserts. Attached
 DELETE-journal ledger атомарно сохраняет candidate writes и checkpoint через SQLite
