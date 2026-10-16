@@ -56,7 +56,7 @@ def fixture(tmp_path):
         owner=233382575,
         maximum=16 * 1024**2,
     )
-    with sqlite3.connect(source) as db:
+    with closing(sqlite3.connect(source)) as db, db:
         db.execute("INSERT INTO runtime VALUES('new','123')")
         db.execute("UPDATE runtime SET payload_json='456' WHERE key='transport:immutable'")
         db.execute("UPDATE delivery_preferences SET enabled=0")
@@ -100,7 +100,7 @@ def test_committed_progress_survives_interruption_and_resumes(tmp_path, stage):
 
 def test_replaced_keys_and_reused_source_rowids_are_deleted_before_upsert(tmp_path):
     opts = fixture(tmp_path)
-    with sqlite3.connect(opts["source"]) as db:
+    with closing(sqlite3.connect(opts["source"])) as db, db:
         old = db.execute("SELECT rowid FROM runtime WHERE key='transport:immutable'").fetchone()[0]
         db.execute("DELETE FROM runtime WHERE key='transport:immutable'")
         db.execute("INSERT INTO runtime(rowid,key,payload_json) VALUES(?, 'moved', '999')", (old,))
@@ -126,7 +126,7 @@ def test_unrelated_candidate_corruption_is_detected_on_complete_readback(tmp_pat
 
     with pytest.raises(RuntimeError):
         refresh.refresh(**opts, progress=interrupt)
-    with sqlite3.connect(opts["candidate"]) as db:
+    with closing(sqlite3.connect(opts["candidate"])) as db, db:
         key = db.execute("SELECT key FROM runtime WHERE key LIKE 'historyblob:%' LIMIT 1").fetchone()[0]
         db.execute("UPDATE runtime SET payload_json='{}' WHERE key=?", (key,))
     with pytest.raises(StateError, match="row hash"):
@@ -158,3 +158,14 @@ def test_uncommitted_candidate_write_and_ledger_progress_roll_back_together(tmp_
         assert db.execute("SELECT count(*) FROM upserts WHERE target_id IS NOT NULL").fetchone() == (0,)
     monkeypatch.setattr(refresh, "converted", original)
     assert refresh.refresh(**opts, resume=True)["state"] == "QUALIFIED_REFRESHED_SNAPSHOT"
+
+
+def test_source_with_uncheckpointed_wal_is_refused_even_if_main_file_hash_matches(tmp_path):
+    opts = fixture(tmp_path)
+    with closing(sqlite3.connect(opts["source"])) as db:
+        db.execute("PRAGMA journal_mode=WAL")
+        db.execute("INSERT INTO runtime VALUES('not-in-main','true')")
+        db.commit()
+        opts["source_sha256"] = hashlib.sha256(opts["source"].read_bytes()).hexdigest()
+        with pytest.raises(StateError, match="without sidecars"):
+            refresh.refresh(**opts)

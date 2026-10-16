@@ -186,7 +186,7 @@ Epoch6c5a6dde…/expiry1792135396 сохранён, partial PC bytes не исп
 fresh-feed preflight и independent guard прекращают только owned helper при
 устойчивом failure. Worker использует mmap как virtual address space при прежнем
 kernel4GiB/no-swap; это не увеличение resident RAM. Новый real fit ещё не доказан.
-Local182 affected regressions/canonical quality50 modules PASS, fresh CI REQUIRED.
+Local183 affected regressions/canonical quality50 modules PASS, fresh CI REQUIRED.
 
 Incremental PC refresh не повторяет старую conversion: полный frozen source scan
 сравнивается с verified row manifest; deletions предшествуют upserts. Attached

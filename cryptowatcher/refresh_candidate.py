@@ -120,6 +120,8 @@ def refresh(
             raise StateError("Refresh private path refused")
     if source == candidate or candidate.stat().st_nlink != 1:
         raise StateError("Exclusive disposable candidate required")
+    if any(Path(str(source) + suffix).exists() for suffix in ("-wal", "-shm", "-journal")):
+        raise StateError("Closed frozen source without sidecars required")
     private_disk(candidate.parent)
     ledger = candidate.with_name(candidate.name + ".refresh.sqlite3")
     if ledger.exists() != resume or ledger.is_symlink():
