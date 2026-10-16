@@ -1,4 +1,5 @@
 import asyncio
+import time
 from contextlib import closing
 from unittest.mock import AsyncMock, patch
 
@@ -189,11 +190,36 @@ def test_repack_validates_typed_envelopes_without_recompressing_them(store):
     assert store.get_runtime("storage_repack") is None
 
 
+def test_slow_repack_phase_cannot_starve_later_phases_across_checkpoints(store):
+    enable(store.db)
+    store.bounded = True
+    with store.db:
+        for i in range(8):
+            History(store).put(f"fixture:{i}", {"source": "retained", "metrics": {"v": i}})
+        store.put_runtime("storage_repack", {"next_phase": 1})
+    clock = [0.0]
+
+    def slow_decisions(store, state, batch, deadline):
+        clock[0] += 1  # One SQL operation overruns a40ms slice.
+
+    with (
+        patch("cryptowatcher.storage_repack.time.monotonic", side_effect=lambda: clock[0]),
+        patch("cryptowatcher.storage_repack.decision_heads", side_effect=slow_decisions),
+    ):
+        first = work(store, NOW)
+        assert first["records"] == 0
+        with closing(Store(store.path, store.owner_id)) as reopened:
+            second = work(reopened, NOW + 1)
+            assert second["records"] == 8 and second["records_complete"]
+            assert History(reopened).get("fixture:7") == {"source": "retained", "metrics": {"v": 7}}
+
+
 async def test_maintenance_and_heartbeat_continue_while_analytics_is_waiting(
     store, infrastructure, monkeypatch
 ):
     radar, _, h, _ = seed(store, monkeypatch, 3)
     controller = Controller(infrastructure, store, radar)
+    ready_ingestion(store)
     entered, release = asyncio.Event(), asyncio.Event()
 
     async def slow_outcomes(clock):
@@ -219,4 +245,69 @@ async def test_maintenance_and_heartbeat_continue_while_analytics_is_waiting(
     app = application(controller)
     callbacks = {job.callback for job in app.job_queue.jobs()}
     assert {controller.repack_job, controller.backfill_job, controller.analytics_job} <= callbacks
+    await radar.close()
+
+
+def ready_ingestion(store):
+    value = {
+        "at": time.time(),
+        "bootstrap_pending_streams": 0,
+        "blocked_streams": 0,
+        "recovery_pending": 0,
+        "recovery_working": 0,
+    }
+    with store.db:
+        store.put_runtime("ingestion", value)
+        store.put_runtime("last_poll_status", {"state": "OK", "at": time.time()})
+    return value
+
+
+@pytest.mark.parametrize(
+    "busy",
+    [
+        "bootstrap_pending_streams",
+        "blocked_streams",
+        "recovery_pending",
+        "recovery_working",
+        "stale",
+        "warming",
+        "prior_runtime_poll",
+    ],
+)
+async def test_maintenance_yields_disk_to_startup_and_live_recovery(store, infrastructure, monkeypatch, busy):
+    radar, _, _, _ = seed(store, monkeypatch, 1)
+    controller = Controller(infrastructure, store, radar)
+    ingestion = ready_ingestion(store)
+    if busy == "stale":
+        ingestion["at"] -= 31
+    elif busy not in ("warming", "prior_runtime_poll"):
+        ingestion[busy] = 1
+    with store.db:
+        store.put_runtime("ingestion", ingestion)
+        store.put_runtime(
+            "last_poll_status",
+            {
+                "state": "WARMING" if busy == "warming" else "OK",
+                "at": controller.maintenance_started_at - 1 if busy == "prior_runtime_poll" else time.time(),
+            },
+        )
+    before = store.db.total_changes
+    with (
+        patch("cryptowatcher.storage_repack.async_work", new=AsyncMock()) as repack,
+        patch.object(controller.recovery, "work", new=AsyncMock()) as backfill,
+    ):
+        await controller.repack_job(None)
+        await controller.backfill_job(None)
+        repack.assert_not_awaited()
+        backfill.assert_not_awaited()
+    assert store.db.total_changes == before
+    ready_ingestion(store)
+    with (
+        patch("cryptowatcher.storage_repack.async_work", new=AsyncMock()) as repack,
+        patch.object(controller.recovery, "work", new=AsyncMock()) as backfill,
+    ):
+        await controller.repack_job(None)
+        await controller.backfill_job(None)
+        repack.assert_awaited_once_with(store, radar.server_now(), slices=1)
+        backfill.assert_awaited_once()
     await radar.close()
