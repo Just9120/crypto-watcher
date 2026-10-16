@@ -154,3 +154,46 @@ def test_unverified_bundle_or_existing_record_never_invokes_transport(tmp_path, 
         deliver(tmp_path, tmp_path, REVISION, RUN)
     assert (tmp_path / "deployment.json").read_bytes() == before
     call.assert_not_called()
+
+
+def test_reset_delivery_requires_private_postcheck_and_exact_discard_scope():
+    from scripts.reset_delivery import POLICY
+
+    proof = {
+        "state": "PASS",
+        "integrity": "PASS",
+        "private_restore": "PASS",
+        "backups_and_experiments": "NOT_TOUCHED",
+        "owner_id": 233382575,
+        "generation": {"id": "new-period"},
+        "private_source_sha256": "1" * 64,
+        "private_fresh_sha256": "2" * 64,
+        "private_recovery_sha256": "3" * 64,
+    }
+    value = success(
+        backup_validation={},
+        delivery_policy=POLICY,
+        reset_proof=proof,
+        reset_promoted=True,
+        reset_old_working_files_removed=2,
+        reset_permit_tree="d" * 40,
+        reset_private_post_check={"state": "PASS"},
+    )
+
+    def checked(v):
+        return delivery_result(
+            CompletedProcess([], 0, json.dumps(v).encode(), b""),
+            revision=REVISION,
+            digest=DIGEST,
+            build_run=RUN,
+        )[1]
+
+    assert checked(value) == 0
+    for updates in (
+        {"reset_private_post_check": None},
+        {"reset_promoted": False},
+        {"reset_old_working_files_removed": 5},
+        {"reset_proof": {**proof, "owner_id": 1}},
+        {"reset_proof": {**proof, "generation": None}},
+    ):
+        assert checked({**value, **updates}) != 0

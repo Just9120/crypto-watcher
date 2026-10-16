@@ -193,6 +193,10 @@ class BoundedRetention:
                     "SELECT key FROM market_lifetimes WHERE event_id=?", (eid,)
                 ).fetchall()
                 for item in owned:
+                    raw = store.get_runtime(item[0], {})
+                    state = raw.get("state") if isinstance(raw, dict) else None
+                    if state in ("PENDING", "RETRY", "IN_FLIGHT", "BLOCKED", "INVALID_SOURCE", "INCOMPLETE"):
+                        self._terminal(item[0][len(PREFIX) :].split(":", 1)[0], state)
                     remove(store, item[0])
                     removed += 1
                 remove(store, row[0])

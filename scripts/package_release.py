@@ -58,6 +58,7 @@ def main() -> None:
         "image_archive_sha256": sha256(archive),
         "compose_sha256": sha256(output / "docker-compose.yml"),
         "database_schema": 1,
+        "supported_database_schemas": [1, 2],
         "migration_class": "NONE",
         "architecture": inspection["Architecture"],
     }

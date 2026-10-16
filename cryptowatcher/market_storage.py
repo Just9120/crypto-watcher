@@ -217,11 +217,11 @@ def restore_window(db: sqlite3.Connection, reference: dict[str, Any]) -> bytes:
         set(reference) != {"mode", "stream", "points", "sha256"}
         or type(reference["stream"]) is not int
         or not isinstance(reference["points"], str)
-        or len(reference["points"]) > 65536
+        or len(reference["points"]) > 4 * 1024 * 1024
     ):
         raise ValueError("Invalid source window reference")
-    points = decoded(base64.b64decode(reference["points"], validate=True), 131072)
-    if not isinstance(points, list) or not 0 < len(points) <= 4096:
+    points = decoded(base64.b64decode(reference["points"], validate=True), 2 * 1024 * 1024)
+    if not isinstance(points, list) or not 0 < len(points) <= 65536:
         raise ValueError("Invalid source window coordinates")
     candles = []
     for point in points:

@@ -40,6 +40,7 @@ def snapshot(store: Store, seconds: float = 3) -> dict[str, Any]:
         "storage": bounded(lambda: report(store)),
         "history_generation": store.get_runtime("history_generation", {"state": "LEGACY"}),
         "database": {
+            "schema": store.db.execute("PRAGMA user_version").fetchone()[0],
             "snapshot_bytes": store.db.execute("PRAGMA page_count").fetchone()[0]
             * store.db.execute("PRAGMA page_size").fetchone()[0],
         },

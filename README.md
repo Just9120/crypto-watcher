@@ -12,6 +12,7 @@ Radar обрабатывает широкий metadata/liquidity universe обо
 - [Runtime boundaries](docs/architecture.md)
 - [Advisory agent contract, configuration и recovery](docs/runbooks/agent-delivery.md)
 - [CI/CD, VPS target, первая поставка и recovery](docs/runbooks/delivery.md)
+- [Хранение, routine disk backup и разовый reset](docs/runbooks/bounded-storage-reset.md)
 - [Исторический tooling: конвертация qualified history backup](docs/runbooks/delivery.md#изолированная-конвертация-legacy-history-backup)
 - [Исторический tooling: compact snapshot](docs/runbooks/delivery.md#read-only-измерение-compact-current-dataset)
 - [Repository procedures](AGENTS.md) и [CI/CD configuration contract](ci-cd-rules.md)
@@ -149,9 +150,9 @@ Production secrets не входят в image/context/logs. SQLite migration и 
 
 Metadata refresh10min, liquidity refresh5min, REST budget5req/s/concurrency4, heartbeat20s, reconnect1–60s с jitter. Spot discovery не имеет pagination; linear проходит весь cursor. Eligibility учитывает Trading/USDT/settlement/perpetual/prelisting, известные crypto types и versioned tokenized-gold exclusions; unknown special types quarantined. Ни fixed Top100, ни symbol suffix не определяют eligible universe.
 
-Native closed candles сохраняются в общей SQLite, memory window≤256 на active stream. Bootstrap получает256 closed bars; gaps приоритетно восстанавливают текущий window, затем older missing history постранично без live alerts. Cursor переживает restart; optional historical work не опережает current recovery. Initial bootstrap progressive: status показывает actual available/requested и причины ограничений. CLI diagnostics включает metadata counts/quarantine/acks/TF/buffers/pending/gaps. Новые subscribers проверяются только по validated metadata/liquidity.
+Native closed candles сохраняются в общей SQLite, memory window≤256 на active stream. Schema2 bootstrap получает нужные detector lookbacks (default22), максимум256 closed bars; gaps приоритетно восстанавливают текущий window, затем older missing history постранично без live alerts. Cursor переживает restart; optional historical work не опережает current recovery. Initial bootstrap progressive: status показывает actual available/requested и причины ограничений. CLI diagnostics включает metadata counts/quarantine/acks/TF/buffers/pending/gaps. Новые subscribers проверяются только по validated metadata/liquidity.
 
-Ordinary raw candles хранятся90days; event/outcome/comparator inputs и pending recovery ranges защищены от retention. Events/revisions/settings/context автоматически не удаляются. Перед длительной эксплуатацией capacity/backup housekeeping проверяется по реальным measurements в G6.
+Подробные events/revisions/episodes/outcomes хранятся30d, small-TF candles35d плюс ограниченные зависимости сохраняемых расчетов. До удаления подробностей сохраняются quality summaries12mo с provenance/N/limitations; служебные зависимости имеют конечный срок. Истекшие подробности недоступны и не подменяются агрегатом. Coarse context90/180d применим только при его фактическом использовании; текущие detector/comparator/enrichment paths используют small-TF inputs и snapshots, отдельного coarse source нет.
 
 ## Компактный market layout v2
 
@@ -165,4 +166,4 @@ Ordinary raw candles хранятся90days; event/outcome/comparator inputs и 
 python -m scripts.measure_market_storage --database /absolute/new/fixture.sqlite3 --instruments 5
 ```
 
-Сценарий охватывает оба рынка/4TF/5families, outcomes и служебные записи, controlled expiry и сравнение analytics. Он не измеряет частоту production signals; artifact сохранять отдельно от working DB. Разовый production reset/cutover procedure готовится в текущем PR; пока ее post-checks не пройдены, новая generation не считается поставленной. Старые backup/conversion tools выше остаются историческими, не текущей задачей.
+Сценарий охватывает оба рынка/4TF/5families, outcomes и служебные записи, controlled expiry и сравнение analytics. Он не измеряет частоту production signals; artifact сохранять отдельно от working DB. Разовый production reset/cutover выполняется по [отдельной процедуре](docs/runbooks/bounded-storage-reset.md); пока ее post-checks не пройдены, новая generation не считается поставленной. Старые backup/conversion tools выше остаются историческими, не текущей задачей.

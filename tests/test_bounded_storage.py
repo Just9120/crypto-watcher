@@ -350,3 +350,67 @@ def test_forecast_includes_annual_quality_before_first_retention_pass(store):
     assert quality["model_applied"] is True
     assert quality["projected_logical_bytes"] > 0
     assert value["quality_forecast_model"]["actual_production_measurement"] is False
+
+
+def test_pending_delivery_expires_explicitly_without_retaining_event_or_sources(store):
+    from cryptowatcher.outcomes import DAY, Retention
+
+    bounded(store)
+    observe(store, OutcomeWorker(store))
+    h = History(store)
+    eid = h.events(1)[0]["event_id"]
+    with store.db:
+        h.put("test-pending:delivery", {"state": "RETRY", "event_id": eid, "attempts": 3})
+    Retention(store).work(NOW + 30 * DAY + 1)
+    assert h.get("test-pending:delivery") is None
+    row = store.db.execute("SELECT value FROM market_meta WHERE key='expired_work'").fetchone()
+    assert json_payload(row[0])["test-pending:RETRY->EXPIRED_RETENTION_INCOMPLETE"] == 1
+    Retention(store).work(NOW + 36 * DAY)
+    assert store.db.execute("SELECT count(*) FROM market_candles").fetchone()[0] == 0
+    assert store.db.execute("SELECT sum(n) FROM market_quality").fetchone()[0] > 0
+
+
+def test_bounded_summary_preserves_nonzero_comparator_distributions_and_export(store):
+    import json
+    from contextlib import closing
+
+    from cryptowatcher.analytics import cohorts
+    from cryptowatcher.export import Selection, ndjson
+    from cryptowatcher.outcomes import DAY, Retention
+
+    from .test_export import populate
+
+    bounded(store)
+    store.update(store.snapshot().revision, store.snapshot().settings.changed(outcome_horizons=(5,)))
+    # The export fixture is deliberately minimal; real comparisons carry this causal revision.
+    from unittest.mock import patch
+
+    original = History.version
+
+    def version(h, kind, value):
+        if kind == "comparison":
+            value = {**value, "event_revision": 1}
+        original(h, kind, value)
+
+    with patch.object(History, "version", version):
+        populate(store, 8)
+    h = History(store)
+    with store.db:
+        for _, event in h.items("event-head:"):
+            h.put(
+                f"history:{event['market_observation_ms']:016d}:{event['event_id']}",
+                {"event_id": event["event_id"]},
+            )
+    before = cohorts(store)["cohorts"]
+    assert before[0]["comparator_sample_size"] == 8
+    for _ in range(20):
+        Retention(store).work(NOW + 31 * DAY)
+        if not h.events(1):
+            break
+    assert not h.events(1)
+    assert cohorts(store)["cohorts"] == before
+    with closing(Store(store.path, store.owner_id, readonly=True)) as reader:
+        exported = [json.loads(line) for line in ndjson(reader, Selection())]
+    assert any(v["type"] == "quality_summary" for v in exported)
+    assert not any(v.get("type") == "event" for v in exported)
+    assert "SENTINEL_SECRET_DO_NOT_EXPORT" not in json.dumps(exported)

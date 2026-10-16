@@ -20,6 +20,9 @@ def series(store, days=2):
         Candle.parse([t, 100, 101, 99, 100, 1, 400], "1m", "rest", t + MINUTE, t + MINUTE)
         for t in range(start, NOW + MINUTE, MINUTE)
     ]
+    if store.bounded:
+        Sources(store).put("spot/BTCUSDT/1m", candles)
+        return candles
     with store.db:
         store.db.executemany(
             "INSERT INTO runtime VALUES (?,?)",
@@ -53,9 +56,15 @@ def event(store, family="price"):
     }
 
 
-def test_prior_complete_matching_quartile_nonoverlap_and_frozen_context(tmp_path):
+@pytest.mark.parametrize("bounded", [False, True])
+def test_prior_complete_matching_quartile_nonoverlap_and_frozen_context(tmp_path, bounded):
     store = Store(tmp_path / "state.sqlite", 233382575)
     store.initialize(OwnerSettings())
+    if bounded:
+        from cryptowatcher.market_storage import enable
+
+        enable(store.db)
+        store.bounded = True
     series(store)
     result = comparison_dataset(store, event(store))
     assert result["sample_size"] > 0 and result["sample_size"] <= 20
@@ -75,9 +84,15 @@ def test_prior_complete_matching_quartile_nonoverlap_and_frozen_context(tmp_path
     assert comparison_dataset(store, future_version)["limitations"] == ["FROZEN_DETECTOR_VERSION_UNAVAILABLE"]
 
 
-def test_composite_never_uses_future_liquidity_or_original_event_noise(tmp_path):
+@pytest.mark.parametrize("bounded", [False, True])
+def test_composite_never_uses_future_liquidity_or_original_event_noise(tmp_path, bounded):
     store = Store(tmp_path / "state.sqlite", 233382575)
     store.initialize(OwnerSettings())
+    if bounded:
+        from cryptowatcher.market_storage import enable
+
+        enable(store.db)
+        store.bounded = True
     series(store)
     value = event(store, "composite")
     assert comparison_dataset(store, value)["sample_size"] == 0

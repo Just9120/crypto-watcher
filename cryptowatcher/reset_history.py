@@ -162,13 +162,27 @@ def prepare(
             "candidate_bytes": destination.stat().st_size,
             "elapsed_seconds": round(time.monotonic() - started, 3),
         }
-    with closing(Store(destination, owner, readonly=True)) as reopened:
+    with closing(Store(destination, owner)) as reopened:
         if (
             signature(private_state(reopened)) != receipt["private_fresh_sha256"]
             or reopened.get_runtime("history_generation") != generation
         ):
             raise StateError("Fresh reopen proof failed")
     return receipt
+
+
+def verify_private(database: Path, recovery: Path, owner: int) -> dict[str, Any]:
+    """Post-start readback; only the digest scheduling cursor may advance."""
+    expected = json.loads(recovery.read_bytes())
+    with closing(Store(database, owner, readonly=True)) as store:
+        actual = private_state(store)
+    for value in (expected, actual):
+        pref = value["preferences"][PREFERENCES[0]]
+        if isinstance(pref, dict):
+            pref.pop("next_end_ms", None)
+    if actual != expected:
+        raise StateError("Post-start private configuration mismatch")
+    return {"state": "PASS", "preserved_configuration_sha256": signature(actual)}
 
 
 def main() -> int:

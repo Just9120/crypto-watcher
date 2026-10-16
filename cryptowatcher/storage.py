@@ -430,6 +430,16 @@ class Store:
                         "sqlite_version": str(validation["sqlite_version"]),
                         "apsw_version": str(validation["apsw_version"]),
                     }
+            if validated_hash is None:
+                phase = "HASH"
+                digest = hashlib.sha256()
+                with destination.open("rb") as verified:
+                    for block in iter(lambda: verified.read(1024 * 1024), b""):
+                        if time.monotonic() >= deadline:
+                            raise IntegrityError("TIME_BUDGET_EXCEEDED", "Backup hash time budget exceeded")
+                        digest.update(block)
+                validated_hash = digest.hexdigest()
+                validation_details.update(bytes=destination.stat().st_size, validation_mode="DISK_STREAMING")
         except IntegrityError as exc:
             exc.backup_metrics = metrics()
             raise

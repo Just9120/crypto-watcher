@@ -26,7 +26,7 @@ def run(
             "--cpus=1",
         ]
         if validation
-        else []
+        else ["--memory=512m", "--memory-swap=512m", "--cpus=1"]
     )
     result = subprocess.run(
         [
@@ -364,11 +364,68 @@ print(json.dumps(value))
                 OWNER,
             )
         )["live"]
+        reset = json.loads(
+            run(
+                args.image,
+                directory,
+                "-B",
+                "-m",
+                "cryptowatcher.reset_history",
+                "--source",
+                "/data/store.db",
+                "--candidate",
+                "/data/fresh.db",
+                "--private-recovery",
+                "/data/private.json",
+                "--owner-id",
+                OWNER,
+                "--receipt",
+                "/data/reset.json",
+            )
+        )
+        assert reset["state"] == "PASS" and reset["private_restore"] == "PASS"
+        run(
+            args.image,
+            directory,
+            "-B",
+            "-c",
+            """import json
+from pathlib import Path
+from cryptowatcher.storage import Store
+from cryptowatcher.reset_history import verify_private
+from cryptowatcher.storage_meter import report,measure_indexes
+s=Store(Path('/data/fresh.db'),233382575)
+assert s.bounded and s.snapshot().settings.price_move_min==7 and not s.enabled()
+assert s.muted('BTCUSDT',100) and s.snapshot().settings.custom_pairs==()
+assert verify_private(s.path,Path('/data/private.json'),233382575)['state']=='PASS'
+indexes=measure_indexes(s,5)
+assert indexes['state']=='PASS' and indexes['total_index_bytes']>0
+assert report(s)['working_bytes']<1024*1024
+s.close()
+""",
+        )
+        disk = json.loads(
+            run(
+                args.image,
+                directory,
+                "-m",
+                "cryptowatcher",
+                "backup",
+                "--database",
+                "/data/fresh.db",
+                "--destination",
+                "/data/fresh-backup.db",
+                "--owner-id",
+                OWNER,
+            )
+        )["backup"]
+        assert disk["phase"] == "COMPLETE" and disk["validation_mode"] == "DISK_STREAMING"
+        assert disk["bytes"] > 0 and len(disk["sha256"]) == 64
         source.write_text('{"version":99,"chats":{}}')
         run(args.image, directory, *migration, success=False)
         assert source.read_text() == '{"version":99,"chats":{}}'
     print(
-        "Image non-root / offline migration / full tmpfs and compressed validation / backup hash / isolated history rebuild / restart / liveness: PASS"
+        "Image non-root / offline migration / full validation / backup hash / isolated rebuild / bounded reset and disk backup / restart / liveness: PASS"
     )
 
 

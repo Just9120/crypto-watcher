@@ -84,7 +84,10 @@ class OwnerSettings:
         ):
             raise ConfigError("Invalid outcome_horizons")
         for key in ("detail_retention_days", "candle_retention_days"):
-            if type(getattr(self, key)) is not int or not 1 <= getattr(self, key) <= 365:
+            if (
+                type(getattr(self, key)) is not int
+                or not 1 <= getattr(self, key) <= (2**63 - 1 - 253402300799999) // 86400000
+            ):
                 raise ConfigError("Invalid " + key)
         if (
             self.candle_retention_days < 29

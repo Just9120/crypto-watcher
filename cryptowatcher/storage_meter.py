@@ -247,7 +247,10 @@ def measure_indexes(store: Store, seconds: float = 0.25) -> dict[str, Any]:
             "tables": {r[0]: r[1] for r in rows if schema.get(r[0]) != "index"},
             "indexes": {r[0]: r[1] for r in rows if schema.get(r[0]) == "index"},
             "total_index_bytes": sum(r[1] for r in rows if schema.get(r[0]) == "index"),
-            "limitations": ["Snapshot sizes; do not imply later unchanged indexes"],
+            "limitations": [
+                "Snapshot sizes; do not imply later unchanged indexes",
+                "WITHOUT ROWID primary keys are integrated in table pages",
+            ],
         }
     except sqlite3.OperationalError as exc:
         if getattr(exc, "sqlite_errorcode", None) != sqlite3.SQLITE_INTERRUPT and "dbstat" not in str(exc):

@@ -12,6 +12,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -21,6 +22,11 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+if __package__:
+    from . import reset_delivery
+else:
+    import reset_delivery
+
 APP = Path("/opt/crypto_watcher")
 TARGET = Path("/etc/cryptowatcher/deploy-target.json")
 NEW_WRITE_PERMIT = Path("/etc/cryptowatcher/new-write-permit.json")
@@ -29,6 +35,8 @@ MAX_BUNDLE = 1024 * 1024 * 1024
 MEMBERS = {"manifest.json", "image.tar.gz", "docker-compose.yml"}
 ACTIVE_RECORD: dict[str, Any] | None = None
 ACTIVE_PATH: Path | None = None
+OPERATION_DEADLINE: float | None = None
+HARD_DEADLINE: float | None = None
 
 
 class DeploymentError(RuntimeError):
@@ -133,7 +141,9 @@ def fingerprint(path: Path) -> str:
 
 
 def command_arguments(command: str) -> tuple[str, str, int]:
-    match = re.fullmatch(r"cryptowatcher-deploy ([0-9a-f]{40}) ([0-9a-f]{64}) ([1-9][0-9]{0,9})", command)
+    match = re.fullmatch(
+        r"cryptowatcher-deploy ([0-9a-f]{40}) ([0-9a-f]{64}) ([1-9][0-9]{0,9})(?: ([1-9][0-9]{9}))?", command
+    )
     require(match is not None, "Unsupported SSH operation")
     assert match is not None
     size = int(match[3])
@@ -170,7 +180,12 @@ def extract_bundle(bundle: Path, destination: Path) -> dict[str, Any]:
 
 
 def run(args: list[str], *, env: dict[str, str] | None = None, timeout: int = 120) -> str:
-    result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=timeout, check=False)
+    if OPERATION_DEADLINE is not None:
+        remaining = OPERATION_DEADLINE - time.monotonic()
+        require(remaining > 0, "Deployment900s budget exhausted")
+        timeout = min(timeout, max(1, int(remaining)))
+    command = [args[0], "--host", "unix:///var/run/docker.sock", *args[1:]] if args[0] == "docker" else args
+    result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=timeout, check=False)
     # Never echo subprocess stderr or env-file/config contents into Actions logs.
     require(result.returncode == 0, f"Operation failed: {args[0]} exit {result.returncode}")
     return result.stdout.strip()
@@ -474,11 +489,22 @@ def target_config() -> dict[str, Any]:
     return target
 
 
-def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
+def deploy(revision: str, digest: str, size: int, deadline_epoch: int | None = None) -> dict[str, Any]:
     import fcntl
 
-    global ACTIVE_RECORD, ACTIVE_PATH
+    global ACTIVE_RECORD, ACTIVE_PATH, OPERATION_DEADLINE, HARD_DEADLINE
 
+    remaining = min(900, (deadline_epoch or int(time.time() + 900)) - time.time())
+    require(remaining >= 180, "Insufficient remaining delivery budget")
+    HARD_DEADLINE = time.monotonic() + remaining
+    OPERATION_DEADLINE = HARD_DEADLINE - 30
+    if hasattr(signal, "setitimer"):
+
+        def expired(signum: int, frame: Any) -> None:
+            raise DeploymentError("Deployment wall-clock budget exhausted")
+
+        signal.signal(signal.SIGALRM, expired)
+        signal.setitimer(signal.ITIMER_REAL, max(1, remaining - 30))
     require(os.geteuid() == 0, "Receiver needs its approved root account")
     target = target_config()
     releases = APP / "releases"
@@ -509,7 +535,16 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
         manifest = extract_bundle(bundle, release)
         require(manifest.get("source_sha") == revision, "Source identity mismatch")
         require(manifest.get("architecture") == target["architecture"], "Target architecture mismatch")
-        permit = new_write_permit(revision)
+        reset_permit = reset_delivery.load_permit(APP, TARGET, revision, run, require)
+        permit = None if reset_permit is not None else new_write_permit(revision)
+        if reset_permit is not None:
+            require(
+                2 in manifest.get("supported_database_schemas", []),
+                "Artifact does not support bounded market layout",
+            )
+            ACTIVE_RECORD.update(
+                delivery_policy=reset_delivery.POLICY, reset_permit_tree=reset_permit["tree_sha"]
+            )
         if permit is not None:
             ACTIVE_RECORD.update(delivery_policy=NEW_WRITE_POLICY, permit_tree=permit["tree_sha"])
         identity = archive_image_identity(release / "image.tar.gz", manifest)
@@ -587,7 +622,17 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
         database_size = (APP / "data/sqlite/cryptowatcher.sqlite3").stat().st_size
         budget = database_timeout(database_size)
         ACTIVE_RECORD.update(database_bytes=database_size, database_timeout_seconds=budget)
-        if permit is not None:
+        if reset_permit is not None:
+            require(
+                OPERATION_DEADLINE - time.monotonic() >= 480,
+                "Insufficient remaining reset/cutover budget",
+            )
+            proof = reset_delivery.prepare(
+                APP, image, reset_permit, run, require, record_phase, ACTIVE_RECORD
+            )
+            backup_name = None
+            ACTIVE_RECORD.update(reset_proof=proof, backup="OLD_TEST_HISTORY_DISCARDED_BY_OWNER_DECISION")
+        elif permit is not None:
             record_phase("BOUNDED_COMPATIBILITY")
             proof = additive_preflight(container_args, release, permit)
             backup_name = None
@@ -616,9 +661,9 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
             "build_run": manifest["build_run"],
             "at": time.time(),
             "previous_image": previous["Image"],
-            "backup": backup_name,
+            "backup": "NOT_RUN_OWNER_DISCARD_TEST_HISTORY" if reset_permit is not None else backup_name,
         }
-        if permit is None:
+        if permit is None and reset_permit is None:
             record.update(
                 backup_validation=proof,
                 state_validation_resources=ACTIVE_RECORD["state_validation_resources"],
@@ -626,6 +671,8 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
             )
         ACTIVE_RECORD.update(record, switch_started=True)
         record_phase("SWITCH")
+        if reset_permit is not None:
+            reset_delivery.promote(APP, reset_permit, require, record_phase, ACTIVE_RECORD)
         run(
             [*compose, "up", "-d", "--no-build", "--pull", "never", "--no-deps", "crypto_watcher"],
             env=environment,
@@ -687,6 +734,30 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
                 os.fsync(output.fileno())
             os.replace(temporary, NEW_WRITE_PERMIT)
             require(json.loads(NEW_WRITE_PERMIT.read_text())["state"] == "CONSUMED", "Permit consume failed")
+        if reset_permit is not None:
+            record_phase("RESET_PRIVATE_POST_CHECK")
+            private = json.loads(
+                run(
+                    [
+                        "docker",
+                        "exec",
+                        "crypto-watcher",
+                        "python",
+                        "-B",
+                        "-c",
+                        "import json; from pathlib import Path; from cryptowatcher.reset_history import verify_private; "
+                        "print(json.dumps(verify_private(Path('/data/sqlite/cryptowatcher.sqlite3'),Path("
+                        + repr(
+                            "/data/sqlite/" + Path(ACTIVE_RECORD["reset_directory"]).name + "/private.json"
+                        )
+                        + "),233382575)))",
+                    ],
+                    timeout=30,
+                )
+            )
+            require(private.get("state") == "PASS", "Private configuration post-check failed")
+            ACTIVE_RECORD["reset_private_post_check"] = private
+            reset_delivery.finish(APP, reset_permit, diagnostics, require, record_phase, ACTIVE_RECORD)
         ACTIVE_RECORD.update(
             state="PASS",
             at=time.time(),
@@ -702,6 +773,8 @@ def deploy(revision: str, digest: str, size: int) -> dict[str, Any]:
 def full_backup_preflight(
     container_args: list[str], before: dict[str, Any], revision: str, budget: int
 ) -> tuple[str, dict[str, Any]]:
+    if before.get("database", {}).get("schema") == 2:
+        return disk_backup_preflight(container_args, before, revision, budget)
     record_phase("CHECK_STATE_INTEGRITY")
     allocation = validation_resources(before.get("database", {}).get("snapshot_bytes"), memory_available())
     ACTIVE_RECORD["state_validation_resources"] = allocation
@@ -779,14 +852,108 @@ def full_backup_preflight(
     return backup_name, proof
 
 
+def disk_backup_preflight(
+    container_args: list[str], before: dict[str, Any], revision: str, budget: int
+) -> tuple[str, dict[str, Any]]:
+    deadline = min(
+        time.monotonic() + min(budget, 900),
+        OPERATION_DEADLINE - 210 if OPERATION_DEADLINE is not None else time.monotonic() + 900,
+    )
+
+    def remaining() -> int:
+        value = int(deadline - time.monotonic())
+        require(value >= 20, "Insufficient disk backup budget")
+        return value
+
+    checks = [
+        *container_args[:-1],
+        "--memory",
+        "4g",
+        "--memory-swap",
+        "4g",
+        "--cpus",
+        "1",
+        container_args[-1],
+    ]
+    record_phase("CHECK_STATE_INTEGRITY_DISK")
+    timeout = remaining()
+    state = json.loads(
+        run(
+            [*checks, "python", "-m", "cryptowatcher", "state-check", "--timeout-seconds", str(timeout - 5)],
+            timeout=timeout,
+        )
+    )
+    receipt = json.loads((APP / "data/sqlite/.g1-migration.json").read_text())
+    require(
+        state.get("schema") == 2
+        and state.get("legacy_sha256") == receipt["legacy_sha256"]
+        and state.get("validation_mode") == "DISK",
+        "Disk source validation failed",
+    )
+    ACTIVE_RECORD["state_validation"] = state
+    size = before["database"]["snapshot_bytes"]
+    require(shutil.disk_usage(APP).free >= size + 1536 * 1024 * 1024, "Insufficient disk backup reserve")
+    name = f"pre-{revision}-{int(time.time())}.sqlite3"
+    ACTIVE_RECORD.update(
+        backup=name,
+        state_validation_resources={
+            "memory_limit_bytes": 4 * 1024**3,
+            "cpus": 1,
+            "validation_mode": "DISK_STREAMING",
+        },
+        backup_validation_resources={
+            "memory_limit_bytes": 4 * 1024**3,
+            "cpus": 1,
+            "validation_mode": "DISK_STREAMING",
+        },
+    )
+    record_phase("BACKUP_AND_VALIDATE_DISK")
+    timeout = remaining()
+    result = json.loads(
+        run(
+            [
+                *checks,
+                "python",
+                "-m",
+                "cryptowatcher",
+                "backup",
+                "--timeout-seconds",
+                str(timeout - 5),
+                "--destination",
+                f"/data/sqlite/backups/{name}",
+            ],
+            timeout=timeout,
+        )
+    )
+    proof = result.get("backup", {})
+    require(
+        result.get("status") == "backup_integrity_ok"
+        and proof.get("phase") == "COMPLETE"
+        and re.fullmatch("[0-9a-f]{64}", str(proof.get("sha256", ""))) is not None,
+        "Disk backup identity/integrity missing",
+    )
+    ACTIVE_RECORD["backup_validation"] = proof
+    return name, proof
+
+
 def main() -> int:
     try:
         revision, digest, size = command_arguments(os.environ.get("SSH_ORIGINAL_COMMAND", ""))
-        print(json.dumps(deploy(revision, digest, size), sort_keys=True))
+        command = os.environ.get("SSH_ORIGINAL_COMMAND", "").split(" ")
+        deadline = int(command[4]) if len(command) == 5 else None
+        print(json.dumps(deploy(revision, digest, size, deadline), sort_keys=True))
         return 0
     except Exception as exc:
         record_phase("FAILED", failure=type(exc).__name__)
         try:
+            if ACTIVE_RECORD is not None:
+                # Recovery of an unchanged old source is a safety action, allowed
+                # after a pre-switch timeout. Never restart it after promotion.
+                global OPERATION_DEADLINE
+                OPERATION_DEADLINE = min(HARD_DEADLINE or time.monotonic() + 30, time.monotonic() + 30)
+                if hasattr(signal, "setitimer"):
+                    signal.setitimer(signal.ITIMER_REAL, max(1, OPERATION_DEADLINE - time.monotonic()))
+                reset_delivery.recover_pre_switch(APP, run, require, ACTIVE_RECORD)
             stop_candidate()
         except Exception as cleanup:
             if ACTIVE_RECORD is not None:
@@ -805,6 +972,9 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
+    finally:
+        if hasattr(signal, "setitimer"):
+            signal.setitimer(signal.ITIMER_REAL, 0)
 
 
 if __name__ == "__main__":
