@@ -259,7 +259,9 @@ def ready_ingestion(store):
     }
     with store.db:
         store.put_runtime("ingestion", value)
-        store.put_runtime("last_poll_status", {"state": "OK", "at": time.time()})
+        store.put_runtime(
+            "last_poll_status", {"state": "OK", "at": time.time(), "available": 1, "requested": 1}
+        )
     return value
 
 
@@ -317,6 +319,40 @@ async def test_warmup_refreshes_cached_readiness_before_normal_poll_and_stops(
     assert store.snapshot() == before
     radar._get.assert_not_awaited()
     context.bot.send_message.assert_not_awaited()
+    await radar.close()
+
+
+async def test_idle_live_recovery_keeps_progress_when_cached_status_returns_to_warming(
+    store, infrastructure, monkeypatch
+):
+    radar, _, h, _ = seed(store, monkeypatch, 1)
+    controller = Controller(infrastructure, store, radar)
+    ready_ingestion(store)
+    assert controller.maintenance_ready()  # Valid ready evidence of this process.
+    with store.db:
+        store.put_runtime(
+            "last_poll_status", {"state": "WARMING", "at": time.time(), "available": 1, "requested": 2}
+        )
+    await controller.repack_job(None)
+    await controller.backfill_job(None)
+    assert h.count("analytics-gap-pending:") == 0
+    assert store.get_runtime("repack_worker")["state"] == "OK"
+    with store.db:
+        store.put_runtime("ingestion", {**store.get_runtime("ingestion"), "recovery_pending": 1})
+    assert not controller.maintenance_ready()  # Actual live work still preempts maintenance.
+    await radar.close()
+
+
+async def test_maintenance_misfires_coalesce_without_parallel_replays(store, infrastructure, monkeypatch):
+    radar, _, _, _ = seed(store, monkeypatch, 0)
+    controller = Controller(infrastructure, store, radar)
+    app = application(controller)
+    selected = {controller.warmup_poll, controller.repack_job, controller.backfill_job}
+    jobs = [j for j in app.job_queue.jobs() if j.callback in selected]
+    assert len(jobs) == 3
+    for job in jobs:
+        assert job.job.max_instances == 1 and job.job.coalesce
+        assert job.job.misfire_grace_time == 30
     await radar.close()
 
 

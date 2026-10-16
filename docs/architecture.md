@@ -133,6 +133,10 @@ Readiness в начале процесса обновляется отдельн
 DEGRADED poll; затем job no-op. BybitRadar.snapshot читает shared cached observations,
 не выполняет REST и не публикует events. Normal owner poll cadence и legacy REST
 adapter не ускоряются; first-ready marker не переносится между restart.
+После first-ready cached UI WARMING больше не останавливает maintenance при idle
+live queues; реальные bootstrap/recovery/blocked состояния по-прежнему приоритетны.
+Новые maintenance/status jobs допускают один coalesced late tick в пределах30s
+и max_instances1, без replay всех пропущенных slots. Freshness при отправке не меняется.
 
 Storage extension3 сохраняет physical schema2 и public contracts. Legacy expiry/quality
 rows остаются видимыми через compatibility views до bounded in-place drain. Internal
