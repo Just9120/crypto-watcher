@@ -95,7 +95,10 @@ Telegram/config writes. Metadata — отдельная root-owned0700 папк�
 Existing directories/status с другим source/schema и symlinks отклоняются.
 
 Sample cadence5min; до старта нужны два последовательных samples без bootstrap/
-ingestion recovery/gaps, с полными ACK, current analytics и COMPLETE repack/admission.
+ingestion recovery/gaps и отдельной analytics-gap-pending queue, с полными ACK,
+current analytics и COMPLETE repack/admission. Analytics queue проверяется одним
+indexed existence lookup с LIMIT1, без count/scan. Нормальные ожидающие наступления
+outcome horizons сами по себе не являются backfill и не блокируют baseline.
 Время завершения bootstrap/repack фиксируется как observed, не выдуманный exact end.
 Ожидание ограничено12h; затем WAIT_LIMIT_REACHED с причинами. После baseline —24h,
 deep scans только на baseline/final. Обычные samples не обходят runtime/quality/indexes.
