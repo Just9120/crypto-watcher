@@ -77,6 +77,66 @@ def radar(store):
     yield instance
 
 
+def test_initial_bucket_windows_are_not_starved_by_an_ongoing_one_minute_gap_queue(radar):
+    buckets = {(market, tf) for market in ("spot", "linear") for tf in TIMEFRAMES}
+    streams = {f"{market}/BTCUSDT/{tf}" for market, tf in buckets}
+    busy = {f"linear/GAP{i}USDT/1m" for i in range(40)}
+    radar.streams = streams | busy | {"spot/HISTORYUSDT/1m"}
+    for stream in sorted(busy):
+        radar.request_recovery(stream, 0)
+    for stream in sorted(streams):
+        radar.request_recovery(stream, 10)
+    radar.request_recovery("spot/HISTORYUSDT/1m", 20)
+    seeded = []
+    for _ in range(8):
+        stream, (priority, _) = radar.next_recovery()
+        radar._pending.pop(stream)
+        bucket = radar.recovery_bucket(stream)
+        seeded.append(bucket)
+        assert priority != 20
+        radar._recovered_buckets.add(bucket)
+        radar._last_market = bucket[0]
+    assert set(seeded) == buckets and len(set(seeded)) == 8
+    assert len(radar._pending) == len(radar.streams) - 8
+    assert radar.next_recovery()[1][0] == 0
+
+
+def test_initial_recovery_workers_do_not_all_claim_the_same_missing_bucket(radar):
+    radar.streams = {
+        f"{market}/{symbol}/{tf}"
+        for market in ("spot", "linear")
+        for symbol in ("BTCUSDT", "ETHUSDT")
+        for tf in TIMEFRAMES
+    }
+    for stream in sorted(radar.streams):
+        radar.request_recovery(stream, 10)
+    claimed = []
+    for _ in range(4):
+        stream, _ = radar.next_recovery()
+        radar._pending.pop(stream)
+        radar._working.add(stream)
+        claimed.append(radar.recovery_bucket(stream))
+    assert len(set(claimed)) == 4
+
+
+@pytest.mark.asyncio
+async def test_failed_initial_window_does_not_mark_bucket_recovered(radar):
+    radar.streams = {"spot/BTCUSDT/1m"}
+    radar.request_recovery("spot/BTCUSDT/1m", 10)
+    radar.restore_current_window = Mock(return_value=False)
+    radar.backfill = AsyncMock(side_effect=MarketError("fixture_failure"))
+    task = asyncio.create_task(radar._worker())
+    try:
+        for _ in range(20):
+            if radar.backfill.called:
+                break
+            await asyncio.sleep(0)
+        assert radar.backfill.called and radar._recovered_buckets == set()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
 async def test_native_interleaved_streams_duplicates_and_no_bootstrap_alert(radar):
     before = await radar.snapshot(OwnerSettings())
     assert len(before.quotes) == 8 and not any(q["live"] for q in before.quotes.values())

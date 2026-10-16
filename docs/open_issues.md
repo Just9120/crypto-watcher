@@ -39,6 +39,11 @@ CI38955487956 PASS766/image, CD38956621801 production PASS330s, full disk backup
 1,234,268,160bytes/copy+integrity43.378s/hash. После поставки hotfix branch
 `codex/capacity-stability-hotfix-20261016`, base `ef5652d99c2fb898fa12ccfd7d5b06c81d211a8f`:
 условие старта observer должно учитывать отдельную analytics recovery queue.
+Hotfix46 merged `dd8bf441e14b07fb84587c855d7bb5f1325b0ff8`, CI38958054568 PASS;
+CD38958643381 POST_CHECK_FAILED после switch (source/image healthy, full gates
+до switch PASS). Observer не запускался. Compatible startup hotfix branch
+`codex/startup-bucket-fairness-20261016`, base `dd8bf441e14b07fb84587c855d7bb5f1325b0ff8`:
+seed каждого market/TF до ordinary gap/bootstrap/history priorities, не пропуск gate.
 
 | Задача / критерий завершения | Статус |
 | --- | --- |
@@ -46,7 +51,7 @@ CI38955487956 PASS766/image, CD38956621801 production PASS330s, full disk backup
 | CAP-02: подтвержденные повторы исправлены с equality/restart/retry/causal evidence; новые codec/batching только после оценки эффекта | CODE READY; decision pointer / ownerless recovery / terminal re-arm / sliced repack tests PASS |
 | CAP-03: репрезентативный controlled-clock полный цикл30/35d/12mo, GC/dependencies/аналитика/plateau | CODE READY;62week fixture и20-comparator/multiple-method boundaries PASS |
 | CAP-04: auto24h после ingestion/bootstrap/repack stability, размер/прирост/data/index/WAL/cleanup; finite sampling, без Actions ожидания | CODE READY; unit/start после applicable CD, actual24h PENDING |
-| CAP-05: validation/self-review/CI/merge/CD<=900s, отчет actual/model/range и оставшиеся причины >20GB | IN_PROGRESS; PR45 CI/CD PASS; stability hotfix CI/CD PENDING |
+| CAP-05: validation/self-review/CI/merge/CD<=900s, отчет actual/model/range и оставшиеся причины >20GB | IN_PROGRESS; PR45 PASS,46 post-check FAIL; startup fairness CI/runtime PENDING |
 
 DoD текущей реализации: measurable ledger и подтвержденные fixes, meaningful tests,
 ordinary gates и post-checks PASS, автоматический конечный observation подготовлен/
@@ -146,7 +151,7 @@ Canonical команды — [README](../README.md#checks); из root repository
 | AC-02-02 Eligibility инструментов | READY | test_universe/test_ingestion/test_bot; universe.py; EVID-04 |
 | AC-02-03 Настраиваемая liquidity | READY | test_universe/test_ingestion/test_bot; universe.py; EVID-04 |
 | AC-02-04 Watchlist по рынкам | READY | test_universe/test_ingestion/test_bot; universe.py; EVID-04 |
-| AC-03-01 WebSocket обоих рынков | READY | test_ingestion/test_sources/test_async_runtime; ingestion.py; EVID-04 |
+| AC-03-01 WebSocket обоих рынков | IN_PROGRESS | F39 startup bucket starvation на runtime46; compatible fairness hotfix local51 PASS, required CI/runtime PENDING |
 | AC-03-02 Одновременные timeframes | READY | test_ingestion/test_sources/test_async_runtime; ingestion.py; EVID-04 |
 | AC-03-03 Закрытые свечи | READY | test_ingestion/test_sources/test_async_runtime; ingestion.py; EVID-04 |
 | AC-03-04 Gaps и recovery | READY | test_ingestion/test_sources/test_async_runtime; ingestion.py; EVID-04 |
@@ -279,7 +284,7 @@ Canonical команды — [README](../README.md#checks); из root repository
 
 | F37 RECOVERY QUEUE | Уже заполненные локально ranges остаются PENDING; analytics_recovery.work не перепроверяет наличие перед REST | P1 | FIX: local completeness/reuse и bounded retirement, сохранить реальные gaps/retries | Read-only16Oct18:48MSK:16/16 checked PENDING ranges complete, attempts0/age48–266min; bounded non-random sample | HIGH / IN_PROGRESS |
 | F38 FORECAST | Валовый оборот временных очередей умножается на30d; общий page factor применяется к годовым numeric facts | P1 | FIX: разные lifetimes/queue occupancy/retained slope и measured format model; не скрывать превышение | storage_meter.report и measured438.2GB; details alone30.1GB encoded30d при текущей частоте | HIGH / IN_PROGRESS |
-| F39 RESTART RECOVERY | Cold in-memory windows вызывают REST bootstrap для всех streams, хотя актуальная полная source history уже сохранена | P1: wide-universe warmup превышает bounded post-check | FIX: local validated restore по одному window с yield, без исторических live observations; реальные gaps сохраняют REST | CD38936336472 POST_CHECK_FAILED после switch; source/full disk backup PASS55.53s; runtime healthy, Telegram DELIVERED, затем оба WS ACK, но bootstrap queue сохранялась | HIGH / IN_PROGRESS; hotfix отe9cc24b |
+| F39 RESTART RECOVERY | Cold windows/recovery priority могут задержать первые окна отдельных market/TF за bounded post-check | P1: wide-universe warmup/CD failure; AC-03-01 | FIX: validated local restore/yield + первые успешные buckets обоих markets/4TF до ordinary priorities; без historical live flood | CD38958643381 POST_CHECK_FAILED;20:08UTC healthy/all ACK, poll WARMING862/1168, referenced backfill25,183; bootstrap/gaps еще выполнялись. Fixture воспроизводит вытеснение bootstrap непрерывной1m gap queue;51 targeted PASS | HIGH / IN_PROGRESS; fairness hotfix CI/runtime PENDING |
 | F40 SUBSCRIPTION BACKLOG | Один linear shard788topics; continuously ready recv может продлевать ACK ожидание после deadline | P1: reconnect/blocked streams при широком universe | FIX: shards<=100topics без потери покрытия; strict15s ACK deadline | Bounded read-only17:23UTC25s: ACK200/788,buffer_overflows22; fake continuous-open stream воспроизводит обход deadline | HIGH / IN_PROGRESS; тот же hotfix |
 | F41 DECISION DUPLICATE | Актуальная decision и immutable revision полностью дублируются;104,860rows на52,430events | P2: лишний payload и writes | FIX: bounded checked pointer на latest immutable revision; отдельный durable repack cursor, public read/retry/restart/expiry unchanged | Exact ledger18:36UTC; sample128heads17,071→3,456bytes до реализации | HIGH / CODE READY; CI/CD PENDING |
 | F42 CAPACITY EVIDENCE | Нет полноценного per-namespace ledger/24h physical deltas; старая annual density синтетическая | P1:20GB не подтверждены | IMPLEMENT: explicit readonly ledger/cardinality/formulas и finite stable24h observation, не менять scope | Actual summaries0; prospective20,684cohort-days/211,000facts, median5; historical110.55GB/model, not daily measurement | HIGH / IN_PROGRESS; observation/result PENDING |
@@ -370,8 +375,16 @@ preserved, full backup43.378s; working1,353,592,216bytes включает113,798
 gate выявлен пропуск отдельной referenced analytics recovery queue: hotfix добавляет
 indexed existence lookup/LIMIT1 без count/scan; нормальные future horizons допустимы.
 
-Next: targeted gate tests/quality, latest required CI/image hotfix, merge и normal
-CD900s, source/private readback, затем finite observer на окончательном artifact.
+Hotfix46/CD38958643381: POST_CHECK_FAILED, после150s нет fresh coverage всех8buckets;
+original failed record сохранен.20:08 runtime healthy/all ACK, poll WARMING862/1168,
+recovery еще не завершено. Worker выбирал priority0 gaps до bootstrap10 без bucket
+seed. Compatible hotfix вводит первые успешные windows8market/TF, без изменения
+REST budgets/coverage/150s post-check/900s CD. Потом прежние priorities0/10/20.
+Working bucket исключен из параллельного seed; failure не отмечает bucket готовым.
+Local51 ingestion/source/async tests и quality PASS; actual delivery PENDING.
+
+Next: self-review/latest required CI/image startup hotfix, merge и normal CD900s,
+source/private readback, затем finite observer на окончательном artifact.
 Observation waits up to12h for two5min stable samples and COMPLETE repack/admission;
 then24h. Sample statuses/partial deep boundary/failure explicit; actual24h PENDING.
 No unrelated branch/worktree cleanup. Backups/experiments сохраняются.
