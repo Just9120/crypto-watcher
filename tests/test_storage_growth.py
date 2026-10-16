@@ -295,3 +295,17 @@ def test_due_service_lookup_skips_large_expired_detail_population(store):
     finally:
         store.db.set_progress_handler(None, 0)
     assert len(rows) == 1 and rows[0][0] == "radar:v1:outbox:telegram:one"
+
+
+def test_pre_extension_index_snapshot_is_explicitly_stale_without_losing_evidence(store):
+    from cryptowatcher.storage_meter import report
+
+    enable(store.db)
+    store.bounded = True
+    old = {"state": "PASS", "at_ms": NOW, "tables": {"runtime": 4096}, "total_index_bytes": 4096}
+    with store.db:
+        store.put_runtime("storage_index_measurement", old)
+    value = report(store, NOW + MINUTE)
+    assert value["indexes"]["state"] == "STALE"
+    assert value["indexes"]["at_ms"] == NOW
+    assert store.get_runtime("storage_index_measurement") == old

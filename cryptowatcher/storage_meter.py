@@ -180,6 +180,15 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         else []
     )
     actual = sum(files.values())
+    indexes = store.get_runtime(
+        "storage_index_measurement", {"state": "PENDING", "reason": "No bounded exact measurement yet"}
+    )
+    if (
+        indexes.get("state") == "PASS"
+        and store.db.execute("SELECT 1 FROM sqlite_master WHERE name='market_expiry'").fetchone()
+        and not {"market_expiry", "market_quality_blocks"}.issubset(indexes.get("tables", {}))
+    ):
+        indexes = {**indexes, "state": "STALE", "reason": "STORAGE_EXTENSION_AFTER_SNAPSHOT"}
     return {
         "schema": "cryptowatcher.storage-report.v1",
         "state": "BUDGET_EXCEEDED"
@@ -202,9 +211,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         if elapsed < 3600
         else "OBSERVED_WINDOW_WITH_MODEL_LIMITATIONS",
         "category_bytes_kind": "LOGICAL_RECORD_VALUES_OR_PUBLIC_INDEX_KEYS; excludes physical table/index overhead",
-        "indexes": store.get_runtime(
-            "storage_index_measurement", {"state": "PENDING", "reason": "No bounded exact measurement yet"}
-        ),
+        "indexes": indexes,
         "net_bytes_per_second": growth,
         "forecast": forecast,
         "projected_working_bytes": projected,

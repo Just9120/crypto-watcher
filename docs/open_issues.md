@@ -158,8 +158,8 @@ Canonical команды — [README](../README.md#checks); из root repository
 | AC-13-02 Автоматическая bounded retention | READY | test_bounded_storage/test_market_reset_delivery; EVID-01/02/03/04 |
 | AC-13-03 Качество detectors 12 месяцев | READY | test_bounded_storage/test_market_reset_delivery; EVID-01/02/03/04 |
 | AC-13-04 Укрупненный context | READY | test_bounded_storage/test_market_reset_delivery; EVID-01/02/03/04 |
-| AC-13-05 Конечные служебные зависимости | IN_PROGRESS | F37 выявил заполненные pending ranges; GROW local regression PASS, required CI pending |
-| AC-13-06 Контроль 20 GB | IN_PROGRESS | F38: separated queue churn/occupancy и current-layout quality scenarios; required CI pending; fit не заявлен |
+| AC-13-05 Конечные служебные зависимости | READY | F37 исправлен; local/restart/overlap tests и Linux CI38935043692 PASS; actual delivery pending |
+| AC-13-06 Контроль 20 GB | READY | F38 separated queue turnover/occupancy/current-layout scenarios PASS; stale index cache явно STALE; required latest CI/delivery pending, fit не заявлен |
 | AC-13-07 Разовый reset | READY | test_bounded_storage/test_market_reset_delivery; EVID-01/02/03/04 |
 
 ## Evidence и baseline
@@ -269,13 +269,13 @@ Confidence HIGH по auth/config/atomic persistence/formulas/retention/replay/CI
 GROW active16Oct2026, branch/base above. Discovery read-only source130225d2:
 18:41MSK working797879672bytes, net4.01GB/day since reset, forecast438.20GB/model;
 16/16 sampled PENDING recovery windows already complete locally (not global census).
-No data/config changed by discovery. Code GROW-01…04 готов,13 новых substantive cases PASS,188 relevant tests PASS/1 Windows skip; quality checks PASS. Required CI/merge/CD PENDING.
+No data/config changed by discovery. Code GROW-01…04 готов,14 новых substantive cases PASS;188 targeted PASS/1 Windows skip ранее,48 growth/bounded PASS после review; quality checks PASS. Required CI/merge/CD PENDING.
 Next: compatible lossless format and bounded recovery/repack; no reset or gate bypass.
 
 ### GROW local Evidence перед PR
 
 Windows/Python3.12, branch dirty diff от447a08a: quality PASS и188 targeted PASS,
-1 platform skip (Linux image остается REQUIRED). Новые13 cases проверяют float bits/
+1 platform skip (Linux image остается REQUIRED). Новые14 cases проверяют float bits/
 legacy decode/corruption bounds, dense20-comparator numeric equality, local-filled
 recovery при live priority/restart, overlap coalescing, old schema2→mixed layout,
 rollback/durable progress, private/history/cohorts, isolated VACUUM/FK invariance,
@@ -290,4 +290,4 @@ Readonly pre-CD16Oct16:44:27UTC: source130225d2/image26b64aee, healthy, working
 940443392bytes/forecast418.53GB(old model), private SHA1bcf2bba…/env SHA96cc5d70…,
 configuration revision3, generation78ed847e… прежние;1248streams/4TF/оба markets,
 analyticsOK/TelegramDELIVERED. Backup/CD<=900s/full validation gates без изменений.
-Self-review PASS; required CI/merge/CD PENDING. Историю, backups и experiments не удалять.
+Self-review PASS. PR43/head53164ce: Linux CI38935043692 PASS744 tests + image upgrade/full disk backup. Final review fix: прежний index snapshot при extension помечается STALE;48 targeted и quality PASS. Latest CI/merge/CD PENDING; normal gates unchanged. Историю, backups и experiments не удалять.
