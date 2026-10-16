@@ -886,7 +886,18 @@ class Controller:
 
         async with self.repack_lock:
             try:
-                await async_work(self.store, now, slices=1)
+                slices = 4 if self.repack_boost_ready() else 1
+                deadline = time.monotonic() + 0.2
+                for index in range(slices):
+                    if index and (
+                        time.monotonic() >= deadline
+                        or not self.maintenance_ready()
+                        or not self.repack_boost_ready()
+                    ):
+                        break
+                    state = await async_work(self.store, self.market.server_now(), slices=1)
+                    if state.get("state") in ("COMPLETE", "N/A_LEGACY"):
+                        break
                 self.store.put_runtime("repack_worker", {"state": "OK", "at_ms": self.market.server_now()})
             except Exception as exc:
                 self.store.put_runtime(
@@ -894,6 +905,27 @@ class Controller:
                     {"state": "FAILED", "error_class": type(exc).__name__, "at_ms": now},
                 )
                 logger.error("Repack worker failure: %s", type(exc).__name__)
+
+    def repack_boost_ready(self) -> bool:
+        """Use spare post-startup time, while retaining each40ms checkpoint/yield."""
+        if not isinstance(self.market, BybitRadar) or time.time() - self.maintenance_started_at < 600:
+            return False
+        ingestion = self.store.get_runtime("ingestion", {})
+        poll = self.store.get_runtime("last_poll_status", {})
+        analytics = self.store.get_runtime("analytics", {})
+        requested, available = poll.get("requested"), poll.get("available")
+        return (
+            type(requested) is int
+            and requested > 0
+            and type(available) is int
+            and available >= requested * 0.95
+            and 0 <= time.time() - ingestion.get("at", 0) <= 5
+            and 0 <= time.time() - poll.get("at", 0) <= 120
+            and analytics.get("state") == "OK"
+            and 0 <= self.market.server_now() - analytics.get("at_ms", 0) <= 60000
+            and not self.market._working
+            and not any(v[0] < 20 for v in self.market._pending.values())
+        )
 
     async def backfill_job(self, context: ContextTypes.DEFAULT_TYPE) -> None:
         if self.recovery is None or not isinstance(self.market, BybitRadar) or self.recovery_lock.locked():

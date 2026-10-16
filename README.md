@@ -169,8 +169,11 @@ Native closed candles сохраняются в общей SQLite, memory window
 
 Backfill и resumable repack обслуживаются отдельными jobs каждую секунду, независимо
 от долгих outcome/comparator calculations. Repack сохраняет конечные границы прохода
-и cursor, проверяет целевые typed records без повторного сжатия; одна transaction
-до40ms за tick с yield. Во время live bootstrap/recovery maintenance ждет. Backfill обрабатывает до32 due jobs за ограниченный проход
+и cursor, проверяет целевые typed records без повторного сжатия. Первые600s процесса
+получает один40ms slice за tick. Затем при fresh ingestion/analytics, coverage>=95%
+и idle live recovery — до4 таких slices с отдельными checkpoint/yield и повторной
+проверкой приоритета между ними; общий intended wall cap200ms. При потере условий
+остается один slice, реальные live queues сохраняют приоритет. Backfill обрабатывает до32 due jobs за ограниченный проход
 с прежним общим REST budget5req/s/concurrency4 и приоритетом live recovery. Retry,
 restart, source conflicts и устаревшие pending bindings не изменяют immutable history.
 Состояния `repack_worker`/`analytics_recovery_worker` диагностируют ошибки независимо

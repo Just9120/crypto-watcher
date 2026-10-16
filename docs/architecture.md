@@ -126,7 +126,13 @@ Current recovery перепроверяется между pages, superseded in-
 Ошибки независимых workers явно блокируют stable capacity baseline.
 Maintenance ждет fresh usable OK/DEGRADED poll именно текущего запуска и нулевой live
 bootstrap/recovery/blocked queue; старый сохраненный OK не разрешает раннюю работу.
-Production repack использует один40ms slice/1s tick, без восьми fsync bursts в секунду.
+Production repack первые600s процесса использует один40ms slice/1s tick.
+После startup допускает до4 прежних slices при coverage>=95%, ingestion age<=5s,
+poll age<=120s, analytics OK/current<=60s и отсутствии фактического live REST work.
+Каждый slice имеет отдельный checkpoint/yield; между ними перепроверяются guards.
+Общий intended wall deadline200ms ограничивает burst, отдельный SQL/commit может
+превысить time check. COMPLETE прекращает лишние slices. При потере условий остается
+один slice; общий startup/current recovery guard сохраняется. RAM/cache не меняются.
 Фазы records/decisions/expiry/quality имеют один deadline и сохраняют очередность
 первого хода. Slow SQL может превысить time check, но не вытесняет всегда одну фазу.
 Readiness в начале процесса обновляется отдельным5s job до первого OK/usable

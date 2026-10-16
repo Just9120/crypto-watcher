@@ -387,7 +387,9 @@ async def test_maintenance_yields_disk_to_startup_and_live_recovery(store, infra
         )
     before = store.db.total_changes
     with (
-        patch("cryptowatcher.storage_repack.async_work", new=AsyncMock()) as repack,
+        patch(
+            "cryptowatcher.storage_repack.async_work", new=AsyncMock(return_value={"state": "IN_PROGRESS"})
+        ) as repack,
         patch.object(controller.recovery, "work", new=AsyncMock()) as backfill,
     ):
         await controller.repack_job(None)
@@ -397,11 +399,138 @@ async def test_maintenance_yields_disk_to_startup_and_live_recovery(store, infra
     assert store.db.total_changes == before
     ready_ingestion(store)
     with (
-        patch("cryptowatcher.storage_repack.async_work", new=AsyncMock()) as repack,
+        patch(
+            "cryptowatcher.storage_repack.async_work", new=AsyncMock(return_value={"state": "IN_PROGRESS"})
+        ) as repack,
         patch.object(controller.recovery, "work", new=AsyncMock()) as backfill,
     ):
         await controller.repack_job(None)
         await controller.backfill_job(None)
         repack.assert_awaited_once_with(store, radar.server_now(), slices=1)
         backfill.assert_awaited_once()
+    await radar.close()
+
+
+def steady_repack(store, infrastructure, monkeypatch):
+    radar, _, _, _ = seed(store, monkeypatch, 0)
+    controller = Controller(infrastructure, store, radar)
+    wall = time.time()
+    monkeypatch.setattr("cryptowatcher.bot.time.time", lambda: wall)
+    controller.maintenance_started_at = wall - 601
+    ready_ingestion(store)
+    store.put_runtime("analytics", {"state": "OK", "at_ms": radar.server_now()})
+    assert controller.maintenance_ready()
+    return controller, radar, wall
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        "ready",
+        "warming",
+        "boundary",
+        "cold",
+        "coverage_boundary",
+        "coverage",
+        "old_poll",
+        "old_ingestion",
+        "old_analytics",
+        "live",
+        "working",
+        "unknown",
+    ],
+)
+async def test_repack_boost_keeps_startup_freshness_and_coverage_guards(
+    store, infrastructure, monkeypatch, condition
+):
+    controller, radar, wall = steady_repack(store, infrastructure, monkeypatch)
+    if condition == "warming":
+        store.put_runtime(
+            "last_poll_status", {"state": "WARMING", "at": wall, "available": 1142, "requested": 1144}
+        )
+    elif condition == "cold":
+        controller.maintenance_started_at = wall - 599
+    elif condition == "boundary":
+        controller.maintenance_started_at = wall - 600
+    elif condition == "coverage_boundary":
+        store.put_runtime("last_poll_status", {"state": "OK", "at": wall, "available": 95, "requested": 100})
+    elif condition == "coverage":
+        store.put_runtime("last_poll_status", {"state": "OK", "at": wall, "available": 94, "requested": 100})
+    elif condition == "old_poll":
+        store.put_runtime(
+            "last_poll_status", {"state": "OK", "at": wall - 121, "available": 1, "requested": 1}
+        )
+    elif condition == "old_ingestion":
+        store.put_runtime("ingestion", {**store.get_runtime("ingestion"), "at": wall - 6})
+    elif condition == "old_analytics":
+        store.put_runtime("analytics", {"state": "OK", "at_ms": radar.server_now() - 61000})
+    elif condition == "live":
+        radar._pending["spot/NEWUSDT/1m"] = (0, 0)
+    elif condition == "working":
+        radar._working.add("spot/NEWUSDT/1m")
+    elif condition == "unknown":
+        store.put_runtime("last_poll_status", {"state": "OK", "at": wall, "available": 1})
+    with (
+        patch("cryptowatcher.bot.time.monotonic", return_value=0),
+        patch(
+            "cryptowatcher.storage_repack.async_work", new=AsyncMock(return_value={"state": "IN_PROGRESS"})
+        ) as repack,
+    ):
+        await controller.repack_job(None)
+        assert repack.await_count == (
+            4 if condition in ("ready", "warming", "boundary", "coverage_boundary") else 1
+        )
+        assert all(call.kwargs == {"slices": 1} for call in repack.await_args_list)
+    assert store.get_runtime("repack_worker")["state"] == "OK"
+    await radar.close()
+
+
+async def test_steady_repack_yields_and_new_live_work_preempts_extra_slices(
+    store, infrastructure, monkeypatch
+):
+    controller, radar, _ = steady_repack(store, infrastructure, monkeypatch)
+    entered = asyncio.Event()
+
+    def one_slice(*args):
+        entered.set()
+        return {"state": "IN_PROGRESS"}
+
+    async def live_arrives():
+        await entered.wait()
+        radar._pending["spot/NEWUSDT/1m"] = (0, 0)
+
+    task = asyncio.create_task(live_arrives())
+    with patch("cryptowatcher.storage_repack.work", side_effect=one_slice) as repack:
+        await controller.repack_job(None)
+        await task
+        assert repack.call_count == 1
+    await radar.close()
+
+
+@pytest.mark.parametrize("stop", ["deadline", "complete", "recovery", "coverage", "stale"])
+async def test_steady_repack_stops_burst_on_deadline_completion_or_lost_readiness(
+    store, infrastructure, monkeypatch, stop
+):
+    controller, radar, wall = steady_repack(store, infrastructure, monkeypatch)
+    clock = [0.0]
+
+    def one_slice(*args):
+        if stop == "deadline":
+            clock[0] += 0.201
+        elif stop == "recovery":
+            store.put_runtime("ingestion", {**store.get_runtime("ingestion"), "recovery_pending": 1})
+        elif stop == "coverage":
+            store.put_runtime(
+                "last_poll_status", {"state": "OK", "at": wall, "available": 90, "requested": 100}
+            )
+        elif stop == "stale":
+            store.put_runtime("ingestion", {**store.get_runtime("ingestion"), "at": wall - 31})
+        return {"state": "COMPLETE" if stop == "complete" else "IN_PROGRESS"}
+
+    with (
+        patch("cryptowatcher.bot.time.monotonic", side_effect=lambda: clock[0]),
+        patch("cryptowatcher.storage_repack.work", side_effect=one_slice) as repack,
+    ):
+        await controller.repack_job(None)
+        assert repack.call_count == 1
     await radar.close()

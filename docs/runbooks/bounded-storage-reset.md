@@ -88,8 +88,12 @@ settings, плотность cohorts, реальные no-signal windows и sour
 ограничения прогноза. Использованные исходники сравнений могут переживать raw35d
 до истечения30d parent detail; это subset необходимых revisions, не indefinite hold.
 
-Runtime repack получает один прежний40ms slice за независимый1s tick, с отдельным
-transaction/checkpoint и scheduler yield. Intended work<=40ms/tick;
+Runtime repack первые600s процесса получает один прежний40ms slice за независимый1s
+tick, с отдельным transaction/checkpoint и scheduler yield. После startup при
+coverage>=95%, ingestion age<=5s, poll age<=120s, analytics OK/age<=60s и отсутствии
+фактических live REST requests допускает до4 таких slices. Общий intended wall cap
+200ms; readiness/live priority перепроверяются между slices. При потере условий
+дополнительные slices не выполняются, startup/current recovery guard сохраняется;
 отдельный SQLite I/O/commit может выйти за time check. COMPLETE прекращает slices.
 Durable rotation phases сохраняет fairness после slow SQL и restart; каждая phase
 использует остаток общего deadline, не создает новый таймер внутри slice.
