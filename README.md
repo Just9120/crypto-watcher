@@ -12,9 +12,11 @@ Radar обрабатывает широкий metadata/liquidity universe обо
 - [Runtime boundaries](docs/architecture.md)
 - [Advisory agent contract, configuration и recovery](docs/runbooks/agent-delivery.md)
 - [CI/CD, VPS target, первая поставка и recovery](docs/runbooks/delivery.md)
-- [Изолированная конвертация qualified history backup](docs/runbooks/delivery.md#изолированная-конвертация-legacy-history-backup)
-- [Read-only compact snapshot текущей базы](docs/runbooks/delivery.md#read-only-измерение-compact-current-dataset)
+- [Исторический tooling: конвертация qualified history backup](docs/runbooks/delivery.md#изолированная-конвертация-legacy-history-backup)
+- [Исторический tooling: compact snapshot](docs/runbooks/delivery.md#read-only-измерение-compact-current-dataset)
 - [Repository procedures](AGENTS.md) и [CI/CD configuration contract](ci-cd-rules.md)
+
+Хранение обновляется по [D22/E13](docs/product_scope.md#e13--компактное-хранение-сроки-и-новый-период-истории): подробности30d, свечи35d, quality summaries12mo, измеряемый storage target20GB. Разовый сброс прежней тестовой market history выполняется отдельно после проверок; полная конвертация этой истории исключена из текущей задачи. Статус реализации — в плане.
 
 ## Stack и установка
 
