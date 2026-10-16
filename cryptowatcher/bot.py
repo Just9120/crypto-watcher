@@ -910,7 +910,8 @@ class Controller:
         ingestion = self.store.get_runtime("ingestion", {})
         poll = self.store.get_runtime("last_poll_status", {})
         return (
-            poll.get("state") == "OK"
+            poll.get("state") in ("OK", "DEGRADED")
+            and (poll.get("state") == "OK" or poll.get("available", 0) > 0)
             and poll.get("at", 0) >= self.maintenance_started_at
             and 0 <= time.time() - ingestion.get("at", 0) <= 30
             and all(

@@ -262,6 +262,36 @@ def ready_ingestion(store):
     return value
 
 
+async def test_usable_degraded_poll_does_not_starve_maintenance(store, infrastructure, monkeypatch):
+    radar, _, h, _ = seed(store, monkeypatch, 1)
+    controller = Controller(infrastructure, store, radar)
+    ready_ingestion(store)
+    with store.db:
+        store.put_runtime(
+            "last_poll_status",
+            {
+                "state": "DEGRADED",
+                "at": time.time(),
+                "available": 1149,
+                "requested": 1152,
+                "errors": {
+                    f"linear/NEW{i}USDT/15m": "insufficient_history_or_zero_baseline" for i in range(3)
+                },
+            },
+        )
+    await controller.repack_job(None)
+    await controller.backfill_job(None)
+    assert store.get_runtime("repack_worker")["state"] == "OK"
+    assert h.count("analytics-gap-pending:") == 0
+    # Degraded without usable data is not market readiness.
+    with store.db:
+        store.put_runtime(
+            "last_poll_status", {"state": "DEGRADED", "at": time.time(), "available": 0, "requested": 10}
+        )
+    assert not controller.maintenance_ready()
+    await radar.close()
+
+
 @pytest.mark.parametrize(
     "busy",
     [

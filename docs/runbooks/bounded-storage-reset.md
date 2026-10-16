@@ -95,7 +95,7 @@ Durable rotation phases сохраняет fairness после slow SQL и resta
 использует остаток общего deadline, не создает новый таймер внутри slice.
 Это не полный scan внутри одной транзакции, не CI job и не изменение900s CD gate.
 Backfill имеет отдельный bounded batch job и прежний shared REST limiter/live priority.
-Оба maintenance jobs ждут fresh OK poll и нулевой live bootstrap/recovery/blocked
+Оба maintenance jobs ждут fresh usable OK/DEGRADED poll и нулевой live bootstrap/recovery/blocked
 queue. При transient live recovery уступают диск, затем продолжают durable progress.
 Новый PASS CD меняет expected source observer: завершить только прежний identified
 WAITING_STABLE unit после readback, сохранить его records, запустить один observer
