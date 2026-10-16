@@ -439,6 +439,40 @@ s.close()
         assert measurement["events"] == 200 and measurement["all_outcomes_complete"]
         assert measurement["analytics_equality"] == "PASS" and measurement["indexes"]["state"] == "PASS"
         print(json.dumps({"image_storage_measurement": measurement}, sort_keys=True))
+        # Qualify the actual old layout/CW2 -> mixed views/CW3 transition with
+        # product Python/SQLite, full disk backup and restart. No API requests.
+        run(
+            args.image,
+            directory,
+            "-B",
+            "-c",
+            """import runpy
+from contextlib import closing
+from pathlib import Path
+from unittest.mock import patch
+from cryptowatcher.storage import Store
+from cryptowatcher.market_storage import encoded
+from cryptowatcher.record_codec import pack_binary_v2
+from cryptowatcher.analytics import cohort_rows
+from cryptowatcher.storage_repack import work
+m=runpy.run_path('/data/measure.py')
+with patch('cryptowatcher.expiry_index.install'),patch('cryptowatcher.quality_layout.install'),patch('cryptowatcher.record_codec.pack_binary',pack_binary_v2),patch('cryptowatcher.quality_summary.encode_facts',encoded):
+    old=m['measure'](Path('/data/upgrade.db'),1)
+with closing(Store(Path('/data/upgrade.db'),233382575)) as s:
+    before=list(cohort_rows(s))
+    private=tuple(s.db.execute('SELECT * FROM owner_settings').fetchone())
+    for _ in range(1000):
+        if work(s,1800000000000,batch=32,seconds=1)['state']=='COMPLETE':break
+    assert s.get_runtime('storage_repack')['state']=='COMPLETE'
+    assert list(cohort_rows(s))==before and tuple(s.db.execute('SELECT * FROM owner_settings').fetchone())==private
+    assert not s.db.execute('SELECT 1 FROM market_expiry_legacy').fetchone()
+    assert not s.db.execute('SELECT 1 FROM market_quality_legacy').fetchone()
+    assert s.backup(Path('/data/upgrade-backup.db'),timeout_seconds=30)['phase']=='COMPLETE'
+with closing(Store(Path('/data/upgrade-backup.db'),233382575,readonly=True)) as restored:
+    assert list(cohort_rows(restored))==before
+print('Mixed storage upgrade/public analytics/private readback/restart/full disk backup: PASS')
+""",
+        )
         source.write_text('{"version":99,"chats":{}}')
         run(args.image, directory, *migration, success=False)
         assert source.read_text() == '{"version":99,"chats":{}}'

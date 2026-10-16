@@ -278,7 +278,7 @@ def test_binary_records_refuse_corruption_and_preserve_original_json_types(fault
     elif fault == "hash":
         damaged = payload[:4] + bytes([payload[4] ^ 1]) + payload[5:]
     elif fault == "dictionary":
-        damaged = b"CW3\0" + payload[4:]
+        damaged = b"CW9\0" + payload[4:]
     elif fault == "size":
         damaged = payload[:36] + b"bad-frame"
     else:

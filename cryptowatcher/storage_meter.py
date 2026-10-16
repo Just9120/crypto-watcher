@@ -75,21 +75,30 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         for r in store.db.execute("SELECT * FROM market_counts")
     }
     samples = store.get_runtime("storage_samples", [])
-    base = samples[0] if samples else None
+    current = [s for s in samples if s.get("format_version") == 3]
+    base = current[0] if current else samples[0] if samples else None
+    frequency_base = samples[0] if samples else None
     elapsed = (now_ms - base["at_ms"]) / 1000 if base else 0
-    growth = (
-        (sum(files.values()) - base["working_bytes"]) / elapsed if elapsed > 0 and base is not None else None
-    )
+    frequency_elapsed = (now_ms - frequency_base["at_ms"]) / 1000 if frequency_base else 0
+    growth = (sum(files.values()) - base["working_bytes"]) / elapsed if elapsed > 0 and base else None
     settings = store.snapshot().settings
     event_total = store.get_runtime("radar:v1:event-counter", 0)
     event_rate = (
-        max(0, event_total - (base or {}).get("event_total", event_total)) / elapsed if elapsed > 0 else None
+        max(0, event_total - frequency_base.get("event_total", event_total)) / frequency_elapsed
+        if frequency_base and frequency_elapsed > 0
+        else None
     )
+    repack = store.get_runtime("storage_repack", {})
+    saved = repack.get("saved_categories", {})
     forecast = []
+    occupancy = {"services", "service_indexes", "pending_holds", "context", "context_bodies"}
     for category, value in counts.items():
-        previous = (base or {}).get("categories", {}).get(category, {"inserted_bytes": 0})
-        inserted = max(0, value["inserted_bytes"] - previous["inserted_bytes"])
+        previous = (base or {}).get("categories", {}).get(category, {"inserted_bytes": 0, "deleted_bytes": 0})
+        inserted = max(0, value["inserted_bytes"] - previous.get("inserted_bytes", 0))
+        deleted = max(0, value["deleted_bytes"] - previous.get("deleted_bytes", 0))
+        repack_savings = saved.get(category, 0) - (base or {}).get("repack_saved", {}).get(category, 0)
         rate = inserted / elapsed if elapsed > 0 else None
+        net = (inserted - deleted + repack_savings) / elapsed if elapsed > 0 else None
         days = (
             settings.candle_retention_days
             if category in ("candles", "context", "context_bodies")
@@ -97,48 +106,78 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
             if category == "quality"
             else settings.detail_retention_days
         )
+        projected = None
+        if rate is not None and net is not None:
+            projected = (
+                value["logical_bytes"] + max(0, net) * 86400 * days
+                if category in occupancy
+                else rate * 86400 * days
+            )
         forecast.append(
             {
                 "category": category,
                 "gross_bytes_per_day": rate * 86400 if rate is not None else None,
+                "net_bytes_per_day_excluding_repack": net * 86400 if net is not None else None,
                 "retention_days_for_estimate": days,
-                "projected_logical_bytes": rate * 86400 * days if rate is not None else None,
+                "projected_logical_bytes": projected,
+                "basis": "CURRENT_OCCUPANCY_PLUS_POSITIVE_NET_GROWTH"
+                if category in occupancy
+                else "RETAINED_INSERT_FLOW",
             }
         )
-    # Quality data is absent until day30. Do not report a zero annual cost.
-    # Exact encoded fact measurement:200 synthetic events/all5 families/both
-    # markets/4TF/800 complete outcomes, schema2, Zlib facts, WindowsPy3.12.
-    # This is an explicit model, never a claimed production measurement.
-    quality_model_per_event = 1582.0 * len(settings.outcome_horizons) / 4
+    # No annual zero from a not-yet-expired history, and no assumption that the
+    # runtime's wide text indexes are the physical layout of numeric quality.
+    from .storage_model import quality_scenarios
+
+    scenarios = quality_scenarios()
+    quality_model_per_event = scenarios[0]["encoded_bytes_per_fact"] * len(settings.outcome_horizons)
     quality_projection = (
         event_rate * 86400 * 366 * quality_model_per_event if event_rate is not None else None
     )
+    quality = next((r for r in forecast if r["category"] == "quality"), None)
     if quality_projection is not None:
-        assert event_rate is not None
-        existing = next((r for r in forecast if r["category"] == "quality"), None)
-        if existing:
-            existing["projected_logical_bytes"] = max(
-                existing["projected_logical_bytes"] or 0, quality_projection
-            )
-            existing["model_applied"] = True
-        else:
-            forecast.append(
-                {
-                    "category": "quality",
-                    "projected_logical_bytes": quality_projection,
-                    "model_applied": True,
-                    "retention_days_for_estimate": 366,
-                    "gross_bytes_per_day": event_rate * 86400 * quality_model_per_event,
-                }
-            )
+        if quality is None:
+            quality = {"category": "quality", "gross_bytes_per_day": None, "retention_days_for_estimate": 366}
+            forecast.append(quality)
+        quality["projected_logical_bytes"] = max(
+            quality.get("projected_logical_bytes") or 0, quality_projection
+        )
+        quality["model_applied"] = True
+        quality["basis"] = "ISOLATED_SPARSE_NO_COMPARATOR_BASELINE; SEE_DENSITY_AND_COMPARATOR_SCENARIOS"
     logical = sum(v["logical_bytes"] for v in counts.values())
     # Current measured page utilization calibrates an explicit estimate; it is
     # neither a guaranteed steady-state size nor a replacement for measured files.
     factor = max(1, (pages - free) * page / max(1, logical))
+    projected_without_quality = (
+        sum(v["projected_logical_bytes"] or 0 for v in forecast if v["category"] != "quality") * factor
+        + files["wal"]
+        + files["shm"]
+    )
+    quality_physical = (
+        event_rate * 86400 * 366 * scenarios[0]["physical_bytes_per_fact"] * len(settings.outcome_horizons)
+        if event_rate is not None
+        else 0
+    )
+    if quality is not None and quality.get("projected_logical_bytes") is not None:
+        quality_physical = max(quality_physical, quality["projected_logical_bytes"] or 0)
     projected = (
-        sum(v["projected_logical_bytes"] or 0 for v in forecast) * factor + files["wal"] + files["shm"]
-        if elapsed > 0
-        else None
+        max(sum(files.values()), projected_without_quality + quality_physical) if elapsed > 0 else None
+    )
+    alternatives = (
+        [
+            {
+                **scenario,
+                "projected_working_bytes": projected_without_quality
+                + event_rate
+                * 86400
+                * 366
+                * scenario["physical_bytes_per_fact"]
+                * len(settings.outcome_horizons),
+            }
+            for scenario in scenarios
+        ]
+        if elapsed > 0 and event_rate is not None
+        else []
     )
     actual = sum(files.values())
     return {
@@ -146,7 +185,10 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "state": "BUDGET_EXCEEDED"
         if actual > BUDGET
         else "FORECAST_EXCEEDS_BUDGET"
-        if projected is not None and projected > BUDGET
+        if projected is not None
+        and (projected > BUDGET or any(v["projected_working_bytes"] > BUDGET for v in alternatives))
+        else "WARMUP"
+        if projected is None
         else "OK",
         "at_ms": now_ms,
         "history_generation": store.get_runtime("history_generation", {}),
@@ -159,7 +201,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "measurement_confidence": "LOW_SHORT_SAMPLE"
         if elapsed < 3600
         else "OBSERVED_WINDOW_WITH_MODEL_LIMITATIONS",
-        "category_bytes_kind": "MEASURED_ENCODED_PAYLOAD; excludes keys/page/index overhead",
+        "category_bytes_kind": "LOGICAL_RECORD_VALUES_OR_PUBLIC_INDEX_KEYS; excludes physical table/index overhead",
         "indexes": store.get_runtime(
             "storage_index_measurement", {"state": "PENDING", "reason": "No bounded exact measurement yet"}
         ),
@@ -171,16 +213,20 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "observed_events_total": event_total,
         "observed_events_per_day_extrapolated": event_rate * 86400 if event_rate is not None else None,
         "quality_forecast_model": {
-            "kind": "ISOLATED_FIXTURE_EXTRAPOLATION",
+            "kind": "ISOLATED_CURRENT_CODEC_AND_SQLITE_LAYOUT_EXTRAPOLATION",
             "encoded_bytes_per_event": quality_model_per_event,
-            "fixture_events": 200,
-            "fixture_outcomes": 800,
+            "scenarios": list(scenarios),
+            "point_scenario": "SPARSE_NO_COMPARATOR_BASELINE",
+            "not_a_bound": True,
             "actual_production_measurement": False,
         },
-        "forecast_kind": "EXTRAPOLATION_FROM_OBSERVED_INSERTS_AND_CURRENT_PAGE_OVERHEAD",
+        "forecast_scenarios": alternatives,
+        "repack": repack,
+        "forecast_kind": "RETAINED_FLOW_AND_NET_QUEUE_OCCUPANCY_PLUS_EXPLICIT_QUALITY_SCENARIOS",
         "limitations": [
             "Bootstrap/bursts/short samples distort forecast",
-            "Quality summary growth needs outcome and expiry sample; zero observed summary writes is not zero future cost",
+            "Quality density/comparator scenarios are synthetic measurements; neither a proven population mix nor upper bounds",
+            "Aggregate service occupancy extrapolates positive net growth conservatively; terminal1d and stream-scoped state are not multiplied by gross turnover",
             "Additional retained methodology/comparator versions can increase cost beyond the single-method fixture",
             "Retained used inputs may exceed raw TTL; forecast is a baseline, not an upper bound",
             "20GB target includes indexes and working journals; no silent scope/retention reduction",
@@ -219,6 +265,8 @@ def sample(store: Store, now_ms: int) -> None:
         {
             "at_ms": now_ms,
             "working_bytes": value["working_bytes"],
+            "format_version": 3,
+            "repack_saved": store.get_runtime("storage_repack", {}).get("saved_categories", {}),
             "categories": value["categories"],
             "event_total": value["observed_events_total"],
         }

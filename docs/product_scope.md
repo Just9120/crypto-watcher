@@ -17,6 +17,7 @@ CryptoWatcher — личный deterministic market radar владельца д�
 | S03 | Предыдущий product scope, [state_contract.md](state_contract.md), README и код на `8ace3638b9193444948d0beb88e0c49e9f2f068e` | Legacy behavior и compatibility evidence; не отменяют S01 |
 | S05 | Явное поручение владельца 2026-10-16: исправить новое накопление, bounded retention и контроль 20 GB, затем разово сбросить старую тестовую рыночную историю | Отменяет сохранение/полную конвертацию этой истории; сохраняет owner config, credentials, инфраструктуру, все markets/TF/detectors и аналитику |
 | S06 | Явное решение владельца16Oct2026: CryptoWatcher готовится для alerts под ручную торговлю и handoff; подключение — ответственность trading agent проекта | Меняет project boundary/DoD E09: producer readiness/contract handoff здесь; credentials/binding/receiver activation/live acceptance снаружи |
+| S07 | Явное поручение владельца16Oct2026: реализовать исправления роста и поставить через CD, сохранив полезную history/analytics/coverage/retention и900s backup/CD | Scope GROW/D24; source epoch не сбрасывается; показать measured post-report относительно20GB |
 | S04 | Уточнение владельца 2026-10-10: бот работает на VPS Contabo; Telegram owner — владелец | Deployment context; assertion владельца не доказывает deployed revision или gates |
 
 S01 и последующие явные решения владельца задают intent. Этот файл фиксирует его декомпозицию. Старый state contract описывает существующий chat-based MVP и подлежит консолидации по плану; при противоречии актуальным требованиям приоритет у этого spec. Код сам по себе не создаёт требования. Внешние hyperlinks в repository documentation не добавляются; source IDs и названия позволяют восстановить evidence.
@@ -303,3 +304,27 @@ consumer cap сохраняются как контракт принимающе
 runtime; доступность/активация внешнего приложения не блокирует его поставку.
 Новая оценка процентов этим UPDATE не проводится; исторический audit snapshot
 остается на своей revision и прежних границах.
+
+## D24 — Lossless storage growth correction (GROW, 2026-10-16)
+
+По явному поручению владельца исправляется layout/упаковка, а не продуктовый scope.
+Physical user_version остается2; storage extension использует typed record encoding3,
+нормализованные внутренние row IDs для expiry и общие cohort/provenance dictionaries.
+Public event/revision IDs, JSON types/float bits, формулы и source links сохраняются.
+Old CW2/J/Z records и legacy index/quality tables остаются читаемыми в смешанной базе.
+
+После обычной полной source/backup validation writer устанавливает небольшие атомарные
+DDL extensions без копирования market history. Старые rows не пропадают из compatibility
+views. Bounded background repack переносит по одной проверенной записи с durable cursor
+в той же транзакции; restart продолжает сохраненный прогресс. Нет полного VACUUM,
+второй рабочей БД, reset или повышения15min backup/CD budgets/RAM.
+Recovery проверяет arrived closed data перед REST, объединяет overlapping requests и
+retire satisfied/obsolete work; реальные gaps/conflicts сохраняют retry и диагностику.
+Годовые facts с другим provenance получают отдельный chunk, не metadata первого метода.
+
+Forecast различает retained inserts, net queue occupancy и эффект repack. Quality
+сценарии измеряют текущий codec/SQLite layout на isolated synthetic данных, отдельно
+показывают cohort density/comparator count; это не production measurement или upper bound.
+Проверяемый20GB target сохраняется, превышение/неизвестность не скрываются. Сроки D22,
+полнота аналитики и охват не сокращаются. Forward-fix с reader обоих formats; старый
+binary без encoding3/view support не является допустимым rollback после новых writes.

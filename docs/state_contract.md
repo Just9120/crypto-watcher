@@ -7,9 +7,26 @@
 
 ## Новая policy хранения и разовый reset (D22)
 
-Updated S01/owner request2026-10-16 отменяют raw90d и бессрочное хранение event/outcome/comparator inputs. Актуальные сроки/AC: [E13](product_scope.md#e13--компактное-хранение-сроки-и-новый-период-истории). Implementation state и gates: [Current Goal](open_issues.md#current-goal--весь-scope-текущий-этап-новое-накопление-и-reset). Полная конвертация прежней тестовой market history больше не задача. Описания прежних converter/qualification tools относятся к историческому tooling и не являются precondition нового reset.
+Updated S01/owner request2026-10-16 отменяют raw90d и бессрочное хранение event/outcome/comparator inputs. Актуальные сроки/AC: [E13](product_scope.md#e13--компактное-хранение-сроки-и-новый-период-истории). Implementation state и gates: [Current Goal](open_issues.md#current-goal--grow-хранение-без-потери-аналитики). Полная конвертация прежней тестовой market history больше не задача. Описания прежних converter/qualification tools относятся к историческому tooling и не являются precondition нового reset.
 
 Reset — отдельная разовая процедура с exact market-data allowlist/target и private preservation/restore/equality proof; не startup migration. Owner settings/watchlist/thresholds/notifications/mutes сохраняются; credentials/infra не меняются. Старые market queues/cursors не импортируются; новая generation/start явно показывает нехватку истории и исключает old live replay. Backups/experiments исключены. Обычные backup/CD<=900s и RAM4GiB сохраняются. Формат и проверенная reset процедура определены ниже и в runbook; факт поставки/reset подтверждается только primary Evidence плана, не самим описанием.
+
+### Storage extension3: совместимое уплотнение
+
+Physical schema остается2; public JSON schemas/IDs не меняются. Writer atomically
+устанавливает additive extension после ordinary CD backup. `market_lifetimes` и
+`market_quality` становятся compatibility views над сохраненными legacy rows и
+новыми normalized tables. Expiry использует explicit stable IDs и shared event IDs;
+quality — shared immutable cohort dimensions/provenance. Legacy data не копируется
+при startup. Перенос выполняет [storage_repack.py](../cryptowatcher/storage_repack.py)
+короткими транзакциями с durable cursors/identity readback и incremental vacuum.
+Новый writer/reader читает CW2 и typed CW3; dictionary3 и float representations
+frozen. Canonical JSON bytes, SHA256, signed outbox body и source revision links
+не меняются. Progress rollback атомарен с измененными rows; skipped large records
+диагностируются, а не удаляются. Metadata references собираются bounded GC и после
+окончания repack. Большие quality blocks используют rowid table, чтобы не создавать
+почти пустую overflow page для каждого промежуточного1–2KiB блока.
+Подробные правила и ограничения — [D24](product_scope.md#d24--lossless-storage-growth-correction-grow-2026-10-16).
 
 ### Market layout v2: новый период
 

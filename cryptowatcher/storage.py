@@ -244,6 +244,12 @@ class Store:
         if not readonly:
             self.db.execute("PRAGMA journal_mode=WAL")
             self.db.execute("PRAGMA synchronous=FULL")
+            if self.bounded:
+                from .expiry_index import install as install_expiry
+                from .quality_layout import install as install_quality
+
+                install_expiry(self.db)
+                install_quality(self.db)
             if not self.bounded:
                 create_schema(self.db)
             if os.name != "nt":
