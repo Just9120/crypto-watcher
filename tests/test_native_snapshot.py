@@ -178,3 +178,25 @@ def test_root_native_launcher_imports_without_third_party_packages():
         timeout=10,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_isolated_worker_import_needs_no_host_operator_bundle(tmp_path):
+    import os
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    package = tmp_path / "scripts"
+    package.mkdir()
+    for name in ("native_snapshot_worker.py", "native_snapshot_bridge.py"):
+        shutil.copyfile(root / "scripts" / name, package / name)
+    result = subprocess.run(
+        [sys.executable, "-S", "-c", "from scripts.native_snapshot_worker import worker"],
+        cwd=tmp_path,
+        env={**os.environ, "PYTHONPATH": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
