@@ -1,7 +1,8 @@
 import asyncio
 import time
 from contextlib import closing
-from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -9,7 +10,7 @@ from cryptowatcher.analytics_recovery import AnalyticsRecovery
 from cryptowatcher.bot import Controller, application
 from cryptowatcher.events import History
 from cryptowatcher.ingestion import BybitRadar
-from cryptowatcher.market import MarketError
+from cryptowatcher.market import MarketError, RadarResult
 from cryptowatcher.market_storage import enable
 from cryptowatcher.record_codec import TYPED_MAGIC, pack_binary, pack_binary_v2
 from cryptowatcher.storage import StateError, Store, encode
@@ -258,7 +259,9 @@ def ready_ingestion(store):
     }
     with store.db:
         store.put_runtime("ingestion", value)
-        store.put_runtime("last_poll_status", {"state": "OK", "at": time.time()})
+        store.put_runtime(
+            "last_poll_status", {"state": "OK", "at": time.time(), "available": 1, "requested": 1}
+        )
     return value
 
 
@@ -289,6 +292,67 @@ async def test_usable_degraded_poll_does_not_starve_maintenance(store, infrastru
             "last_poll_status", {"state": "DEGRADED", "at": time.time(), "available": 0, "requested": 10}
         )
     assert not controller.maintenance_ready()
+    await radar.close()
+
+
+async def test_warmup_refreshes_cached_readiness_before_normal_poll_and_stops(
+    store, infrastructure, monkeypatch
+):
+    radar, _, _, _ = seed(store, monkeypatch, 0)
+    controller = Controller(infrastructure, store, radar)
+    before = store.snapshot()
+    clock = [time.time()]
+    monkeypatch.setattr("cryptowatcher.bot.time.time", lambda: clock[0])
+    radar.snapshot = AsyncMock(return_value=RadarResult({"spot/BTCUSDT/1m": {}}, {}, 1))
+    radar.delivery_ready = Mock(side_effect=[False, True])
+    context = SimpleNamespace(bot=SimpleNamespace(send_message=AsyncMock()))
+    await controller.poll(context)
+    assert store.get_runtime("last_poll_status")["state"] == "WARMING"
+    clock[0] += 6
+    await controller.warmup_poll(context)
+    assert radar.snapshot.await_count == 2 and store.get_runtime("last_poll_status")["state"] == "OK"
+    assert controller.first_ready_poll
+    clock[0] += 6
+    await controller.warmup_poll(context)
+    await controller.poll(context)
+    assert radar.snapshot.await_count == 2  # Normal60s owner cadence is unchanged.
+    assert store.snapshot() == before
+    radar._get.assert_not_awaited()
+    context.bot.send_message.assert_not_awaited()
+    await radar.close()
+
+
+async def test_idle_live_recovery_keeps_progress_when_cached_status_returns_to_warming(
+    store, infrastructure, monkeypatch
+):
+    radar, _, h, _ = seed(store, monkeypatch, 1)
+    controller = Controller(infrastructure, store, radar)
+    ready_ingestion(store)
+    assert controller.maintenance_ready()  # Valid ready evidence of this process.
+    with store.db:
+        store.put_runtime(
+            "last_poll_status", {"state": "WARMING", "at": time.time(), "available": 1, "requested": 2}
+        )
+    await controller.repack_job(None)
+    await controller.backfill_job(None)
+    assert h.count("analytics-gap-pending:") == 0
+    assert store.get_runtime("repack_worker")["state"] == "OK"
+    with store.db:
+        store.put_runtime("ingestion", {**store.get_runtime("ingestion"), "recovery_pending": 1})
+    assert not controller.maintenance_ready()  # Actual live work still preempts maintenance.
+    await radar.close()
+
+
+async def test_maintenance_misfires_coalesce_without_parallel_replays(store, infrastructure, monkeypatch):
+    radar, _, _, _ = seed(store, monkeypatch, 0)
+    controller = Controller(infrastructure, store, radar)
+    app = application(controller)
+    selected = {controller.warmup_poll, controller.repack_job, controller.backfill_job}
+    jobs = [j for j in app.job_queue.jobs() if j.callback in selected]
+    assert len(jobs) == 3
+    for job in jobs:
+        assert job.job.max_instances == 1 and job.job.coalesce
+        assert job.job.misfire_grace_time == 30
     await radar.close()
 
 

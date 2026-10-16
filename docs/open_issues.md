@@ -44,7 +44,18 @@ insufficient-history baselines блокирует слишком строгий 
 Compatible hotfix `codex/maintenance-degraded-hotfix-20261017`, base7015ff6,
 принимает usable DEGRADED как existing CD, не WARMING и не zero-available. Реальные
 live recovery/blocked queue и current-process poll checks сохраняются; observer
-stability gates не меняются. Предыдущая основная branch
+stability gates не меняются. PR50 merged15daa13, CI38971799676 PASS;
+CD38972288968 POST_CHECK_FAILED (full backup41.012s PASS). После cutoff runtime
+healthy/8seed buckets, bootstrap/gaps/recovery0, usable DEGRADED и workers OK;
+readiness status ожидал normal60s owner/engine tick. Necessary compatible hotfix
+`codex/startup-status-hotfix-20261017`, base15daa13: separate5s cached status refresh
+до первого current-process ready poll, затем no-op; normal cadence/REST/alerts и
+150s/900s gates сохраняются. Readback01:11MSK: workers timestamps от01:05 при
+fresh ingestion/bootstrap/gaps/recovery0 и cached WARMING;25misfires/300log lines.
+First-ready process latch отделяет maintenance от устаревшей UI phase; actual live
+queues приоритетны. New jobs coalesce/max_instances1/grace30s без slot replay;
+это scheduling, не изменение event freshness или delivery deadlines.
+Предыдущая основная branch
 `codex/maintenance-throughput-20261016`, base
 `f9df4b890f6a32e871d4a24fb9387e8c0c7fb91a`; clean main/fresh origin, protections
 `ci-required`/strict/self-review и SSH проверены. Предыдущие PR45/46/47 поставлены;

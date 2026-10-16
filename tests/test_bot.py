@@ -273,3 +273,10 @@ async def test_application_identity_guard_before_command_registration(controller
     with pytest.raises(ConfigError, match="identity mismatch"):
         await app.post_init(SimpleNamespace(bot=wrong_bot))
     wrong_bot.set_my_commands.assert_not_awaited()
+
+
+async def test_legacy_warmup_does_not_fetch_or_send(controller):
+    before = controller.store.db.total_changes
+    await controller.warmup_poll(SimpleNamespace(bot=SimpleNamespace(send_message=AsyncMock())))
+    controller.market.snapshot.assert_not_awaited()
+    assert controller.store.db.total_changes == before

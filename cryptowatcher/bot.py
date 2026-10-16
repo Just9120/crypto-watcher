@@ -156,6 +156,7 @@ class Controller:
         self.repack_lock = asyncio.Lock()
         self.recovery_lock = asyncio.Lock()
         self.maintenance_started_at = time.time()
+        self.first_ready_poll = False
         self.enrichment = Enrichment(store, market) if isinstance(market, BybitRadar) else None
         self.engine = (
             EventEngine(
@@ -729,11 +730,16 @@ class Controller:
         elif parts[0] == "rb":
             await self.command(update, "resetbase")
 
-    async def poll(self, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def warmup_poll(self, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if isinstance(self.market, BybitRadar) and not self.first_ready_poll:
+            await self.poll(context, warmup=True)
+
+    async def poll(self, context: ContextTypes.DEFAULT_TYPE, *, warmup: bool = False) -> None:
         now = time.time()
         snapshot = self.store.snapshot()
         last_poll = self.store.get_runtime("last_poll_ts", 0)
-        if now - last_poll < snapshot.settings.radar_poll_sec:
+        interval = min(5, snapshot.settings.radar_poll_sec) if warmup else snapshot.settings.radar_poll_sec
+        if now - last_poll < interval:
             return
         self.store.put_runtime("last_poll_ts", now)
         try:
@@ -761,6 +767,11 @@ class Controller:
                 "configuration_revision": snapshot.revision,
             },
         )
+        if isinstance(self.market, BybitRadar) and self.store.get_runtime("last_poll_status")["state"] in (
+            "OK",
+            "DEGRADED",
+        ):
+            self.first_ready_poll = True
         if self.engine is not None:
             return  # Persisted observation producer and durable episode queue own live delivery.
         for item, quote in result.quotes.items():
@@ -909,10 +920,14 @@ class Controller:
         """Give startup/current recovery the disk as well as the REST priority."""
         ingestion = self.store.get_runtime("ingestion", {})
         poll = self.store.get_runtime("last_poll_status", {})
+        usable = poll.get("state") in ("OK", "DEGRADED") and (
+            poll.get("state") == "OK" or poll.get("available", 0) > 0
+        )
+        if usable and poll.get("at", 0) >= self.maintenance_started_at:
+            self.first_ready_poll = True
         return (
-            poll.get("state") in ("OK", "DEGRADED")
-            and (poll.get("state") == "OK" or poll.get("available", 0) > 0)
-            and poll.get("at", 0) >= self.maintenance_started_at
+            self.first_ready_poll
+            and (poll.get("available", 0) > 0 or poll.get("requested") == 0)
             and 0 <= time.time() - ingestion.get("at", 0) <= 30
             and all(
                 ingestion.get(k, 1) == 0
@@ -999,14 +1014,26 @@ def application(controller: Controller) -> Application[Any, Any, Any, Any, Any, 
     if app.job_queue is None:
         raise ConfigError("Telegram job-queue dependency missing")
     app.job_queue.run_repeating(controller.poll, interval=controller.infrastructure.engine_interval, first=1)
+    app.job_queue.run_repeating(
+        controller.warmup_poll,
+        interval=5,
+        first=2,
+        job_kwargs={"max_instances": 1, "coalesce": True, "misfire_grace_time": 30},
+    )
     app.job_queue.run_repeating(controller.heartbeat, interval=20, first=1)
     app.job_queue.run_repeating(controller.deliver, interval=2, first=2)
     app.job_queue.run_repeating(controller.analytics_job, interval=5, first=5)
     app.job_queue.run_repeating(
-        controller.repack_job, interval=1, first=3, job_kwargs={"max_instances": 1, "coalesce": True}
+        controller.repack_job,
+        interval=1,
+        first=3,
+        job_kwargs={"max_instances": 1, "coalesce": True, "misfire_grace_time": 30},
     )
     app.job_queue.run_repeating(
-        controller.backfill_job, interval=1, first=4, job_kwargs={"max_instances": 1, "coalesce": True}
+        controller.backfill_job,
+        interval=1,
+        first=4,
+        job_kwargs={"max_instances": 1, "coalesce": True, "misfire_grace_time": 30},
     )
     app.job_queue.run_repeating(controller.enrichment_job, interval=2, first=6)
     app.job_queue.run_repeating(controller.agent_job, interval=2, first=3)
