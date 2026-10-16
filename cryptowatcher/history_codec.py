@@ -443,14 +443,16 @@ class Codec:
             result[MARKER] = {"schema": SCHEMA, "fields": references}
         return result
 
-    def unpack(self, value: Any) -> Any:
+    def unpack(self, value: Any, *, omit_fields: frozenset[str] = frozenset()) -> Any:
         value = self.record_value(value)
         if isinstance(value, list):
-            return [self.unpack(item) for item in value]
+            return [self.unpack(item, omit_fields=omit_fields) for item in value]
         if not isinstance(value, dict):
             return value
         result = {
-            k: self.unpack(v) if isinstance(v, (dict, list)) else v for k, v in value.items() if k != MARKER
+            k: self.unpack(v, omit_fields=omit_fields) if isinstance(v, (dict, list)) else v
+            for k, v in value.items()
+            if k != MARKER and k not in omit_fields
         }
         if MARKER not in value:
             return result
@@ -465,6 +467,8 @@ class Codec:
         for name, reference in storage["fields"].items():
             if name not in SHARED_FIELDS | WINDOW_FIELDS:
                 raise StateError("Unknown shared history field")
+            if name in omit_fields:
+                continue
             restored = self.field(reference)
             if name in result:
                 projection = (

@@ -501,3 +501,245 @@ def test_current_episode_pointer_renews_and_permanent_target_failure_is_not_auto
     assert h.get("active:spot/BTCUSDT/UP")["episode_id"] == "current"
     Retention(store).work(NOW + 400 * DAY)
     assert h.get("target:telegram")["state"] == "BLOCKED"
+
+
+def test_retention_preserves_all_method_versions_and_frozen_strength_grouping(store, monkeypatch):
+    from cryptowatcher import outcomes as outcome_module
+    from cryptowatcher.analytics import cohort_rows
+    from cryptowatcher.events import identity
+    from cryptowatcher.market_storage import decoded
+    from cryptowatcher.outcomes import DAY, Retention
+
+    bounded(store)
+    worker = OutcomeWorker(store)
+    observe(store, worker)
+    Sources(store).put("spot/BTCUSDT/1m", future())
+    worker.work(NOW + 6 * MINUTE)
+    h = History(store)
+    original = h.items("outcome-head:")[0][1]
+    source = h.get(f"event:{original['event_id']}:{original['event_revision']:010d}")
+    with store.db:
+        h.version(
+            "event",
+            {
+                **source,
+                "revision": 2,
+                "available_at_ms": NOW + 7 * MINUTE,
+                "strength": source["strength"] + 100,
+            },
+        )
+        h.put(
+            "outcome-method:2", {"version": "2", "description": "compatibility fixture; no new calculation"}
+        )
+        h.version(
+            "outcome",
+            {
+                **original,
+                "outcome_id": identity(f"outcome/{original['event_id']}/5/2"),
+                "methodology_version": "2",
+                "revision": 1,
+                "available_at_ms": NOW + 7 * MINUTE,
+            },
+        )
+    before = list(cohort_rows(store, ("strength", "settings", "version")))
+    # Simulate deployment of a new default; retained v1/v2 records still define their methods.
+    monkeypatch.setattr(outcome_module, "METHOD", "new-default")
+    Retention(store).work(NOW + 31 * DAY)
+    assert list(cohort_rows(store, ("strength", "settings", "version"))) == before
+    rows = store.db.execute("SELECT dimensions,provenance,facts FROM market_quality").fetchall()
+    assert {json_payload(r[0])["methodology_version"] for r in rows} == {"1", "2"}
+    assert all(json_payload(r[0])["methodology_version"] != "new-default" for r in rows)
+    facts = [v for r in rows for v in decoded(bytes(r[2]), 1024 * 1024)]
+    assert source["strength"] + 100 not in [v["strength"] for v in facts]
+    assert any(
+        h.codec.unpack(json_payload(r[1]))["quality_provenance"]["outcome_definition"]
+        == {"version": "2", "description": "compatibility fixture; no new calculation"}
+        for r in rows
+    )
+
+
+def test_retention_keeps_all_comparator_versions_and_original_pending_method(store):
+    from cryptowatcher.analytics import cohort_rows
+    from cryptowatcher.events import identity
+    from cryptowatcher.market_storage import decoded
+    from cryptowatcher.outcomes import DAY, Retention
+
+    bounded(store)
+    worker = OutcomeWorker(store)
+    observe(store, worker)
+    Sources(store).put("spot/BTCUSDT/1m", future())
+    worker.work(NOW + 6 * MINUTE)
+    h = History(store)
+    event = h.events(1)[0]
+    with store.db:
+        for version, value in (("1", -2), ("2", 3)):
+            h.put("comparison-method:" + version, {"version": version})
+            h.version(
+                "comparison",
+                {
+                    "comparison_id": identity(f"comparison/{event['event_id']}/{version}"),
+                    "event_id": event["event_id"],
+                    "event_revision": 1,
+                    "revision": 1,
+                    "available_at_ms": NOW + 7 * MINUTE,
+                    "methodology_version": version,
+                    "samples": [
+                        {
+                            "outcomes": {
+                                "5": {"metrics": {"price_return_pct": value, "directed_return_pct": value}}
+                            }
+                        }
+                    ],
+                    "limitations": ["fixture-" + version],
+                },
+            )
+        h.put(
+            "outcome-job:pending-old-method",
+            {
+                "outcome_id": "pending-old-method",
+                "event_id": event["event_id"],
+                "event_revision": 1,
+                "methodology_version": "old-pending",
+                "horizon_min": 10,
+                "state": "INCOMPLETE",
+            },
+        )
+    before = list(cohort_rows(store))
+    Retention(store).work(NOW + 31 * DAY)
+    assert list(cohort_rows(store)) == before
+    rows = store.db.execute("SELECT dimensions,provenance,facts FROM market_quality").fetchall()
+    assert any(
+        json_payload(r[0])["methodology_version"] == "old-pending" and json_payload(r[0])["horizon_min"] == 10
+        for r in rows
+    )
+    relevant = [
+        r
+        for r in rows
+        if h.codec.unpack(json_payload(r[1]))["quality_provenance"]["comparison_versions"] == ["1", "2"]
+    ]
+    assert relevant
+    provenance = h.codec.unpack(json_payload(relevant[0][1]))["quality_provenance"]
+    assert provenance["comparison_definitions"] == {"1": {"version": "1"}, "2": {"version": "2"}}
+    facts = [v for r in relevant for v in decoded(bytes(r[2]), 1024 * 1024)]
+    assert any(
+        len(v["comparator_metrics"]) == 2 and v["limitations"] == ["fixture-1", "fixture-2"] for v in facts
+    )
+
+    complete = next(v for v in facts if len(v["comparator_metrics"]) == 2)
+    assert {
+        entry["methodology_version"]: complete["comparator_metrics"][entry["offset"]]["price_return_pct"]
+        for entry in complete["comparator_sets"]
+        if entry["count"]
+    } == {"1": -2, "2": 3}
+
+
+def test_split_retention_batches_keep_pending_versions_and_do_not_expand_expired_windows(store):
+    from dataclasses import asdict
+
+    from cryptowatcher.analytics import cohort_rows
+    from cryptowatcher.events import identity
+    from cryptowatcher.outcomes import DAY, Retention
+    from cryptowatcher.sources import Candle
+    from cryptowatcher.storage import StateError
+
+    bounded(store)
+    worker = OutcomeWorker(store)
+    observe(store, worker)
+    Sources(store).put("spot/BTCUSDT/1m", future())
+    worker.work(NOW + 6 * MINUTE)
+    h = History(store)
+    event_id = h.items("history:")[-1][1]["event_id"]
+    old = [
+        Candle.parse(
+            [NOW - 28 * DAY + i * MINUTE, 100, 101, 99, 100, 1, 20],
+            "1m",
+            "fixture",
+            NOW - 28 * DAY + 5 * MINUTE,
+            NOW - 28 * DAY + 5 * MINUTE,
+        )
+        for i in range(5)
+    ]
+    cid = identity(f"comparison/{event_id}/1")
+    with store.db:
+        h.version(
+            "comparison",
+            {
+                "comparison_id": cid,
+                "event_id": event_id,
+                "event_revision": 1,
+                "revision": 1,
+                "available_at_ms": NOW,
+                "methodology_version": "1",
+                "samples": [
+                    {
+                        "source_inputs": [asdict(c) for c in old],
+                        "future_inputs": [asdict(c) for c in old],
+                        "outcomes": {"5": {"metrics": {"price_return_pct": -2}}},
+                    }
+                ],
+                "limitations": [],
+            },
+        )
+        h.put(
+            "outcome-job:original-method",
+            {
+                "outcome_id": "original-method",
+                "event_id": event_id,
+                "event_revision": 1,
+                "horizon_min": 10,
+                "methodology_version": "original-pending",
+                "state": "PENDING",
+            },
+        )
+    before = list(cohort_rows(store))
+    Retention(store).work(NOW + 31 * DAY, batch=1)
+    assert h.get("outcome-job:original-method") is not None
+    # Ordinary readers still validate raw source availability. Retention needs
+    # only already persisted metrics and provenance from the expired detail.
+    with pytest.raises(StateError):
+        h.get("comparison-head:" + cid)
+    assert "source_inputs" not in h.metadata("comparison-head:" + cid)["samples"][0]
+    for _ in range(20):
+        Retention(store).work(NOW + 31 * DAY, batch=1)
+        if not h.events(1):
+            break
+    assert not h.events(1) and list(cohort_rows(store)) == before
+    rows = store.db.execute("SELECT dimensions FROM market_quality").fetchall()
+    assert any(json_payload(r[0])["methodology_version"] == "original-pending" for r in rows)
+
+
+def test_pending_method_is_not_silently_replaced_and_recompare_keeps_original_event(store, monkeypatch):
+    from cryptowatcher import analytics as analytics_module
+    from cryptowatcher import outcomes as outcome_module
+    from cryptowatcher.analytics import ComparisonWorker
+
+    bounded(store)
+    worker = OutcomeWorker(store)
+    observe(store, worker)
+    h = History(store)
+    event = h.events(1)[0]
+    job = next(j for _, j in h.items("outcome-job:") if j["event_id"] == event["event_id"])
+    monkeypatch.setattr(outcome_module, "METHOD", "2")
+    result = worker.calculate(store, job, event)
+    assert result["state"] == "INVALID_SOURCE" and result["reason"] == "OUTCOME_METHODOLOGY_UNAVAILABLE"
+    with store.db:
+        worker.apply(job, event, {"outcome_id": job["outcome_id"]}, result, NOW + 6 * MINUTE)
+    assert h.get("outcome-head:" + job["outcome_id"])["methodology_version"] == "1"
+    comparison = ComparisonWorker(store)
+    monkeypatch.setattr(analytics_module, "COMPARATOR_VERSION", "2")
+    for frozen_job in ({"methodology_version": "1"}, {}):
+        result = comparison.calculate(store, frozen_job, event)
+        assert (
+            result["state"] == "INVALID_SOURCE"
+            and result["methodology_version"] == "1"
+            and not result["samples"]
+        )
+    with store.db:
+        h.delete("comparison-job:" + event["event_id"])
+        h.version(
+            "event",
+            {**event, "revision": 2, "strength": event["strength"] + 10, "available_at_ms": NOW + MINUTE},
+        )
+    comparison.requeue(event["event_id"], NOW + 2 * MINUTE)
+    assert h.get("comparison-job:" + event["event_id"])["event_revision"] == 1
+    assert h.get("comparison-job:" + event["event_id"])["methodology_version"] == "2"

@@ -109,7 +109,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
     # Exact encoded fact measurement:200 synthetic events/all5 families/both
     # markets/4TF/800 complete outcomes, schema2, Zlib facts, WindowsPy3.12.
     # This is an explicit model, never a claimed production measurement.
-    quality_model_per_event = 1299.0 * len(settings.outcome_horizons) / 4
+    quality_model_per_event = 1582.0 * len(settings.outcome_horizons) / 4
     quality_projection = (
         event_rate * 86400 * 366 * quality_model_per_event if event_rate is not None else None
     )
@@ -181,6 +181,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "limitations": [
             "Bootstrap/bursts/short samples distort forecast",
             "Quality summary growth needs outcome and expiry sample; zero observed summary writes is not zero future cost",
+            "Additional retained methodology/comparator versions can increase cost beyond the single-method fixture",
             "Retained used inputs may exceed raw TTL; forecast is a baseline, not an upper bound",
             "20GB target includes indexes and working journals; no silent scope/retention reduction",
         ],

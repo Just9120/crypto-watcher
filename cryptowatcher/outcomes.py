@@ -221,6 +221,7 @@ class OutcomeWorker:
                     "event_id": event["event_id"],
                     "event_revision": event["revision"],
                     "state": "PENDING",
+                    "methodology_version": COMPARATOR_VERSION,
                     "pending_key": comparison_pending,
                     "next_attempt_ms": event["available_at_ms"],
                 },
@@ -276,6 +277,13 @@ class OutcomeWorker:
 
     @staticmethod
     def calculate(store: Store, job: dict[str, Any], event: dict[str, Any]) -> dict[str, Any]:
+        if job.get("methodology_version", "1") != METHOD:
+            return {
+                "state": "INVALID_SOURCE",
+                "metrics": {},
+                "source_inputs": [],
+                "reason": "OUTCOME_METHODOLOGY_UNAVAILABLE",
+            }
         start = event["reference_time_ms"]
         end = start + job["horizon_min"] * MINUTE
         try:
@@ -337,7 +345,7 @@ class OutcomeWorker:
             event_id=job["event_id"],
             event_revision=job["event_revision"],
             horizon_min=job["horizon_min"],
-            methodology_version=METHOD,
+            methodology_version=job.get("methodology_version", "1"),
         )
         previous = self.history.get("outcome-head:" + job["outcome_id"])
         changed = previous is None or encode(result) != encode(

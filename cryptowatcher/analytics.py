@@ -226,7 +226,7 @@ class ComparisonWorker:
         """Explicit owner action; preserve the original revision and prior analytics."""
         job = self.history.get("comparison-job:" + event_id)
         if job is None and self.store.bounded:
-            event = self.history.get("event-head:" + event_id)
+            event = self.history.get(f"event:{event_id}:0000000001")
             if event is not None:
                 job = {"event_id": event_id, "event_revision": event["revision"], "pending_key": ""}
         if job is None:
@@ -241,7 +241,12 @@ class ComparisonWorker:
             16, int(max(v for k, v in event["effective_parameters"].items() if k.endswith("lookback"))) + 2
         )
         with self.store.db:
-            job.update(state="PENDING", next_attempt_ms=now_ms, recalculation_requested_ms=now_ms)
+            job.update(
+                state="PENDING",
+                next_attempt_ms=now_ms,
+                recalculation_requested_ms=now_ms,
+                methodology_version=COMPARATOR_VERSION,
+            )
             job["pending_key"] = pending_key(now_ms, event_id).replace(
                 "outcome-pending:", "comparison-pending:", 1
             )
@@ -276,6 +281,19 @@ class ComparisonWorker:
 
     @staticmethod
     def calculate(store: Store, job: dict[str, Any], event: dict[str, Any]) -> dict[str, Any]:
+        if job.get("methodology_version", "1") != COMPARATOR_VERSION:
+            version = job.get("methodology_version", "1")
+            return {
+                "schema": "cryptowatcher.comparison.v1",
+                "comparison_id": identity(f"comparison/{event['event_id']}/{version}"),
+                "event_id": event["event_id"],
+                "event_revision": event["revision"],
+                "methodology_version": version,
+                "state": "INVALID_SOURCE",
+                "sample_size": 0,
+                "samples": [],
+                "limitations": ["FROZEN_COMPARISON_VERSION_UNAVAILABLE"],
+            }
         try:
             return comparison_dataset(store, event)
         except (ValueError, TypeError, KeyError, OverflowError, StateError) as exc:
