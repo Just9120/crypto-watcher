@@ -119,6 +119,16 @@ def test_initial_recovery_workers_do_not_all_claim_the_same_missing_bucket(radar
     assert len(set(claimed)) == 4
 
 
+def test_seed_requires_fresh_usable_baseline_not_just_a_successful_rest_response(radar):
+    assert radar.recovery_window_usable("spot/BTCUSDT/1m")
+    rows = history("1m")
+    for row in rows:
+        row[5] = row[6] = "0"
+    candles = [Candle.parse(row, "1m", "rest", NOW, NOW) for row in rows]
+    radar.sources.windows["spot/BTCUSDT/1m"] = {c.start: c for c in candles}
+    assert not radar.recovery_window_usable("spot/BTCUSDT/1m")
+
+
 @pytest.mark.asyncio
 async def test_failed_initial_window_does_not_mark_bucket_recovered(radar):
     radar.streams = {"spot/BTCUSDT/1m"}

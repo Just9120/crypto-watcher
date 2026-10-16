@@ -151,7 +151,7 @@ Canonical команды — [README](../README.md#checks); из root repository
 | AC-02-02 Eligibility инструментов | READY | test_universe/test_ingestion/test_bot; universe.py; EVID-04 |
 | AC-02-03 Настраиваемая liquidity | READY | test_universe/test_ingestion/test_bot; universe.py; EVID-04 |
 | AC-02-04 Watchlist по рынкам | READY | test_universe/test_ingestion/test_bot; universe.py; EVID-04 |
-| AC-03-01 WebSocket обоих рынков | IN_PROGRESS | F39 startup bucket starvation на runtime46; compatible fairness hotfix local51 PASS, required CI/runtime PENDING |
+| AC-03-01 WebSocket обоих рынков | IN_PROGRESS | F39 startup bucket starvation на runtime46; compatible fairness hotfix local52 PASS, required CI/runtime PENDING |
 | AC-03-02 Одновременные timeframes | READY | test_ingestion/test_sources/test_async_runtime; ingestion.py; EVID-04 |
 | AC-03-03 Закрытые свечи | READY | test_ingestion/test_sources/test_async_runtime; ingestion.py; EVID-04 |
 | AC-03-04 Gaps и recovery | READY | test_ingestion/test_sources/test_async_runtime; ingestion.py; EVID-04 |
@@ -381,7 +381,9 @@ recovery еще не завершено. Worker выбирал priority0 gaps д
 seed. Compatible hotfix вводит первые успешные windows8market/TF, без изменения
 REST budgets/coverage/150s post-check/900s CD. Потом прежние priorities0/10/20.
 Working bucket исключен из параллельного seed; failure не отмечает bucket готовым.
-Local51 ingestion/source/async tests и quality PASS; actual delivery PENDING.
+Local52 ingestion/source/async tests и quality PASS; actual delivery PENDING.
+Seed требует свежую usable composite baseline; zero baseline/stale window не дают
+ложной готовности. Условие не заменяет unchanged full ACK/fresh coverage post-check.
 
 Next: self-review/latest required CI/image startup hotfix, merge и normal CD900s,
 source/private readback, затем finite observer на окончательном artifact.

@@ -482,7 +482,12 @@ class BybitRadar(BybitREST):
                         await self.history_page(stream)
                     elif not self.restore_current_window(stream):
                         await self.backfill(stream)
-                    if priority < 20 and stream in self.streams:
+                    if (
+                        priority < 20
+                        and stream in self.streams
+                        and self.recovery_bucket(stream) not in self._recovered_buckets
+                        and self.recovery_window_usable(stream)
+                    ):
                         self._recovered_buckets.add(self.recovery_bucket(stream))
                 except (MarketError, KeyError, TypeError, ValueError):
                     if priority == 20:
@@ -505,6 +510,25 @@ class BybitRadar(BybitREST):
     def recovery_bucket(stream: str) -> tuple[str, str]:
         market, _, tf = stream.split("/")
         return market, tf
+
+    def recovery_window_usable(self, stream: str) -> bool:
+        market, symbol, tf = stream.split("/")
+        settings = self.store.snapshot().settings
+        parameters = effective_parameters(settings, f"{market}/{symbol}")
+        effective = settings.changed(
+            bybit_category=market,
+            signal_timeframe=tf,
+            price_move_min=parameters[f"price_{tf}"],
+            turnover_spike_min=parameters["turnover_ratio"],
+            sma_periods=parameters["turnover_lookback"],
+        )
+        value = evaluate_composite(
+            self.sources.rows(stream, effective.sma_periods + 2),
+            self.tickers[f"{market}/{symbol}"],
+            effective,
+            self.server_now(),
+        )
+        return value is not None and 0 <= self.server_now() - value["candle_end_ms"] <= int(tf[:-1]) * 60_000
 
     def next_recovery(self) -> tuple[str, tuple[int, int]]:
         # A busy1m repair queue must not starve the first usable3m/5m/15m
