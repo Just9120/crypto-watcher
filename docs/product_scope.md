@@ -234,18 +234,18 @@ Requirement `REQ-E13`; трассировка: S01 / DATA И DIAGNOSTICS / ХР�
 | AC-13-06 — Контроль 20 GB | Автоматически доступны category counts/bytes, indexes/journals, net growth и прогноз по выбранным срокам. DB/index/WAL target20,000,000,000bytes проверяется измерением; backups/experiments отдельно. Actual/estimate и ограничения видны, превышение объясняется без silent сокращения scope/retention. Routine control bounded, без постоянного full scan. Проверка: счетчики/измерения против fixture, рост/очистка/предупреждение/measurement budget. |
 | AC-13-07 — Разовый reset | После REQUIRED checks отдельная exact-target процедура сбрасывает только прежнюю тестовую market history CW и ее queues/cursors; проверенный owner settings/watchlist/thresholds/notifications/mutes и credentials/infra сохранены. Новый generation/start виден, restart/deploy не повторяет reset, backfill не отправляет прошлое как live и ограничен потребностями расчетов. Backups/experiments не удаляются. Проверка: private-state equality/restore, отказ при неверном target, reset/restart/no-old-alerts fixtures, actual source/image/health/ingestion/outcome/Telegram и применимые integration post-checks. |
 
-## Открытые вопросы / SPEC gaps
+## Решения по исходным вопросам и зависимости
 
-| ID | Существенный неизвестный параметр | Влияние / когда решить |
+| ID | Действующее правило | Источник / эксплуатационная зависимость |
 | --- | --- | --- |
-| Q01 | RESOLVED_POLICY: D11–D15 задают versioned detector/episode/freshness formulas и defaults. Эффективность параметров ещё измеряется; это не blocker implementation. | Основание: approved full implementation plan 2026-10-10 и Current Goal G1; детали в canonical плане/runbook |
-| Q02 | CONTRACT_IDENTIFIED: основной claude-bybit-trading-agent, prepared v1 receiver и D18/v2 scope. Delivery receiver в main/production остаётся prerequisite; endpoint availability/secret binding проверяются в G4. | Основание: approved full implementation plan 2026-10-10 и Current Goal G1; детали в canonical плане/runbook |
-| Q03 | G1: import только private owner233382575; other chats архивируются без объединения. Фактический owner record/mapping и production backup требуют readback/rehearsal. | Основание: approved full implementation plan 2026-10-10 и Current Goal G1; детали в canonical плане/runbook |
-| Q04 | RESOLVED_POLICY: D16 задаёт horizons/neutral/comparator/export/retention. Implementation и causal completeness tests — G3. | Основание: approved full implementation plan 2026-10-10 и Current Goal G1; детали в canonical плане/runbook |
-| Q05 | PARTIAL: root:22 operator-assisted SSH, app /opt/crypto_watcher, service crypto_watcher, persistent data подтверждены inventory. Artifact/gates/queue заданы delivery runbook; project label/architecture/config ownership и first migration/CD credentials ещё требуют evidence. | Основание: approved full implementation plan 2026-10-10 и Current Goal G1; детали в canonical плане/runbook |
-| Q06 | RESOLVED_UI: G1 deprecates CMC/reset callbacks с понятным ответом; migration archive сохраняет legacy fields/baselines. External private Python helper consumers не подтверждены: F24 остаётся DOCUMENT/DEFER candidate. | Основание: approved full implementation plan 2026-10-10 и Current Goal G1; детали в canonical плане/runbook |
+| Q01 | Формулы, profiles, episodes и freshness заданы D11–D15; эффективность defaults оценивается описательной статистикой, без обещания прибыльности. | Согласованный план10Oct; изменение production thresholds — явная owner операция. |
+| Q02 | Отдельный claude-bybit-trading-agent принимает backward-compatible v1/v2 по D18; полный settings snapshot/hash сохраняется, включая известные retention metadata. | Endpoint/binding/current revision и signed delivery проверяются по плану. Создание отдельного credential владельцем остается предпосылкой activation. |
+| Q03 | JSON import относится только к private owner233382575; прочие chats архивируются без объединения. Явный пустой список сохраняется. | D11; actual migration/recovery Evidence находится в плане. Новый reset по D22 не повторяет JSON import. |
+| Q04 | Horizons, neutral outcomes, no-signal comparator и export определены D16; сроки хранения изменены D22. | Прежние raw90days/indefinite details отменены; expiry не меняет записанные методики/settings/results. |
+| Q05 | Target — Contabo167.86.68.98, /opt/crypto_watcher, Compose project crypto_watcher/service crypto_watcher, один production Environment. | Точный runtime, approvals, artifact/backup/recovery и post-checks — в действующей процедуре delivery и Evidence плана. |
+| Q06 | CMC/reset callbacks deprecated с понятным ответом; startup wrapper и legacy migration compatibility сохраняются. | D04; неподтвержденные внешние consumers private helpers не дают основания для нового удаления. F24 в плане. |
 
-Denominator AC определён как 58 текущих критериев. Значения Q01–Q05 не придуманы; связанные AC остаются BLOCKED/не READY. Изменение поведения/формул требует явного решения владельца; уточнение проверок понятного требования само по себе scope не меняет.
+Текущий согласованный scope содержит **65 AC**: исходные58 сохранены, E13 добавляет7 критериев обновленного S01/S05. Статусы и аудиторские оценки находятся только в плане. Новые business rules, сокращение analytics/retention и изменение формул требуют решения владельца; конкретизация проверок понятного требования scope не меняет.
 
 ## Утверждённые implementation решения 2026-10-10
 
