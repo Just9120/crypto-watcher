@@ -58,6 +58,7 @@ def snapshot(store: Store, seconds: float = 3) -> dict[str, Any]:
         },
         "analytics": store.get_runtime("analytics", {"state": "PENDING"}),
         "analytics_recovery": {"pending": bounded(lambda: history.count("analytics-gap-pending:"))},
+        "retired_pending": history.get("orphaned-pending-summary", {}),
         "enrichment": {
             "enabled": settings.settings.enrichment_enabled,
             "ticker_cadence_ms": 60_000,

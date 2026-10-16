@@ -414,3 +414,90 @@ def test_bounded_summary_preserves_nonzero_comparator_distributions_and_export(s
     assert any(v["type"] == "quality_summary" for v in exported)
     assert not any(v.get("type") == "event" for v in exported)
     assert "SENTINEL_SECRET_DO_NOT_EXPORT" not in json.dumps(exported)
+
+
+def test_expired_job_and_orphaned_indexes_retire_without_breaking_workers(store):
+    from cryptowatcher.analytics_worker import prepare
+    from cryptowatcher.outcomes import Retention
+
+    bounded(store)
+    h = History(store)
+    with store.db:
+        h.put("analytics-gap:gap", {"id": "gap", "state": "PENDING", "expires_ms": NOW + 1})
+        h.put("analytics-gap-pending:1:gap", {"id": "gap"})
+        h.put("outcome-pending:1:missing", {"outcome_id": "missing"})
+        h.put("comparison-pending:1:missing", {"event_id": "missing"})
+        h.put("pending:telegram:1:missing", {"delivery_id": "missing"})
+        h.put("agent:send-due:1:missing", {"delivery_id": "missing"})
+        h.put("digest-pending:missing", {"delivery_id": "missing"})
+    assert (
+        prepare(store, "outcome-pending:", "outcome-job:", "outcome_id", NOW, 20, 1, lambda *args: None) == []
+    )
+    Retention(store).work(NOW + 2)
+    assert h.get("analytics-gap:gap") is None
+    counts = h.get("orphaned-pending-summary")
+    assert len(counts) == 6 and sum(counts.values()) == 6
+    with store.db:
+        assert h.prune_pending() == 0
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        "EXPIRED_LIVE",
+        "MUTED",
+        "ALERTS_DISABLED",
+        "SUPERSEDED",
+        "DIGEST_DISABLED",
+        "DELIVERED_PRIOR_PREFERENCE",
+    ],
+)
+def test_terminal_delivery_receipts_drop_bodies_and_expire_while_event_remains(store, state):
+    from cryptowatcher.outcomes import DAY, Retention
+
+    bounded(store)
+    h = History(store)
+    observe(store, OutcomeWorker(store))
+    eid = h.events(1)[0]["event_id"]
+    with store.db:
+        h.put(
+            "outbox:telegram:done",
+            {
+                "state": state,
+                "completed_ms": NOW,
+                "event_id": eid,
+                "body": "immutable delivered bytes",
+                "intent": {"event_id": eid},
+                "episode_snapshot": {"large": "snapshot"},
+                "text": "rendered body",
+                "body_sha256": "hash",
+            },
+        )
+    receipt = h.get("outbox:telegram:done")
+    assert (
+        receipt["body_sha256"] == "hash"
+        and not {"body", "intent", "episode_snapshot", "text"} & receipt.keys()
+    )
+    Retention(store).work(NOW + DAY + 1)
+    assert h.get("outbox:telegram:done") is None and h.events(1)
+
+
+def test_current_episode_pointer_renews_and_permanent_target_failure_is_not_auto_enabled(store):
+    from cryptowatcher.outcomes import DAY, Retention
+
+    bounded(store)
+    h = History(store)
+    with store.db:
+        h.put("active:spot/BTCUSDT/UP", {"episode_id": "old"})
+        h.put("target:telegram", {"state": "BLOCKED", "reason": "Forbidden"})
+        store.db.execute(
+            "INSERT INTO market_lifetimes VALUES (?,?,?,NULL)",
+            ("radar:v1:target:telegram", NOW + 30 * DAY, "target"),
+        )
+    store.clock_ms = lambda: NOW + 29 * DAY
+    with store.db:
+        h.put("active:spot/BTCUSDT/UP", {"episode_id": "current"})
+    Retention(store).work(NOW + 31 * DAY)
+    assert h.get("active:spot/BTCUSDT/UP")["episode_id"] == "current"
+    Retention(store).work(NOW + 400 * DAY)
+    assert h.get("target:telegram")["state"] == "BLOCKED"

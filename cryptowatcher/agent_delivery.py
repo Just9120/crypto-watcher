@@ -297,6 +297,10 @@ class AgentDelivery:
                 return
             due_key, binding = pending[0]
             record = self.history.get("agent:outbox:" + binding["delivery_id"])
+            if record is None:
+                with self.store.db:
+                    self.history.delete(due_key)
+                return
             if record["next_ms"] > now:
                 return
             if record["kind"] != "HISTORICAL_OUTCOME_UPDATE" and (

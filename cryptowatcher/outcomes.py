@@ -263,8 +263,12 @@ class OutcomeWorker:
 
     def work(self, now_ms: int, batch: int = 20) -> None:
         self.bootstrap(batch)
-        for _, binding in self.history.items("outcome-pending:", batch):
+        for pending, binding in self.history.items("outcome-pending:", batch):
             job = self.history.get("outcome-job:" + binding["outcome_id"])
+            if job is None:
+                with self.store.db:
+                    self.history.delete(pending)
+                continue
             if job["next_attempt_ms"] > now_ms:
                 break
             event = self.history.get(f"event:{job['event_id']}:{job['event_revision']:010d}")

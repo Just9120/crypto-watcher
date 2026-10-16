@@ -12,6 +12,24 @@ DAY = 86400000
 PREFIX = "radar:v1:"
 FIXED = ("detector-metadata:", "outcome-method:", "comparison-method:", "enrichment-method:")
 PRIVATE = {"agent:preference", "digest-preferences"}
+TERMINAL_DELIVERY = frozenset(
+    (
+        "DELIVERED",
+        "DELIVERED_PRIOR_SETTINGS",
+        "DELIVERED_PRIOR_PREFERENCE",
+        "EXPIRED",
+        "EXPIRED_LIVE",
+        "CANCELLED",
+        "OBSOLETE_CONFIGURATION",
+        "SUPERSEDED",
+        "MUTED",
+        "ALERTS_DISABLED",
+        "DIGEST_DISABLED",
+        "DIGEST_PREFERENCE_CHANGED",
+        "SUPERSEDED_PERIOD",
+        "CANCELED_AFTER_FAILED_ATTEMPT",
+    )
+)
 
 
 def body_links(store: Store, owner: str, value: Any) -> None:
@@ -85,7 +103,12 @@ def track(store: Store, key: str, value: Any) -> None:
     if not store.bounded or not key.startswith(PREFIX):
         return
     name = key[len(PREFIX) :]
-    if name in PRIVATE or name.startswith(FIXED) or ":" not in name:
+    if (
+        name in PRIVATE
+        or name in ("target:telegram", "agent:target")
+        or name.startswith(FIXED)
+        or ":" not in name
+    ):
         return
     now = store.clock_ms()
     event_id = parent_event(store, value, name)
@@ -109,7 +132,9 @@ def track(store: Store, key: str, value: Any) -> None:
         expiry = min(expiry, value["expires_ms"])
     category = name.split(":", 1)[0]
     # Active per-stream state may renew; immutable/per-event/service state cannot.
-    if category in ("condition", "diagnostic", "oi-attempt"):
+    if category == "active":
+        expiry = now + days * DAY
+    elif category in ("condition", "diagnostic", "oi-attempt"):
         expiry = now + store.snapshot().settings.candle_retention_days * DAY
     store.db.execute(
         "INSERT INTO market_lifetimes VALUES (?,?,?,?) ON CONFLICT(key) DO UPDATE SET expires=excluded.expires,event_id=excluded.event_id",
@@ -117,15 +142,7 @@ def track(store: Store, key: str, value: Any) -> None:
     )
     if (
         isinstance(value, dict)
-        and value.get("state")
-        in (
-            "COMPLETE",
-            "DELIVERED",
-            "DELIVERED_PRIOR_SETTINGS",
-            "EXPIRED",
-            "CANCELLED",
-            "OBSOLETE_CONFIGURATION",
-        )
+        and value.get("state") in TERMINAL_DELIVERY | {"COMPLETE", "EXPIRED_RETENTION_INCOMPLETE"}
         and name.startswith(
             ("agent:attempt:", "agent:outbox:", "outbox:telegram:", "analytics-gap:", "digest-outbox:")
         )
@@ -182,6 +199,12 @@ class BoundedRetention:
         deadline = time.monotonic() + 0.05
         processed = 0
         with store.db:
+            # Repair only these two singleton scheduling indexes from initial v2.
+            # A permanent target failure is retained until an owner re-enables it.
+            store.db.execute(
+                "DELETE FROM market_lifetimes WHERE key IN (?,?)",
+                (PREFIX + "target:telegram", PREFIX + "agent:target"),
+            )
             for row in due:
                 if time.monotonic() >= deadline:
                     break
@@ -224,6 +247,7 @@ class BoundedRetention:
                     self._terminal(row[1], state)
                 remove(store, row[0])
                 removed += 1
+            removed += history.prune_pending()
             # A source revision survives the ordinary TTL only while a retained detail
             # references it. Old global `protected` records are not a v2 mechanism.
             candidates = store.db.execute(
