@@ -26,7 +26,50 @@ Canonical spec: [product_scope.md](product_scope.md). Этот план соде
 | E12 CI/CD/operations | 4/4 | 100.0% | Evidence ниже; READY кода не обещает долгосрочную capacity |
 | E13 Bounded storage/reset | 7/7 | 100.0% | Evidence ниже; READY кода не обещает долгосрочную capacity |
 
-## Current Goal — CAPACITY: реальные источники и заполненная база
+## Current Goal — MAINTENANCE: завершение backfill/repack и старт24h
+
+Основание: явное поручение владельца16Oct2026 устранить узкие места backfill и
+repack, сохранить history/analytics/alerts, RAM и ordinary backup/CD<=900s.
+Один основной PR; branch `codex/maintenance-throughput-20261016`, base
+`f9df4b890f6a32e871d4a24fb9387e8c0c7fb91a`; clean main/fresh origin, protections
+`ci-required`/strict/self-review и SSH проверены. Предыдущие PR45/46/47 поставлены;
+последний CD38962027960 PASS294s, full backup45.442s. Ошибка CD46 сохранена в records.
+
+Результат: независимое ограниченное обслуживание очередей, конечный durable repack
+без повторного кодирования целевого формата; finite observer начинает baseline
+только после фактического завершения работ и стабильных samples. Actual24h —
+последующее автоматическое наблюдение, не бесконечное ожидание этой Goal.
+
+| Задача / DoD | Статус |
+| --- | --- |
+| M01: backfill batch/fairness/retry/restart; сохранность sources и результатов, приоритет live и прежний REST budget | CODE READY; targeted checks PASS, CI/runtime PENDING |
+| M02: независимый repack, конечная граница прохода, public equality/checkpoint/rollback и yield для Telegram | CODE READY; equality/cancel/restart/fairness PASS, runtime completion PENDING |
+| M03: CI/merge/CD<=900s с прежними recovery gates, RAM без увеличения; source/settings/generation и alerts readback | PENDING |
+| M04: observed completion очередей, проверенный finite observer новой revision, actual baseline/24h статус | PENDING |
+
+Validation Plan (root): local `python scripts/checks.py quality` REQUIRED; targeted
+pytest recovery/storage growth/capacity/async runtime/bot REQUIRED — повторная
+обработка, незавершённые задания, retry/conflict, restart/cancel/rollback, независимость
+доставки, finite snapshot при новых writes. Полная Linux suite/image и `ci-required`
+REQUIRED в CI. Production: обычный CD/full backup<=900s, unchanged config/generation,
+current source/image/health/ingestion, queue progress/completion и observer baseline
+REQUIRED. Controlled-clock observer test REQUIRED; новый reset/conversion, cleanup,
+новые codecs, изменение retention/coverage/точности/REST/RAM/gates — non-goals.
+Фактический 24h итог PENDING до отдельного конечного наблюдения; tests/CD не доказывают20GB.
+
+Checkpoint: code baseline f9df4b8. Read-only23:49MSK: backfill24,904;
+repack remaining1,237,061 runtime keys,823,885 legacy expiry,43,486 decision heads
+(неаддитивные очереди). Progress10,160keys/10min; observer WAITING_STABLE, baseline
+отсутствует. Ingestion bootstrap/gaps0, allACK; analytics OK, Telegram DELIVERED.
+Независимые jobs1s/32 backfill jobs, существующие8x40ms repack slices, durable bounds
+и защита superseded HTTP result реализованы. Local92 targeted PASS; после final review
+29 focused PASS; canonical docs/Ruff/mypy PASS. Isolated Windows fixture5,000rows
+(90%current typed/10%CW2): identical public SHA256, active codec work0.406→0.156s
+(2.6x), не production throughput/ETA. RAM/cache/dependencies/CI/CD gates не изменены.
+Следующий шаг: required Linux CI/image, merge и обычный CD; затем bounded readback
+очередей и новый finite observer из final artifact. Latest runtime gates PENDING.
+
+## Previous Goal — CAPACITY: реальные источники и заполненная база
 
 Основание: поручение владельца16Oct2026 после GROW handoff: измерить источники,
 кардинальность cohorts/revisions/comparators/services; исправлять только подтвержденную
@@ -289,7 +332,7 @@ Canonical команды — [README](../README.md#checks); из root repository
 | F41 DECISION DUPLICATE | Актуальная decision и immutable revision полностью дублируются;104,860rows на52,430events | P2: лишний payload и writes | FIX: bounded checked pointer на latest immutable revision; отдельный durable repack cursor, public read/retry/restart/expiry unchanged | Exact ledger18:36UTC; sample128heads17,071→3,456bytes до реализации | HIGH / CODE READY; CI/CD PENDING |
 | F42 CAPACITY EVIDENCE | Нет полноценного per-namespace ledger/24h physical deltas; старая annual density синтетическая | P1:20GB не подтверждены | IMPLEMENT: explicit readonly ledger/cardinality/formulas и finite stable24h observation, не менять scope | Actual summaries0; prospective20,684cohort-days/211,000facts, median5; historical110.55GB/model, not daily measurement | HIGH / IN_PROGRESS; observation/result PENDING |
 | F43 RETENTION PROOF | Прежний малый fixture не доказывал rolling filled-window/restart и реальные20 comparator arrays вместе с methods | P1: lifecycle/capacity evidence gap | IMPLEMENT: controlled62week population plateau, exact facts/group equality и full GC; separate richer comparator/method boundary fixture | Local tests/rehearsal PASS; production annual mix unobserved | HIGH / CODE READY; CI PENDING |
-| F45 MAINTENANCE THROUGHPUT | Один40ms repack после долгого analytics cycle оставляет старые payload/index structures надолго; E13 | P1: repack мешает stable24h baseline | FIX: до8 самостоятельных40ms slices с yield/commit между ними, без изменения source/TTL | Readbacks18:28→19:28UTC:31,869→47,710records, legacy expiry не завершена,1,073,959runtime rows; local76 capacity/bot/storage tests PASS, актуальный CI/runtime throughput PENDING | HIGH / CODE READY |
+| F45 MAINTENANCE THROUGHPUT | Repack/backfill ждут долгий analytics cycle; repack повторно сжимает current typed и догоняет новые writes; E06/E13 | P1: completion/stable24h baseline задержаны | FIX: независимые bounded1s jobs, finite repack bounds/current-codec validation, due backfill batch32 с прежним REST/live priority; stale HTTP result не перезаписывает job |23:49MSK:24,904backfill/1,237,061runtime keys/823,885legacy expiry/43,486decision heads;10,160keys/10min. Local equality/restart/cancel/priority PASS, isolated active codec2.6x при unchanged public hash. Production completion PENDING | HIGH / CODE READY; CI/CD PENDING |
 | F44 RECOVERY TERMINAL REUSE | Ownerless requests читают candles до owner check; terminal receipt блокирует новый valid owner до cleanup | P1: лишний scan/backlog и задержка repair | FIX: owner-first terminal retirement без source mutation; terminal job re-arm при valid retained owner; dedup/retry preserved |65/128pending без owner; regression re-arm/arrived data/noREST PASS | HIGH / CODE READY; CI/CD PENDING |
 
 ## Документы, legacy и artifacts

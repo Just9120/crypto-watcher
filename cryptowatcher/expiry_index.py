@@ -104,11 +104,9 @@ def drain(db: sqlite3.Connection, batch: int = 128, seconds: float = 0.025) -> d
     for row in rows:
         if time.monotonic() >= deadline:
             break
-        exists = db.execute("SELECT 1 FROM runtime WHERE key=?", (row[0],)).fetchone()
-        if exists:
-            db.execute("INSERT INTO market_lifetimes VALUES (?,?,?,?)", tuple(row))
-        else:
-            db.execute("DELETE FROM market_expiry_legacy WHERE key=?", (row[0],))
+        # The view trigger already removes the legacy row and admits only an
+        # existing runtime key. Avoid a redundant lookup on every migrated row.
+        db.execute("INSERT INTO market_lifetimes VALUES (?,?,?,?)", tuple(row))
         processed += 1
     collect_garbage(db, batch)
     return {"moved": processed, "legacy_empty": not rows or (len(rows) < batch and processed == len(rows))}

@@ -12,7 +12,7 @@ async def async_work(store: Store, now_ms: int, slices: int = 8) -> dict[str, An
     """Advance a finite queue without one long transaction or event-loop stall.
 
     Each existing40ms slice commits its own checkpoint. Eight slices add at
-    most320ms of intended work per analytics cycle, with a scheduler yield
+    most320ms of intended work per maintenance tick, with a scheduler yield
     between slices; SQL/commit I/O can overrun an individual time check.
     """
     import asyncio
@@ -30,9 +30,15 @@ def decision_heads(store: Store, state: dict[str, Any], batch: int, deadline: fl
     from .events import DECISION_HEAD, PREFIX, History
 
     prefix = PREFIX + "decision:telegram:"
+    if "decision_upper" not in state:
+        row = store.db.execute(
+            "SELECT key FROM runtime WHERE key>=? AND key<? AND length(key)=? ORDER BY key DESC LIMIT 1",
+            (prefix, prefix + "~", len(prefix) + 36),
+        ).fetchone()
+        state["decision_upper"] = row[0] if row else prefix
     rows = store.db.execute(
-        "SELECT key,payload_json FROM runtime WHERE key>? AND key<? AND length(key)=? ORDER BY key LIMIT ?",
-        (state.get("decision_cursor", prefix), prefix + "~", len(prefix) + 36, batch),
+        "SELECT key,payload_json FROM runtime WHERE key>? AND key<=? AND length(key)=? ORDER BY key LIMIT ?",
+        (state.get("decision_cursor", prefix), state["decision_upper"], len(prefix) + 36, batch),
     ).fetchall()
     processed = 0
     for key, payload in rows:
@@ -68,7 +74,7 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
     from .market_storage import decoded
     from .quality_layout import drain as drain_quality
     from .quality_summary import encode_facts
-    from .record_codec import pack_binary, sql_payload
+    from .record_codec import TYPED_MAGIC, pack_binary, sql_payload
 
     if not store.bounded:
         return {"state": "N/A_LEGACY"}
@@ -86,9 +92,15 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
         expiry = drain(store.db, batch=batch, seconds=seconds / 3)
         if not state.get("records_complete"):
             prefix = "radar:v1:"
+            if "records_upper" not in state:
+                row = store.db.execute(
+                    "SELECT key FROM runtime WHERE key>=? AND key<? ORDER BY key DESC LIMIT 1",
+                    (prefix, prefix + "~"),
+                ).fetchone()
+                state["records_upper"] = row[0] if row else prefix
             rows = store.db.execute(
-                "SELECT key,payload_json FROM runtime WHERE key>? AND key<? ORDER BY key LIMIT ?",
-                (state["cursor"] or prefix, prefix + "~", batch),
+                "SELECT key,payload_json FROM runtime WHERE key>? AND key<=? ORDER BY key LIMIT ?",
+                (state["cursor"] or prefix, state["records_upper"], batch),
             )
             processed = 0
             exhausted = True
@@ -99,7 +111,13 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
                 size = len(payload.encode() if isinstance(payload, str) else payload)
                 if size <= 1024 * 1024:
                     raw = sql_payload(payload)
-                    packed = pack_binary(raw)
+                    # Validate the target envelope, but do not parse/compress it
+                    # a second time. New writes already choose this codec.
+                    packed = (
+                        payload
+                        if isinstance(payload, bytes) and payload.startswith(TYPED_MAGIC)
+                        else pack_binary(raw)
+                    )
                     if len(packed) < size:
                         if sql_payload(packed) != raw:
                             raise ValueError("Repack changed public record bytes")

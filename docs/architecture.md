@@ -115,6 +115,16 @@ Analytics grouping включает frozen profile, detector/version/settings/ma
 
 Automatic cleanup использует expiry/GC indexes и bounded batches вместо обхода всего архива. Record body refs и context body refs имеют transactional counters. Quality summaries сохраняются до удаления подробностей; pending service/recovery ownership имеет конечный срок. Контроль объема отделяет измеренные bytes/counts, extrapolation и данные которые еще не подтверждены. Наличие этих modules само по себе не подтверждает поставку/reset; их завершение проверяется по primary CI/CD и runtime Evidence плана. Повторный reset обычным restart/deploy запрещен.
 
+Repack и analytics backfill имеют отдельные single-instance jobs с cadence1s;
+они не ждут завершения долгих outcome/comparator calculations. Все записи выполняет
+тот же writer, network вне transactions, между slices/pages есть scheduler yield.
+Repack фиксирует конечные key bounds с durable cursor и проверяет уже целевой typed
+envelope без повторного сжатия; новые записи получают compact format при сохранении.
+Backfill ограничен32jobs/проход и1s admission budget (один уже начатый HTTP request
+ограничен прежним timeout клиента), общий REST5req/s/concurrency4 не изменяется.
+Current recovery перепроверяется между pages, superseded in-flight job не оживает.
+Ошибки независимых workers явно блокируют stable capacity baseline.
+
 Storage extension3 сохраняет physical schema2 и public contracts. Legacy expiry/quality
 rows остаются видимыми через compatibility views до bounded in-place drain. Internal
 row IDs/shared dimensions/provenance не заменяют внешние event IDs. Recovery убирает

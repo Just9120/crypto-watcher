@@ -167,6 +167,15 @@ Native closed candles сохраняются в общей SQLite, memory window
 
 `storage` возвращает actual working files/counts/encoded category bytes, durable repack progress и явно помеченный forecast. Retained inserts считаются отдельно от net queue occupancy; эффект repack не выдается за изменение потока событий. Quality baseline и сценарии density/comparators измеряют текущий codec/SQLite table+indexes на isolated synthetic данных; они не production measurement и не upper bound. Initial small-file index measurement ограничен; `storage-indexes` запрашивает отдельный bounded exact snapshot. Автоматический control не сканирует постоянно все страницы, samples ограничены26 записями;20GB fit не считается доказанным по fixture или короткому post-deploy окну. Windows без dbstat показывает UNAVAILABLE, required Linux verification остается обязательной.
 
+Backfill и resumable repack обслуживаются отдельными jobs каждую секунду, независимо
+от долгих outcome/comparator calculations. Repack сохраняет конечные границы прохода
+и cursor, проверяет целевые typed records без повторного сжатия; до8 transactions
+по40ms с yield между ними. Backfill обрабатывает до32 due jobs за ограниченный проход
+с прежним общим REST budget5req/s/concurrency4 и приоритетом live recovery. Retry,
+restart, source conflicts и устаревшие pending bindings не изменяют immutable history.
+Состояния `repack_worker`/`analytics_recovery_worker` диагностируют ошибки независимо
+от analytics; их failure не допускает stable capacity baseline.
+
 Воспроизводимое измерение на **новом** disposable fixture path из root:
 
 ```bash
