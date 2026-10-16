@@ -282,7 +282,7 @@ class ComparisonWorker:
     @staticmethod
     def calculate(store: Store, job: dict[str, Any], event: dict[str, Any]) -> dict[str, Any]:
         if job.get("methodology_version", "1") != COMPARATOR_VERSION:
-            version = job["methodology_version"]
+            version = job.get("methodology_version", "1")
             return {
                 "schema": "cryptowatcher.comparison.v1",
                 "comparison_id": identity(f"comparison/{event['event_id']}/{version}"),

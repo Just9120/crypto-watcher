@@ -727,10 +727,13 @@ def test_pending_method_is_not_silently_replaced_and_recompare_keeps_original_ev
     assert h.get("outcome-head:" + job["outcome_id"])["methodology_version"] == "1"
     comparison = ComparisonWorker(store)
     monkeypatch.setattr(analytics_module, "COMPARATOR_VERSION", "2")
-    result = comparison.calculate(store, {"methodology_version": "1"}, event)
-    assert (
-        result["state"] == "INVALID_SOURCE" and result["methodology_version"] == "1" and not result["samples"]
-    )
+    for frozen_job in ({"methodology_version": "1"}, {}):
+        result = comparison.calculate(store, frozen_job, event)
+        assert (
+            result["state"] == "INVALID_SOURCE"
+            and result["methodology_version"] == "1"
+            and not result["samples"]
+        )
     with store.db:
         h.delete("comparison-job:" + event["event_id"])
         h.version(
