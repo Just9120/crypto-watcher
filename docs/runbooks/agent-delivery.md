@@ -2,6 +2,13 @@
 
 ## Contract и qualification
 
+Physical state producer сейчас schema2; logical agent preference/event/outbox
+versions независимы от нее. Действующий backup/recovery определяется
+[bounded-storage процедурой](bounded-storage-reset.md#routine-schema2-backupcd).
+Ни наличие binaries, ни приведенные исторические qualifications не включают
+owner credential/binding; actual activation state и последние primary records —
+в [плане](../open_issues.md#blockers-и-следующий-шаг).
+
 Producer передаёт `cryptowatcher.market_event.v2` в `POST /integrations/cryptowatcher/events`.
 Consumer сохраняет приём v1; v2 поставлен в main67716b3282bf9fefe1a84077dfae7c6c99c6b1f0,
 production CD38100792664 подтвердил source/image/readiness 2026-10-11 01:12UTC.
@@ -26,10 +33,16 @@ fields не заполняются новыми defaults. Поздние outcome
 `HISTORICAL_OUTCOME_UPDATE`; они не меняют source metrics/settings/reference или live cutoff.
 Episode closure передаёт CLOSED snapshot без освежения исходного наблюдения.
 
+Known `detail_retention_days`/`candle_retention_days` в полном settings snapshot
+принимаются consumer как optional strictly positive integers; legacy отсутствие
+не дополняется выдуманными defaults. Исходные snapshot/hash сохраняются. Эти поля
+описывают storage policy и не продлевают market freshness/consumer max-age.
+Unknown/secret settings и execution fields по-прежнему запрещены.
+
 ## Owner control и infrastructure
 
 `/agent status`, `/agent on`, `/agent off`, `/agent retry`, `/agent replay EVENT_ID`
-доступны только владельцу в private chat через общий guard. Preference schema1 хранится
+доступны только владельцу в private chat через общий guard. Preference logical version1 хранится
 отдельно от domain settings, Telegram alerts/mutes и digest; default OFF. Unknown/corrupt
 preference сохраняется и fail-closed. `/diagnostics` и read-only CLI `diagnostics` показывают
 enabled/configuration/intents/pending/delivered/blocked и target state, без credentials.
@@ -70,7 +83,7 @@ Ack200 должен совпадать по event_id/revision, содержат�
 flags. Только такой ack расходует successful live notification state. Потерянный ack и
 interrupted IN_FLIGHT повторяют исходные bytes/id/revision; ambiguity хранится отдельно.
 Transient network/408/425/429/5xx: exponential1–300s; Retry-After seconds/HTTP-date учитывается.
-Permanent error блокирует target до owner on/retry, записи не теряются. Oversized payload
+Permanent error блокирует target до owner on/retry. Pending записи сохраняются в пределах D22; после допустимого срока получают terminal status и освобождают dependencies, не удерживая всю history бессрочно. Oversized payload
 BLOCKED индивидуально. Failed send не останавливает history или другой consumer.
 
 Live payload, истёкший либо устаревший по settings revision до отправки, сохраняется как
@@ -83,10 +96,14 @@ Future source/episode timestamps дают WAIT_CLOCK; local clock не подд�
 
 ## Delivery и recovery
 
-Producer G4: schema1/NONE, без DDL или JSON re-import. Все agent logical namespaces входят
-в existing all-row backup; startup сохраняет preference/bytes/attempts/pending jobs. CD
-прежний, automatic, с expected merged source/image, online backup, health/persistence и
-dual-market/4TF checks. Activation требует qualified consumer config/secret/HTTPS и bounded
+Producer physical schema2, logical agent state v1; activation сама по себе не
+выполняет DDL, JSON re-import или reset. SQLite backup включает agent namespaces,
+preferences и необходимые immutable bytes/pending work. Current routine CD
+выбирает disk source integrity/online backup/full backup integrity/hash и
+expected merged source/image/health/persistence/dual-market/4TF checks по
+[действующей процедуре](bounded-storage-reset.md#routine-schema2-backupcd).
+Нельзя брать historical schema1 compressed-RAM validation за routine schema2 flow.
+Activation требует qualified consumer config/secret/HTTPS и bounded
 joint runtime verification; binary deployment не выдаётся за включённую integration.
 Forward-fix/compatible binary; без DB downgrade/restore поверх живых producer/consumer данных.
 Operational activation не меняет Strategies, allowed symbols или trading credentials.

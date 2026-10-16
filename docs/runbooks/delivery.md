@@ -1,5 +1,13 @@
 # CryptoWatcher — delivery and recovery
 
+Текущий runtime — physical schema2. Routine source integrity/backup на диске,
+resource/deadline/space gates и отдельный уже выполненный test-history reset
+определены в [действующей storage процедуре](bounded-storage-reset.md).
+Далее сохраняются artifact/GitHub/SSH/queue trust boundaries и исторические
+schema1 qualifications/converter commands. Первую migration/reset и compressed-RAM
+path нельзя повторять как обычную schema2 поставку; текущие source/image/receipts —
+в [плане](../open_issues.md#evidence-и-baseline).
+
 ## Фактический target
 
 Источник initial baseline: owner-assisted read-only SSH inventory 2026-10-10 09:23:18, 10:08:53 и 10:49:10 UTC; Git blob/archive comparison в G1. Scope — только CryptoWatcher. Таблица сохраняет прежний runtime для compatibility/recovery; актуальная первая поставка зафиксирована ниже.
