@@ -250,6 +250,13 @@ def stable_reason(store: Store) -> list[str]:
         reasons.append("SUBSCRIPTION_ACK")
     if not store.get_runtime("radar:v1:outcome-admission", {}).get("complete"):
         reasons.append("OUTCOME_BOOTSTRAP")
+    # Referenced analytics backfill has a different queue from live ingestion
+    # recovery. A populated queue must not be mistaken for a settled baseline.
+    prefix = PREFIX + "analytics-gap-pending:"
+    if store.db.execute(
+        "SELECT 1 FROM runtime WHERE key>=? AND key<? LIMIT 1", (prefix, prefix + "~")
+    ).fetchone():
+        reasons.append("ANALYTICS_RECOVERY_PENDING")
     if store.get_runtime("storage_repack", {}).get("state") != "COMPLETE":
         reasons.append("REPACK")
     analytics = store.get_runtime("analytics", {})

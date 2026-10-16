@@ -6,7 +6,14 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from cryptowatcher.capacity import explain_forecast, interval, prospective_cohorts, runtime_ledger, snapshot
+from cryptowatcher.capacity import (
+    explain_forecast,
+    interval,
+    prospective_cohorts,
+    runtime_ledger,
+    snapshot,
+    stable_reason,
+)
 from cryptowatcher.events import DECISION_HEAD, PREFIX, EventEngine, History, identity
 from cryptowatcher.market_storage import enable
 from cryptowatcher.storage import StateError, Store
@@ -165,6 +172,35 @@ def test_quick_capacity_never_walks_runtime_or_quality_and_interval_does_not_inv
     assert interval(value, later)["state"] == "OBSERVED_24H"
     later["configuration_revision"] += 1
     assert interval(value, later)["state"] == "PARTIAL_OR_UNSTABLE"
+
+
+def test_stable_baseline_distinguishes_referenced_backfill_from_normal_pending_horizons(store):
+    bounded(store)
+    with store.db:
+        store.put_runtime(
+            "ingestion",
+            {
+                "at": NOW / 1000,
+                "bootstrap_pending_streams": 0,
+                "blocked_streams": 0,
+                "recovery_pending": 0,
+                "recovery_working": 0,
+                "historical_gaps_pending": 0,
+                "subscriptions": {"spot:0": {"state": "CONNECTED", "requested": 1, "acknowledged": 1}},
+            },
+        )
+        store.put_runtime("radar:v1:outcome-admission", {"complete": True})
+        store.put_runtime("storage_repack", {"state": "COMPLETE"})
+        store.put_runtime("analytics", {"state": "OK", "at_ms": NOW})
+        History(store).put("outcome-pending:future-horizon", {"key": "normal-scheduled-work"})
+    with patch("cryptowatcher.capacity.time.time", return_value=NOW / 1000):
+        assert stable_reason(store) == []
+        with store.db:
+            History(store).put("analytics-gap-pending:queued", {"id": "referenced-backfill"})
+        assert stable_reason(store) == ["ANALYTICS_RECOVERY_PENDING"]
+        with store.db:
+            History(store).delete("analytics-gap-pending:queued")
+        assert stable_reason(store) == []
 
 
 def test_forecast_attribution_does_not_add_indexes_twice_and_sampling_is_finite():

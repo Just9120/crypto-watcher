@@ -34,6 +34,11 @@ Canonical spec: [product_scope.md](product_scope.md). Этот план соде
 наблюдение после стабилизации без ожидания агентом. Один основной PR.
 Base `c922700c6db7a9cc6cb543f3170d0d83917b547b`, branch
 `codex/capacity-evidence-20261016`; Git/GitHub/protections/SSH проверены.
+Основной PR45 merged `ef5652d99c2fb898fa12ccfd7d5b06c81d211a8f`;
+CI38955487956 PASS766/image, CD38956621801 production PASS330s, full disk backup
+1,234,268,160bytes/copy+integrity43.378s/hash. После поставки hotfix branch
+`codex/capacity-stability-hotfix-20261016`, base `ef5652d99c2fb898fa12ccfd7d5b06c81d211a8f`:
+условие старта observer должно учитывать отдельную analytics recovery queue.
 
 | Задача / критерий завершения | Статус |
 | --- | --- |
@@ -41,7 +46,7 @@ Base `c922700c6db7a9cc6cb543f3170d0d83917b547b`, branch
 | CAP-02: подтвержденные повторы исправлены с equality/restart/retry/causal evidence; новые codec/batching только после оценки эффекта | CODE READY; decision pointer / ownerless recovery / terminal re-arm / sliced repack tests PASS |
 | CAP-03: репрезентативный controlled-clock полный цикл30/35d/12mo, GC/dependencies/аналитика/plateau | CODE READY;62week fixture и20-comparator/multiple-method boundaries PASS |
 | CAP-04: auto24h после ingestion/bootstrap/repack stability, размер/прирост/data/index/WAL/cleanup; finite sampling, без Actions ожидания | CODE READY; unit/start после applicable CD, actual24h PENDING |
-| CAP-05: validation/self-review/CI/merge/CD<=900s, отчет actual/model/range и оставшиеся причины >20GB | IN_PROGRESS; local quality/self-review PASS, required CI/CD PENDING |
+| CAP-05: validation/self-review/CI/merge/CD<=900s, отчет actual/model/range и оставшиеся причины >20GB | IN_PROGRESS; PR45 CI/CD PASS; stability hotfix CI/CD PENDING |
 
 DoD текущей реализации: measurable ledger и подтвержденные fixes, meaningful tests,
 ordinary gates и post-checks PASS, автоматический конечный observation подготовлен/
@@ -358,8 +363,15 @@ allowlist. Добавлено разрешение только `scripts/observe
 private experiments и runtime data в build context не включаются. Required latest
 CI/image, merge и ordinary CD пока PENDING.
 
-Next: required full Linux CI+image, merge, normal CD900s,
-primary source/image/private readback, then finite readonly observer on exact artifact.
+PR45 latest CI38955487956 PASS766/image; merged ef5652d, ordinary CD38956621801
+PASS330s. Readback19:50UTC: exact source/image healthy, private/env/generation
+preserved, full backup43.378s; working1,353,592,216bytes включает113,798,552WAL.
+После restart bootstrap еще выполняется — это не steady interval. При проверке
+gate выявлен пропуск отдельной referenced analytics recovery queue: hotfix добавляет
+indexed existence lookup/LIMIT1 без count/scan; нормальные future horizons допустимы.
+
+Next: targeted gate tests/quality, latest required CI/image hotfix, merge и normal
+CD900s, source/private readback, затем finite observer на окончательном artifact.
 Observation waits up to12h for two5min stable samples and COMPLETE repack/admission;
 then24h. Sample statuses/partial deep boundary/failure explicit; actual24h PENDING.
 No unrelated branch/worktree cleanup. Backups/experiments сохраняются.
