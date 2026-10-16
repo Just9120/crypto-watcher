@@ -129,13 +129,57 @@ reviewed promotion/merge/CD с точной image/config identity и runtime che
 DoD: working DB физически уменьшена, useful history/new writes сохранены,
 alerts работают, применимая поставка и recurring900s подтверждены.
 
-Следующий шаг: после pending разрешения удалить только новый временный input
-неудавшегося proof (5.27GB), повторно сверив hash с сохранённым PC original.
-Затем target indexed proof без второго spool. Подготовка source capture должна
-содержать exact stop/checkpoint, independent watchdog900s/restore reserve150s и
-запуск того же bot container; не исполнять старую процедуру с новыми параметрами
-или выдавать physical transport за qualified current source. Подготовленные PC
-copies/recovery/source сохраняются; production replacement ещё NOT_RUN.
+Owner16Oct явно разрешил exact5.27GB temporary input cleanup после повторного
+hash check. Выполнено05:19:44UTC: retained PC/source и VPS hashes36278747… PASS,
+identity/handles PASS, удалено ровно одно разрешённое имя; CW/API/Postgres IDs и
+running state unchanged. Primary `rehearsals/disk-backup-proof-85w8mjae/approved-temp-copy-cleanup-e256306077624fe98fb0085631ad5f58.json`.
+Свободное место1,596,735,488→6,859,972,608bytes. Остальные retained copies сохраняются.
+
+Actual v2 capture `rehearsals/closed-page-capture-v2-elseqtgr` не завершён:
+3GiB packet bound исчерпан, fresh snapshot footer не создан. Whole operation
+889.507s/900s, terminal RESTORATION_UNCONFIRMED из-за post-check timeout. Тот же
+container запущен и healthy; отдельный readback05:40:32UTC подтверждает fresh
+Spot/Linear4TF, полные ACK836/384, owner revision3, Telegram DELIVERED. Этот
+поздний PASS не повышает итог bounded operation. Application history не удалена,
+working DB не заменена. Служебный epoch6a664ecf… сохраняется; prior ff7559…
+keys500k архивированы/decoded/hash/count PASS до rearm. Partial pages не пригодны
+для promotion и сохраняются до отдельного cleanup решения.
+
+Следующий путь — [online pages](../cryptowatcher/online_pages.py): pinned WAL
+read transaction + SQLite backup API прямо в private PC stream, без остановки
+бота и большого второго VPS spool. 4KiB page hashes/root охватывают все
+snapshot bytes, включая неизменившийся baseline; producer/receiver packet hashes,
+fsync и полный PC page-root readback обязательны. Это snapshot transport, SQL/history
+integrity остаются PENDING до отдельной полной проверки. Source mount при capture
+read-only, kernel CPU1/4GiB/no-swap, managed RuntimeMaxSec900; receiver+SSH на ПК
+ограничены одним CPU и общим4GiB Job. Ordinary backup/CD gates не меняются.
+
+Перед первой source point единственный maintenance consumer архивирует все pending
+journal keys/counters в согласованном WAL snapshot; только после root proof
+отсутствия прежней source point допускается initial key-only mode. Все app values
+должны войти в новый полный snapshot. Для tail после принятой source point нужны
+полные values/tombstones; key-only режим там запрещён. Полный independent decode/hash
+и fsync предшествуют acknowledgement; короткие transaction удаляют только
+служебные keys с seq≤verified upper, concurrent updates с новыми seq сохраняются.
+SQL authorizer запрещает DML пяти app tables, max500k/128MiB/expiry/epoch не
+расширяются. Архив prefix сохраняется как recovery evidence. Ни при overflow,
+ни при expiry completeness не возобновляется вслепую. Ранее принятая source point
+любой capture method блокирует reset journal. Local171 affected scenarios PASS,
+включая online/ack/receiver fixtures; canonical quality49 modules PASS.
+Fresh required CI и real source capture/whole900s backup proof ещё REQUIRED.
+
+Если initial journal уже invalid до первой source point, разрешён только
+проверенный initial rearm с архивом всех прежних keys и no-prior-capture guard;
+новый epoch сохраняет прежние max bounds и expiry. Это не восстановление tail
+принятого снимка. Online capture не останавливает/restarts production.
+
+PC preservation preparation16Oct05:29:46UTC: retained D raw и disposable C raw
+SHA24314f94… повторно PASS, empty C WAL housekeeping raw bytes не изменил,
+application rows changed0. 4KiB baseline рассчитан за54.969s, raw35,553,550,336bytes,
+hashes36d5e1fc…, descriptor533b07f3…; CPU1/process4GiB. Историческая candidate16.06GB
+и recovery archives сохраняются. Следующий шаг — CI текущего online engine,
+actual stream/reconstruction/full SQL CHECK, свежая reconciliation и newer tail;
+production promotion и whole ordinary target900s proof остаются REQUIRED.
 
 15Oct owner поручил уменьшить накопленную БД, сохранив useful history и работу
 алертов. Последующее решение15Oct: owner разрешил более15min только для

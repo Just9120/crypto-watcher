@@ -745,3 +745,48 @@ read-only. Rearm≤90s и повторный checkpoint вычитаются и�
 restore reserve150s и CPU1/RAM4GiB/no-swap сохраняются. Overflow нового epoch
 снова запрещает complete-tail proof, сохраняя alerts/application writes.
 Старый подготовленный v1 capsule после overflow исполнять нельзя.
+
+### Online snapshot на private PC без остановки radar
+
+`scripts/online_capture.py` — operator-only managed launcher/runner;
+`scripts/online_capture_worker.py` — UID10001 worker. SQLite source открывается
+read-only, первая read transaction фиксирует один WAL snapshot. Journal watermark,
+owner/schema и SQLite backup API относятся к этому же состоянию. Destination VFS
+хранит header и page hashes, а изменённые4KiB pages передаёт через stdout прямо
+в SSH receiver. Большой VPS snapshot spool не создаётся. Source WAL может расти,
+поэтому reserve1.5GiB+headroom проверяется во время backup; deadline или потеря
+receiver прекращают read snapshot, приложение не останавливается.
+
+Managed RuntimeMaxSec900 и exact cleanup hook проверяются через D-Bus; source
+worker CPU1/RAM4GiB/no-swap. Cleanup удаляет только принадлежащий этому unit
+ephemeral worker, не запускает/останавливает production. Перед запуском сверяются
+host/account, exact image/container/revision, owner3, code manifests, baseline
+hashes и active journal bounds. Единственный target lock исключает concurrent
+deployment. Неоднозначный dispatch сначала проверяется по unit/primary records.
+
+Подготовка journal — отдельная явная роль с source RW только для двух
+служебных tables. До первой source point она сохраняет pending keys/counters
+одной read snapshot; отсутствие прежней source point доказывается root guard,
+а все app values затем обязательно входят в fresh full snapshot. Для tail после
+принятой source point требуются полные values/tombstones, initial key-only запрещён.
+Fsync и independent decode/hash предшествуют acknowledgement. Порции≤500 keys
+в коротких transaction удаляются только при seq≤verified archive upper;
+новые seq сохраняются. SQL authorizer запрещает app-table DML; user data,
+config revision, journal epoch/expiry/max bounds не меняются. Archive retained,
+overflow/expiry остаются blocker; это не автоматическая retention application data.
+
+`scripts/receive_online_pages.py` использует frozen SSH args соответствующего
+VPS skill с strict host verification, без повторного чтения SSH config. На ПК
+receiver+SSH ограничены одним CPU и общим4GiB Job. Binary bytes идут в новый
+private файл; stderr сохраняется отдельно. Exit0, fsync, точные encoded hash/size
+и producer metadata обязательны. Partial transfer не повышается до snapshot.
+
+Формат `cryptowatcher.online-page-stream.v1` допускает backup header rewrite;
+complete page-root проверяет итог каждого page, включая unchanged baseline.
+PC apply разрешён только для disposable closed copy при сохранённом original
+recovery. Identity marker позволяет idempotent replay после interruption;
+packet bounds/checksum/encoded identity и полный page-root проверяются заново.
+SQLite backup может нормализовать file header: page-root относится к согласованному
+backup snapshot, а не к изменяющемуся main file на VPS. Full source SQL/history
+qualification, actual900s backup/CD proof и reviewed fresh-tail-preserving
+production promotion остаются отдельными обязательными gates.

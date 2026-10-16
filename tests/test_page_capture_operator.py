@@ -301,6 +301,17 @@ def test_recorded_source_point_blocks_rearm_even_when_not_yet_qualified(tmp_path
     capture.uncaptured_epoch("f" * 32)
 
 
+def test_online_source_point_also_prevents_old_journal_rearm(tmp_path, monkeypatch):
+    root = tmp_path.resolve() / "rehearsals/online-snapshot-complete"
+    (root / "work").mkdir(parents=True)
+    (root / "work/snapshot.json").write_text(
+        json.dumps({"state": "CAPTURED_SNAPSHOT_NOT_QUALIFIED", "journal_epoch": "f" * 32})
+    )
+    monkeypatch.setattr(capture.common, "APP", tmp_path.resolve())
+    with pytest.raises(RuntimeError, match="consumes"):
+        capture.uncaptured_epoch("f" * 32)
+
+
 def test_initial_rearm_and_second_checkpoint_share_the_capture_budget(tmp_path, monkeypatch):
     root, value = prepared(tmp_path, monkeypatch)
     initial_plan(root, value)

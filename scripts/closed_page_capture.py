@@ -99,15 +99,16 @@ def uncaptured_epoch(prior_epoch: str) -> None:
     Root's reviewed initial_snapshot attestation is still required. Absence of
     these records alone is not authorization or proof of an uncaptured epoch.
     """
-    for root in (common.APP / "rehearsals").glob("closed-page-capture-*"):
+    rehearsals = common.APP / "rehearsals"
+    for root in (*rehearsals.glob("closed-page-capture-*"), *rehearsals.glob("online-snapshot-*")):
         if root.is_symlink() or root.resolve() != root:
             raise RuntimeError("Prior capture directory identity refused")
-        for path in (root / "work/capture.json", root / "operation.json"):
+        for path in (root / "work/capture.json", root / "work/snapshot.json", root / "operation.json"):
             if path.is_symlink():
                 raise RuntimeError("Prior capture record symlink refused")
             if path.is_file():
                 value = json.loads(path.read_text(encoding="utf-8"))
-                candidate = value.get("capture", value)
+                candidate = value.get("capture", value.get("snapshot", value))
                 if candidate.get("journal_epoch") == prior_epoch:
                     raise RuntimeError("Prior source point consumes this journal")
 
