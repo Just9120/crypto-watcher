@@ -93,6 +93,12 @@ def enable(db: sqlite3.Connection) -> None:
 
     create(db)
     create_meter(db)
+    from .expiry_index import install as install_expiry
+
+    install_expiry(db)
+    from .quality_layout import install as install_quality
+
+    install_quality(db)
 
 
 def active(db: sqlite3.Connection) -> bool:
@@ -108,6 +114,13 @@ def encoded(value: Any) -> bytes:
 
 
 def decoded(payload: bytes, maximum: int = 8192) -> Any:
+    if payload.startswith((b"CW2\x00", b"CW3\x00")):
+        from .record_codec import binary_payload
+
+        raw = binary_payload(payload).encode()
+        if len(raw) > maximum:
+            raise ValueError("Compact value exceeds decoder bound")
+        return json.loads(raw)
     if not payload or payload[:1] not in (b"J", b"Z"):
         raise ValueError("Invalid compact candle encoding")
     if payload[:1] == b"Z":

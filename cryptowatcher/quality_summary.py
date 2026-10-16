@@ -13,6 +13,15 @@ from .storage import Store, encode
 DAY = 86400000
 
 
+def encode_facts(facts: list[Any]) -> bytes:
+    """Lossless numeric columns; keep the smaller of typed v3 and legacy zlib."""
+    from .record_codec import pack_binary
+
+    typed = pack_binary(encode(facts))
+    legacy = encoded(facts)
+    return typed if len(typed) < len(legacy) else legacy
+
+
 def month_boundary(day: int, months: int) -> int:
     value = datetime.fromtimestamp(day * 86400, timezone.utc)
     index = value.year * 12 + value.month - 1 + months
@@ -170,19 +179,22 @@ def archive_event(store: Store, event: dict[str, Any]) -> None:
             },
         }
         cohort = hashlib.sha256(encode(group).encode()).hexdigest()
+        packed = history.codec.pack({"quality_provenance": provenance})
         old = store.db.execute(
-            "SELECT chunk,facts,n FROM market_quality WHERE day=? AND cohort=? ORDER BY chunk DESC LIMIT 1",
+            "SELECT chunk,facts,n,provenance FROM market_quality WHERE day=? AND cohort=? ORDER BY chunk DESC LIMIT 1",
             (day, cohort),
         ).fetchone()
         chunk = old[0] if old else 0
-        facts = decoded(bytes(old[1]), 1024 * 1024) if old and old[2] < 128 else []
-        if old and old[2] >= 128:
+        append = old and old[2] < 128 and old[3] == encode(packed)
+        facts = decoded(bytes(old[1]), 1024 * 1024) if append else []
+        if old and not append:
             chunk += 1
         facts.append(fact)
         # Shared settings/definitions outlive detail via the same ref-counted body pool.
-        packed = history.codec.pack({"quality_provenance": provenance})
-        store.db.execute(
-            "INSERT INTO market_quality VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(day,cohort,chunk) DO UPDATE SET facts=excluded.facts,n=excluded.n",
+        from .quality_layout import put
+
+        put(
+            store.db,
             (
                 day,
                 cohort,
@@ -190,7 +202,7 @@ def archive_event(store: Store, event: dict[str, Any]) -> None:
                 month_boundary(day, 12),
                 encode(group),
                 encode(packed),
-                encoded(facts),
+                encode_facts(facts),
                 len(facts),
             ),
         )

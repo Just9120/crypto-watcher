@@ -136,10 +136,10 @@ def track(store: Store, key: str, value: Any) -> None:
         expiry = now + days * DAY
     elif category in ("condition", "diagnostic", "oi-attempt"):
         expiry = now + store.snapshot().settings.candle_retention_days * DAY
-    store.db.execute(
-        "INSERT INTO market_lifetimes VALUES (?,?,?,?) ON CONFLICT(key) DO UPDATE SET expires=excluded.expires,event_id=excluded.event_id",
-        (key, expiry, category, event_id),
-    )
+    # Delete/insert also supports the normalized compatibility view. Both remain
+    # in the caller's transaction, including counter/ref updates and rollback.
+    store.db.execute("DELETE FROM market_lifetimes WHERE key=?", (key,))
+    store.db.execute("INSERT INTO market_lifetimes VALUES (?,?,?,?)", (key, expiry, category, event_id))
     if (
         isinstance(value, dict)
         and value.get("state") in TERMINAL_DELIVERY | {"COMPLETE", "EXPIRED_RETENTION_INCOMPLETE"}
@@ -225,10 +225,9 @@ class BoundedRetention:
                 remove(store, row[0])
                 processed += 1
             # Service receipts expire first. They do not keep detail alive indefinitely.
-            service = store.db.execute(
-                "SELECT key,category FROM market_lifetimes WHERE expires<=? AND category NOT IN ('event','event-head','outcome','outcome-head','comparison','comparison-head','history') ORDER BY expires,key LIMIT ?",
-                (now_ms, batch),
-            ).fetchall()
+            from .expiry_index import due_services
+
+            service = due_services(store.db, now_ms, batch)
             service_removed = 0
             for row in service:
                 if row[1] in ("episode", "episode-head"):
@@ -328,6 +327,13 @@ class BoundedRetention:
                 store.db.execute(
                     "DELETE FROM market_quality WHERE day=? AND cohort=? AND chunk=?", (day, cohort, chunk)
                 )
+            from .expiry_index import collect_garbage as collect_events
+            from .quality_layout import collect_garbage as collect_quality
+
+            if store.db.execute("SELECT 1 FROM sqlite_master WHERE name='market_expiry'").fetchone():
+                collect_events(store.db, batch)
+            if store.db.execute("SELECT 1 FROM sqlite_master WHERE name='market_quality_blocks'").fetchone():
+                collect_quality(store.db, batch)
             garbage = store.db.execute(
                 "SELECT body FROM market_body_counts WHERE refs=0 LIMIT ?", (batch,)
             ).fetchall()

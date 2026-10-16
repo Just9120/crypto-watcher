@@ -133,7 +133,7 @@ BINARY_DICTIONARY = zstandard.ZstdCompressionDict(
 )
 
 
-def pack_binary(payload: str) -> bytes:
+def pack_binary_v2(payload: str) -> bytes:
     raw = payload.encode("utf-8")
     if not 0 < len(raw) <= MAX_BYTES:
         raise StateError("Compressed record size refused")
@@ -143,7 +143,55 @@ def pack_binary(payload: str) -> bytes:
     return BINARY_MAGIC + hashlib.sha256(raw).digest() + frame
 
 
+TYPED_MAGIC = b"CW3\x00"
+
+
+def pack_binary(payload: str) -> bytes:
+    """Typed canonical records; noncanonical legacy bytes keep their v2 codec."""
+    from .compact_json import pack as typed_pack
+
+    raw = payload.encode("utf-8")
+    if not 0 < len(raw) <= MAX_BYTES:
+        raise StateError("Compressed record size refused")
+    value = json.loads(payload)
+    if encode(value) != payload:
+        return pack_binary_v2(payload)
+    try:
+        typed = typed_pack(value)
+    except ValueError:
+        return pack_binary_v2(payload)
+    if len(typed) >= len(raw):
+        return pack_binary_v2(payload)
+    frame = zstandard.ZstdCompressor(level=3, write_checksum=True, threads=0).compress(typed)
+    return TYPED_MAGIC + len(raw).to_bytes(4, "big") + hashlib.sha256(raw).digest() + frame
+
+
 def binary_payload(payload: bytes) -> str:
+    if payload.startswith(TYPED_MAGIC):
+        from .compact_json import unpack as typed_unpack
+
+        if len(payload) < 46:
+            raise StateError("Invalid typed record envelope")
+        size = int.from_bytes(payload[4:8], "big")
+        try:
+            parameters = zstandard.get_frame_parameters(payload[40:])
+            if (
+                not 0 < size <= MAX_BYTES
+                or not 0 < parameters.content_size <= MAX_BYTES
+                or parameters.window_size > MAX_BYTES
+                or parameters.dict_id
+                or not parameters.has_checksum
+            ):
+                raise StateError("Invalid typed record bounds")
+            typed = zstandard.ZstdDecompressor(max_window_size=MAX_BYTES // 1024).decompress(
+                payload[40:], max_output_size=parameters.content_size, allow_extra_data=False
+            )
+            raw = encode(typed_unpack(typed, MAX_BYTES)).encode()
+            if len(raw) != size or hashlib.sha256(raw).digest() != payload[8:40]:
+                raise StateError("Typed record identity mismatch")
+            return raw.decode("utf-8")
+        except (zstandard.ZstdError, ValueError, UnicodeError, RecursionError) as exc:
+            raise StateError("Invalid typed record encoding") from exc
     if not payload.startswith(BINARY_MAGIC) or len(payload) < 42:
         raise StateError("Invalid binary record envelope")
     fingerprint = payload[4:36]

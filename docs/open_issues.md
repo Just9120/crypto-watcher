@@ -26,50 +26,42 @@ Canonical spec: [product_scope.md](product_scope.md). Этот план соде
 | E12 CI/CD/operations | 4/4 | 100.0% | Evidence ниже; READY кода не обещает долгосрочную capacity |
 | E13 Bounded storage/reset | 7/7 | 100.0% | Evidence ниже; READY кода не обещает долгосрочную capacity |
 
-## Current Goal — самостоятельный manual radar и handoff
+## Current Goal — GROW: хранение без потери аналитики
 
-**Основание S06 (16Oct2026):** владелец разделил проекты: здесь готовится CryptoWatcher
-для alerts под ручную торговлю и handoff; подключение в trading agent — задача
-принимающего проекта. D23 в spec заменяет прежний cross-project activation DoD.
-Credentials/binding/consumer activation не являются условием завершения CryptoWatcher.
-Предыдущее BLOCKED B02 относилось к прежним границам; отсутствие ключа не дефект radar.
-Встроенная Goal сохраняет историю поручения; ее завершение — после проверки нового DoD.
+Основание: явное поручение владельца16Oct2026 реализовать предложенные исправления
+роста базы и поставить через CD. Base `447a08a703f7c864e419be504d8c340da1863e1c`,
+branch `codex/storage-growth-20261016`. Clean Git/GitHub/protections/worktree проверены.
+Предыдущий handoff PR42 merged447a08a, CI38919152279 и postmerge38919292133 PASS;
+consumer activation остается вне проекта по D23.
 
-**Прогресс по коду/документам текущего CW scope:65/65 AC.** После S06 прежний AC-09-02 оценивается по producer readiness; это не proof живой consumer delivery. Required PR CI/merge остаются gates текущей документации.
+Результат: recovery не накапливает уже заполненные запросы; подробные records и
+годовые numeric facts используют обратимое компактное представление; существующие
+rows сохраняются и постепенно уплотняются с durable progress; forecast различает
+оборот очередей, retained data, измерения и модели. Один основной PR.
 
-**Результат:** работающий standalone Spot/USDT Perpetual radar,1/3/5/15m,5families,
-episodes/outcomes/history/Telegram и bounded storage; готовый versioned producer,
-контракт, synthetic payload и список внешних acceptance checks в
-[handoff](runbooks/agent-delivery.md#handoff-принимающему-проекту).
-Scope AC IDs сохраняется65; ответственность частей E09 уточнена S06/D23.
-Аудиторские проценты ниже/выше — прошлый snapshot, сейчас не пересчитываются.
+| Задача / closure criterion | Статус |
+| --- | --- |
+| GROW-01 / F37: local completeness, overlap recovery, bounded retirement/restart, без лишнего REST | CODE READY; targeted PASS |
+| GROW-02 / F34: typed lossless records и resumable bounded repack накопленного, public bytes/results сохранены | CODE READY; required CI PENDING |
+| GROW-03 / F34: compact numeric quality blocks, methods/settings/comparators/completeness и controlled expiry equality | CODE READY; required CI PENDING |
+| GROW-04 / F38: measured category rates, queue lifetime/turnover, versioned forecast model и ограничения | CODE READY; required CI PENDING |
+| GROW-05: required CI, merge, normal CD<=900s, source/image/settings/history/alerts readback и measured post-report | BACKLOG |
 
-**DoD текущего уточнения:** spec/plan/runbook/README согласованы; handoff содержит
-контракт/ownership/configuration/выходные artifacts/ограничения/acceptance checks
-принимающей стороны; пример соответствует producer и не содержит secrets; existing
-HMAC/retry/restart/expiry/isolation fixtures PASS; bounded readonly CW smoke/manual
-path подтверждены; docs CI/merge и safe branch cleanup. Runtime deploy N/A для
-этого docs-only scope. Никакой зависимости от включенного consumer или нового ключа.
+Затрагиваются E06/E10/E12/E13; существующие65AC/исторические проценты сохраняются,
+новые AC не вводятся. Работа отслеживается по пяти задачам. AC-13-02/13-05 уточняются
+по выявленным gaps; code READY не заменяет required checks и delivery.
 
-**Non-goals:** конфигурация/активация/изменения trading agent, credentials/binding,
-live joint delivery; сокращение markets/TF/detectors/events/качества аналитики,
-auto calibration, LLM/trading/orders, PostgreSQL/Redis, удаление backups/experiments,
-увеличение RAM/backup/CD deadlines, повтор reset, длительный monitoring в Actions.
-Подключение позднее orchestrates принимающий проект с отдельными permissions и
-согласованием изменения producer infrastructure config.
+DoD: задачи подтверждены meaningful regression/equality/restart/corruption/retention
+checks и измерением bytes/event/outcomes/services; CI на latest revision PASS;
+merge+CD по действующей full source/backup validation, health/ingestion/private
+settings preservation, no historical alert replay. Показать фактический объем,
+скорость и новый прогноз относительно20GB с ограничениями; не объявлять fit без
+измерений. Постоянное ожидание статистики не входит в DoD.
 
-| Этап | Состояние CryptoWatcher | Передаваемая/последующая работа |
-| --- | --- | --- |
-| G1 | Owner config/migration/tests/CI/CD DONE | Existing backups/private settings сохраняются |
-| G2A/G2B | Два universe/4TF/5families/episodes/Telegram DONE | Routine source diagnostics продолжаются автоматически |
-| G3/G5 | Outcomes/comparator/export/digest/optional enrichment DONE по code/fixtures | Малый N/неполнота/optional OFF видны явно |
-| E13 storage | Compact accumulation/retention/metering/reset DONE | F34:20GB fit пока не доказан; follow-up observation отдельно |
-| E09 producer/handoff | Producer готов; handoff в текущей branch | TA-CW-01…06 — receiving-project integration checklist |
-| G6 | Audit40 и F02 consolidation41 merged | Последняя audit оценка не меняется этим UPDATE |
-
-**Branch/base:** `codex/manual-radar-handoff-20261016`, base2e242abf4679f76254e6445e23dd8cf70b1d22a0;
-clean main/remotes/worktrees/protections/open PR проверены до изменений. Только CW
-repository documentation/example; counterpart repository/runtime/config не меняются.
+Non-goals: reset/удаление полезной истории, сокращение markets/detectors/TF/events/
+метрик/сроков, PostgreSQL/Redis, owner threshold changes, consumer activation,
+удаление backups/experiments, повышение RAM или backup/CD900s. Старые форматы
+остаются читаемыми; schema/encoding changes сопровождаются compatibility evidence.
 
 ## Validation Plan
 
@@ -87,6 +79,16 @@ Canonical команды — [README](../README.md#checks); из root repository
 | Ordinary CD/recovery | Required protection/latest CI/tree/source/image, full source integrity + disk snapshot/hash/readback, target lock, health/ingestion/private equality | production CW CD38/39 | REQUIRED EVID-03 PASS; entire job<=900s, CPU1/RAM4GiB/no swap |
 | Handoff / S06 | Existing producer5+14 targeted fixtures, exact example/schema/hash/source equality, stable65 AC и6TA-CW items, bounded readonly CW smoke | local + required docs CI | REQUIRED local PASS; latest PR CI/merge PENDING; runtime deploy N/A |
 | Representative load / longer trend | Separate owner observation; CPU/RAM/backlog/disk by representative workload, stop criteria до load | не запускался как длительный Actions monitoring | RECOMMENDED; не блокирует завершенный storage/reset scope |
+
+### GROW Validation Plan
+
+| Риск / критерий | Проверка, команда из root | Среда/этап / gate |
+| --- | --- | --- |
+| Recovery F37 | Existing analytics_recovery + bounded fixtures: local fill, overlapping requests, priority/restart/conflict and terminal cleanup | Local targeted pytest / REQUIRED |
+| Lossless records/quality | Old/new decode/public canonical equality, corrupt/truncated/bounds, mixed formats, all methods/frozen revisions, NDJSON/analytics before/after expiry | Local targeted pytest + full CI / REQUIRED |
+| Progress/history preservation | Bounded repack interruption/restart/concurrent new write/rollback, counters/links/private and no re-notification | Local fixture + Linux image / REQUIRED |
+| Capacity F38 | Existing isolated measurement, dense multi-event numeric blocks and comparator case; measured bytes separately from forecast; queue turnover plateau | Local targeted + CI measurement / REQUIRED |
+| Delivery | Canonical quality locally, full PR CI/image; existing ordinary full disk source+backup checks and bounded post-checks | Production only after merge / REQUIRED;900s unchanged |
 
 ## Текущее состояние AC
 
@@ -156,8 +158,8 @@ Canonical команды — [README](../README.md#checks); из root repository
 | AC-13-02 Автоматическая bounded retention | READY | test_bounded_storage/test_market_reset_delivery; EVID-01/02/03/04 |
 | AC-13-03 Качество detectors 12 месяцев | READY | test_bounded_storage/test_market_reset_delivery; EVID-01/02/03/04 |
 | AC-13-04 Укрупненный context | READY | test_bounded_storage/test_market_reset_delivery; EVID-01/02/03/04 |
-| AC-13-05 Конечные служебные зависимости | READY | test_bounded_storage/test_market_reset_delivery; EVID-01/02/03/04 |
-| AC-13-06 Контроль 20 GB | READY | test_bounded_storage/test_market_reset_delivery; EVID-01/02/03/04 |
+| AC-13-05 Конечные служебные зависимости | READY | F37 исправлен; local/restart/overlap tests и Linux CI38935043692 PASS; actual delivery pending |
+| AC-13-06 Контроль 20 GB | READY | F38 separated queue turnover/occupancy/current-layout scenarios PASS; stale index cache явно STALE; required latest CI/delivery pending, fit не заявлен |
 | AC-13-07 Разовый reset | READY | test_bounded_storage/test_market_reset_delivery; EVID-01/02/03/04 |
 
 ## Evidence и baseline
@@ -230,9 +232,12 @@ Canonical команды — [README](../README.md#checks); из root repository
 | F31 HARDENING | Docker runtime использует root default; resource/health policy UNSET; Dockerfile/Compose; AC-12-01 | P3 | DEFER: Новых runtime hard limits без измеренного основания не вводить; отсутствие limit само по себе не defect. | Actual app UID10001/read-only root/cap-drop/no-new-privileges/health PASS. CPU/RAM hard app limits0; single-point115MiB/82.75% CPU. Maintenance только CPU1/4GiB. | MEDIUM / DOCUMENT / DEFER |
 | F32 UX CANDIDATE | Legacy polish/preset strategy без конкретного нового дефекта; прежний open_issues #6/#7; E07/E08 | P3 | DEFER: Неподтвержденный visual polish/подбор прибыльных thresholds вне текущих обязательств; по owner feedback. | Five-family terms/explanations/profiles/history→outcomes/comparison views и no-auto-calibration fixtures PASS. | MEDIUM / DOCUMENT / DEFER |
 | F33 G1 REGRESSION | `/sample_alert` потерял baseline Bybit/mute/coin controls и не учитывает active TF; cryptowatcher/bot.py/render.py; G1 preservation / AC-07-03 | P2: неверный sample и потеря manual controls | FIX: Ограничение: owner assertion не заменяет все browser scenarios. | PR22/CD38087285142 + owner screenshot/«вроде работает»; current sample/menu/no-op tests PASS. | HIGH / CLOSED |
-| F34 HISTORY CAPACITY | Full heads/shared overlapping windows и indefinite service/source references увеличивают БД; AC-06/10/12 и13-01…07 | P1: disk/write amplification,20GB target не доказан | REFACTOR: Исправления/reset DONE. После отдельного наблюдения сравнить category mix/dense summary compression/index overhead; варианты schema/агрегатов требуют сохранения качества или согласованного изменения. Старую conversion не возобновлять. | Compact shared candles/settings/context, bounded services/30d details/35d candles/12mo quality, reset37 и normal CD38/39. Working247078264bytes/index78925824,3.247MB/min over4493s. Model462.15GB предупреждает;20GB fit не доказан. | HIGH / DOCUMENT / DEFER |
+| F34 HISTORY CAPACITY | Full heads/shared overlapping windows и indefinite service/source references увеличивают БД; AC-06/10/12 и13-01…07 | P1: disk/write amplification,20GB target не доказан | REFACTOR: Reset37 выполнен. GROW реализует typed records, shared quality dimensions/provenance, normalized expiry, durable repack и honest forecast; сроки/метрики/охват сохраняются. Старую conversion не возобновлять. | Compact shared candles/settings/context, bounded services/30d details/35d candles/12mo quality, reset37 и normal CD38/39. Working247078264bytes/index78925824,3.247MB/min over4493s. Model462.15GB предупреждает;20GB fit не доказан. | HIGH / GROW IN_PROGRESS; target fit UNPROVEN |
 | F35 ANALYTICS COMPATIBILITY | AC-06-05/06-06/10-02/13-03; quality_summary.archive_event выбирал global method/latest event revision | P1 | FIX: все methods/comparator versions, frozen revisions и metadata-only expiry reader | Repros before expiry методы1/2→после только1 и strength1→101. PR39/main130225d2, CI38897051479 731 PASS/image equality; normal CD38897380425 PASS. Source/candidate quality0 еще не достиг30d; переписывать summaries не требовалось | HIGH / CLOSED |
 | F36 CONSUMER COMPATIBILITY | AC-09-01/09-02; actual consumer PublicSettings отвергает новые retention metadata | P1 | FIX: backward-compatible optional positive ints, полный snapshot/hash без fabricated defaults; unknown/secret fields остаются forbidden | Actual cacdfda parser40 fixtures FAIL только detail_retention_days/candle_retention_days. Consumer PR949 merged8c207edf; CI38898629578/38899151685 и CD38899376113 PASS. Actual parser40/40 payloads и40/40 authority rejects, snapshot/hash preservation/legacy/invalid metadata fixtures PASS; no events sent | HIGH / CLOSED |
+
+| F37 RECOVERY QUEUE | Уже заполненные локально ranges остаются PENDING; analytics_recovery.work не перепроверяет наличие перед REST | P1 | FIX: local completeness/reuse и bounded retirement, сохранить реальные gaps/retries | Read-only16Oct18:48MSK:16/16 checked PENDING ranges complete, attempts0/age48–266min; bounded non-random sample | HIGH / IN_PROGRESS |
+| F38 FORECAST | Валовый оборот временных очередей умножается на30d; общий page factor применяется к годовым numeric facts | P1 | FIX: разные lifetimes/queue occupancy/retained slope и measured format model; не скрывать превышение | storage_meter.report и measured438.2GB; details alone30.1GB encoded30d при текущей частоте | HIGH / IN_PROGRESS |
 
 ## Документы, legacy и artifacts
 
@@ -249,7 +254,7 @@ F02 consolidation выполнена PR41: canonical paths и полезные h
 | B03 | RESOLVED: numeric policies/owner mapping/retention определены D09-D22 | Сохранять актуальные правила и settings equality |
 | B04 | RESOLVED: GitHub admin, strict ci-required/production Environment/DEPLOY_ENABLEDtrue, restricted SSH | Перед каждым merge reread head/protections; не обходить gates |
 
-F34 budget/capacity — ограничение Evidence и отдельный follow-up, не ожидание статистики агентом. Контроль работает автоматически каждую минуту через counters/files/pages; exact later index walk — отдельная bounded snapshot. При устойчивом forecast>20GB сначала проверить largest category/dense compression/index/service cost; затем предложить решения с сохранением аналитики. Сокращать сроки/события/метрики скрытно запрещено. Remaining included Actions minutes UNSET; speculative monitoring/reruns не запускались.
+F34 budget/capacity выбран владельцем в текущую GROW Goal; fit остается проверяемой целью, не ожиданием статистики агентом. Контроль работает автоматически каждую минуту через counters/files/pages; exact later index walk — отдельная bounded snapshot. При устойчивом forecast>20GB сначала проверить largest category/dense compression/index/service cost; затем предложить решения с сохранением аналитики. Сокращать сроки/события/метрики скрытно запрещено. Remaining included Actions minutes UNSET; speculative monitoring/reruns не запускались.
 
 ## Audit quality review
 
@@ -261,12 +266,28 @@ Confidence HIGH по auth/config/atomic persistence/formulas/retention/replay/CI
 
 ## Checkpoint
 
-2026-10-16 S06: явное разделение ответственности manual radar/producer handoff и
-receiving-project activation. PR41 merged2e242abf, CI38901694618 и postmerge38901939152
-PASS/docs-only; F02 закрыт. Предыдущая runtime source130225d2 и reset generation
-не меняются. B02 сохранен как external receiving-project dependency, а не CW blocker.
+GROW active16Oct2026, branch/base above. Discovery read-only source130225d2:
+18:41MSK working797879672bytes, net4.01GB/day since reset, forecast438.20GB/model;
+16/16 sampled PENDING recovery windows already complete locally (not global census).
+No data/config changed by discovery. Code GROW-01…04 готов,14 новых substantive cases PASS;188 targeted PASS/1 Windows skip ранее,48 growth/bounded PASS после review; quality checks PASS. Required CI/merge/CD PENDING.
+Next: compatible lossless format and bounded recovery/repack; no reset or gate bypass.
 
-Current branch `codex/manual-radar-handoff-20261016`, base2e242abf. Scope: spec/plan,
-existing agent runbook/README navigation, synthetic example. Local producer5+14 targeted tests PASS; docs/example/hash/source alignment и bounded readonly CW smoke PASS (EVID-07). Self-review PASS; latest required docs PR CI/merge PENDING. Runtime CD N/A.
-Новых consumer API/credential/config operations не выполнять. New audit percentages
-не рассчитывать; old64/65 snapshot остается историческим до S06.
+### GROW local Evidence перед PR
+
+Windows/Python3.12, branch dirty diff от447a08a: quality PASS и188 targeted PASS,
+1 platform skip (Linux image остается REQUIRED). Новые14 cases проверяют float bits/
+legacy decode/corruption bounds, dense20-comparator numeric equality, local-filled
+recovery при live priority/restart, overlap coalescing, old schema2→mixed layout,
+rollback/durable progress, private/history/cohorts, isolated VACUUM/FK invariance,
+NDJSON equality и controlled12mo expiry/metadata GC, indexed service budget.
+Baseline/current canonical200-event/800-outcome fixture:22,609.92→21,176.32bytes/event
+со всеми sources/services/indexes; quality payload1,582→802.8bytes/event, analytics
+равны. Fixed pages/short synthetic burst и отсутствующие comparator arrays в этом
+fixture не выданы за production capacity. Отдельные quality density/comparator
+сценарии измеряют real codec/SQLite layout, не upper bounds.
+
+Readonly pre-CD16Oct16:44:27UTC: source130225d2/image26b64aee, healthy, working
+940443392bytes/forecast418.53GB(old model), private SHA1bcf2bba…/env SHA96cc5d70…,
+configuration revision3, generation78ed847e… прежние;1248streams/4TF/оба markets,
+analyticsOK/TelegramDELIVERED. Backup/CD<=900s/full validation gates без изменений.
+Self-review PASS. PR43/head53164ce: Linux CI38935043692 PASS744 tests + image upgrade/full disk backup. Final review fix: прежний index snapshot при extension помечается STALE;48 targeted и quality PASS. Latest CI/merge/CD PENDING; normal gates unchanged. Историю, backups и experiments не удалять.

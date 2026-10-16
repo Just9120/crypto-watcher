@@ -32,3 +32,22 @@ Target: Contabo167.86.68.98, `/opt/crypto_watcher`, Compose project/service `cry
 После reset автоматические delivery используют full source integrity и SQLite online backup на диске с полной integrity и streaming SHA256. Вся DB в RAM/tmpfs не копируется; cap4GiB/CPU1/no swap остается. Source+backup делят оставшееся время общего900s deadline с резервом переключения/post-checks. При нехватке места/времени stage завершается failure до switch; gates не ослабляются. Target20GB не является гарантией выполнения полного scan любой20GB базы за15min: фактическая скорость и длительность видны в records, превышение требует переработки, не автоматического увеличения deadline.
 
 Retention работает batches через indexes/transactional counters, summaries12 календарных месяцев; routine control не сканирует все DB pages. `storage-indexes` — отдельное ограниченное измерение, размер snapshot помечен временем. Его отсутствие/timeout не считается доказанным размером индексов. Forecast отражает short-window/model limitations и предупреждает о20GB без скрытого сокращения данных. Последующее наблюдение — отдельная задача владельца после завершения исправлений/reset.
+
+## Storage extension3: routine delivery без reset
+
+Класс миграции — additive schema2 layout extension и обратимое кодирование records;
+source DB/private settings/history generation сохраняются. До switch действуют full
+source integrity и ordinary disk backup/hash/validation под общим900s deadline.
+После switch новый writer atomically создает compact expiry/quality tables и
+compatibility views, не копируя всю history в startup. Затем bounded repack/drain
+с durable progress выполняется обычным runtime; old/new formats читаются совместно.
+State/cursor записываются в той же транзакции, что и проверенные replacement bytes;
+никакой потери прогресса или восстановления старых событий как новых alerts.
+
+Post-checks: expected source/image/health, оба markets/4TF, owner config/private hash,
+прежняя generation, outcomes/Telegram, `storage.repack` progress и свежие samples.
+Repack может продолжаться после ограниченного delivery window; это не повторный
+backup/конвертация в Actions. Статус IN_PROGRESS показывается явно. После encoding3
+writes или view promotion старый binary без обоих readers не является допустимым
+rollback: совместимый forward-fix, без DB downgrade/автоматического restore поверх
+новых данных. Reset permit не переустанавливается. Бэкапы/эксперименты не удаляются.

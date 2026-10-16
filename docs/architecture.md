@@ -16,10 +16,10 @@ Binding/activation/recovery — в [agent procedure](runbooks/agent-delivery.md)
 | Infrastructure / domain configuration | `cryptowatcher/config.py` | Fail-closed owner identity, token/bot binding, validated immutable owner settings |
 | Persistence | `cryptowatcher/storage.py`, `lease.py` | Owner revisions/CAS, delivery preference, mutes, runtime, preserved legacy import; один application writer |
 | Universe / realtime sources | `universe.py`, `ingestion.py`, `sources.py` | Metadata eligibility, market identity, WS ACK/recovery и shared bounded windows |
-| Compact market storage | `market_storage.py`, `history_codec.py`, `record_codec.py` | Normalized candle/context revisions, content-addressed shared data и strict public readback |
+| Compact market storage | `market_storage.py`, `history_codec.py`, `record_codec.py`, `compact_json.py` | Normalized candle/context revisions, content-addressed shared data и strict public readback |
 | Analytics / recovery | `outcomes.py`, `analytics.py`, `analytics_worker.py`, `analytics_recovery.py` | Frozen horizons/comparator versions, readonly calculations, CAS apply и referenced recovery |
-| Retention / summaries | `storage_lifecycle.py`, `quality_summary.py` | Bounded expiry, all-method numeric quality перед удалением details, finite service dependencies |
-| Storage control | `storage_meter.py` | Cheap category counts/files/pages/samples, bounded explicit index measurement, model warning |
+| Retention / summaries | `storage_lifecycle.py`, `quality_summary.py`, `expiry_index.py`, `quality_layout.py` | Bounded expiry, all-method numeric quality перед удалением details, finite service dependencies |
+| Storage control | `storage_meter.py`, `storage_model.py`, `storage_repack.py` | Cheap counters/samples, separated occupancy/retained-flow forecast, isolated quality scenarios и durable bounded lossless repack |
 | Agent consumer | `agent_contract.py`, `agent_delivery.py` | Полный public snapshot/hash, independent immutable outbox/retries/ack и owner diagnostics |
 | Digest / optional context | `digest.py`, `enrichment.py`, `enrichment_runtime.py` | Independent period delivery и qualified derivatives mapping/source freshness |
 | Market adapter / computation | `cryptowatcher/market.py` | Общий async HTTP client, bounded REST requests; closed-candle composite, gaps/invalid data diagnostics |
@@ -113,3 +113,9 @@ Analytics grouping включает frozen profile, detector/version/settings/ma
 Нормализованные candle/context revisions и shared settings питают прежние detector/outcome formulas без копирования полных windows. History/consumer APIs сохраняются; serialized signed bytes не пересобираются при retry. `market_storage.py`, `record_codec.py`, `quality_summary.py`, `storage_lifecycle.py` и `storage_meter.py` реализуют этот формат. Подробные ownership/expiry/reset contracts: [state contract](state_contract.md#market-layout-v2-новый-период). Schema1 остается legacy compatibility input; fresh schema2 создается только отдельной reset preparation, не ordinary startup. Текущий runtime уже использует schema2; actual reset/delivery Evidence находится в плане.
 
 Automatic cleanup использует expiry/GC indexes и bounded batches вместо обхода всего архива. Record body refs и context body refs имеют transactional counters. Quality summaries сохраняются до удаления подробностей; pending service/recovery ownership имеет конечный срок. Контроль объема отделяет измеренные bytes/counts, extrapolation и данные которые еще не подтверждены. Наличие этих modules само по себе не подтверждает поставку/reset; их завершение проверяется по primary CI/CD и runtime Evidence плана. Повторный reset обычным restart/deploy запрещен.
+
+Storage extension3 сохраняет physical schema2 и public contracts. Legacy expiry/quality
+rows остаются видимыми через compatibility views до bounded in-place drain. Internal
+row IDs/shared dimensions/provenance не заменяют внешние event IDs. Recovery убирает
+уже заполненные local ranges без REST и coalesce overlapping work, сохраняя source
+conflict checks/owner expiry. Детали upgrade/rollback boundaries — в [state contract](state_contract.md#storage-extension3-совместимое-уплотнение).

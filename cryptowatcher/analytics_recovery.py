@@ -12,7 +12,7 @@ from .ingestion import BybitRadar
 from .market import MarketError
 from .outcomes import MINUTE, pending_key
 from .sources import Candle, Sources
-from .storage import Store, encode
+from .storage import Store, encode, json_payload
 
 
 class AnalyticsRecovery:
@@ -22,11 +22,18 @@ class AnalyticsRecovery:
     def request(self, stream: str, start: int, end: int) -> str | None:
         if start >= end:
             return "INVALID_REFERENCED_WINDOW"
+        if self.complete_locally(stream, start, end):
+            return None
         expires = None
         if self.store.bounded:
             expires = self.owner_deadline(stream, start, end, self.market.server_now())
             if expires is None:
                 return "REFERENCED_OWNER_EXPIRED"
+        merged: list[dict[str, Any]] = []
+        recent: list[str] = []
+        if self.store.bounded:
+            start, end, merged, recent = self.coalesce(stream, start, end)
+            expires = self.owner_deadline(stream, start, end, self.market.server_now())
         key = identity(f"analytics-gap/{stream}/{start}/{end}")
         job = self.history.get("analytics-gap:" + key)
         if job is not None and job["state"] != "COMPLETE":
@@ -35,6 +42,12 @@ class AnalyticsRecovery:
             now = self.market.server_now()
             pending = pending_key(now, key).replace("outcome-pending:", "analytics-gap-pending:", 1)
             with self.store.db:
+                for previous in merged:
+                    if previous["id"] == key:
+                        continue
+                    self.history.delete(previous["pending_key"])
+                    previous.update(state="SUPERSEDED", completed_ms=now)
+                    self.history.put("analytics-gap:" + previous["id"], previous)
                 self.history.put(
                     "analytics-gap:" + key,
                     {
@@ -51,7 +64,52 @@ class AnalyticsRecovery:
                     },
                 )
                 self.history.put(pending, {"id": key})
+                if self.store.bounded:
+                    self.history.put("recovery-ranges:" + stream, (recent + [key])[-32:])
         return "REFERENCED_RECOVERY_PENDING"
+
+    def coalesce(self, stream: str, start: int, end: int) -> tuple[int, int, list[dict[str, Any]], list[str]]:
+        """Share overlapping outstanding ranges, with a bounded durable lookup.
+
+        Jobs have no consumer payload identity: outcomes refer to their immutable
+        event/source revisions. Only the REST work/index is superseded.
+        """
+        jobs = [
+            self.history.get("analytics-gap:" + key)
+            for key in self.history.get("recovery-ranges:" + stream, [])[-32:]
+        ]
+        jobs = [job for job in jobs if job and job["state"] in ("PENDING", "RETRY")]
+        merged = []
+        changed = True
+        while changed:
+            changed = False
+            for job in jobs:
+                if job in merged:
+                    continue
+                left, right = min(start, job["start"]), max(end, job["cursor_end"])
+                if job["start"] <= end and job["cursor_end"] >= start and right - left <= 1000 * MINUTE:
+                    start, end = left, right
+                    merged.append(job)
+                    changed = True
+        return start, end, merged, [job["id"] for job in jobs if job not in merged]
+
+    def complete_locally(self, stream: str, start: int, end: int) -> bool:
+        """An arrived WS candle retires a queued REST request without re-admission.
+
+        Check at most one REST page. Larger ranges remain paginated by work(); a
+        partial window, conflicting source or merely an open candle is never a hit.
+        """
+        from .outcomes import read_candles
+
+        step = int(stream.rsplit("/", 1)[1][:-1]) * MINUTE
+        if step != MINUTE or end > self.market.server_now() or (end - start) % step:
+            return False
+        if not 0 < (end - start) // step <= 1000:
+            return False
+        candles = read_candles(self.store, stream, start, end)
+        return len(candles) == (end - start) // step and all(
+            candle.start == start + i * step for i, candle in enumerate(candles)
+        )
 
     def owner_deadline(self, stream: str, start: int, end: int, now: int) -> int | None:
         from .market_storage import stream_id
@@ -64,6 +122,10 @@ class AnalyticsRecovery:
         return row[0] if row else None
 
     async def work(self, now: int) -> None:
+        # Retire already satisfied/obsolete jobs even while live bootstrap owns
+        # the REST budget. Their pending index is not useful historical evidence.
+        if self.store.bounded:
+            await self.retire_satisfied(now)
         # Live gaps and bootstrap keep priority over historical analytics in the same REST budget.
         if any(v[0] < 20 for v in self.market._pending.values()) or self.market._working:
             return
@@ -73,6 +135,9 @@ class AnalyticsRecovery:
                 with self.store.db:
                     self.history.delete(pending)
                 continue
+            if self.complete_locally(job["stream"], job["start"], job["cursor_end"]):
+                self.finish_local(job, pending, now)
+                return
             if (
                 self.store.bounded
                 and self.owner_deadline(job["stream"], job["start"], job["end"], now) is None
@@ -152,6 +217,7 @@ class AnalyticsRecovery:
                         )
                         self.history.put(job["pending_key"], binding)
                     self.history.put("analytics-gap:" + job["id"], job)
+
             except (MarketError, KeyError, TypeError, ValueError, OverflowError) as exc:
                 job.update(
                     state="RETRY",
@@ -166,6 +232,48 @@ class AnalyticsRecovery:
                     )
                     self.history.put(job["pending_key"], binding)
                     self.history.put("analytics-gap:" + job["id"], job)
+
+    def finish_local(self, job: dict[str, Any], pending: str, now: int) -> None:
+        with self.store.db:
+            self.history.delete(pending)
+            job.update(state="COMPLETE", completed_ms=now, completion="LOCAL_CLOSED_DATA")
+            job.pop("reason", None)
+            # No consumer refers to the job bytes. Keep a one-day terminal
+            # receipt for duplicate requests; actual source revisions stay intact.
+            self.history.put("analytics-gap:" + job["id"], job)
+
+    async def retire_satisfied(self, now: int, batch: int = 64) -> None:
+        import asyncio
+
+        cursor = self.history.get("recovery-retire-cursor", "")
+        prefix = "radar:v1:analytics-gap-pending:"
+        rows = self.store.db.execute(
+            "SELECT key,payload_json FROM runtime WHERE key>? AND key<? ORDER BY key LIMIT ?",
+            (cursor or prefix, prefix + "~", batch),
+        ).fetchall()
+        deadline = time.monotonic() + 0.025
+        for row in rows:
+            if time.monotonic() >= deadline:
+                break
+            binding = json_payload(row[1])
+            pending = row[0][len("radar:v1:") :]
+            job = self.history.get("analytics-gap:" + binding["id"])
+            if job is None or job["state"] in ("COMPLETE", "SUPERSEDED") or job.get("pending_key") != pending:
+                with self.store.db:
+                    self.history.delete(pending)
+            elif self.complete_locally(job["stream"], job["start"], job["cursor_end"]):
+                self.finish_local(job, pending, now)
+            elif self.owner_deadline(job["stream"], job["start"], job["end"], now) is None:
+                with self.store.db:
+                    self.history.delete(pending)
+                    job.update(state="EXPIRED_RETENTION_INCOMPLETE", completed_ms=now)
+                    self.history.put("analytics-gap:" + job["id"], job)
+            cursor = row[0]
+            await asyncio.sleep(0)
+        if len(rows) < batch and (not rows or cursor == rows[-1][0]):
+            cursor = ""
+        with self.store.db:
+            self.history.put("recovery-retire-cursor", cursor)
 
     def diagnostics(self) -> dict[str, Any]:
         return {
