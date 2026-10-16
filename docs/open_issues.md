@@ -37,7 +37,14 @@ Source/image healthy, full backup42.391s; failed record сохранен. Compat
 до fresh OK poll/bootstrap0/gaps0; repack один40ms slice за1s tick, не восемь commits
 в секунду. Фазы records/decisions/expiry/quality делят один40ms deadline; durable
 rotation не дает медленному SQL постоянно вытеснять хвост. Gates150s/900s/RAM
-неизменны. Предыдущая основная branch
+неизменны. Hotfix49 merged7015ff6, CI38969740225 PASS; CD38970152846 PASS297s,
+full disk backup37.669s, private/env/generation и64immutable revisions equality PASS.
+Readback00:46MSK: live bootstrap/gaps/recovery0, но DEGRADED1149/1152 из-за трех
+insufficient-history baselines блокирует слишком строгий maintenance OK guard.
+Compatible hotfix `codex/maintenance-degraded-hotfix-20261017`, base7015ff6,
+принимает usable DEGRADED как existing CD, не WARMING и не zero-available. Реальные
+live recovery/blocked queue и current-process poll checks сохраняются; observer
+stability gates не меняются. Предыдущая основная branch
 `codex/maintenance-throughput-20261016`, base
 `f9df4b890f6a32e871d4a24fb9387e8c0c7fb91a`; clean main/fresh origin, protections
 `ci-required`/strict/self-review и SSH проверены. Предыдущие PR45/46/47 поставлены;
