@@ -142,6 +142,8 @@ def test_wide_subscription_shards_preserve_every_tf_and_spot_batch_limits():
     streams = [f"spot/C{i}USDT/{tf}" for i in range(1000) for tf in TIMEFRAMES]
     groups = shards(streams)
     assert len(groups) > 1
+    assert all(len(group) <= 100 for group in groups)
+    assert sum(map(len, groups)) == len(streams)
     assert set(s for g in groups for s in g) == set(streams)
     assert all(len(json.dumps([topic(s) for s in group])) <= 20_000 for group in groups)
 
@@ -307,6 +309,78 @@ async def test_rejected_subscription_discards_buffer_before_any_candle_write(rad
         await radar.close()
 
 
+async def test_continuous_open_updates_cannot_extend_subscription_deadline(radar, monkeypatch):
+    clock = iter(range(10000))
+    monkeypatch.setattr(
+        ingestion, "time", SimpleNamespace(monotonic=lambda: next(clock), time=lambda: NOW / 1000)
+    )
+
+    class NoAcknowledgement(Socket):
+        async def send(self, raw):
+            if json.loads(raw)["op"] == "subscribe":
+                for _ in range(100):
+                    await self.messages.put(json.dumps(message(confirm=False)))
+
+    socket = NoAcknowledgement()
+    radar.connector = lambda *args, **kwargs: socket
+    task = asyncio.create_task(radar._session("spot:0", "spot", ["spot/BTCUSDT/1m"]))
+    try:
+        await wait_condition(lambda: radar.connections.get("spot:0", {}).get("state") == "RECONNECTING")
+        assert radar.connections["spot:0"]["reason"] == "TimeoutError"
+        assert radar.connections["spot:0"]["acknowledged"] == 0
+        assert socket.messages.qsize() > 50  # timeout despite recv being continuously ready
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await radar.close()
+
+
+async def test_wide_linear_shards_ack_independently_before_closed_candle_work(radar, monkeypatch):
+    streams = [f"linear/C{i}USDT/{tf}" for i in range(90) for tf in TIMEFRAMES]
+    radar.streams = set(streams)
+    sockets = []
+
+    class InitialBurst(Socket):
+        async def send(self, raw):
+            payload = json.loads(raw)
+            if payload["op"] == "subscribe":
+                for value in payload["args"]:
+                    _, interval, symbol = value.split(".")
+                    await self.messages.put(json.dumps(message(interval + "m", symbol)))
+            await super().send(raw)
+
+    def connector(*args, **kwargs):
+        socket = InitialBurst()
+        sockets.append(socket)
+        return socket
+
+    seen = []
+
+    def accept(market, payload, allowed, **kwargs):
+        name = names[next(s for s in allowed)]
+        assert radar.connections[name]["acknowledged"] == len(allowed)
+        seen.append(payload["topic"])
+
+    groups = shards(streams)
+    names = {s: f"linear:{i}" for i, group in enumerate(groups) for s in group}
+    monkeypatch.setattr(radar, "accept_message", accept)
+    radar.connector = connector
+    tasks = [
+        asyncio.create_task(radar._session(f"linear:{i}", "linear", group)) for i, group in enumerate(groups)
+    ]
+    try:
+        await wait_condition(lambda: len(seen) == len(streams))
+        assert len(sockets) == 4
+        assert len(set(seen)) == len(streams)
+        assert all(len(s.sent) == 1 for s in sockets)  # one bounded linear subscribe per shard
+        assert all(c["state"] == "CONNECTED" for c in radar.connections.values())
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await radar.close()
+
+
 async def test_delivery_requires_both_metadata_all_ack_and_each_tf(radar):
     result = await radar.snapshot(OwnerSettings())
     radar.connections["spot:0"] = {"state": "CONNECTED", "requested": 4, "acknowledged": 3}
@@ -459,6 +533,86 @@ async def test_restart_subscribes_without_eager_windows_and_snapshot_does_not_lo
         assert "linear/BTCUSDT/3m" in radar.sources.windows
         assert len(radar.sources.windows) == 2
     finally:
+        await radar.close()
+
+
+@pytest.mark.parametrize("bounded", [False, True])
+async def test_restart_worker_reuses_all_market_tf_windows_without_rest_or_live(radar, bounded):
+    if bounded:
+        from cryptowatcher.market_storage import enable
+
+        windows = {s: list(w.values()) for s, w in radar.sources.windows.items()}
+        radar.store.db.execute("DELETE FROM runtime")
+        radar.store.db.commit()
+        enable(radar.store.db)
+        radar.store.bounded = True
+        radar.sources.windows.clear()
+        for stream, candles in windows.items():
+            radar.sources.put(stream, candles, recovery=True)
+    radar.sources.windows.clear()
+    radar.sources.live.clear()
+    radar._get = AsyncMock(side_effect=AssertionError("Unnecessary REST bootstrap"))
+    radar.on_observation = Mock()
+    for stream in sorted(radar.streams):
+        radar.sources.blocked[stream] = "stream_disconnected"
+        radar.request_recovery(stream, 10)
+    turns = []
+
+    async def witness():
+        while radar._pending or radar._working:
+            turns.append(len(radar.sources.windows))
+            await asyncio.sleep(0)
+
+    witness_task = asyncio.create_task(witness())
+    worker = asyncio.create_task(radar._worker())
+    try:
+        await wait_condition(lambda: not radar._pending and not radar._working)
+        await witness_task
+        result = await radar.snapshot(radar.store.snapshot().settings)
+        assert len(result.quotes) == 8 and radar.delivery_ready(result)
+        assert not radar.sources.blocked and not radar.sources.live
+        assert any(0 < n < 8 for n in turns)  # no synchronous whole-universe restore
+        radar._get.assert_not_called()
+        radar.on_observation.assert_not_called()
+        # The next actual closed WS observation remains eligible for live delivery.
+        radar.accept_message("spot", message(), radar.streams)
+        assert radar.sources.live["spot/BTCUSDT/1m"] == NOW
+        assert radar.on_observation.call_args.args[-1] is True
+    finally:
+        worker.cancel()
+        witness_task.cancel()
+        await asyncio.gather(worker, witness_task, return_exceptions=True)
+        await radar.close()
+
+
+@pytest.mark.parametrize("condition", ["stale", "gap", "short", "conflict", "larger_lookback"])
+async def test_local_restart_restore_does_not_bypass_required_rest(radar, condition):
+    stream = "spot/BTCUSDT/1m"
+    window = radar.sources.windows[stream]
+    if condition == "stale":
+        del window[max(window)]
+    elif condition == "gap":
+        del window[sorted(window)[-3]]
+    elif condition == "short":
+        radar.sources.windows[stream] = dict(sorted(window.items())[-5:])
+    elif condition == "conflict":
+        radar.sources.blocked[stream] = "conflicting_closed_candle"
+    else:
+        radar.sources.windows[stream] = dict(sorted(window.items())[-25:])
+        settings = radar.store.snapshot()
+        radar.store.update(settings.revision, settings.settings.changed(sma_periods=40))
+    radar._get = AsyncMock(return_value={"time": NOW, "result": {"list": history()}})
+    radar.on_observation = Mock()
+    radar.request_recovery(stream, 0)
+    worker = asyncio.create_task(radar._worker())
+    try:
+        await wait_condition(lambda: not radar._pending and not radar._working)
+        radar._get.assert_awaited_once()
+        assert stream not in radar.sources.live
+        assert all(not call.args[-1] for call in radar.on_observation.call_args_list)
+    finally:
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
         await radar.close()
 
 

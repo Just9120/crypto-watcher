@@ -30,7 +30,9 @@ Canonical spec: [product_scope.md](product_scope.md). Этот план соде
 
 Основание: явное поручение владельца16Oct2026 реализовать предложенные исправления
 роста базы и поставить через CD. Base `447a08a703f7c864e419be504d8c340da1863e1c`,
-branch `codex/storage-growth-20261016`. Clean Git/GitHub/protections/worktree проверены.
+основной PR43 merged `e9cc24b94ed35d206033973ef82f31b1514d11e0`.
+Hotfix branch `codex/local-window-recovery-20261016`, base `e9cc24b`;
+clean Git/GitHub/protections/worktree повторно проверены.
 Предыдущий handoff PR42 merged447a08a, CI38919152279 и postmerge38919292133 PASS;
 consumer activation остается вне проекта по D23.
 
@@ -42,10 +44,10 @@ rows сохраняются и постепенно уплотняются с du
 | Задача / closure criterion | Статус |
 | --- | --- |
 | GROW-01 / F37: local completeness, overlap recovery, bounded retirement/restart, без лишнего REST | CODE READY; targeted PASS |
-| GROW-02 / F34: typed lossless records и resumable bounded repack накопленного, public bytes/results сохранены | CODE READY; required CI PENDING |
-| GROW-03 / F34: compact numeric quality blocks, methods/settings/comparators/completeness и controlled expiry equality | CODE READY; required CI PENDING |
-| GROW-04 / F38: measured category rates, queue lifetime/turnover, versioned forecast model и ограничения | CODE READY; required CI PENDING |
-| GROW-05: required CI, merge, normal CD<=900s, source/image/settings/history/alerts readback и measured post-report | BACKLOG |
+| GROW-02 / F34: typed lossless records и resumable bounded repack накопленного, public bytes/results сохранены | CODE READY; CI38935830076 PASS745 tests |
+| GROW-03 / F34: compact numeric quality blocks, methods/settings/comparators/completeness и controlled expiry equality | CODE READY; CI/image PASS |
+| GROW-04 / F38: measured category rates, queue lifetime/turnover, versioned forecast model и ограничения | CODE READY; CI/image PASS |
+| GROW-05: required CI, merge, normal CD<=900s, source/image/settings/history/alerts readback и measured post-report | IN_PROGRESS: CD38936336472 failed POST_CHECKS; necessary restart hotfix |
 
 Затрагиваются E06/E10/E12/E13; существующие65AC/исторические проценты сохраняются,
 новые AC не вводятся. Работа отслеживается по пяти задачам. AC-13-02/13-05 уточняются
@@ -89,6 +91,8 @@ Canonical команды — [README](../README.md#checks); из root repository
 | Progress/history preservation | Bounded repack interruption/restart/concurrent new write/rollback, counters/links/private and no re-notification | Local fixture + Linux image / REQUIRED |
 | Capacity F38 | Existing isolated measurement, dense multi-event numeric blocks and comparator case; measured bytes separately from forecast; queue turnover plateau | Local targeted + CI measurement / REQUIRED |
 | Delivery | Canonical quality locally, full PR CI/image; existing ordinary full disk source+backup checks and bounded post-checks | Production only after merge / REQUIRED;900s unchanged |
+| Restart hotfix | Local current/complete persisted windows skip redundant REST; stale/gap/short/conflict/settings cases retain recovery, both markets/4TF, cooperative scheduling/no historical live replay | Targeted ingestion tests, full required CI, ordinary CD / REQUIRED |
+| Wide WS ACK | Shards<=100topics с полным покрытием, strict15s ACK deadline даже при непрерывных updates, independent shard ACK до обработки closed observations | Targeted fake WS burst/timeout + required CI / REQUIRED |
 
 ## Текущее состояние AC
 
@@ -238,6 +242,8 @@ Canonical команды — [README](../README.md#checks); из root repository
 
 | F37 RECOVERY QUEUE | Уже заполненные локально ranges остаются PENDING; analytics_recovery.work не перепроверяет наличие перед REST | P1 | FIX: local completeness/reuse и bounded retirement, сохранить реальные gaps/retries | Read-only16Oct18:48MSK:16/16 checked PENDING ranges complete, attempts0/age48–266min; bounded non-random sample | HIGH / IN_PROGRESS |
 | F38 FORECAST | Валовый оборот временных очередей умножается на30d; общий page factor применяется к годовым numeric facts | P1 | FIX: разные lifetimes/queue occupancy/retained slope и measured format model; не скрывать превышение | storage_meter.report и measured438.2GB; details alone30.1GB encoded30d при текущей частоте | HIGH / IN_PROGRESS |
+| F39 RESTART RECOVERY | Cold in-memory windows вызывают REST bootstrap для всех streams, хотя актуальная полная source history уже сохранена | P1: wide-universe warmup превышает bounded post-check | FIX: local validated restore по одному window с yield, без исторических live observations; реальные gaps сохраняют REST | CD38936336472 POST_CHECK_FAILED после switch; source/full disk backup PASS55.53s; runtime healthy, Telegram DELIVERED, затем оба WS ACK, но bootstrap queue сохранялась | HIGH / IN_PROGRESS; hotfix отe9cc24b |
+| F40 SUBSCRIPTION BACKLOG | Один linear shard788topics; continuously ready recv может продлевать ACK ожидание после deadline | P1: reconnect/blocked streams при широком universe | FIX: shards<=100topics без потери покрытия; strict15s ACK deadline | Bounded read-only17:23UTC25s: ACK200/788,buffer_overflows22; fake continuous-open stream воспроизводит обход deadline | HIGH / IN_PROGRESS; тот же hotfix |
 
 ## Документы, legacy и artifacts
 
@@ -266,11 +272,23 @@ Confidence HIGH по auth/config/atomic persistence/formulas/retention/replay/CI
 
 ## Checkpoint
 
-GROW active16Oct2026, branch/base above. Discovery read-only source130225d2:
+GROW active16Oct2026, branch/base above. PR43 merged e9cc24b; latest CI38935830076
+PASS745 Linux tests/image. CD38936336472 failed POST_CHECKS после switch,
+production job378s. Full disk backup965529600bytes PASS55.53s/hash e282448f…;
+новый source e9cc24b healthy, owner Telegram DELIVERED. Старый binary не запускать:
+новые layout/codec требуют compatible forward-fix. Hotfix F39 восстанавливает
+сохранённые complete/current windows без лишнего REST; post-check150s и CD900s
+не меняются. Последний readback17:17UTC: оба WS fully ACK,1152streams/4TF,
+analyticsOK, bootstrap34; prior poll WARMING. Required hotfix CI/merge/CD PENDING.
+Следующий шаг — targeted validation и поставка compatible hotfix обычным CD.
+Hotfix initial6b5760b CI38938935388 PASS752 tests/image. Review/live readback
+выявил F40: ACK200/788 сохранялся25s,buffer_overflows22. Добавлены shards100 и
+strict existing15s deadline;33 local ingestion tests/quality PASS; latest CI pending.
+
+Discovery read-only source130225d2:
 18:41MSK working797879672bytes, net4.01GB/day since reset, forecast438.20GB/model;
 16/16 sampled PENDING recovery windows already complete locally (not global census).
-No data/config changed by discovery. Code GROW-01…04 готов,14 новых substantive cases PASS;188 targeted PASS/1 Windows skip ранее,48 growth/bounded PASS после review; quality checks PASS. Required CI/merge/CD PENDING.
-Next: compatible lossless format and bounded recovery/repack; no reset or gate bypass.
+No data/config changed by discovery. Code GROW-01…04 готов,14 новых substantive cases PASS;188 targeted PASS/1 Windows skip ранее,48 growth/bounded PASS после review; quality checks PASS. No reset or gate bypass.
 
 ### GROW local Evidence перед PR
 
