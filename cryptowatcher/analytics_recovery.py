@@ -67,8 +67,12 @@ class AnalyticsRecovery:
         # Live gaps and bootstrap keep priority over historical analytics in the same REST budget.
         if any(v[0] < 20 for v in self.market._pending.values()) or self.market._working:
             return
-        for _, binding in self.history.items("analytics-gap-pending:", 1):
+        for pending, binding in self.history.items("analytics-gap-pending:", 1):
             job = self.history.get("analytics-gap:" + binding["id"])
+            if job is None:
+                with self.store.db:
+                    self.history.delete(pending)
+                continue
             if (
                 self.store.bounded
                 and self.owner_deadline(job["stream"], job["start"], job["end"], now) is None

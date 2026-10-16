@@ -120,6 +120,9 @@ class Digest:
     def cancel_pending(self, reason: str, now: int) -> None:
         for key, binding in self.history.items("digest-pending:", 1):
             candidate = self.history.get("digest-outbox:" + binding["delivery_id"])
+            if candidate is None:
+                self.history.delete(key)
+                continue
             candidate.update(state=reason, completed_ms=now)
             self.history.put("digest-outbox:" + candidate["delivery_id"], candidate)
             self.history.delete(key)
@@ -173,6 +176,10 @@ class Digest:
                 return
             for key, binding in self.history.items("digest-pending:", 1):
                 candidate = self.history.get("digest-outbox:" + binding["delivery_id"])
+                if candidate is None:
+                    with self.store.db:
+                        self.history.delete(key)
+                    continue
                 if (
                     candidate["next_attempt_ms"] > now
                     or self.history.get("target:telegram", {}).get("state") == "BLOCKED"

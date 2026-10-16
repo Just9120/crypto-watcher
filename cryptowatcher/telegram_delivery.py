@@ -54,8 +54,12 @@ class TelegramDelivery:
         clock = clock or (lambda: now_ms)
         async with self.lock:
             # A bounded batch yields to commands, heartbeat and ingestion even after an outage.
-            for _, binding in self.history.items("pending:telegram:", 20):
+            for pending, binding in self.history.items("pending:telegram:", 20):
                 candidate = self.history.get("outbox:telegram:" + binding["delivery_id"])
+                if candidate is None:
+                    with self.store.db:
+                        self.history.delete(pending)
+                    continue
                 if candidate["state"] not in ("PENDING", "RETRY", "IN_FLIGHT"):
                     continue
                 settings = self.store.snapshot()

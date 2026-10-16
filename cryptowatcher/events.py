@@ -171,12 +171,13 @@ class History:
         return {k: self._expand_services(v, depth + 1) for k, v in value.items()}
 
     def put(self, key: str, value: Any) -> None:
+        from .storage_lifecycle import TERMINAL_DELIVERY
+
         if (
             self.store.bounded
             and isinstance(value, dict)
             and key.startswith(("agent:outbox:", "outbox:telegram:", "digest-outbox:"))
-            and value.get("state")
-            in ("DELIVERED", "DELIVERED_PRIOR_SETTINGS", "EXPIRED", "CANCELLED", "OBSOLETE_CONFIGURATION")
+            and value.get("state") in TERMINAL_DELIVERY
         ):
             parent = (
                 value.get("event_id")
@@ -275,6 +276,36 @@ class History:
                 self.codec.source_stream = None
         if head is None or value["revision"] > head["revision"]:
             self.put(f"{kind}-head:{key}", self._head(kind, value, version_key, bounded=self.store.bounded))
+
+    def prune_pending(self, limit: int = 64) -> int:
+        """Caller owns the transaction. A missing job can never be retried."""
+        if not self.store.bounded:
+            return 0
+        counts = self.get("orphaned-pending-summary", {})
+        removed = 0
+        for pending, parent, field in (
+            ("outcome-pending:", "outcome-job:", "outcome_id"),
+            ("comparison-pending:", "comparison-job:", "event_id"),
+            ("analytics-gap-pending:", "analytics-gap:", "id"),
+            ("pending:telegram:", "outbox:telegram:", "delivery_id"),
+            ("agent:send-due:", "agent:outbox:", "delivery_id"),
+            ("digest-pending:", "digest-outbox:", "delivery_id"),
+        ):
+            for key, binding in self.items(pending, limit):
+                if (
+                    self.store.db.execute(
+                        "SELECT 1 FROM runtime WHERE key=?", (PREFIX + parent + binding[field],)
+                    ).fetchone()
+                    is None
+                ):
+                    self.delete(key)
+                    counts[pending + "EXPIRED_MISSING_PARENT"] = (
+                        counts.get(pending + "EXPIRED_MISSING_PARENT", 0) + 1
+                    )
+                    removed += 1
+        if removed:
+            self.put("orphaned-pending-summary", counts)
+        return removed
 
     def events(self, limit: int = 20) -> list[dict[str, Any]]:
         return [

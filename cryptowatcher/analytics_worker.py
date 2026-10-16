@@ -37,6 +37,8 @@ def prepare(
         if time.monotonic() >= deadline:
             break
         job = history.get(job_prefix + binding[binding_id])
+        if job is None:
+            continue  # Bounded retention retires the dangling queue index.
         if job["next_attempt_ms"] > now_ms:
             break
         event = history.get(f"event:{job['event_id']}:{job['event_revision']:010d}")
