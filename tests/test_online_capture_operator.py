@@ -1,11 +1,23 @@
 import hashlib
 import io
 import json
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
 
 from scripts import online_capture, receive_online_pages
+
+
+def test_root_launcher_imports_with_no_installed_third_party_dependencies():
+    result = subprocess.run(
+        [sys.executable, "-S", "-c", "from scripts import online_capture"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_pc_receiver_binds_primary_snapshot_to_same_operation_and_journal(tmp_path, monkeypatch):

@@ -16,9 +16,24 @@ from pathlib import Path
 
 from cryptowatcher.maintenance import Unit
 from cryptowatcher.storage import encode
-from cryptowatcher.validation import fingerprint
 from scripts import closed_source_maintenance as common
 from scripts.closed_page_capture import JOURNAL_READBACK, uncaptured_epoch
+
+
+def fingerprint(path: Path, deadline: float) -> tuple[str, int]:
+    """Root launcher uses only the host standard library; APSW stays in worker."""
+    meta = path.stat()
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as source:
+        for body in iter(lambda: source.read(1024**2), b""):
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Operator hash deadline exhausted")
+            digest.update(body)
+            size += len(body)
+    if path.stat() != meta or size != meta.st_size:
+        raise RuntimeError("Operator hash identity changed")
+    return digest.hexdigest(), size
 
 
 def configuration(root: Path) -> dict:
