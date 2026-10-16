@@ -831,10 +831,18 @@ SQLite child и SSH делят прежний total4GiB Job и CPU1. Общий 
 только helper. Native transaction сохраняет прежний replica point при interruption;
 partial run не принимается за актуальный snapshot. Состояние сначала перечитывается.
 
-Native exit0 недостаточен: bridge требует полный v2 BEGIN/pages/COMMIT/END,
+Native exit0 недостаточен: bridge требует полный BEGIN/pages/COMMIT/END,
 валидную compressed frame, совпадающий transcript SHA256/encoded counts, exact
 source receipt и healthy unchanged runtime. PC readback проверяет closed files,
 raw SHA256/extent, owner/schema и journal watermark из самой captured point.
 Результат только CAPTURED_SNAPSHOT_NOT_QUALIFIED. Full SQL/history comparison,
 полный newer tail, ordinary backup/CD≤900s и reviewed production promotion остаются
 обязательными; этот transport не выполняет замену рабочей базы и не расширяет budgets.
+
+Для этого большого isolated catch-up source и replica явно используют protocol1:
+он сравнивает hashes каждой страницы одним проходом, сохраняя ту же snapshot
+transaction и передачу только changed pages. Protocol2 с укрупнёнными ranges
+на actual source повторно читал большие участки; повтор такого же запуска не
+считается исправлением. Parser принимает оба upstream protocols, но не допускает
+v2-only messages в v1. Выбор protocol не ослабляет full transcript/raw/SQL checks
+и не увеличивает RAM или900s budgets; actual fit проверяется отдельно.

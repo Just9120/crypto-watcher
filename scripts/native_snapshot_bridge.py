@@ -16,11 +16,12 @@ MAXIMUM = 128 * 1024**3
 
 
 class OriginTranscript:
-    """Check complete upstream v2 messages without interpreting or retaining DB pages."""
+    """Check complete upstream v1/v2 messages without interpreting or retaining DB pages."""
 
     def __init__(self) -> None:
         self.digest = hashlib.sha256()
         self.buffer = bytearray()
+        self.protocol = 0
         self.pages = 0
         self.page_bytes = 0
         self.messages = 0
@@ -51,7 +52,11 @@ class OriginTranscript:
                     self.command = None
                     return
                 lengths = {0x41: 6, 0x44: 4, 0x45: 4, 0x47: 8, 0x48: 0}
-                if command not in lengths or self.transactions:
+                if (
+                    command not in lengths
+                    or self.transactions
+                    or (self.protocol == 1 and command in (0x47, 0x48))
+                ):
                     raise RuntimeError("Native origin error or unknown message")
                 self.remaining = lengths[command]
             take = min(self.remaining, len(self.buffer))
@@ -64,8 +69,9 @@ class OriginTranscript:
             command, self.command = self.command, None
             header = self.header
             if command == 0x41:
-                if self.pages or header[0] != 2 or not 9 <= header[1] <= 16:
+                if self.pages or header[0] not in (1, 2) or not 9 <= header[1] <= 16:
                     raise RuntimeError("Native protocol/page size refused")
+                self.protocol = header[0]
                 self.page_bytes = 1 << header[1]
                 self.pages = int.from_bytes(header[2:], "big")
                 if not 0 < self.pages * self.page_bytes <= 64 * 1024**3:
@@ -88,7 +94,7 @@ class OriginTranscript:
         if not self.ended or self.command is not None or self.remaining or self.transactions != 1:
             raise RuntimeError("Native transcript lacks a complete committed snapshot")
         return {
-            "protocol": 2,
+            "protocol": self.protocol,
             "pages": self.pages,
             "page_bytes": self.page_bytes,
             "updated_pages": self.messages,

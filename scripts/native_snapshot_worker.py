@@ -35,7 +35,14 @@ def worker(seconds: float) -> None:
     try:
         with Path("/scratch/native.stderr").open("xb") as errors:
             result = native.bridge(
-                [str(executable), "--origin", "/history/cryptowatcher.sqlite3", "source.sqlite3"],
+                [
+                    str(executable),
+                    "--protocol",
+                    "1",
+                    "--origin",
+                    "/history/cryptowatcher.sqlite3",
+                    "source.sqlite3",
+                ],
                 sys.stdin.buffer,
                 sys.stdout.buffer,
                 role="origin",

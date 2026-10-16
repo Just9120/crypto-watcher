@@ -114,7 +114,14 @@ def receive(
                 try:
                     assert process.stdout is not None and process.stdin is not None
                     result = native.bridge(
-                        [str(executable), "--replica", "/history/cryptowatcher.sqlite3", str(working)],
+                        [
+                            str(executable),
+                            "--protocol",
+                            "1",
+                            "--replica",
+                            "/history/cryptowatcher.sqlite3",
+                            str(working),
+                        ],
                         process.stdout,
                         process.stdin,
                         role="replica",

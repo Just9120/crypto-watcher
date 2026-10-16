@@ -39,7 +39,7 @@ def test_fragmented_native_protocol_is_complete_and_hashed():
         b"B",
         transcript()[:-1],
         transcript()[:-6],
-        b"A\x01\x0c\x00\x00\x00\x02",
+        b"A\x00\x0c\x00\x00\x00\x02",
         b"A\x02\x20\x00\x00\x00\x02",
         b"A\x02\x0c\x00\x00\x00\x02D\x00\x00\x00\x03",
         b"A\x02\x0c\x00\x00\x00\x02E\x00\x00\x00\x03B",
@@ -200,3 +200,14 @@ def test_isolated_worker_import_needs_no_host_operator_bundle(tmp_path):
         timeout=10,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_single_pass_protocol_preserves_complete_snapshot_checks():
+    body = transcript().replace(b"A\x02", b"A\x01", 1)
+    parser = OriginTranscript()
+    parser.feed(body)
+    value = parser.finish()
+    assert value["protocol"] == 1 and value["sha256"] == hashlib.sha256(body).hexdigest()
+    parser = OriginTranscript()
+    with pytest.raises(RuntimeError):
+        parser.feed(b"A\x01\x0c\x00\x00\x00\x02H")
