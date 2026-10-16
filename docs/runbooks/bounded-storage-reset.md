@@ -88,11 +88,13 @@ settings, плотность cohorts, реальные no-signal windows и sour
 ограничения прогноза. Использованные исходники сравнений могут переживать raw35d
 до истечения30d parent detail; это subset необходимых revisions, не indefinite hold.
 
-Runtime repack получает до восьми прежних40ms slices за независимый1s tick, с отдельным
-transaction/checkpoint и scheduler yield между ними. Intended work<=320ms/cycle;
+Runtime repack получает один прежний40ms slice за независимый1s tick, с отдельным
+transaction/checkpoint и scheduler yield. Intended work<=40ms/tick;
 отдельный SQLite I/O/commit может выйти за time check. COMPLETE прекращает slices.
 Это не полный scan внутри одной транзакции, не CI job и не изменение900s CD gate.
 Backfill имеет отдельный bounded batch job и прежний shared REST limiter/live priority.
+Оба maintenance jobs ждут fresh OK poll и нулевой live bootstrap/recovery/blocked
+queue. При transient live recovery уступают диск, затем продолжают durable progress.
 Новый PASS CD меняет expected source observer: завершить только прежний identified
 WAITING_STABLE unit после readback, сохранить его records, запустить один observer
 из нового exact image в новой private folder. Существующую baseline другого source

@@ -124,6 +124,9 @@ Backfill ограничен32jobs/проход и1s admission budget (один �
 ограничен прежним timeout клиента), общий REST5req/s/concurrency4 не изменяется.
 Current recovery перепроверяется между pages, superseded in-flight job не оживает.
 Ошибки независимых workers явно блокируют stable capacity baseline.
+Maintenance ждет fresh OK poll именно текущего запуска и нулевой live
+bootstrap/recovery/blocked queue; старый сохраненный OK не разрешает раннюю работу.
+Production repack использует один40ms slice/1s tick, без восьми fsync bursts в секунду.
 
 Storage extension3 сохраняет physical schema2 и public contracts. Legacy expiry/quality
 rows остаются видимыми через compatibility views до bounded in-place drain. Internal

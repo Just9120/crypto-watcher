@@ -155,6 +155,7 @@ class Controller:
         self.analytics_lock = asyncio.Lock()
         self.repack_lock = asyncio.Lock()
         self.recovery_lock = asyncio.Lock()
+        self.maintenance_started_at = time.time()
         self.enrichment = Enrichment(store, market) if isinstance(market, BybitRadar) else None
         self.engine = (
             EventEngine(
@@ -868,11 +869,13 @@ class Controller:
         now = self.market.server_now()
         if now <= 0:
             return
+        if not self.maintenance_ready():
+            return
         from .storage_repack import async_work
 
         async with self.repack_lock:
             try:
-                await async_work(self.store, now)
+                await async_work(self.store, now, slices=1)
                 self.store.put_runtime("repack_worker", {"state": "OK", "at_ms": self.market.server_now()})
             except Exception as exc:
                 self.store.put_runtime(
@@ -887,6 +890,8 @@ class Controller:
         now = self.market.server_now()
         if now <= 0:
             return
+        if not self.maintenance_ready():
+            return
         async with self.recovery_lock:
             try:
                 await self.recovery.work(now)
@@ -899,6 +904,25 @@ class Controller:
                     {"state": "FAILED", "error_class": type(exc).__name__, "at_ms": now},
                 )
                 logger.error("Backfill worker failure: %s", type(exc).__name__)
+
+    def maintenance_ready(self) -> bool:
+        """Give startup/current recovery the disk as well as the REST priority."""
+        ingestion = self.store.get_runtime("ingestion", {})
+        poll = self.store.get_runtime("last_poll_status", {})
+        return (
+            poll.get("state") == "OK"
+            and poll.get("at", 0) >= self.maintenance_started_at
+            and 0 <= time.time() - ingestion.get("at", 0) <= 30
+            and all(
+                ingestion.get(k, 1) == 0
+                for k in (
+                    "bootstrap_pending_streams",
+                    "blocked_streams",
+                    "recovery_pending",
+                    "recovery_working",
+                )
+            )
+        )
 
     async def enrichment_job(self, context: ContextTypes.DEFAULT_TYPE) -> None:
         if self.enrichment is None or not isinstance(self.market, BybitRadar):

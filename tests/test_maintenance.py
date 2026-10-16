@@ -1,4 +1,5 @@
 import asyncio
+import time
 from contextlib import closing
 from unittest.mock import AsyncMock, patch
 
@@ -194,6 +195,7 @@ async def test_maintenance_and_heartbeat_continue_while_analytics_is_waiting(
 ):
     radar, _, h, _ = seed(store, monkeypatch, 3)
     controller = Controller(infrastructure, store, radar)
+    ready_ingestion(store)
     entered, release = asyncio.Event(), asyncio.Event()
 
     async def slow_outcomes(clock):
@@ -219,4 +221,69 @@ async def test_maintenance_and_heartbeat_continue_while_analytics_is_waiting(
     app = application(controller)
     callbacks = {job.callback for job in app.job_queue.jobs()}
     assert {controller.repack_job, controller.backfill_job, controller.analytics_job} <= callbacks
+    await radar.close()
+
+
+def ready_ingestion(store):
+    value = {
+        "at": time.time(),
+        "bootstrap_pending_streams": 0,
+        "blocked_streams": 0,
+        "recovery_pending": 0,
+        "recovery_working": 0,
+    }
+    with store.db:
+        store.put_runtime("ingestion", value)
+        store.put_runtime("last_poll_status", {"state": "OK", "at": time.time()})
+    return value
+
+
+@pytest.mark.parametrize(
+    "busy",
+    [
+        "bootstrap_pending_streams",
+        "blocked_streams",
+        "recovery_pending",
+        "recovery_working",
+        "stale",
+        "warming",
+        "prior_runtime_poll",
+    ],
+)
+async def test_maintenance_yields_disk_to_startup_and_live_recovery(store, infrastructure, monkeypatch, busy):
+    radar, _, _, _ = seed(store, monkeypatch, 1)
+    controller = Controller(infrastructure, store, radar)
+    ingestion = ready_ingestion(store)
+    if busy == "stale":
+        ingestion["at"] -= 31
+    elif busy not in ("warming", "prior_runtime_poll"):
+        ingestion[busy] = 1
+    with store.db:
+        store.put_runtime("ingestion", ingestion)
+        store.put_runtime(
+            "last_poll_status",
+            {
+                "state": "WARMING" if busy == "warming" else "OK",
+                "at": controller.maintenance_started_at - 1 if busy == "prior_runtime_poll" else time.time(),
+            },
+        )
+    before = store.db.total_changes
+    with (
+        patch("cryptowatcher.storage_repack.async_work", new=AsyncMock()) as repack,
+        patch.object(controller.recovery, "work", new=AsyncMock()) as backfill,
+    ):
+        await controller.repack_job(None)
+        await controller.backfill_job(None)
+        repack.assert_not_awaited()
+        backfill.assert_not_awaited()
+    assert store.db.total_changes == before
+    ready_ingestion(store)
+    with (
+        patch("cryptowatcher.storage_repack.async_work", new=AsyncMock()) as repack,
+        patch.object(controller.recovery, "work", new=AsyncMock()) as backfill,
+    ):
+        await controller.repack_job(None)
+        await controller.backfill_job(None)
+        repack.assert_awaited_once_with(store, radar.server_now(), slices=1)
+        backfill.assert_awaited_once()
     await radar.close()

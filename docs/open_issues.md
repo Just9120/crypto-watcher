@@ -30,7 +30,13 @@ Canonical spec: [product_scope.md](product_scope.md). Этот план соде
 
 Основание: явное поручение владельца16Oct2026 устранить узкие места backfill и
 repack, сохранить history/analytics/alerts, RAM и ordinary backup/CD<=900s.
-Один основной PR; branch `codex/maintenance-throughput-20261016`, base
+Основной PR48 merged4c3a362; CI38966791666 PASS, CD38967393380 POST_CHECK_FAILED:
+maintenance jobs конкурировали с cold startup до достаточного available coverage.
+Source/image healthy, full backup42.391s; failed record сохранен. Compatible hotfix
+`codex/maintenance-startup-hotfix-20261017`, base4c3a362: диск отдается live recovery
+до fresh OK poll/bootstrap0/gaps0; repack один40ms slice за1s tick, не восемь commits
+в секунду. Gates150s/900s/RAM неизменны. Предыдущая основная branch
+`codex/maintenance-throughput-20261016`, base
 `f9df4b890f6a32e871d4a24fb9387e8c0c7fb91a`; clean main/fresh origin, protections
 `ci-required`/strict/self-review и SSH проверены. Предыдущие PR45/46/47 поставлены;
 последний CD38962027960 PASS294s, full backup45.442s. Ошибка CD46 сохранена в records.
@@ -44,7 +50,7 @@ repack, сохранить history/analytics/alerts, RAM и ordinary backup/CD<=
 | --- | --- |
 | M01: backfill batch/fairness/retry/restart; сохранность sources и результатов, приоритет live и прежний REST budget | CODE READY; targeted checks PASS, CI/runtime PENDING |
 | M02: независимый repack, конечная граница прохода, public equality/checkpoint/rollback и yield для Telegram | CODE READY; equality/cancel/restart/fairness PASS, runtime completion PENDING |
-| M03: CI/merge/CD<=900s с прежними recovery gates, RAM без увеличения; source/settings/generation и alerts readback | PENDING |
+| M03: CI/merge/CD<=900s с прежними recovery gates, RAM без увеличения; source/settings/generation и alerts readback | IN_PROGRESS; CD48 post-check FAIL, compatible hotfix validation PENDING |
 | M04: observed completion очередей, проверенный finite observer новой revision, actual baseline/24h статус | PENDING |
 
 Validation Plan (root): local `python scripts/checks.py quality` REQUIRED; targeted
@@ -61,13 +67,18 @@ Checkpoint: code baseline f9df4b8. Read-only23:49MSK: backfill24,904;
 repack remaining1,237,061 runtime keys,823,885 legacy expiry,43,486 decision heads
 (неаддитивные очереди). Progress10,160keys/10min; observer WAITING_STABLE, baseline
 отсутствует. Ingestion bootstrap/gaps0, allACK; analytics OK, Telegram DELIVERED.
-Независимые jobs1s/32 backfill jobs, существующие8x40ms repack slices, durable bounds
+Независимые jobs1s/32 backfill jobs, production1x40ms repack slice, durable bounds
 и защита superseded HTTP result реализованы. Local92 targeted PASS; после final review
 29 focused PASS; canonical docs/Ruff/mypy PASS. Isolated Windows fixture5,000rows
 (90%current typed/10%CW2): identical public SHA256, active codec work0.406→0.156s
 (2.6x), не production throughput/ETA. RAM/cache/dependencies/CI/CD gates не изменены.
 Следующий шаг: required Linux CI/image, merge и обычный CD; затем bounded readback
 очередей и новый finite observer из final artifact. Latest runtime gates PENDING.
+Startup hotfix: отсутствие market-ready poll именно этого запуска, stale ingestion,
+bootstrap/blocked/current recovery запрещают maintenance без DB writes. Возобновление
+после восстановления и независимость от долгого analytics проверены fixture;
+старый сохраненный OK не считается startup evidence. Local102 maintenance/ingestion/
+bot checks и canonical quality PASS; required hotfix CI/runtime еще PENDING.
 
 ## Previous Goal — CAPACITY: реальные источники и заполненная база
 
