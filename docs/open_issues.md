@@ -92,6 +92,7 @@ Canonical команды — [README](../README.md#checks); из root repository
 | Capacity F38 | Existing isolated measurement, dense multi-event numeric blocks and comparator case; measured bytes separately from forecast; queue turnover plateau | Local targeted + CI measurement / REQUIRED |
 | Delivery | Canonical quality locally, full PR CI/image; existing ordinary full disk source+backup checks and bounded post-checks | Production only after merge / REQUIRED;900s unchanged |
 | Restart hotfix | Local current/complete persisted windows skip redundant REST; stale/gap/short/conflict/settings cases retain recovery, both markets/4TF, cooperative scheduling/no historical live replay | Targeted ingestion tests, full required CI, ordinary CD / REQUIRED |
+| Wide WS ACK | Shards<=100topics с полным покрытием, strict15s ACK deadline даже при непрерывных updates, independent shard ACK до обработки closed observations | Targeted fake WS burst/timeout + required CI / REQUIRED |
 
 ## Текущее состояние AC
 
@@ -242,6 +243,7 @@ Canonical команды — [README](../README.md#checks); из root repository
 | F37 RECOVERY QUEUE | Уже заполненные локально ranges остаются PENDING; analytics_recovery.work не перепроверяет наличие перед REST | P1 | FIX: local completeness/reuse и bounded retirement, сохранить реальные gaps/retries | Read-only16Oct18:48MSK:16/16 checked PENDING ranges complete, attempts0/age48–266min; bounded non-random sample | HIGH / IN_PROGRESS |
 | F38 FORECAST | Валовый оборот временных очередей умножается на30d; общий page factor применяется к годовым numeric facts | P1 | FIX: разные lifetimes/queue occupancy/retained slope и measured format model; не скрывать превышение | storage_meter.report и measured438.2GB; details alone30.1GB encoded30d при текущей частоте | HIGH / IN_PROGRESS |
 | F39 RESTART RECOVERY | Cold in-memory windows вызывают REST bootstrap для всех streams, хотя актуальная полная source history уже сохранена | P1: wide-universe warmup превышает bounded post-check | FIX: local validated restore по одному window с yield, без исторических live observations; реальные gaps сохраняют REST | CD38936336472 POST_CHECK_FAILED после switch; source/full disk backup PASS55.53s; runtime healthy, Telegram DELIVERED, затем оба WS ACK, но bootstrap queue сохранялась | HIGH / IN_PROGRESS; hotfix отe9cc24b |
+| F40 SUBSCRIPTION BACKLOG | Один linear shard788topics; continuously ready recv может продлевать ACK ожидание после deadline | P1: reconnect/blocked streams при широком universe | FIX: shards<=100topics без потери покрытия; strict15s ACK deadline | Bounded read-only17:23UTC25s: ACK200/788,buffer_overflows22; fake continuous-open stream воспроизводит обход deadline | HIGH / IN_PROGRESS; тот же hotfix |
 
 ## Документы, legacy и artifacts
 
@@ -279,6 +281,9 @@ production job378s. Full disk backup965529600bytes PASS55.53s/hash e282448f…;
 не меняются. Последний readback17:17UTC: оба WS fully ACK,1152streams/4TF,
 analyticsOK, bootstrap34; prior poll WARMING. Required hotfix CI/merge/CD PENDING.
 Следующий шаг — targeted validation и поставка compatible hotfix обычным CD.
+Hotfix initial6b5760b CI38938935388 PASS752 tests/image. Review/live readback
+выявил F40: ACK200/788 сохранялся25s,buffer_overflows22. Добавлены shards100 и
+strict existing15s deadline;33 local ingestion tests/quality PASS; latest CI pending.
 
 Discovery read-only source130225d2:
 18:41MSK working797879672bytes, net4.01GB/day since reset, forecast438.20GB/model;

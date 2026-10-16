@@ -142,6 +142,8 @@ def test_wide_subscription_shards_preserve_every_tf_and_spot_batch_limits():
     streams = [f"spot/C{i}USDT/{tf}" for i in range(1000) for tf in TIMEFRAMES]
     groups = shards(streams)
     assert len(groups) > 1
+    assert all(len(group) <= 100 for group in groups)
+    assert sum(map(len, groups)) == len(streams)
     assert set(s for g in groups for s in g) == set(streams)
     assert all(len(json.dumps([topic(s) for s in group])) <= 20_000 for group in groups)
 
@@ -304,6 +306,78 @@ async def test_rejected_subscription_discards_buffer_before_any_candle_write(rad
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+        await radar.close()
+
+
+async def test_continuous_open_updates_cannot_extend_subscription_deadline(radar, monkeypatch):
+    clock = iter(range(10000))
+    monkeypatch.setattr(
+        ingestion, "time", SimpleNamespace(monotonic=lambda: next(clock), time=lambda: NOW / 1000)
+    )
+
+    class NoAcknowledgement(Socket):
+        async def send(self, raw):
+            if json.loads(raw)["op"] == "subscribe":
+                for _ in range(100):
+                    await self.messages.put(json.dumps(message(confirm=False)))
+
+    socket = NoAcknowledgement()
+    radar.connector = lambda *args, **kwargs: socket
+    task = asyncio.create_task(radar._session("spot:0", "spot", ["spot/BTCUSDT/1m"]))
+    try:
+        await wait_condition(lambda: radar.connections.get("spot:0", {}).get("state") == "RECONNECTING")
+        assert radar.connections["spot:0"]["reason"] == "TimeoutError"
+        assert radar.connections["spot:0"]["acknowledged"] == 0
+        assert socket.messages.qsize() > 50  # timeout despite recv being continuously ready
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await radar.close()
+
+
+async def test_wide_linear_shards_ack_independently_before_closed_candle_work(radar, monkeypatch):
+    streams = [f"linear/C{i}USDT/{tf}" for i in range(90) for tf in TIMEFRAMES]
+    radar.streams = set(streams)
+    sockets = []
+
+    class InitialBurst(Socket):
+        async def send(self, raw):
+            payload = json.loads(raw)
+            if payload["op"] == "subscribe":
+                for value in payload["args"]:
+                    _, interval, symbol = value.split(".")
+                    await self.messages.put(json.dumps(message(interval + "m", symbol)))
+            await super().send(raw)
+
+    def connector(*args, **kwargs):
+        socket = InitialBurst()
+        sockets.append(socket)
+        return socket
+
+    seen = []
+
+    def accept(market, payload, allowed, **kwargs):
+        name = names[next(s for s in allowed)]
+        assert radar.connections[name]["acknowledged"] == len(allowed)
+        seen.append(payload["topic"])
+
+    groups = shards(streams)
+    names = {s: f"linear:{i}" for i, group in enumerate(groups) for s in group}
+    monkeypatch.setattr(radar, "accept_message", accept)
+    radar.connector = connector
+    tasks = [
+        asyncio.create_task(radar._session(f"linear:{i}", "linear", group)) for i, group in enumerate(groups)
+    ]
+    try:
+        await wait_condition(lambda: len(seen) == len(streams))
+        assert len(sockets) == 4
+        assert len(set(seen)) == len(streams)
+        assert all(len(s.sent) == 1 for s in sockets)  # one bounded linear subscribe per shard
+        assert all(c["state"] == "CONNECTED" for c in radar.connections.values())
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         await radar.close()
 
 

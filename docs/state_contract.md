@@ -56,6 +56,11 @@ reader/rollback compatibility с существующим compact-aware runtime.
 
 Во время первоначальной WebSocket subscription phase closed observations временно
 буферизуются отдельно от ACK: максимум128 сообщений/2MiB raw bytes на session.
+WS shards ограничены100topics и20,000bytes topic list, без сокращения universe.
+Deadline ACK15s абсолютный, включая continuously ready receive. При restart worker
+по одному восстанавливает complete/current закрытое локальное окно с yield;
+неполное, устаревшее или конфликтующее окно требует REST recovery. Local restore
+не публикует observation и не превращает сохранённые candles в новые live alerts.
 После полного ACK они проходят прежние validation/persistence/detector paths
 с исходным network receipt time; freshness остаётся от market observation time.
 Replay уступает event loop между сообщениями, buffer освобождается после обработки.

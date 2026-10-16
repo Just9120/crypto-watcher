@@ -22,6 +22,7 @@ from .universe import CLASSIFICATION_VERSION, Instrument, active_instruments, di
 
 SUBSCRIPTION_BUFFER_MESSAGES = 128
 SUBSCRIPTION_BUFFER_BYTES = 2 * 1024 * 1024
+SUBSCRIPTION_SHARD_TOPICS = 100
 
 
 def topic(stream: str) -> str:
@@ -33,7 +34,10 @@ def shards(streams: list[str]) -> list[list[str]]:
     groups: list[list[str]] = []
     group: list[str] = []
     for stream in sorted(streams):
-        if len(json.dumps([topic(s) for s in (*group, stream)])) > 20_000:
+        if (
+            len(group) >= SUBSCRIPTION_SHARD_TOPICS
+            or len(json.dumps([topic(s) for s in (*group, stream)])) > 20_000
+        ):
             groups.append(group)
             group = []
         group.append(stream)
@@ -618,9 +622,10 @@ class BybitRadar(BybitREST):
                             )
                             deadline = time.monotonic() + 15
                             while True:
-                                raw = await asyncio.wait_for(
-                                    websocket.recv(), max(0.01, deadline - time.monotonic())
-                                )
+                                remaining = deadline - time.monotonic()
+                                if remaining <= 0:
+                                    raise TimeoutError("Subscription acknowledgement deadline")
+                                raw = await asyncio.wait_for(websocket.recv(), remaining)
                                 received_ms = int(time.time() * 1000)
                                 message = json.loads(raw)
                                 # Subscription responses must not wait for cold source
