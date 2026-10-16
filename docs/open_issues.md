@@ -41,7 +41,7 @@ Snapshot: 2026-10-10, проверка около 10:00–10:15 Europe/Moscow; `
 
 **Результат текущего этапа:** компактное accumulation со всеми markets/TF/detectors и неизменной аналитикой; bounded automatic retention/quality summaries/storage diagnostics; отдельный разовый reset market history с проверкой private config и запуском новой generation.
 
-**Scope:** AC-13-01…07, regression AC-03/04/05/06/07/08/09/10/11/12 и F15/F20/F22/F25/F27/F34. Новые7 AC отражают новые требования S01/S05; исходные58 ID сохранены, scope теперь65 AC. Последний implementation checkpoint54/58 относится к прежнему scope и не является новым READY audit. Текущий storage этап: **0/7 AC реализовано полностью**; project/epic percentage не пересчитывается. Остальная согласованная Goal сохраняется, external credential activation отложена владельцем.
+**Scope:** AC-13-01…07, regression AC-03/04/05/06/07/08/09/10/11/12 и F15/F20/F22/F25/F27/F34. Новые7 AC отражают новые требования S01/S05; исходные58 ID сохранены, scope теперь65 AC. Последний implementation checkpoint54/58 относится к прежнему scope и не является новым READY audit. Текущий storage этап: **1/7 AC реализовано по коду полностью**; project/epic percentage не пересчитывается. Остальная согласованная Goal сохраняется, external credential activation отложена владельцем.
 
 **Non-goals:** сохранение/конвертация удаляемой тестовой истории, новые market sources, уменьшение universe/TF/detectors/числа событий/качества analytics, auto-calibration, PostgreSQL/Redis, изменение trading authority, удаление backups/experimental files, увеличение RAM/обычных backup/CD deadlines, длительное ожидание статистики.
 
@@ -49,7 +49,7 @@ Snapshot: 2026-10-10, проверка около 10:00–10:15 Europe/Moscow; `
 
 ### Задачи и зависимости
 
-1. Сверить весь обновленный S01 и latest owner request; обновить spec/plan/state contract и убрать действующие indefinite-retention правила. **IN_PROGRESS**: S01 modified08:48:31.536UTC прочитан полностью,170 paragraphs/tab t.0; D22/E13 введены.
+1. Сверить весь обновленный S01 и latest owner request; обновить spec/plan/state contract и убрать действующие indefinite-retention правила. **DONE**: S01 modified08:48:31.536UTC прочитан полностью,170 paragraphs/tab t.0; D22/E13 введены, canonical quality PASS.
 2. Исследовать уже поставленные compact heads/shared bodies и фактические write/read paths; переиспользовать полезное без переноса старого converter scope. Устранить window/settings/context duplication. **PENDING**.
 3. Реализовать configurable compatible retention, quality aggregates12mo и dependency/service cleanup. Условный coarse context inventory90/180d. **PENDING**.
 4. Встроить bounded category counts/bytes/index/journal/net growth/forecast/budget warning; измерить event+outcomes+services на изолированных данных. **PENDING**.
@@ -83,7 +83,23 @@ Consumer primary PR935/936: merged7456e1bc/67716b32, CI38099567857/38100130663 �
 
 PR31/32 compact new writes: CI38524296127/38525193430, CD38525778657/source047c66e5 PASS по разовому owner-approved gate. PR33/34 переключали image, но их records оставлены failed POST_CHECKS; поздний healthy readback не переименовывает failed CD. PR35 устранил ACK-before-candle startup regression, main2efd9093; actual running image/source/health подтверждены последующими readbacks. IDs актуального CD найти по первичным GitHub records до новой поставки; не повторять deploy ради статуса. Historical5.42GB qualification/hash61e4f087… и прочие conversion результаты относятся к прошлым snapshots; новая задача не требует их повторять.
 
-## Состояние AC и Evidence baseline
+### Код storage этапа / Evidence
+
+| AC | Статус | Evidence / оставшийся gate |
+| --- | --- | --- |
+|13-01|READY в рабочей ветке|20 новых storage regressions PASS, targeted existing history/source/analytics/export/agent suites PASS; lossless equality/replay/restart, all5 families/both markets/4TF fixture200events/800complete outcomes. Target Linux CI/image еще PENDING.|
+|13-02|IN_PROGRESS|Controlled30/35d expiry, reference GC, atomic rollback и leases PASS; broad config/restart/load qualification/target CI еще PENDING.|
+|13-03|IN_PROGRESS|Exact existing cohorts до/после expiry PASS; calendar12mo boundary и summary provenance implemented. Дополнительные comparator/export fixtures и target CI еще PENDING.|
+|13-04|IN_PROGRESS|Native active TF1/3/5/15m; отдельного30m/1h candle context нет. Завершить conditional inventory/retention interpretation, не добавлять источники.|
+|13-05|IN_PROGRESS|Completed jobs retirement/admission dedup/recompare и signed retry/restart/causal tests PASS; pending owner expiry implemented. Target/fault/bounded workload validation еще PENDING.|
+|13-06|IN_PROGRESS|Transactional counters/files/net growth/model forecast implemented; initial exact index snapshot Windows UNAVAILABLE(dbstat), Linux check required.20GB target не подтвержден.|
+|13-07|IN_PROGRESS|Private snapshot/restore/candidate integrity/prefs preservation/generation-no-old-alerts fixtures PASS. Production host procedure/CD/reset/post-checks еще не реализованы/не выполнены.|
+
+Latest synthetic WindowsPy3.12 measurement:200events/800complete outcomes, обе markets/4TF/5families, analytics equality PASS; working4,468,736bytes,22,343.68bytes/event включая indexes/служебные/source. Quality facts encoded259,800bytes/1,299bytes per event, sparse fixture с одним событием на cohort. Это не production rate или steady-state allocation. Runtime rowid вместо WITHOUT ROWID уменьшил ту же fixture allocation с8,491,008 до5,668,864bytes; binary dictionary уменьшил далее до4,468,736bytes. Raw research records остаются вне repository. Required Linux/image measurement еще PENDING.
+
+09:19:39UTC read-only VPS: same7723a326/source2efd9093 healthy, working42,072,223,744bytes/WAL1,466,415,152/free3,115,704,320bytes;1208 active streams, full latest ACK, analyticsOK, TelegramDELIVERED.09:41:04UTC narrow timestamp-index sample15min:1423events,136608/day extrapolated,0.003s. Короткий старый runtime sample не является устойчивым forecast нового layout;20GB fit нельзя объявлять. Production writes/reset/restart не выполнялись текущим этапом.
+
+## Исторические состояния AC: audit baseline2026-10-10
 
 Все строки относятся к baseline audit SHA выше. READY подтверждает только соответствующий критерий, а не всю подсистему. BLOCKED хранит причину; backlog/partial не выдаются за отсутствие возможности реализации.
 
@@ -248,4 +264,6 @@ Confidence: HIGH по code/fixture-backed gaps и inventory; MEDIUM у orphan ex
 
 2026-10-16: updated S01 modified08:48:31.536UTC прочитан полностью (170 paragraphs,tab t.0; revision в spec). Branch `codex/bounded-market-storage-20261016`, base/main2efd9093; clean start. PR36 закрыт без merge, его branch/commits/private files сохранены. Старые transfer jobs terminal;08:44:21UTC CW same container7723a326/source2efd9093 running/healthy, перенос/конвертация/удаление/reset не выполнялись этим этапом. Работа alerts не прерывалась. Состояние временных conversion journals не создает обязательства продлевать их для отмененного scope.
 
-Следующий шаг: закончить requirements/contract consistency, изучить current-main storage paths, реализовать компактное новое накопление/retention/summary/meter/reset tests. Затем один PR, required CI, concrete exact-target reset/delivery и bounded runtime measurements. 0/7 AC нового этапа полностью закрыты; прежний54/58 implementation snapshot не выдается за новую оценку65 AC. No audit percentage recalculation. Consumer credential/TOTP deferred остается отдельной внешней зависимостью.
+Requirements/spec/plan синхронизированы в локальном commit09206a2. Ветка содержит локальную opt-in schema2 implementation; нормальный startup schema1 не меняет.20 storage tests/targeted legacy suites/quality PASS, pending CI/production gates не выданы за success. Сохранены `.cache-g1/operator` measurements/checkpoints, все прежние private copies/archives и PR36 branch. Текущий код storage этапа1/7 AC, не пересчет project readiness.
+
+Следующий шаг: завершить metering/index/current-size estimates и annual summary model qualification, дополнительные comparator/expiry/restart/export regressions; реализовать exact-target reset/CD procedure и disk streaming backup без увеличения RAM/900s. Затем self-review, один PR со всем scope, required Linux CI, безопасная поставка/authorized reset и bounded live measurements/outcome/Telegram checks. Consumer credential/TOTP deferred остается отдельной внешней зависимостью. Production42GB остается прежней до успешных gates; старую историю не конвертировать/не копировать, backups/experiments не удалять.

@@ -188,7 +188,11 @@ def test_pending_restart_gaps_recovery_reference_and_no_silent_recalculation(sto
 
 def test_event_admission_atomic_and_horizon_numeric_order(store, monkeypatch):
     snapshot = store.snapshot()
-    store.update(snapshot.revision, snapshot.settings.changed(outcome_horizons=(10**100, 5)))
+    # D22 rejects horizons incompatible with retained inputs/detail. Keep the
+    # numeric-order and atomic rollback regression within the supported window.
+    with pytest.raises(ConfigError, match="retention incompatible"):
+        snapshot.settings.changed(outcome_horizons=(10**100, 5))
+    store.update(snapshot.revision, snapshot.settings.changed(outcome_horizons=(10_000, 5)))
     worker = OutcomeWorker(store)
     engine = observe(store, worker)
     Sources(store).put("spot/BTCUSDT/1m", future())

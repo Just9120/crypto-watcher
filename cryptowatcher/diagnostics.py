@@ -34,7 +34,11 @@ def snapshot(store: Store, seconds: float = 3) -> dict[str, Any]:
     ingestion.update(
         diagnostic_age_seconds=round(age, 1), diagnostic_state="FRESH" if 0 <= age <= 30 else "STALE"
     )
+    from .storage_meter import report
+
     return {
+        "storage": bounded(lambda: report(store)),
+        "history_generation": store.get_runtime("history_generation", {"state": "LEGACY"}),
         "database": {
             "snapshot_bytes": store.db.execute("PRAGMA page_count").fetchone()[0]
             * store.db.execute("PRAGMA page_size").fetchone()[0],

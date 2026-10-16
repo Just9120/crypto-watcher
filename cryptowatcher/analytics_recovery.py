@@ -22,6 +22,11 @@ class AnalyticsRecovery:
     def request(self, stream: str, start: int, end: int) -> str | None:
         if start >= end:
             return "INVALID_REFERENCED_WINDOW"
+        expires = None
+        if self.store.bounded:
+            expires = self.owner_deadline(stream, start, end, self.market.server_now())
+            if expires is None:
+                return "REFERENCED_OWNER_EXPIRED"
         key = identity(f"analytics-gap/{stream}/{start}/{end}")
         job = self.history.get("analytics-gap:" + key)
         if job is not None and job["state"] != "COMPLETE":
@@ -42,10 +47,21 @@ class AnalyticsRecovery:
                         "next_attempt_ms": now,
                         "pending_key": pending,
                         "attempts": 0,
+                        **({"expires_ms": expires} if expires is not None else {}),
                     },
                 )
                 self.history.put(pending, {"id": key})
         return "REFERENCED_RECOVERY_PENDING"
+
+    def owner_deadline(self, stream: str, start: int, end: int, now: int) -> int | None:
+        from .market_storage import stream_id
+
+        sid = stream_id(self.store.db, stream)
+        row = self.store.db.execute(
+            "SELECT MAX(expires) FROM market_holds WHERE stream=? AND start<? AND end>? AND expires>?",
+            (sid, end, start, now),
+        ).fetchone()
+        return row[0] if row else None
 
     async def work(self, now: int) -> None:
         # Live gaps and bootstrap keep priority over historical analytics in the same REST budget.
@@ -53,6 +69,15 @@ class AnalyticsRecovery:
             return
         for _, binding in self.history.items("analytics-gap-pending:", 1):
             job = self.history.get("analytics-gap:" + binding["id"])
+            if (
+                self.store.bounded
+                and self.owner_deadline(job["stream"], job["start"], job["end"], now) is None
+            ):
+                with self.store.db:
+                    self.history.delete(job["pending_key"])
+                    job.update(state="EXPIRED_RETENTION_INCOMPLETE", completed_ms=now)
+                    self.history.put("analytics-gap:" + job["id"], job)
+                return
             if job["next_attempt_ms"] > now:
                 return
             market, symbol, tf = job["stream"].split("/")
@@ -86,7 +111,14 @@ class AnalyticsRecovery:
                 ):
                     raise MarketError("incomplete_referenced_page")
                 writes = []
-                for candle in candles:
+                if self.store.bounded:
+                    from .market_storage import read
+
+                    existing_values = read(self.store.db, job["stream"], candles[0].start, job["cursor_end"])
+                    old = {v["start"]: Candle(**v) for v in existing_values}
+                    if any(c.start in old and old[c.start].row() != c.row() for c in candles):
+                        raise MarketError("referenced_source_conflict")
+                for candle in [] if self.store.bounded else candles:
                     key = Sources.prefix(job["stream"]) + f"{candle.start:016d}"
                     existing = self.store.db.execute(
                         "SELECT payload_json FROM runtime WHERE key=?", (key,)
@@ -98,7 +130,14 @@ class AnalyticsRecovery:
                     else:
                         writes.append((key, encode(asdict(candle))))
                 with self.store.db:
-                    self.store.db.executemany("INSERT INTO runtime VALUES (?,?)", writes)
+                    if self.store.bounded:
+                        from .market_storage import admit
+
+                        for candle in candles:
+                            if candle.start not in old:
+                                admit(self.store.db, job["stream"], asdict(candle))
+                    else:
+                        self.store.db.executemany("INSERT INTO runtime VALUES (?,?)", writes)
                     job["cursor_end"] = candles[0].start
                     job["state"] = "COMPLETE" if job["cursor_end"] == job["start"] else "PENDING"
                     job.pop("reason", None)

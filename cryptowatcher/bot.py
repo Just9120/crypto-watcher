@@ -133,6 +133,8 @@ MANUAL_FIELDS = {
     "liquidity_floor_24h",
     "sma_periods",
     "digest_interval_min",
+    "detail_retention_days",
+    "candle_retention_days",
 }
 MANUAL_FIELDS.update(PARAMETERS)
 
@@ -209,6 +211,7 @@ class Controller:
 
     def diagnostics(self) -> dict[str, Any]:
         return {
+            "storage": self.store.get_runtime("storage_report", {"state": "PENDING"}),
             "source_revision": self.infrastructure.source_revision,
             "configuration_revision": self.store.snapshot().revision,
             "telegram_alerts_enabled": self.store.enabled(),
@@ -817,6 +820,9 @@ class Controller:
                 processed_outcomes = await self.outcomes.async_work(self.market.server_now)
                 processed_comparisons = await ComparisonWorker(self.store).async_work(self.market.server_now)
                 self.retention.work(now)
+                from .storage_meter import sample
+
+                sample(self.store, now)
                 await self.recovery.work(now)
                 self.store.put_runtime(
                     "analytics",

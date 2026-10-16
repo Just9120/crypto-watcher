@@ -73,8 +73,26 @@ class OwnerSettings:
     outcome_horizons: tuple[int, ...] = (5, 15, 30, 60)
     digest_interval_min: int = 60
     enrichment_enabled: bool = False
+    detail_retention_days: int = 30
+    candle_retention_days: int = 35
 
     def __post_init__(self) -> None:
+        if (
+            not isinstance(self.outcome_horizons, tuple)
+            or not self.outcome_horizons
+            or any(type(h) is not int or h <= 0 for h in self.outcome_horizons)
+        ):
+            raise ConfigError("Invalid outcome_horizons")
+        for key in ("detail_retention_days", "candle_retention_days"):
+            if type(getattr(self, key)) is not int or not 1 <= getattr(self, key) <= 365:
+                raise ConfigError("Invalid " + key)
+        if (
+            self.candle_retention_days < 29
+            or self.candle_retention_days < max(self.outcome_horizons) / 1440 + 1
+        ):
+            raise ConfigError("Candle retention incompatible with comparator/lookback/horizons")
+        if max(self.outcome_horizons) >= self.detail_retention_days * 1440:
+            raise ConfigError("Detail retention incompatible with outcome horizons")
         if self.bybit_category not in ("spot", "linear"):
             raise ConfigError("Invalid bybit_category")
         if self.alert_universe_mode not in ("top", "custom"):
@@ -152,7 +170,14 @@ class OwnerSettings:
                 parsed["detector_parameters"] = validate_parameters(parsed["detector_parameters"])
             except ValueError as exc:
                 raise ConfigError(str(exc)) from exc
-        for key in ("radar_poll_sec", "cooldown_min", "sma_periods", "digest_interval_min"):
+        for key in (
+            "radar_poll_sec",
+            "cooldown_min",
+            "sma_periods",
+            "digest_interval_min",
+            "detail_retention_days",
+            "candle_retention_days",
+        ):
             if key in parsed:
                 parsed[key] = int(number(parsed[key], key, integer=True))
         for key in ("price_move_min", "turnover_spike_min", "liquidity_floor_24h", "watchlist_multiplier"):

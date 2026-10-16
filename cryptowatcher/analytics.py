@@ -15,7 +15,7 @@ from .detectors import VERSIONS, DetectorUnavailable, atr14, evaluate
 from .events import PREFIX, History, identity
 from .outcomes import DAY, MINUTE, calculate, pending_key, protect, read_candles
 from .source_context import context
-from .storage import StateError, Store, encode
+from .storage import StateError, Store, encode, json_payload
 
 COMPARATOR_VERSION = "1"
 COMPARATOR_DEFINITION = {
@@ -46,7 +46,7 @@ def as_of(history: History, kind: str, key: str, cutoff_ms: int) -> dict[str, An
         (prefix, prefix + "~"),
     )
     for row in rows:
-        record = history.resolve(row[0][len(PREFIX) :], json.loads(row[1]))
+        record = history.resolve(row[0][len(PREFIX) :], json_payload(row[1]))
         if record["available_at_ms"] <= cutoff_ms:
             return record
     return None
@@ -225,6 +225,10 @@ class ComparisonWorker:
     def requeue(self, event_id: str, now_ms: int) -> str:
         """Explicit owner action; preserve the original revision and prior analytics."""
         job = self.history.get("comparison-job:" + event_id)
+        if job is None and self.store.bounded:
+            event = self.history.get("event-head:" + event_id)
+            if event is not None:
+                job = {"event_id": event_id, "event_revision": event["revision"], "pending_key": ""}
         if job is None:
             raise ValueError("No admitted event")
         if self.history.get(job["pending_key"]) is not None:
@@ -344,7 +348,10 @@ class ComparisonWorker:
                 for held in (native, stream):
                     self.history.delete(f"hold:{held}:comparison:{event['event_id']}")
                 job.update(state=result["state"], completed_ms=now_ms)
-            self.history.put("comparison-job:" + event["event_id"], job)
+            if self.store.bounded and result["state"] in ("COMPLETE", "COMPLETE_LIMITED"):
+                self.history.delete("comparison-job:" + event["event_id"])
+            else:
+                self.history.put("comparison-job:" + event["event_id"], job)
 
 
 def dimensions(event: dict[str, Any]) -> dict[str, Any]:
@@ -389,12 +396,12 @@ def cohort_rows(
     for kind, name in (("outcome", "o"), ("comparison", "c")):
         if cutoff_ms is None:
             prefix = PREFIX + kind + "-head:"
-            if kind == "comparison":
+            if kind in ("comparison", "outcome"):
                 definitions.append(
                     f"{name} AS (SELECT COALESCE(v.payload_json,h.payload_json) AS payload_json "
                     "FROM runtime h LEFT JOIN runtime v ON v.key='"
                     + PREFIX
-                    + "' || json_extract(h.payload_json,'$.revision_key') "
+                    + "' || json_extract(cw_record_json(h.payload_json),'$.revision_key') "
                     "WHERE h.key>=? AND h.key<?)"
                 )
             else:
@@ -403,7 +410,7 @@ def cohort_rows(
         else:
             prefix = PREFIX + kind + ":"
             definitions += [
-                f"{name}v AS (SELECT payload_json, ROW_NUMBER() OVER (PARTITION BY json_extract(payload_json,'$.{kind}_id') ORDER BY json_extract(payload_json,'$.revision') DESC) AS pos FROM runtime WHERE key>=? AND key<? AND json_extract(payload_json,'$.available_at_ms')<=?)",
+                f"{name}v AS (SELECT payload_json, ROW_NUMBER() OVER (PARTITION BY json_extract(cw_record_json(payload_json),'$.{kind}_id') ORDER BY json_extract(cw_record_json(payload_json),'$.revision') DESC) AS pos FROM runtime WHERE key>=? AND key<? AND json_extract(cw_record_json(payload_json),'$.available_at_ms')<=?)",
                 f"{name} AS (SELECT payload_json FROM {name}v WHERE pos=1)",
             ]
             args += [prefix, prefix + "~", cutoff_ms]
@@ -421,47 +428,65 @@ def cohort_rows(
     fields = []
     for group in groups:
         expression = (
-            "json_extract(e.payload_json,'$.settings_revision')"
+            "json_extract(cw_record_json(e.payload_json),'$.settings_revision')"
             if group == "settings"
-            else f"json_extract(e.payload_json,'$.{paths[group]}')"
+            else f"json_extract(cw_record_json(e.payload_json),'$.{paths[group]}')"
         )
         # Settings revision uniquely identifies the immutable owner snapshot in this database.
         fields += [f"'{group}'", expression]
     fields += [
         "'horizon_min'",
-        "json_extract(o.payload_json,'$.horizon_min')",
+        "json_extract(cw_record_json(o.payload_json),'$.horizon_min')",
         "'methodology_version'",
-        "json_extract(o.payload_json,'$.methodology_version')",
+        "json_extract(cw_record_json(o.payload_json),'$.methodology_version')",
     ]
     terms = [
-        "json_extract(o.payload_json,'$.state')='COMPLETE'",
-        "json_extract(e.payload_json,'$.market_observation_ms')>=?",
-        "json_extract(e.payload_json,'$.market_observation_ms')<?",
+        "json_extract(cw_record_json(o.payload_json),'$.state')='COMPLETE'",
+        "json_extract(cw_record_json(e.payload_json),'$.market_observation_ms')>=?",
+        "json_extract(cw_record_json(e.payload_json),'$.market_observation_ms')<?",
     ]
     args += [start_ms, end_ms]
     if cutoff_ms is not None:
-        terms.append("json_extract(e.payload_json,'$.available_at_ms')<=?")
+        terms.append("json_extract(cw_record_json(e.payload_json),'$.available_at_ms')<=?")
         args.append(cutoff_ms)
     for field, value in (("detector_id", detector), ("detector_version", version), ("market_type", market)):
         if value is not None:
-            terms.append(f"json_extract(e.payload_json,'$.{field}')=?")
+            terms.append(f"json_extract(cw_record_json(e.payload_json),'$.{field}')=?")
             args.append(value)
     definitions += [
         "base AS (SELECT json_object(" + ",".join(fields) + ") AS group_key, "
-        "COALESCE(json_extract(o.payload_json,'$.metrics.directed_return_pct'),json_extract(o.payload_json,'$.metrics.price_return_pct')) AS value, "
-        "json_extract(o.payload_json,'$.classification') AS class, json_extract(o.payload_json,'$.noise_threshold_pct') AS noise, "
-        "json_extract(o.payload_json,'$.event_id') AS event_id, json_extract(o.payload_json,'$.horizon_min') AS horizon "
+        "COALESCE(json_extract(cw_record_json(o.payload_json),'$.metrics.directed_return_pct'),json_extract(cw_record_json(o.payload_json),'$.metrics.price_return_pct')) AS value, "
+        "json_extract(cw_record_json(o.payload_json),'$.classification') AS class, json_extract(cw_record_json(o.payload_json),'$.noise_threshold_pct') AS noise, "
+        "json_extract(cw_record_json(o.payload_json),'$.event_id') AS event_id, json_extract(cw_record_json(o.payload_json),'$.horizon_min') AS horizon "
         "FROM o JOIN runtime e ON e.key='"
         + PREFIX
-        + "event:' || json_extract(o.payload_json,'$.event_id') || ':' || printf('%010d',json_extract(o.payload_json,'$.event_revision')) WHERE "
+        + "event:' || json_extract(cw_record_json(o.payload_json),'$.event_id') || ':' || printf('%010d',json_extract(cw_record_json(o.payload_json),'$.event_revision')) WHERE "
         + " AND ".join(terms)
         + ")",
         "ordered AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY group_key ORDER BY value) AS rn, COUNT(*) OVER (PARTITION BY group_key) AS n FROM base)",
         "stats AS (SELECT group_key,COUNT(*) AS n,MIN(noise) AS noise_min,MAX(noise) AS noise_max,COUNT(noise) AS noise_n,AVG(value) AS mean,MIN(value) AS minimum,MAX(value) AS maximum,AVG(CASE WHEN rn IN ((n+1)/2,(n+2)/2) THEN value END) AS median,MAX(CASE WHEN rn=(n+9)/10 THEN value END) AS p10,MAX(CASE WHEN rn=(n*9+9)/10 THEN value END) AS p90 FROM ordered GROUP BY group_key)",
         "classes AS (SELECT group_key,class,COUNT(*) AS n FROM base GROUP BY group_key,class)",
         "class_json AS (SELECT group_key,json_group_object(class,n) AS counts FROM classes GROUP BY group_key)",
-        "comparators AS (SELECT b.group_key,COUNT(*) AS n,AVG(COALESCE(json_extract(s.value,'$.outcomes.' || json_quote(CAST(b.horizon AS TEXT)) || '.metrics.directed_return_pct'),json_extract(s.value,'$.outcomes.' || json_quote(CAST(b.horizon AS TEXT)) || '.metrics.price_return_pct'))) AS mean FROM base b JOIN c ON json_extract(c.payload_json,'$.event_id')=b.event_id JOIN json_each(c.payload_json,'$.samples') s GROUP BY b.group_key)",
+        "comparators AS (SELECT b.group_key,COUNT(*) AS n,AVG(COALESCE(json_extract(s.value,'$.outcomes.' || json_quote(CAST(b.horizon AS TEXT)) || '.metrics.directed_return_pct'),json_extract(s.value,'$.outcomes.' || json_quote(CAST(b.horizon AS TEXT)) || '.metrics.price_return_pct'))) AS mean FROM base b JOIN c ON json_extract(cw_record_json(c.payload_json),'$.event_id')=b.event_id JOIN json_each(cw_record_json(c.payload_json),'$.samples') s GROUP BY b.group_key)",
     ]
+    if store.bounded and cutoff_ms is None:
+        from .quality_summary import union_sql
+
+        summary_sql, summary_args = union_sql(groups, start_ms, end_ms, detector, version, market)
+        for index, definition in enumerate(definitions):
+            if definition.startswith("base AS ("):
+                definitions[index] = definition[:-1] + " UNION ALL " + summary_sql + ")"
+            elif definition.startswith("c AS ("):
+                definitions[index] = (
+                    definition[:-1]
+                    + " UNION ALL "
+                    + (
+                        "SELECT json_object('event_id','summary:'||q.day||':'||q.cohort||':'||q.chunk||':'||s.key,"
+                        "'samples',json((SELECT json_group_array(json_object('outcomes',json_object(CAST(json_extract(q.dimensions,'$.horizon_min') AS TEXT),json_object('metrics',json(m.value))))) FROM json_each(s.value,'$.comparator_metrics') m))) AS payload_json "
+                        "FROM market_quality q JOIN json_each(cw_quality_json(q.facts)) s)"
+                    )
+                )
+        args.extend(summary_args)
     query = (
         "WITH "
         + ",".join(definitions)
@@ -514,17 +539,25 @@ def cohorts(
     # Summary counts need only projected state; never expand every candle window.
     if cutoff_ms is None:
         incomplete = store.db.execute(
-            "SELECT COUNT(*) FROM runtime WHERE key>=? AND key<? AND json_extract(payload_json,'$.state')!='COMPLETE'",
+            "SELECT COUNT(*) FROM runtime WHERE key>=? AND key<? AND json_extract(cw_record_json(payload_json),'$.state')!='COMPLETE'",
             (PREFIX + "outcome-head:", PREFIX + "outcome-head:~"),
         ).fetchone()[0]
     else:
         incomplete = store.db.execute(
-            "WITH revisions AS (SELECT json_extract(payload_json,'$.state') AS state, "
-            "ROW_NUMBER() OVER (PARTITION BY json_extract(payload_json,'$.outcome_id') "
-            "ORDER BY json_extract(payload_json,'$.revision') DESC) AS pos FROM runtime "
-            "WHERE key>=? AND key<? AND json_extract(payload_json,'$.available_at_ms')<=?) "
+            "WITH revisions AS (SELECT json_extract(cw_record_json(payload_json),'$.state') AS state, "
+            "ROW_NUMBER() OVER (PARTITION BY json_extract(cw_record_json(payload_json),'$.outcome_id') "
+            "ORDER BY json_extract(cw_record_json(payload_json),'$.revision') DESC) AS pos FROM runtime "
+            "WHERE key>=? AND key<? AND json_extract(cw_record_json(payload_json),'$.available_at_ms')<=?) "
             "SELECT COUNT(*) FROM revisions WHERE pos=1 AND state!='COMPLETE'",
             (PREFIX + "outcome:", PREFIX + "outcome:~", cutoff_ms),
+        ).fetchone()[0]
+    if store.bounded and cutoff_ms is None:
+        incomplete += store.db.execute(
+            "SELECT COUNT(*) FROM runtime j WHERE j.key>=? AND j.key<? AND NOT EXISTS (SELECT 1 FROM runtime h WHERE h.key=?||json_extract(cw_record_json(j.payload_json),'$.outcome_id'))",
+            (PREFIX + "outcome-job:", PREFIX + "outcome-job:~", PREFIX + "outcome-head:"),
+        ).fetchone()[0]
+        incomplete += store.db.execute(
+            "SELECT COUNT(*) FROM market_quality q JOIN json_each(cw_quality_json(q.facts)) s WHERE json_extract(s.value,'$.state')!='COMPLETE'"
         ).fetchone()[0]
     return {
         "schema": "cryptowatcher.analytics.v1",
@@ -539,4 +572,12 @@ def cohorts(
             "Small N and incomplete prior source history constrain interpretation",
         ],
         "cutoff_ms": cutoff_ms,
+        "history_period": store.get_runtime("history_generation", {"state": "LEGACY"}),
+        "detail_retention_days": store.snapshot().settings.detail_retention_days,
+        "summary_retention_months": 12,
+        "old_detail_available": False if store.bounded else None,
+        "summary_period_resolution": "UTC_DAY" if store.bounded else None,
+        "historical_cutoff_limit": "Expired detail cannot reconstruct old decision cutoff"
+        if store.bounded and cutoff_ms is not None
+        else None,
     }

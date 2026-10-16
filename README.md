@@ -80,6 +80,8 @@ python -m cryptowatcher check-config
 python -m cryptowatcher run
 python -m cryptowatcher --version
 python -m cryptowatcher diagnostics
+python -m cryptowatcher storage
+python -m cryptowatcher storage-indexes
 python -m cryptowatcher state-check
 python -m cryptowatcher health
 ```
@@ -150,3 +152,17 @@ Metadata refresh10min, liquidity refresh5min, REST budget5req/s/concurrency4, he
 Native closed candles сохраняются в общей SQLite, memory window≤256 на active stream. Bootstrap получает256 closed bars; gaps приоритетно восстанавливают текущий window, затем older missing history постранично без live alerts. Cursor переживает restart; optional historical work не опережает current recovery. Initial bootstrap progressive: status показывает actual available/requested и причины ограничений. CLI diagnostics включает metadata counts/quarantine/acks/TF/buffers/pending/gaps. Новые subscribers проверяются только по validated metadata/liquidity.
 
 Ordinary raw candles хранятся90days; event/outcome/comparator inputs и pending recovery ranges защищены от retention. Events/revisions/settings/context автоматически не удаляются. Перед длительной эксплуатацией capacity/backup housekeeping проверяется по реальным measurements в G6.
+
+## Компактный market layout v2
+
+Новая generation использует нормализованные immutable candle revisions и отдельные context values; history windows содержат координаты, а не копии перекрывающихся OHLC arrays. Settings/context используют shared bodies, outcome heads не дублируют metrics; finished jobs удаляются после сохранения результатов, успешная доставка оставляет компактный receipt. Binary JSON records используют frozen dictionary/checksum/SHA256 без изменения public values. Schema1 читается для совместимости; обычный open/restart не конвертирует старую историю и не включает reset.
+
+`storage` возвращает actual working files/counts/encoded category bytes и явно помеченный forecast. Initial small-file index measurement ограничен; `storage-indexes` запрашивает отдельный bounded exact snapshot. Автоматический control не сканирует постоянно все страницы; samples ограничены26 записями. Quality forecast до первых retention runs использует отдельно помеченную synthetic модель, не нулевую стоимость будущих summaries. Windows без dbstat показывает UNAVAILABLE, required Linux verification остается обязательной.20GB target не считается доказанным только по fixture.
+
+Воспроизводимое измерение на **новом** disposable fixture path из root:
+
+```bash
+python -m scripts.measure_market_storage --database /absolute/new/fixture.sqlite3 --instruments 5
+```
+
+Сценарий охватывает оба рынка/4TF/5families, outcomes и служебные записи, controlled expiry и сравнение analytics. Он не измеряет частоту production signals; artifact сохранять отдельно от working DB. Разовый production reset/cutover procedure готовится в текущем PR; пока ее post-checks не пройдены, новая generation не считается поставленной. Старые backup/conversion tools выше остаются историческими, не текущей задачей.
