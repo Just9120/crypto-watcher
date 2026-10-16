@@ -80,6 +80,7 @@ class BybitRadar(BybitREST):
         self._history_errors: dict[str, str] = {}
         self._sequence = 0
         self._last_market = "linear"
+        self._recovered_buckets: set[tuple[str, str]] = set()
         self._started = False
         self.on_observation: Callable[[str, list[Candle], float, float, int, bool], None] | None = None
 
@@ -241,6 +242,7 @@ class BybitRadar(BybitREST):
         removed = self.streams - new_streams
         added = new_streams - self.streams
         self.streams = new_streams
+        self._recovered_buckets.intersection_update(self.recovery_bucket(stream) for stream in new_streams)
         for stream in removed:
             self.sources.remove_window(stream)
             self._pending.pop(stream, None)
@@ -468,14 +470,7 @@ class BybitRadar(BybitREST):
                 self._work_ready.clear()
                 await self._work_ready.wait()
                 continue
-            stream, (priority, _) = min(
-                self._pending.items(),
-                key=lambda item: (
-                    item[1][0],
-                    item[0].split("/", 1)[0] == self._last_market,
-                    item[1][1],
-                ),
-            )
+            stream, (priority, _) = self.next_recovery()
             self._last_market = stream.split("/", 1)[0]
             self._pending.pop(stream)
             if stream not in self.streams:
@@ -487,6 +482,13 @@ class BybitRadar(BybitREST):
                         await self.history_page(stream)
                     elif not self.restore_current_window(stream):
                         await self.backfill(stream)
+                    if (
+                        priority < 20
+                        and stream in self.streams
+                        and self.recovery_bucket(stream) not in self._recovered_buckets
+                        and self.recovery_window_usable(stream)
+                    ):
+                        self._recovered_buckets.add(self.recovery_bucket(stream))
                 except (MarketError, KeyError, TypeError, ValueError):
                     if priority == 20:
                         self._history_errors[stream] = "historical_recovery_failed"
@@ -503,6 +505,49 @@ class BybitRadar(BybitREST):
                 # Local restores have no network await. Give subscription ACKs,
                 # heartbeat and Telegram a turn after each bounded window.
                 await asyncio.sleep(0)
+
+    @staticmethod
+    def recovery_bucket(stream: str) -> tuple[str, str]:
+        market, _, tf = stream.split("/")
+        return market, tf
+
+    def recovery_window_usable(self, stream: str) -> bool:
+        market, symbol, tf = stream.split("/")
+        settings = self.store.snapshot().settings
+        parameters = effective_parameters(settings, f"{market}/{symbol}")
+        effective = settings.changed(
+            bybit_category=market,
+            signal_timeframe=tf,
+            price_move_min=parameters[f"price_{tf}"],
+            turnover_spike_min=parameters["turnover_ratio"],
+            sma_periods=parameters["turnover_lookback"],
+        )
+        value = evaluate_composite(
+            self.sources.rows(stream, effective.sma_periods + 2),
+            self.tickers[f"{market}/{symbol}"],
+            effective,
+            self.server_now(),
+        )
+        return value is not None and 0 <= self.server_now() - value["candle_end_ms"] <= int(tf[:-1]) * 60_000
+
+    def next_recovery(self) -> tuple[str, tuple[int, int]]:
+        # A busy1m repair queue must not starve the first usable3m/5m/15m
+        # windows after restart. Seed at most one worker per missing bucket;
+        # then retain the existing live-gap/bootstrap/history priorities.
+        working = {self.recovery_bucket(stream) for stream in self._working}
+        bootstrap = [
+            item
+            for item in self._pending.items()
+            if item[1][0] < 20 and self.recovery_bucket(item[0]) not in self._recovered_buckets | working
+        ]
+        return min(
+            bootstrap or self._pending.items(),
+            key=lambda item: (
+                item[1][0],
+                item[0].split("/", 1)[0] == self._last_market,
+                item[1][1],
+            ),
+        )
 
     def accept_message(
         self,
@@ -801,6 +846,7 @@ class BybitRadar(BybitREST):
                 },
                 "subscriptions": self.connections,
                 "active_streams": len(self.streams),
+                "startup_recovered_buckets": sorted("/".join(bucket) for bucket in self._recovered_buckets),
                 "bootstrap_pending_streams": len(self.streams - self.sources.windows.keys()),
                 "recovery_pending": len(self._pending),
                 "recovery_working": len(self._working),

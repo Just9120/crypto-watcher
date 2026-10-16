@@ -52,6 +52,13 @@ writes или view promotion старый binary без обоих readers не 
 rollback: совместимый forward-fix, без DB downgrade/автоматического restore поверх
 новых данных. Reset permit не переустанавливается. Бэкапы/эксперименты не удаляются.
 
+Startup recovery сначала дает успешное calculation window каждому market/TF;
+одновременно один seed worker на bucket, failed window не считается готовым.
+После этого возвращаются обычные live-gap/bootstrap/history priorities. REST budget,
+full-universe subscriptions и post-check gate150s/whole CD900s сохраняются.
+`startup_recovered_buckets` — diagnostic подтвержденных windows, не замена проверки
+fresh data всех market/TF и полного ACK в `delivery_ready`.
+
 ## Измерение ёмкости и конечное24h наблюдение
 
 Canonical команды из root, existing env/owner binding:
