@@ -842,9 +842,9 @@ class Controller:
                 processed_comparisons = await ComparisonWorker(self.store).async_work(self.market.server_now)
                 self.retention.work(now)
                 from .storage_meter import sample
-                from .storage_repack import work as repack
+                from .storage_repack import async_work as repack
 
-                repack(self.store, now)
+                await repack(self.store, now)
                 sample(self.store, now)
                 await self.recovery.work(now)
                 self.store.put_runtime(

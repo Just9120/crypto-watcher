@@ -384,6 +384,22 @@ print(json.dumps(value))
             )
         )
         assert reset["state"] == "PASS" and reset["private_restore"] == "PASS"
+        capacity = json.loads(
+            run(
+                args.image,
+                directory,
+                "-m",
+                "cryptowatcher",
+                "capacity",
+                "--database",
+                "/data/fresh.db",
+                "--capacity-ledger",
+                "--capacity-cohorts",
+            )
+        )
+        assert capacity["runtime_ledger"]["state"] == "MEASURED"
+        assert capacity["source_revision"] == args.revision
+        assert capacity["storage"]["history_generation"]["id"]
         run(
             args.image,
             directory,

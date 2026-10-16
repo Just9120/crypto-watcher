@@ -51,3 +51,69 @@ backup/конвертация в Actions. Статус IN_PROGRESS показы�
 writes или view promotion старый binary без обоих readers не является допустимым
 rollback: совместимый forward-fix, без DB downgrade/автоматического restore поверх
 новых данных. Reset permit не переустанавливается. Бэкапы/эксперименты не удаляются.
+
+## Измерение ёмкости и конечное24h наблюдение
+
+Canonical команды из root, existing env/owner binding:
+
+```bash
+python -m cryptowatcher capacity
+python -m cryptowatcher capacity --capacity-ledger --capacity-cohorts
+python scripts/rehearse_retention.py --database PATH_TO_NEW_DISPOSABLE_DB
+```
+
+Первый вариант читает постоянное число counters/состояний/files. Deep flags — явные
+разовые snapshot scans: runtime ledger50s, prospective cohorts60s, physical dbstat10s,
+quality count5s; timeout дает PARTIAL/UNSET, не нулевой размер. Sequential rowid
+используется только внутри read snapshot, не как persistent cursor. Logical payload/
+key bytes не являются физическими страницами. DB file уже включает indexes/free
+pages; total=DB+WAL+SHM+journal. Табличные/index snapshots показывают разложение
+внутри DB, не прибавляются повторно. Snapshot SQL согласован; размеры files снимаются
+отдельно по времени, writer может продвинуть WAL во время deep probe.
+
+`forecast_explanation` восстанавливает арифметику прежней модели. Разделение details
+по namespaces пропорционально текущему payload mix — model allocation, не измеренный
+посуточный insert flow. Cohort study считает frozen event grouping по активной
+outcome methodology1; при других methods не угадывает Cartesian product. Actual
+quality facts и prospective cohorts показываются отдельно. Empty comparator sets
+не доказывают выигрыш от dedup полноценных будущих comparators. Additional methods/
+settings, плотность cohorts, реальные no-signal windows и source leases — явные
+ограничения прогноза. Использованные исходники сравнений могут переживать raw35d
+до истечения30d parent detail; это subset необходимых revisions, не indefinite hold.
+
+Runtime repack получает до восьми прежних40ms slices за analytics cycle, с отдельным
+transaction/checkpoint и scheduler yield между ними. Intended work<=320ms/cycle;
+отдельный SQLite I/O/commit может выйти за time check. COMPLETE прекращает slices.
+Это не полный scan внутри одной транзакции, не CI job и не изменение900s CD gate.
+
+Для24h используется reviewed `scripts/observe_capacity.py`, также включенный в image
+как `/app/operator/observe_capacity.py`. После PASS CD operator копирует его из
+точного running artifact, проверяет SHA256 против merged source и запускает один
+transient unit `cryptowatcher-capacity-*` на установленном target. Никаких producer/
+Telegram/config writes. Metadata — отдельная root-owned0700 папка
+`/opt/crypto_watcher/observations/capacity-*`, файлы0600; они не входят в рабочую БД.
+Existing directories/status с другим source/schema и symlinks отклоняются.
+
+Sample cadence5min; до старта нужны два последовательных samples без bootstrap/
+ingestion recovery/gaps, с полными ACK, current analytics и COMPLETE repack/admission.
+Время завершения bootstrap/repack фиксируется как observed, не выдуманный exact end.
+Ожидание ограничено12h; затем WAIT_LIMIT_REACHED с причинами. После baseline —24h,
+deep scans только на baseline/final. Обычные samples не обходят runtime/quality/indexes.
+Probe: readonly, nice15, address space256MiB, CPU90s, wall145s; обычные runtime/
+maintenance RAM4GiB/CPU1 и backup/CD900s не изменяются. Host unit имеет отдельный
+малый memory/CPU limit и конечный RuntimeMaxSec; GitHub Actions не ожидает observation.
+
+Status/каждый sample/baseline/final/result сохраняются atomically. Restart host observer
+продолжает ту же baseline; source change завершает наблюдение как invalidated/failure.
+Три подряд probe failures прекращают loop. Ошибка внутри24h отмечает interruption;
+короткие пропуски между5min samples могут быть не замечены. Короткому/нестабильному
+интервалу не присваивается устойчивый суточный темп. Interval report содержит physical
+DB/index/WAL deltas, logical namespace deltas и cumulative cleanup counters; отсутствие
+полного boundary ledger явно UNSET. Даже успешные24h и controlled-clock tests сами
+по себе не подтверждают population mix следующего года или20GB fit.
+
+Rehearsal моделирует62 weekly epochs, settings changes, restart, partial horizons,
+all markets/families/TF и весь30d/35d/calendar12mo lifecycle. Numeric/comparator facts
+сравниваются как точные multiset; private settings сохраняются. Это структурное
+доказательство finite retention, не имитация непрерывного universe или load/SLO.
+Отдельный regression case проверяет20 comparator windows и несколько methods.

@@ -36,9 +36,10 @@ class AnalyticsRecovery:
             expires = self.owner_deadline(stream, start, end, self.market.server_now())
         key = identity(f"analytics-gap/{stream}/{start}/{end}")
         job = self.history.get("analytics-gap:" + key)
-        if job is not None and job["state"] != "COMPLETE":
+        terminal = {"COMPLETE", "SUPERSEDED", "EXPIRED_RETENTION_INCOMPLETE"}
+        if job is not None and job["state"] not in terminal:
             return job.get("reason", "REFERENCED_RECOVERY_PENDING")
-        if job is None or job["state"] == "COMPLETE":
+        if job is None or job["state"] in terminal:
             now = self.market.server_now()
             pending = pending_key(now, key).replace("outcome-pending:", "analytics-gap-pending:", 1)
             with self.store.db:
@@ -135,17 +136,14 @@ class AnalyticsRecovery:
                 with self.store.db:
                     self.history.delete(pending)
                 continue
-            if self.complete_locally(job["stream"], job["start"], job["cursor_end"]):
-                self.finish_local(job, pending, now)
-                return
             if (
                 self.store.bounded
                 and self.owner_deadline(job["stream"], job["start"], job["end"], now) is None
             ):
-                with self.store.db:
-                    self.history.delete(job["pending_key"])
-                    job.update(state="EXPIRED_RETENTION_INCOMPLETE", completed_ms=now)
-                    self.history.put("analytics-gap:" + job["id"], job)
+                self.finish_unowned(job, pending, now)
+                return
+            if self.complete_locally(job["stream"], job["start"], job["cursor_end"]):
+                self.finish_local(job, pending, now)
                 return
             if job["next_attempt_ms"] > now:
                 return
@@ -242,6 +240,15 @@ class AnalyticsRecovery:
             # receipt for duplicate requests; actual source revisions stay intact.
             self.history.put("analytics-gap:" + job["id"], job)
 
+    def finish_unowned(self, job: dict[str, Any], pending: str, now: int) -> None:
+        # No retained consumer requires this work. Do not decode old candle
+        # windows or spend REST budget deciding the status of an unused request.
+        # Actual event/outcome/source history remains untouched.
+        with self.store.db:
+            self.history.delete(pending)
+            job.update(state="EXPIRED_RETENTION_INCOMPLETE", completed_ms=now, completion="NO_RETAINED_OWNER")
+            self.history.put("analytics-gap:" + job["id"], job)
+
     async def retire_satisfied(self, now: int, batch: int = 64) -> None:
         import asyncio
 
@@ -261,13 +268,10 @@ class AnalyticsRecovery:
             if job is None or job["state"] in ("COMPLETE", "SUPERSEDED") or job.get("pending_key") != pending:
                 with self.store.db:
                     self.history.delete(pending)
+            elif self.owner_deadline(job["stream"], job["start"], job["end"], now) is None:
+                self.finish_unowned(job, pending, now)
             elif self.complete_locally(job["stream"], job["start"], job["cursor_end"]):
                 self.finish_local(job, pending, now)
-            elif self.owner_deadline(job["stream"], job["start"], job["end"], now) is None:
-                with self.store.db:
-                    self.history.delete(pending)
-                    job.update(state="EXPIRED_RETENTION_INCOMPLETE", completed_ms=now)
-                    self.history.put("analytics-gap:" + job["id"], job)
             cursor = row[0]
             await asyncio.sleep(0)
         if len(rows) < batch and (not rows or cursor == rows[-1][0]):

@@ -1,4 +1,4 @@
-# Only the application and hash lock are build inputs.
+# Only the application, native sources, hash lock and reviewed observer are build inputs.
 **
 !Dockerfile
 !requirements.txt
@@ -7,6 +7,8 @@
 !cryptowatcher/**
 !native/
 !native/**
+!scripts/
+!scripts/observe_capacity.py
 cryptowatcher/_native/*.so
 cryptowatcher/**/__pycache__/**
 cryptowatcher/**/*.pyc

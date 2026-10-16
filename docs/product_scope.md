@@ -18,6 +18,7 @@ CryptoWatcher — личный deterministic market radar владельца д�
 | S05 | Явное поручение владельца 2026-10-16: исправить новое накопление, bounded retention и контроль 20 GB, затем разово сбросить старую тестовую рыночную историю | Отменяет сохранение/полную конвертацию этой истории; сохраняет owner config, credentials, инфраструктуру, все markets/TF/detectors и аналитику |
 | S06 | Явное решение владельца16Oct2026: CryptoWatcher готовится для alerts под ручную торговлю и handoff; подключение — ответственность trading agent проекта | Меняет project boundary/DoD E09: producer readiness/contract handoff здесь; credentials/binding/receiver activation/live acceptance снаружи |
 | S07 | Явное поручение владельца16Oct2026: реализовать исправления роста и поставить через CD, сохранив полезную history/analytics/coverage/retention и900s backup/CD | Scope GROW/D24; source epoch не сбрасывается; показать measured post-report относительно20GB |
+| S08 | Поручение владельца16Oct2026 после handoff: сначала реальные источники/cardinality/revisions/comparators/services, затем подтвержденные fixes; controlled retention и автоматический24h замер после стабилизации | Уточнение evidence AC-13, без нового reset, сокращения scope/точности/retention или равенства CI/CD и capacity PASS |
 | S04 | Уточнение владельца 2026-10-10: бот работает на VPS Contabo; Telegram owner — владелец | Deployment context; assertion владельца не доказывает deployed revision или gates |
 
 S01 и последующие явные решения владельца задают intent. Этот файл фиксирует его декомпозицию. Старый state contract описывает существующий chat-based MVP и подлежит консолидации по плану; при противоречии актуальным требованиям приоритет у этого spec. Код сам по себе не создаёт требования. Внешние hyperlinks в repository documentation не добавляются; source IDs и названия позволяют восстановить evidence.
@@ -328,3 +329,21 @@ Forecast различает retained inserts, net queue occupancy и эффек�
 Проверяемый20GB target сохраняется, превышение/неизвестность не скрываются. Сроки D22,
 полнота аналитики и охват не сокращаются. Forward-fix с reader обоих formats; старый
 binary без encoding3/view support не является допустимым rollback после новых writes.
+
+## D25 — Capacity evidence после GROW (S08, 2026-10-16)
+
+20GB относятся к working DB с её indexes/free pages и рабочими journals. Logical
+payload/key sizes и физические таблицы/indexes показываются раздельно; indexes
+внутри DB не прибавляются повторно. Backups/experiments — отдельный inventory.
+Старый point forecast разбирается по исходным формулам, а allocation текущего mix
+не называется измеренным per-category daily flow. Actual quality facts отличаются
+от prospective frozen cohorts и synthetic сценариев comparator density.
+
+Проверка retention использует управляемое время, finite dependencies, повторные
+запуски/restart и сохранение точных numeric/group/method/settings/comparator results.
+После bootstrap/repack организуется конечный24h замер counters/files/cleanup и
+boundary ledger/indexes; без ожидания агента/Actions и без частого полного scan.
+Короткое post-restart окно не объявляется устойчивым суточным темпом. Наблюдение
+имеет явные completion/partial/failure states; tests/CD PASS не означают capacity PASS.
+Новые codec/batching выбираются после измерения ожидаемого эффекта. Сокращение
+retention, coverage, точности или возможностей аналитики требует решения владельца.

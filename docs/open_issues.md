@@ -26,7 +26,39 @@ Canonical spec: [product_scope.md](product_scope.md). Этот план соде
 | E12 CI/CD/operations | 4/4 | 100.0% | Evidence ниже; READY кода не обещает долгосрочную capacity |
 | E13 Bounded storage/reset | 7/7 | 100.0% | Evidence ниже; READY кода не обещает долгосрочную capacity |
 
-## Current Goal — GROW: хранение без потери аналитики
+## Current Goal — CAPACITY: реальные источники и заполненная база
+
+Основание: поручение владельца16Oct2026 после GROW handoff: измерить источники,
+кардинальность cohorts/revisions/comparators/services; исправлять только подтвержденную
+избыточность; доказать controlled-time retention и организовать автоматическое24h
+наблюдение после стабилизации без ожидания агентом. Один основной PR.
+Base `c922700c6db7a9cc6cb543f3170d0d83917b547b`, branch
+`codex/capacity-evidence-20261016`; Git/GitHub/protections/SSH проверены.
+
+| Задача / критерий завершения | Статус |
+| --- | --- |
+| CAP-01: ledger физических bytes/индексов/WAL отдельно от payloads; counts/TTL/formulas, cohorts/revisions/comparators/jobs и limits | CODE READY; exact runtime ledger и full prospective cohort study PASS |
+| CAP-02: подтвержденные повторы исправлены с equality/restart/retry/causal evidence; новые codec/batching только после оценки эффекта | CODE READY; decision pointer / ownerless recovery / terminal re-arm / sliced repack tests PASS |
+| CAP-03: репрезентативный controlled-clock полный цикл30/35d/12mo, GC/dependencies/аналитика/plateau | CODE READY;62week fixture и20-comparator/multiple-method boundaries PASS |
+| CAP-04: auto24h после ingestion/bootstrap/repack stability, размер/прирост/data/index/WAL/cleanup; finite sampling, без Actions ожидания | CODE READY; unit/start после applicable CD, actual24h PENDING |
+| CAP-05: validation/self-review/CI/merge/CD<=900s, отчет actual/model/range и оставшиеся причины >20GB | IN_PROGRESS; local quality/self-review PASS, required CI/CD PENDING |
+
+DoD текущей реализации: measurable ledger и подтвержденные fixes, meaningful tests,
+ordinary gates и post-checks PASS, автоматический конечный observation подготовлен/
+запущен. Финальный24h результат имеет отдельный PENDING до фактического окончания;
+capacity PASS не следует из tests/CD. Наблюдение не заменять короткой экстраполяцией.
+Область — E06/E10/E12/E13 и findings;65AC и исторические проценты не пересчитываются.
+Non-goals: новый reset, старая test-history conversion, удаление backups/experiments,
+новые sources, снижение точности/markets/detectors/TF/events/retention, consumer setup,
+увеличение RAM/ordinary backup/CD900s или ослабление gates.
+
+Validation: local canonical quality и targeted existing storage/analytics/retention
+fixtures; новые tests только для подтвержденных gaps/рисков; required full Linux CI/
+image. Runtime readonly budgets явно ограничены;24h sampler только CW metadata,
+bounded payload samples/counters, physical index walk только на границах. Во всех
+этапах сохраняются settings/generation, retry/dedup и signed immutable delivery.
+
+## Previous Goal — GROW: хранение без потери аналитики
 
 Основание: явное поручение владельца16Oct2026 реализовать предложенные исправления
 роста базы и поставить через CD. Base `447a08a703f7c864e419be504d8c340da1863e1c`,
@@ -47,7 +79,7 @@ rows сохраняются и постепенно уплотняются с du
 | GROW-02 / F34: typed lossless records и resumable bounded repack накопленного, public bytes/results сохранены | CODE READY; CI38935830076 PASS745 tests |
 | GROW-03 / F34: compact numeric quality blocks, methods/settings/comparators/completeness и controlled expiry equality | CODE READY; CI/image PASS |
 | GROW-04 / F38: measured category rates, queue lifetime/turnover, versioned forecast model и ограничения | CODE READY; CI/image PASS |
-| GROW-05: required CI, merge, normal CD<=900s, source/image/settings/history/alerts readback и measured post-report | IN_PROGRESS: CD38936336472 failed POST_CHECKS; necessary restart hotfix |
+| GROW-05: required CI, merge, normal CD<=900s, source/image/settings/history/alerts readback и measured post-report | DONE: PR44/c922700, CI38939657096 PASS754; CD38940357976 PASS298s, full backup27.639s; private/env/generation equality |
 
 Затрагиваются E06/E10/E12/E13; существующие65AC/исторические проценты сохраняются,
 новые AC не вводятся. Работа отслеживается по пяти задачам. AC-13-02/13-05 уточняются
@@ -244,6 +276,11 @@ Canonical команды — [README](../README.md#checks); из root repository
 | F38 FORECAST | Валовый оборот временных очередей умножается на30d; общий page factor применяется к годовым numeric facts | P1 | FIX: разные lifetimes/queue occupancy/retained slope и measured format model; не скрывать превышение | storage_meter.report и measured438.2GB; details alone30.1GB encoded30d при текущей частоте | HIGH / IN_PROGRESS |
 | F39 RESTART RECOVERY | Cold in-memory windows вызывают REST bootstrap для всех streams, хотя актуальная полная source history уже сохранена | P1: wide-universe warmup превышает bounded post-check | FIX: local validated restore по одному window с yield, без исторических live observations; реальные gaps сохраняют REST | CD38936336472 POST_CHECK_FAILED после switch; source/full disk backup PASS55.53s; runtime healthy, Telegram DELIVERED, затем оба WS ACK, но bootstrap queue сохранялась | HIGH / IN_PROGRESS; hotfix отe9cc24b |
 | F40 SUBSCRIPTION BACKLOG | Один linear shard788topics; continuously ready recv может продлевать ACK ожидание после deadline | P1: reconnect/blocked streams при широком universe | FIX: shards<=100topics без потери покрытия; strict15s ACK deadline | Bounded read-only17:23UTC25s: ACK200/788,buffer_overflows22; fake continuous-open stream воспроизводит обход deadline | HIGH / IN_PROGRESS; тот же hotfix |
+| F41 DECISION DUPLICATE | Актуальная decision и immutable revision полностью дублируются;104,860rows на52,430events | P2: лишний payload и writes | FIX: bounded checked pointer на latest immutable revision; отдельный durable repack cursor, public read/retry/restart/expiry unchanged | Exact ledger18:36UTC; sample128heads17,071→3,456bytes до реализации | HIGH / CODE READY; CI/CD PENDING |
+| F42 CAPACITY EVIDENCE | Нет полноценного per-namespace ledger/24h physical deltas; старая annual density синтетическая | P1:20GB не подтверждены | IMPLEMENT: explicit readonly ledger/cardinality/formulas и finite stable24h observation, не менять scope | Actual summaries0; prospective20,684cohort-days/211,000facts, median5; historical110.55GB/model, not daily measurement | HIGH / IN_PROGRESS; observation/result PENDING |
+| F43 RETENTION PROOF | Прежний малый fixture не доказывал rolling filled-window/restart и реальные20 comparator arrays вместе с methods | P1: lifecycle/capacity evidence gap | IMPLEMENT: controlled62week population plateau, exact facts/group equality и full GC; separate richer comparator/method boundary fixture | Local tests/rehearsal PASS; production annual mix unobserved | HIGH / CODE READY; CI PENDING |
+| F45 MAINTENANCE THROUGHPUT | Один40ms repack после долгого analytics cycle оставляет старые payload/index structures надолго; E13 | P1: repack мешает stable24h baseline | FIX: до8 самостоятельных40ms slices с yield/commit между ними, без изменения source/TTL | Readbacks18:28→19:28UTC:31,869→47,710records, legacy expiry не завершена,1,073,959runtime rows; local76 capacity/bot/storage tests PASS, актуальный CI/runtime throughput PENDING | HIGH / CODE READY |
+| F44 RECOVERY TERMINAL REUSE | Ownerless requests читают candles до owner check; terminal receipt блокирует новый valid owner до cleanup | P1: лишний scan/backlog и задержка repair | FIX: owner-first terminal retirement без source mutation; terminal job re-arm при valid retained owner; dedup/retry preserved |65/128pending без owner; regression re-arm/arrived data/noREST PASS | HIGH / CODE READY; CI/CD PENDING |
 
 ## Документы, legacy и artifacts
 
@@ -272,40 +309,57 @@ Confidence HIGH по auth/config/atomic persistence/formulas/retention/replay/CI
 
 ## Checkpoint
 
-GROW active16Oct2026, branch/base above. PR43 merged e9cc24b; latest CI38935830076
-PASS745 Linux tests/image. CD38936336472 failed POST_CHECKS после switch,
-production job378s. Full disk backup965529600bytes PASS55.53s/hash e282448f…;
-новый source e9cc24b healthy, owner Telegram DELIVERED. Старый binary не запускать:
-новые layout/codec требуют compatible forward-fix. Hotfix F39 восстанавливает
-сохранённые complete/current windows без лишнего REST; post-check150s и CD900s
-не меняются. Последний readback17:17UTC: оба WS fully ACK,1152streams/4TF,
-analyticsOK, bootstrap34; prior poll WARMING. Required hotfix CI/merge/CD PENDING.
-Следующий шаг — targeted validation и поставка compatible hotfix обычным CD.
-Hotfix initial6b5760b CI38938935388 PASS752 tests/image. Review/live readback
-выявил F40: ACK200/788 сохранялся25s,buffer_overflows22. Добавлены shards100 и
-strict existing15s deadline;33 local ingestion tests/quality PASS; latest CI pending.
+CAPACITY active16Oct2026, branch/base above; one main PR. Source baseline c922700,
+PR44 CI38939657096 PASS754, CD38940357976 PASS298s; backup1,015,951,360bytes full
+copy/hash/integrity PASS27.639s,CPU1/RAM4GiB. No reset/persistent history deletion.
+Discovery18:28UTC healthy/TelegramDELIVERED/analyticsOK;1192streams/4TF, bootstrap/
+blocked/live recovery/historical gaps0. Repack IN_PROGRESS31,869rows; completion
+не заявлено. Working1,180,349,680bytes; forecast133.42GB — short model, не суточный факт.
 
-Discovery read-only source130225d2:
-18:41MSK working797879672bytes, net4.01GB/day since reset, forecast438.20GB/model;
-16/16 sampled PENDING recovery windows already complete locally (not global census).
-No data/config changed by discovery. Code GROW-01…04 готов,14 новых substantive cases PASS;188 targeted PASS/1 Windows skip ранее,48 growth/bounded PASS после review; quality checks PASS. No reset or gate bypass.
+Exact sequential runtime snapshot18:36UTC:1,073,959rows. Event52,430rev/52,430heads;
+episode65,697/30,282; outcome251,658/197,222; comparison52,408/52,408. Encoded payload:
+event52,026,714 +heads11,868,318; episode25,577,769+6,191,607; outcomes126,727,124+
+34,635,179; comparison22,007,119+9,294,149bytes. Keys/physical pages/indexes отдельно.
+Decision104,860rows/13,970,138payloadbytes — по две копии на event. Actual year facts0
+(еще не наступило30d expiry). Full prospective study52,750event revisions→211,000facts/
+20,684cohort-days; density mean10.20/median5. Instrument иTF/horizon — главные факторы;
+strength49,372unique хранится в facts, не cohort key. Published method/settings/version
+по одной; future variation и comparator availability не измерены.
 
-### GROW local Evidence перед PR
+Bounded samples128 comparison revisions:128 empty sets; не доказательство полезного
+nonempty dedup. Episode/outcome revisions меняют confirmations/closure/metrics/
+completeness, event revisions=1 в полном study; безосновательное удаление не сделано.
+Ownerless recovery65/128ordered pending (не случайная выборка), source scan не нужен.
+Expected effect до изменения: decision heads17,071→3,456encoded bytes на128rows (~80%);
+малый выигрыш не объявлен решением20GB. Новый compressor/batch format не вводился.
 
-Windows/Python3.12, branch dirty diff от447a08a: quality PASS и188 targeted PASS,
-1 platform skip (Linux image остается REQUIRED). Новые14 cases проверяют float bits/
-legacy decode/corruption bounds, dense20-comparator numeric equality, local-filled
-recovery при live priority/restart, overlap coalescing, old schema2→mixed layout,
-rollback/durable progress, private/history/cohorts, isolated VACUUM/FK invariance,
-NDJSON equality и controlled12mo expiry/metadata GC, indexed service budget.
-Baseline/current canonical200-event/800-outcome fixture:22,609.92→21,176.32bytes/event
-со всеми sources/services/indexes; quality payload1,582→802.8bytes/event, analytics
-равны. Fixed pages/short synthetic burst и отсутствующие comparator arrays в этом
-fixture не выданы за production capacity. Отдельные quality density/comparator
-сценарии измеряют real codec/SQLite layout, не upper bounds.
+Local Windows/Python3.12:99 targeted PASS включая62week controlled fixture33s;
+после owner-first/re-arm fix25 targeted PASS. Rehearsal: обоих рынков/5families/4TF,
+settings changes/restart, точный multiset numeric/comparator/group equality, private
+unchanged. После заполнения windows stable50detail events/840source rows/1920quality
+facts; file3.14–3.15MB на synthetic weekly workload. Final400d drain удаляет истекшие
+source/context/holds/summaries/dictionaries/body refs; producer DB не затронута.
+Отдельный test20 matching comparator windows + multiple methodology versions PASS
+через30d/35d/12mo, без duplicate summary admissions. Это не capacity/load proof.
 
-Readonly pre-CD16Oct16:44:27UTC: source130225d2/image26b64aee, healthy, working
-940443392bytes/forecast418.53GB(old model), private SHA1bcf2bba…/env SHA96cc5d70…,
-configuration revision3, generation78ed847e… прежние;1248streams/4TF/оба markets,
-analyticsOK/TelegramDELIVERED. Backup/CD<=900s/full validation gates без изменений.
-Self-review PASS. PR43/head53164ce: Linux CI38935043692 PASS744 tests + image upgrade/full disk backup. Final review fix: прежний index snapshot при extension помечается STALE;48 targeted и quality PASS. Latest CI/merge/CD PENDING; normal gates unchanged. Историю, backups и experiments не удалять.
+Latest local quality/docs/Ruff/mypy PASS;24 focused tests PASS после compatibility
+guard. Self-review: tiny decision heads сохраняют immutable revisions/public bytes;
+atomic repack/checkpoint и retention counters rollback проверены fault injection.
+Source/gen/config changes и probe interruptions исключают stable-day extrapolation.
+Runtime readback19:28UTC: bootstrap/recovery0, полные1192ACK; repack47,710records,
+за час+15,841 при>1m runtime rows. Added bounded asynchronous8x40ms slices, yield
+между отдельными transactions/checkpoints; общий intended work320ms/cycle, no long
+single lock. Local76 capacity/bot/storage checks и canonical quality PASS; fairness,
+finite completion и действующие bot paths проверены. Actual throughput после CD
+измеряется отдельно, ускорение8x заранее не объявляется фактом.
+
+CI38954699435: tests PASS, image build FAIL — новый observer был исключен Docker
+allowlist. Добавлено разрешение только `scripts/observe_capacity.py`; прочие scripts,
+private experiments и runtime data в build context не включаются. Required latest
+CI/image, merge и ordinary CD пока PENDING.
+
+Next: required full Linux CI+image, merge, normal CD900s,
+primary source/image/private readback, then finite readonly observer on exact artifact.
+Observation waits up to12h for two5min stable samples and COMPLETE repack/admission;
+then24h. Sample statuses/partial deep boundary/failure explicit; actual24h PENDING.
+No unrelated branch/worktree cleanup. Backups/experiments сохраняются.

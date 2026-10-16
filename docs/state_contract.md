@@ -7,7 +7,15 @@
 
 ## Новая policy хранения и разовый reset (D22)
 
-Updated S01/owner request2026-10-16 отменяют raw90d и бессрочное хранение event/outcome/comparator inputs. Актуальные сроки/AC: [E13](product_scope.md#e13--компактное-хранение-сроки-и-новый-период-истории). Implementation state и gates: [Current Goal](open_issues.md#current-goal--grow-хранение-без-потери-аналитики). Полная конвертация прежней тестовой market history больше не задача. Описания прежних converter/qualification tools относятся к историческому tooling и не являются precondition нового reset.
+Updated S01/owner request2026-10-16 отменяют raw90d и бессрочное хранение event/outcome/comparator inputs. Актуальные сроки/AC: [E13](product_scope.md#e13--компактное-хранение-сроки-и-новый-период-истории). Implementation state и gates: [Current Goal](open_issues.md#current-goal--capacity-реальные-источники-и-заполненная-база). Полная конвертация прежней тестовой market history больше не задача. Описания прежних converter/qualification tools относятся к историческому tooling и не являются precondition нового reset.
+
+Bounded Telegram decision head содержит только `_cw_decision_revision`; неизменная
+revision хранит полный результат. Reader проверяет ключ/event identity/revision и
+возвращает прежний public JSON. Старые полные heads читаются; bounded repack имеет
+отдельный durable decision cursor и не сбрасывает прогресс прежних проходов.
+После новых pointer writes rollback требует совместимого reader/forward-fix.
+Cleanup telemetry и накопительные `market_retention_totals` фиксируются в одной
+transaction с удалениями; это counters, не отдельная копия market history.
 
 Reset — отдельная разовая процедура с exact market-data allowlist/target и private preservation/restore/equality proof; не startup migration. Owner settings/watchlist/thresholds/notifications/mutes сохраняются; credentials/infra не меняются. Старые market queues/cursors не импортируются; новая generation/start явно показывает нехватку истории и исключает old live replay. Backups/experiments исключены. Обычные backup/CD<=900s и RAM4GiB сохраняются. Формат и проверенная reset процедура определены ниже и в runbook; факт поставки/reset подтверждается только primary Evidence плана, не самим описанием.
 
