@@ -1,6 +1,6 @@
 # CryptoWatcher
 
-Deterministic radar Bybit для владельца в Telegram. Согласованный результат — Spot USDT и USDT Perpetual, четыре одновременных TF, пять detectors, episodes/history/outcomes и advisory context для отдельного trading agent. Radar не исполняет ордера и не вызывает LLM.
+Deterministic radar Bybit для владельца в Telegram. Согласованный результат — Spot USDT и USDT Perpetual, четыре одновременных TF, пять detectors, episodes/history/outcomes и advisory context для отдельного trading agent. Radar не исполняет ордера и не вызывает LLM. Цель этого проекта — alerts для ручной торговли и готовый handoff; credentials/binding/receiver activation выполняются в принимающем проекте и не требуются для manual radar.
 
 Radar обрабатывает широкий metadata/liquidity universe обоих рынков и native `1m/3m/5m/15m` одновременно через public WebSocket. Пять versioned detectors создают persistent events и episodes; Telegram delivery имеет независимые attempts/retry. Custom thresholds сохранены. Telegram управляет typed watchlist, profiles/manual settings без restart, detectors, market-specific mutes, alerts/digest toggles, историей и outcomes. Статусы поставки и следующих подсистем — в [плане](docs/open_issues.md).
 
@@ -10,7 +10,7 @@ Radar обрабатывает широкий metadata/liquidity universe обо
 - [Current Goal, Validation Plan, findings и checkpoint](docs/open_issues.md)
 - [State ownership, JSON compatibility и SQLite migration](docs/state_contract.md)
 - [Runtime boundaries](docs/architecture.md)
-- [Advisory agent contract, configuration и recovery](docs/runbooks/agent-delivery.md)
+- [Handoff в trading agent: contract, example, границы и checklist подключения](docs/runbooks/agent-delivery.md#handoff-принимающему-проекту)
 - [CI/CD, VPS target, первая поставка и recovery](docs/runbooks/delivery.md)
 - [Хранение, routine disk backup и разовый reset](docs/runbooks/bounded-storage-reset.md)
 - [Исторический tooling: конвертация qualified history backup](docs/runbooks/delivery.md#изолированная-конвертация-legacy-history-backup)
