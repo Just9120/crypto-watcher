@@ -190,6 +190,30 @@ def test_repack_validates_typed_envelopes_without_recompressing_them(store):
     assert store.get_runtime("storage_repack") is None
 
 
+def test_slow_repack_phase_cannot_starve_later_phases_across_checkpoints(store):
+    enable(store.db)
+    store.bounded = True
+    with store.db:
+        for i in range(8):
+            History(store).put(f"fixture:{i}", {"source": "retained", "metrics": {"v": i}})
+        store.put_runtime("storage_repack", {"next_phase": 1})
+    clock = [0.0]
+
+    def slow_decisions(store, state, batch, deadline):
+        clock[0] += 1  # One SQL operation overruns a40ms slice.
+
+    with (
+        patch("cryptowatcher.storage_repack.time.monotonic", side_effect=lambda: clock[0]),
+        patch("cryptowatcher.storage_repack.decision_heads", side_effect=slow_decisions),
+    ):
+        first = work(store, NOW)
+        assert first["records"] == 0
+        with closing(Store(store.path, store.owner_id)) as reopened:
+            second = work(reopened, NOW + 1)
+            assert second["records"] == 8 and second["records_complete"]
+            assert History(reopened).get("fixture:7") == {"source": "retained", "metrics": {"v": 7}}
+
+
 async def test_maintenance_and_heartbeat_continue_while_analytics_is_waiting(
     store, infrastructure, monkeypatch
 ):

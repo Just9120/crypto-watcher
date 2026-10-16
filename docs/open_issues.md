@@ -35,7 +35,9 @@ maintenance jobs конкурировали с cold startup до достато�
 Source/image healthy, full backup42.391s; failed record сохранен. Compatible hotfix
 `codex/maintenance-startup-hotfix-20261017`, base4c3a362: диск отдается live recovery
 до fresh OK poll/bootstrap0/gaps0; repack один40ms slice за1s tick, не восемь commits
-в секунду. Gates150s/900s/RAM неизменны. Предыдущая основная branch
+в секунду. Фазы records/decisions/expiry/quality делят один40ms deadline; durable
+rotation не дает медленному SQL постоянно вытеснять хвост. Gates150s/900s/RAM
+неизменны. Предыдущая основная branch
 `codex/maintenance-throughput-20261016`, base
 `f9df4b890f6a32e871d4a24fb9387e8c0c7fb91a`; clean main/fresh origin, protections
 `ci-required`/strict/self-review и SSH проверены. Предыдущие PR45/46/47 поставлены;

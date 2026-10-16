@@ -91,6 +91,8 @@ settings, плотность cohorts, реальные no-signal windows и sour
 Runtime repack получает один прежний40ms slice за независимый1s tick, с отдельным
 transaction/checkpoint и scheduler yield. Intended work<=40ms/tick;
 отдельный SQLite I/O/commit может выйти за time check. COMPLETE прекращает slices.
+Durable rotation phases сохраняет fairness после slow SQL и restart; каждая phase
+использует остаток общего deadline, не создает новый таймер внутри slice.
 Это не полный scan внутри одной транзакции, не CI job и не изменение900s CD gate.
 Backfill имеет отдельный bounded batch job и прежний shared REST limiter/live priority.
 Оба maintenance jobs ждут fresh OK poll и нулевой live bootstrap/recovery/blocked
