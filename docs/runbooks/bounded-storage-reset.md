@@ -59,6 +59,25 @@ full-universe subscriptions и post-check gate150s/whole CD900s сохраняю
 `startup_recovered_buckets` — diagnostic подтвержденных windows, не замена проверки
 fresh data всех market/TF и полного ACK в `delivery_ready`.
 
+### Disk integrity на базе больше2GiB
+
+Disk `state-check` использует уже pinned APSW/SQLite и logical read/write handle с
+`query_only=ON`: SQLite пропускает CHECK-constraints при SQLITE_OPEN_READONLY.
+Валидатор выполняет полный `PRAGMA integrity_check`, включая CHECK/index/freelist,
+держит один согласованный read snapshot и проверяет тот же shared deadline.
+Записи SQL запрещены query_only; приложение продолжает использовать стандартный
+SQLite writer. APSW позволяет mmap до3GiB вместо stdlib ceiling2GiB; cache128MiB и
+существующие отдельные CPU1/hard4GiB/no-swap limits остаются. Это настройка только
+валидации, без изменения memory/CPU приложения или900s production gate.
+
+Для больших closed disk backups выбирается тот же validator после закрытия copy
+connection и освобождения live WAL snapshot. Полный SHA256/размер, source integrity,
+backup integrity и все post-checks сохраняются. Small backups и TMPFS/compressed
+qualification не меняются. Qualification17Oct на live2.89GB:57.11s, peakRSS2.95GB,
+zero data writes; это snapshot текущего размера, не обещание времени для любой
+будущей базы и не доказательство20GB capacity. Failed attempt сохраняется; повтор
+делается после исправления через новый validated artifact, без bypass/reset.
+
 ## Измерение ёмкости и конечное24h наблюдение
 
 Canonical команды из root, existing env/owner binding:
