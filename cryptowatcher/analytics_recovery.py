@@ -129,11 +129,13 @@ class AnalyticsRecovery:
         Requests still pass through the radar's shared rate/concurrency limiter.
         Every page commits before yielding; cancellation never consumes a job.
         """
-        deadline = time.monotonic() + seconds
         # Retire already satisfied/obsolete jobs even while live bootstrap owns
         # the REST budget. Their pending index is not useful historical evidence.
         if self.store.bounded:
             await self.retire_satisfied(now)
+        # Retirement has its own bounded quantum and can yield to other jobs.
+        # Start the REST admission budget only when this phase is reached.
+        deadline = time.monotonic() + seconds
         for _ in range(batch):
             if time.monotonic() >= deadline:
                 break
