@@ -166,32 +166,45 @@ def pack_binary(payload: str) -> bytes:
     return TYPED_MAGIC + len(raw).to_bytes(4, "big") + hashlib.sha256(raw).digest() + frame
 
 
+def _typed_value(payload: bytes) -> tuple[Any, bytes]:
+    """Validate the existing CW3 envelope once; retain exact JSON for SQL callers."""
+    from .compact_json import unpack as typed_unpack
+
+    if len(payload) < 46:
+        raise StateError("Invalid typed record envelope")
+    size = int.from_bytes(payload[4:8], "big")
+    try:
+        parameters = zstandard.get_frame_parameters(payload[40:])
+        if (
+            not 0 < size <= MAX_BYTES
+            or not 0 < parameters.content_size <= MAX_BYTES
+            or parameters.window_size > MAX_BYTES
+            or parameters.dict_id
+            or not parameters.has_checksum
+        ):
+            raise StateError("Invalid typed record bounds")
+        typed = zstandard.ZstdDecompressor(max_window_size=MAX_BYTES // 1024).decompress(
+            payload[40:], max_output_size=parameters.content_size, allow_extra_data=False
+        )
+        value = typed_unpack(typed, MAX_BYTES)
+        raw = encode(value).encode()
+        if len(raw) != size or hashlib.sha256(raw).digest() != payload[8:40]:
+            raise StateError("Typed record identity mismatch")
+        return value, raw
+    except (zstandard.ZstdError, ValueError, UnicodeError, RecursionError) as exc:
+        raise StateError("Invalid typed record encoding") from exc
+
+
+def json_value(payload: Any) -> Any:
+    """Avoid a second JSON parse after fully validating and decoding typed data."""
+    if isinstance(payload, bytes) and payload.startswith(TYPED_MAGIC):
+        return _typed_value(payload)[0]
+    return json.loads(sql_payload(payload))
+
+
 def binary_payload(payload: bytes) -> str:
     if payload.startswith(TYPED_MAGIC):
-        from .compact_json import unpack as typed_unpack
-
-        if len(payload) < 46:
-            raise StateError("Invalid typed record envelope")
-        size = int.from_bytes(payload[4:8], "big")
-        try:
-            parameters = zstandard.get_frame_parameters(payload[40:])
-            if (
-                not 0 < size <= MAX_BYTES
-                or not 0 < parameters.content_size <= MAX_BYTES
-                or parameters.window_size > MAX_BYTES
-                or parameters.dict_id
-                or not parameters.has_checksum
-            ):
-                raise StateError("Invalid typed record bounds")
-            typed = zstandard.ZstdDecompressor(max_window_size=MAX_BYTES // 1024).decompress(
-                payload[40:], max_output_size=parameters.content_size, allow_extra_data=False
-            )
-            raw = encode(typed_unpack(typed, MAX_BYTES)).encode()
-            if len(raw) != size or hashlib.sha256(raw).digest() != payload[8:40]:
-                raise StateError("Typed record identity mismatch")
-            return raw.decode("utf-8")
-        except (zstandard.ZstdError, ValueError, UnicodeError, RecursionError) as exc:
-            raise StateError("Invalid typed record encoding") from exc
+        return _typed_value(payload)[1].decode("utf-8")
     if not payload.startswith(BINARY_MAGIC) or len(payload) < 42:
         raise StateError("Invalid binary record envelope")
     fingerprint = payload[4:36]

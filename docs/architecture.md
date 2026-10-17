@@ -176,3 +176,10 @@ deep scans. Это устраняет привязку одного5min sample �
 быть действительно пуста. Main loop сохраняет300s pause, две чистые проверки и
 исходную deep boundary/12h wait policy. Другие blockers не retry; после baseline
 каждый interruption остается видимым. Resource caps и24h boundary не меняются.
+
+Python readers компактных CW3 records получают уже декодированное значение,
+сохраняя проверку canonical byte length/SHA256, Zstd frame/checksum и typed
+depth/node/collection/truncation bounds. SQL callers по-прежнему получают прежний
+JSON text. Повторный JSON parse готового объекта исключен; чтение однобайтовых
+tags/varints не создает временный bytes slice. Encoding/writer, schema и legacy
+CW2/JSON/candle semantics прежние; аналитические методы и retention не меняются.
