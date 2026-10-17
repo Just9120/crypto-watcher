@@ -168,3 +168,11 @@ rows остаются видимыми через compatibility views до bound
 row IDs/shared dimensions/provenance не заменяют внешние event IDs. Recovery убирает
 уже заполненные local ranges без REST и coalesce overlapping work, сохраняя source
 conflict checks/owner expiry. Детали upgrade/rollback boundaries — в [state contract](state_contract.md#storage-extension3-совместимое-уплотнение).
+
+Перед baseline finite capacity observer перепроверяет только единственный blocker
+ANALYTICS_RECOVERY_PENDING максимум3 раза с10s pause, quick read-only probes без
+deep scans. Это устраняет привязку одного5min sample к краткой current-candle queue.
+Каждая неудачная попытка сохраняет timestamp/blockers; актуальная очередь должна
+быть действительно пуста. Main loop сохраняет300s pause, две чистые проверки и
+исходную deep boundary/12h wait policy. Другие blockers не retry; после baseline
+каждый interruption остается видимым. Resource caps и24h boundary не меняются.
