@@ -349,8 +349,14 @@ class BybitRadar(BybitREST):
 
     async def backfill(self, stream: str) -> None:
         market, symbol, tf = stream.split("/")
+        self.sources.load(stream)
+        window = self.sources.windows[stream]
+        ordered = sorted(window)
+        has_gap = any(b - a != window[b].step for a, b in zip(ordered, ordered[1:]))
         needed = WINDOW_SIZE
-        if self.store.bounded:
+        # A short calculation tail cannot repair an older hole retained in
+        # memory. Recover the existing bounded window for that stream only.
+        if self.store.bounded and not has_gap:
             from .detector_config import effective_parameters
 
             settings = self.store.snapshot().settings
@@ -482,6 +488,8 @@ class BybitRadar(BybitREST):
                         await self.history_page(stream)
                     elif not self.restore_current_window(stream):
                         await self.backfill(stream)
+                        if stream in self.sources.blocked:
+                            raise MarketError("incomplete_recovery_window")
                     if (
                         priority < 20
                         and stream in self.streams
