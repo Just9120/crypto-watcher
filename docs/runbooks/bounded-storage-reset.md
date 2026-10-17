@@ -97,6 +97,17 @@ coverage>=95%, ingestion age<=5s, poll age<=120s, analytics OK/age<=60s и от�
 отдельный SQLite I/O/commit может выйти за time check. COMPLETE прекращает slices.
 Durable rotation phases сохраняет fairness после slow SQL и restart; каждая phase
 использует остаток общего deadline, не создает новый таймер внутри slice.
+Records/decision heads/quality используют fixed rowid interval и durable next ID,
+с прежним logical key floor для продолжения начатого ранее прохода. Дополнительные
+headers вне scope учитываются в rows_scanned; payload для них не загружается.
+Новые записи сохраняются сразу в current format и не расширяют physical interval.
+Display cursor после перехода не задаёт остаток: для оценки используй next ID/high
+water, а не key>cursor. Разность ID — верхняя граница позиций, не число записей при
+удалениях/sparse IDs; точный count требует отдельного bounded запроса.
+Обычный restart продолжает durable position. schema_version только читается;
+DDL/VACUUM инвалидирует physical position и вызывает conservative recheck с тем же
+logical floor, без потери преобразованных данных. Production VACUUM этим flow не
+разрешается и не запускается. Budget/RAM/cache и обычные backup/CD остаются прежними.
 Это не полный scan внутри одной транзакции, не CI job и не изменение900s CD gate.
 Backfill имеет отдельный bounded batch job и прежний shared REST limiter/live priority.
 Оба maintenance jobs ждут fresh usable OK/DEGRADED poll и нулевой live bootstrap/recovery/blocked

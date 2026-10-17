@@ -169,7 +169,10 @@ Native closed candles сохраняются в общей SQLite, memory window
 
 Backfill и resumable repack обслуживаются отдельными jobs каждую секунду, независимо
 от долгих outcome/comparator calculations. Repack сохраняет конечные границы прохода
-и cursor, проверяет целевые typed records без повторного сжатия. Первые600s процесса
+и cursor: fixed physical high water/next ID, исходный logical key floor и
+schema_version guard. Новые записи не продлевают interval; обычный restart сохраняет
+позицию, DDL/VACUUM консервативно перевычитывает оставшийся logical scope. Проверяет
+целевые typed records без повторного сжатия. Первые600s процесса
 получает один40ms slice за tick. Затем при fresh ingestion/analytics, coverage>=95%
 и idle live recovery — до4 таких slices с отдельными checkpoint/yield и повторной
 проверкой приоритета между ними; общий intended wall cap200ms. При потере условий

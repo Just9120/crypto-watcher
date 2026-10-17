@@ -8,6 +8,26 @@ from typing import Any
 from .storage import Store, encode, json_payload
 
 
+def scan_bounds(store: Store, state: dict[str, Any], kind: str) -> tuple[int, int]:
+    """A finite physical interval; a schema rebuild invalidates physical IDs.
+
+    Public identity and the pre-upgrade logical floor remain keys. Normal
+    restart resumes next_rowid; DDL/VACUUM conservatively rechecks the retained
+    logical remainder rather than trusting relocated physical positions.
+    """
+    table = {"records": "runtime", "decisions": "runtime", "quality": "market_quality_blocks"}[kind]
+    version = store.db.execute("PRAGMA schema_version").fetchone()[0]
+    if f"{kind}_rowid_upper" not in state or state.get(f"{kind}_schema_version") != version:
+        if f"{kind}_rowid_upper" in state:
+            state[f"{kind}_scan_restarts"] = state.get(f"{kind}_scan_restarts", 0) + 1
+        low = store.db.execute(f"SELECT rowid FROM {table} ORDER BY rowid LIMIT 1").fetchone()
+        high = store.db.execute(f"SELECT rowid FROM {table} ORDER BY rowid DESC LIMIT 1").fetchone()
+        state[f"{kind}_next_rowid"] = low[0] if low else 1
+        state[f"{kind}_rowid_upper"] = high[0] if high else 0
+        state[f"{kind}_schema_version"] = version
+    return state[f"{kind}_next_rowid"], state[f"{kind}_rowid_upper"]
+
+
 async def async_work(store: Store, now_ms: int, slices: int = 8) -> dict[str, Any]:
     """Advance a finite queue without one long transaction or event-loop stall.
 
@@ -36,14 +56,35 @@ def decision_heads(store: Store, state: dict[str, Any], batch: int, deadline: fl
             (prefix, prefix + "~", len(prefix) + 36),
         ).fetchone()
         state["decision_upper"] = row[0] if row else prefix
-    rows = store.db.execute(
-        "SELECT key,payload_json FROM runtime WHERE key>? AND key<=? AND length(key)=? ORDER BY key LIMIT ?",
-        (state.get("decision_cursor", prefix), state["decision_upper"], len(prefix) + 36, batch),
-    ).fetchall()
+    state.setdefault("decisions_key_floor", state.get("decision_cursor", prefix))
+    next_rowid, upper = scan_bounds(store, state, "decisions")
+    rows = (
+        store.db.execute(
+            "SELECT rowid,key,CASE WHEN key>? AND key<=? AND length(key)=? THEN payload_json END "
+            "FROM runtime NOT INDEXED WHERE rowid>=? AND rowid<=? ORDER BY rowid LIMIT ?",
+            (
+                state["decisions_key_floor"],
+                state["decision_upper"],
+                len(prefix) + 36,
+                next_rowid,
+                upper,
+                batch,
+            ),
+        )
+        if next_rowid <= upper
+        else ()
+    )
     processed = 0
-    for key, payload in rows:
-        if time.monotonic() >= deadline:
+    exhausted = True
+    for rid, key, payload in rows:
+        if processed and time.monotonic() >= deadline:
+            exhausted = False
             break
+        state["decisions_next_rowid"] = rid + 1
+        state["decisions_rows_scanned"] = state.get("decisions_rows_scanned", 0) + 1
+        processed += 1
+        if payload is None:
+            continue
         value = json_payload(payload)
         revision = value.get("revision") if isinstance(value, dict) else None
         if type(revision) is int and revision > 0:
@@ -65,8 +106,7 @@ def decision_heads(store: Store, state: dict[str, Any], batch: int, deadline: fl
                 state["decision_heads_compacted"] = state.get("decision_heads_compacted", 0) + 1
         state["decision_cursor"] = key
         state["decision_heads_scanned"] = state.get("decision_heads_scanned", 0) + 1
-        processed += 1
-    state["decisions_complete"] = len(rows) < batch and processed == len(rows)
+    state["decisions_complete"] = exhausted and (processed < batch or state["decisions_next_rowid"] > upper)
 
 
 def record_rows(store: Store, state: dict[str, Any], batch: int, deadline: float) -> None:
@@ -80,16 +120,30 @@ def record_rows(store: Store, state: dict[str, Any], batch: int, deadline: float
                 (prefix, prefix + "~"),
             ).fetchone()
             state["records_upper"] = row[0] if row else prefix
-        rows = store.db.execute(
-            "SELECT key,payload_json FROM runtime WHERE key>? AND key<=? ORDER BY key LIMIT ?",
-            (state["cursor"] or prefix, state["records_upper"], batch),
+        state.setdefault("records_key_floor", state["cursor"] or prefix)
+        next_rowid, upper = scan_bounds(store, state, "records")
+        # Bound the SQL read itself, including excluded headers. CASE avoids
+        # loading large shared bodies which never belonged to this repack.
+        rows = (
+            store.db.execute(
+                "SELECT rowid,key,CASE WHEN key>? AND key<=? THEN payload_json END "
+                "FROM runtime NOT INDEXED WHERE rowid>=? AND rowid<=? ORDER BY rowid LIMIT ?",
+                (state["records_key_floor"], state["records_upper"], next_rowid, upper, batch),
+            )
+            if next_rowid <= upper
+            else ()
         )
         processed = 0
         exhausted = True
-        for key, payload in rows:
-            if time.monotonic() >= deadline:
+        for rid, key, payload in rows:
+            if processed and time.monotonic() >= deadline:
                 exhausted = False
                 break
+            state["records_next_rowid"] = rid + 1
+            state["records_rows_scanned"] = state.get("records_rows_scanned", 0) + 1
+            processed += 1
+            if payload is None:
+                continue
             size = len(payload.encode() if isinstance(payload, str) else payload)
             if size <= 1024 * 1024:
                 raw = sql_payload(payload)
@@ -130,8 +184,7 @@ def record_rows(store: Store, state: dict[str, Any], batch: int, deadline: float
                 state["large_records_skipped"] = state.get("large_records_skipped", 0) + 1
             state["cursor"] = key
             state["records"] += 1
-            processed += 1
-        state["records_complete"] = exhausted and processed < batch
+        state["records_complete"] = exhausted and (processed < batch or state["records_next_rowid"] > upper)
 
 
 def quality_rows(store: Store, state: dict[str, Any], batch: int, deadline: float) -> None:
@@ -146,17 +199,28 @@ def quality_rows(store: Store, state: dict[str, Any], batch: int, deadline: floa
         and not state.get("quality_complete")
         and time.monotonic() < deadline
     ):
-        cursor = state.get("quality_cursor", [-1, -1, -1])
-        rows = store.db.execute(
-            "SELECT b.day,b.cohort,b.chunk,b.facts FROM market_quality_blocks b WHERE (b.day,b.cohort,b.chunk)>(?,?,?) ORDER BY b.day,b.cohort,b.chunk LIMIT ?",
-            (*cursor, batch),
+        state.setdefault("quality_key_floor", state.get("quality_cursor", [-1, -1, -1]))
+        next_rowid, upper = scan_bounds(store, state, "quality")
+        rows = (
+            store.db.execute(
+                "SELECT rowid,day,cohort,chunk,CASE WHEN (day,cohort,chunk)>(?,?,?) THEN facts END "
+                "FROM market_quality_blocks NOT INDEXED WHERE rowid>=? AND rowid<=? ORDER BY rowid LIMIT ?",
+                (*state["quality_key_floor"], next_rowid, upper, batch),
+            )
+            if next_rowid <= upper
+            else ()
         )
         processed = 0
         exhausted = True
-        for day, cohort, chunk, payload in rows:
-            if time.monotonic() >= deadline:
+        for rid, day, cohort, chunk, payload in rows:
+            if processed and time.monotonic() >= deadline:
                 exhausted = False
                 break
+            state["quality_next_rowid"] = rid + 1
+            state["quality_rows_scanned"] = state.get("quality_rows_scanned", 0) + 1
+            processed += 1
+            if payload is None:
+                continue
             facts = decoded(bytes(payload), 1024 * 1024)
             packed = encode_facts(facts)
             if len(packed) < len(payload):
@@ -171,8 +235,7 @@ def quality_rows(store: Store, state: dict[str, Any], batch: int, deadline: floa
                     state["saved_categories"].get("quality", 0) + len(payload) - len(packed)
                 )
             state["quality_cursor"] = [day, cohort, chunk]
-            processed += 1
-        state["quality_complete"] = exhausted and processed < batch
+        state["quality_complete"] = exhausted and (processed < batch or state["quality_next_rowid"] > upper)
     state["quality_legacy_empty"] = quality_moved == 0
 
 
