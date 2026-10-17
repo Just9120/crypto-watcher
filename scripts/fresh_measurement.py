@@ -90,7 +90,34 @@ def preserve_original(source: Path, directory: Path) -> list[dict[str, Any]]:
     return result
 
 
-def execute(expected_source: str, expected_generation: str, *, approved: bool) -> dict[str, Any]:
+def original_archive_proof(source: Path, validation: dict[str, Any]) -> dict[str, Any]:
+    """Qualify the stopped original as its own archive, without allocating another copy."""
+    require(
+        validation.get("status") == "integrity_ok" and validation.get("schema") == 2,
+        "Original archive full integrity failed",
+    )
+    files = []
+    for suffix in SUFFIXES:
+        path = Path(str(source) + suffix)
+        require(not path.is_symlink(), "Symlink original archive")
+        if path.exists():
+            files.append({"path": str(path), "sha256": fingerprint(path), "bytes": path.stat().st_size})
+    main = next((file for file in files if file["path"] == str(source)), None)
+    require(main is not None, "Qualified original database missing")
+    assert main is not None
+    return {
+        "phase": "COMPLETE",
+        "method": "RETAIN_ORIGINAL",
+        "sha256": main["sha256"],
+        "bytes": main["bytes"],
+        "files": files,
+        "full_integrity": validation,
+    }
+
+
+def execute(
+    expected_source: str, expected_generation: str, *, approved: bool, archive_original: bool = False
+) -> dict[str, Any]:
     require(approved, "Explicit --approve-fresh-database is required")
     require(os.geteuid() == 0 and socket.gethostname() == "vmi3224957", "Wrong host/account")
     import fcntl
@@ -146,7 +173,7 @@ def execute(expected_source: str, expected_generation: str, *, approved: bool) -
         require(len(records) == 1, "No unique successful exact-image delivery")
         require(
             os.statvfs(source.parent).f_bavail * os.statvfs(source.parent).f_frsize
-            > 2 * source.stat().st_size + 1536 * 1024**2,
+            > (0 if archive_original else 2 * source.stat().st_size) + 1536 * 1024**2,
             "Insufficient archive reserve",
         )
         env = APP / ".env"
@@ -174,6 +201,8 @@ def execute(expected_source: str, expected_generation: str, *, approved: bool) -
             "delivery_record": records[0],
             "env_sha256": env_hash,
             "scheduled_tasks": False,
+            "archive_method": "RETAIN_ORIGINAL" if archive_original else "FULL_COPY",
+            "operator_sha256": fingerprint(Path(__file__).resolve()),
         }
         receipt = folder / "operation.json"
 
@@ -234,39 +263,53 @@ def execute(expected_source: str, expected_generation: str, *, approved: bool) -
                 "Writer did not stop",
             )
             require(identity(source)[:2] == source_identity, "Working database identity changed")
-            phase("FULL_ARCHIVE_BACKUP")
+            phase("FULL_ARCHIVE_INTEGRITY" if archive_original else "FULL_ARCHIVE_BACKUP")
             budget = min(630, int(deadline - time.monotonic() - 180))
             require(budget >= 60, "Insufficient full archive budget")
-            backup = json.loads(
-                offline(
-                    "/data/sqlite/cryptowatcher.sqlite3",
-                    [
-                        "-m",
-                        "cryptowatcher",
-                        "backup",
-                        "--destination",
-                        relative + "/archive.sqlite3",
-                        "--timeout-seconds",
-                        str(budget - 5),
-                    ],
-                    budget,
+            if archive_original:
+                validation = json.loads(
+                    offline(
+                        "/data/sqlite/cryptowatcher.sqlite3",
+                        ["-m", "cryptowatcher", "state-check", "--timeout-seconds", str(budget - 5)],
+                        budget,
+                    )
                 )
-            )
-            proof = backup["backup"]
-            require(
-                backup.get("status") == "backup_integrity_ok" and proof.get("phase") == "COMPLETE",
-                "Archive did not pass full integrity",
-            )
+                proof = original_archive_proof(source, validation)
+                archive_input = "/data/sqlite/cryptowatcher.sqlite3"
+                preserved_archive = raw_folder / source.name
+            else:
+                backup = json.loads(
+                    offline(
+                        "/data/sqlite/cryptowatcher.sqlite3",
+                        [
+                            "-m",
+                            "cryptowatcher",
+                            "backup",
+                            "--destination",
+                            relative + "/archive.sqlite3",
+                            "--timeout-seconds",
+                            str(budget - 5),
+                        ],
+                        budget,
+                    )
+                )
+                proof = backup["backup"]
+                require(
+                    backup.get("status") == "backup_integrity_ok" and proof.get("phase") == "COMPLETE",
+                    "Archive did not pass full integrity",
+                )
+                archive_input = relative + "/archive.sqlite3"
+                preserved_archive = folder / "archive.sqlite3"
             record["archive_backup"] = proof
             phase("PREPARE_FRESH")
             candidate = json.loads(
                 offline(
-                    relative + "/archive.sqlite3",
+                    archive_input,
                     [
                         "-m",
                         "cryptowatcher.reset_history",
                         "--source",
-                        relative + "/archive.sqlite3",
+                        archive_input,
                         "--candidate",
                         relative + "/fresh.sqlite3",
                         "--private-recovery",
@@ -289,6 +332,11 @@ def execute(expected_source: str, expected_generation: str, *, approved: bool) -
             )
             record["candidate"] = candidate
             require_no_handles(source)
+            if archive_original:
+                for file in proof["files"]:
+                    if file["path"].endswith("-shm"):
+                        continue  # SQLite readers may advance lock metadata, never database/WAL data.
+                    require(fingerprint(Path(file["path"])) == file["sha256"], "Qualified original changed")
             phase("PRESERVE_ORIGINAL")
             record["original_files"] = preserve_original(source, raw_folder)
             phase("PROMOTING")
@@ -315,7 +363,8 @@ def execute(expected_source: str, expected_generation: str, *, approved: bool) -
             after = json.loads(offline("/data/sqlite/cryptowatcher.sqlite3", ["-c", private_code], 30))
             require(after["generation"] == candidate["generation"], "Fresh generation mismatch")
             require(fingerprint(env) == env_hash, "Infrastructure config changed")
-            require(fingerprint(folder / "archive.sqlite3") == proof["sha256"], "Preserved archive changed")
+            require(fingerprint(preserved_archive) == proof["sha256"], "Preserved archive changed")
+            record["archive_path"] = str(preserved_archive)
             for original in record["original_files"]:
                 preserved = Path(original["path"])
                 require(
@@ -338,7 +387,11 @@ def execute(expected_source: str, expected_generation: str, *, approved: bool) -
             record.update(state="FAILED", failure=type(exc).__name__)
             failed_phase = record["phase"]
             phase("FAILED_" + failed_phase)
-            if failed_phase in ("STOP_WRITER", "FULL_ARCHIVE_BACKUP", "PREPARE_FRESH") and source.is_file():
+            if (
+                failed_phase
+                in ("STOP_WRITER", "FULL_ARCHIVE_BACKUP", "FULL_ARCHIVE_INTEGRITY", "PREPARE_FRESH")
+                and source.is_file()
+            ):
                 run([*DOCKER, "start", c["Id"]], timeout=30, recovery=True)
             raise
 
@@ -348,10 +401,16 @@ def main() -> None:
     parser.add_argument("--expected-source", required=True)
     parser.add_argument("--expected-generation", required=True)
     parser.add_argument("--approve-fresh-database", action="store_true")
+    parser.add_argument("--archive-original", action="store_true")
     args = parser.parse_args()
     print(
         json.dumps(
-            execute(args.expected_source, args.expected_generation, approved=args.approve_fresh_database),
+            execute(
+                args.expected_source,
+                args.expected_generation,
+                approved=args.approve_fresh_database,
+                archive_original=args.archive_original,
+            ),
             sort_keys=True,
         )
     )

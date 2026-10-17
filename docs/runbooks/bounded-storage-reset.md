@@ -69,6 +69,21 @@ writer на прежней DB. После начала rename — exact record i
 source/config/generation. Все прежние observation folders сохраняются;
 запланированные Codex задачи не создаются.
 
+При недостатке места для второй полной копии explicit `--archive-original`
+выполняет прежний full integrity на остановленной исходной БД и фиксирует
+SHA256 каждого data file. Эта же проверенная БД/sidecars становится архивом
+через exact rename; private candidate готовится до promotion и требует тот же
+archive hash/generation. После promotion hashes/identities проверяются снова.
+Дополнительная полная копия не нужна; резерв1536MiB для нового накопления
+остаётся обязательным. Это не отменяет full integrity или routine CD backup.
+
+Если operator-only исправление нужно для устранения disk prerequisite следующего
+обычного CD, его допустимо выполнить из exact reviewed PR head после всех
+required CI/self-review, до merge этого hotfix. Отдельно проверяются актуальная
+runtime source/image и operator SHA256/head/CI; helper в running artifact должен
+уже поддерживать используемый API. После операции hotfix проходит обычный merge/CD
+на новой малой working DB. Receiver/permit/protections/budgets не меняются.
+
 После reset автоматические delivery используют full source integrity и SQLite online backup на диске с полной integrity и streaming SHA256. Вся DB в RAM/tmpfs не копируется; cap4GiB/CPU1/no swap остается. Source+backup делят оставшееся время общего900s deadline с резервом переключения/post-checks. При нехватке места/времени stage завершается failure до switch; gates не ослабляются. Target20GB не является гарантией выполнения полного scan любой20GB базы за15min: фактическая скорость и длительность видны в records, превышение требует переработки, не автоматического увеличения deadline.
 
 Retention работает batches через indexes/transactional counters, summaries12 календарных месяцев; routine control не сканирует все DB pages. `storage-indexes` — отдельное ограниченное измерение, размер snapshot помечен временем. Его отсутствие/timeout не считается доказанным размером индексов. Forecast отражает short-window/model limitations и предупреждает о20GB без скрытого сокращения данных. Последующее наблюдение — отдельная задача владельца после завершения исправлений/reset.
