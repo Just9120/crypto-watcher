@@ -135,6 +135,15 @@ poll age<=120s, analytics OK/current<=60s и отсутствии фактиче
 один slice; общий startup/current recovery guard сохраняется. RAM/cache не меняются.
 Фазы records/decisions/expiry/quality имеют один deadline и сохраняют очередность
 первого хода. Slow SQL может превысить time check, но не вытесняет всегда одну фазу.
+Records/decision/quality scans фиксируют physical high water и следующий rowid.
+Прежний logical cursor сохраняется как неизменный floor; display cursor после
+перехода не используется как новый floor. Ограниченный SQL читает не более batch headers,
+CASE не загружает payload вне scope. Sparse/reused IDs не расширяют конечный interval.
+Каждый slice гарантирует первый header даже после slow SELECT, затем проверяет
+deadline. Обычный restart сохраняет позицию. Чтение schema_version обнаруживает
+DDL/VACUUM и консервативно начинает recheck оставшегося logical scope с новой
+physical границей; уже преобразованные public данные сохраняются. Публичные IDs
+остаются ключами; rowid не становится API identity. Полного scan/копии в startup нет.
 Readiness в начале процесса обновляется отдельным5s job до первого OK/usable
 DEGRADED poll; затем job no-op. BybitRadar.snapshot читает shared cached observations,
 не выполняет REST и не публикует events. Normal owner poll cadence и legacy REST
