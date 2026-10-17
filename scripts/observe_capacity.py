@@ -17,6 +17,7 @@ from typing import Any
 
 DOCKER = ["docker", "--host", "unix:///var/run/docker.sock"]
 SCHEMA = "cryptowatcher.capacity-observation.v1"
+PROBE_ERRORS = (ValueError, OSError, subprocess.SubprocessError, json.JSONDecodeError)
 
 
 def atomic(path: Path, value: dict[str, Any]) -> None:
@@ -71,6 +72,85 @@ def sample_for_state(expected: str, state: str) -> dict[str, Any]:
             time.sleep(10)
             value = probe(expected)
     return {**value, "baseline_settling_attempts": attempts} if attempts else value
+
+
+def boundary_probe(folder: Path, state: dict[str, Any], expected: str, kind: str) -> dict[str, Any]:
+    """Retain the actual boundary decision, including rejected snapshots and failures."""
+    if kind not in ("baseline", "final"):
+        raise ValueError("Unknown boundary phase")
+    counter = kind + "_attempts"
+    state[counter] = state.get(counter, 0) + 1
+    name = f"{kind}-attempt-{state[counter]:04d}.json"
+    # The attempt file may have survived a crash before status.json was replaced.
+    while (folder / name).exists() or (folder / name).is_symlink():
+        state[counter] += 1
+        name = f"{kind}-attempt-{state[counter]:04d}.json"
+    attempt: dict[str, Any] = {
+        "schema": "cryptowatcher.capacity-boundary-attempt.v1",
+        "phase": kind.upper(),
+        "expected_source": expected,
+        "started_at": time.time(),
+        "decision": "PENDING",
+    }
+    state.update(phase=kind.upper(), phase_started_at=attempt["started_at"], active_attempt=name)
+    atomic(folder / name, attempt)
+    atomic(folder / "status.json", state)
+    try:
+        value = probe(expected, deep=True)
+    except PROBE_ERRORS as exc:
+        attempt.update(decision="ERROR", error_class=type(exc).__name__, finished_at=time.time())
+        if isinstance(exc, subprocess.CalledProcessError):
+            attempt["returncode"] = exc.returncode
+        atomic(folder / name, attempt)
+        state.update(last_error_phase=kind.upper(), last_error_attempt=name)
+        raise
+    blockers = value["stability_blockers"]
+    decision = "REJECTED" if kind == "baseline" and blockers else "CAPTURED"
+    attempt.update(decision=decision, snapshot=value, blockers=blockers, finished_at=time.time())
+    atomic(folder / name, attempt)
+    state.update(
+        last_blockers=blockers,
+        **{
+            "last_" + kind + "_attempt": {
+                "file": name,
+                "decision": decision,
+                "at_ms": value["at_ms"],
+                "blockers": blockers,
+            }
+        },
+    )
+    if decision == "REJECTED":
+        state["last_baseline_rejection"] = dict(state["last_baseline_attempt"])
+    return value
+
+
+def recover_boundary(folder: Path, state: dict[str, Any]) -> None:
+    """A process restart must not strand a persisted in-flight boundary phase."""
+    if state["state"] not in ("READY_FOR_BASELINE", "READY_FOR_FINAL"):
+        return
+    name = state.get("active_attempt")
+    if name and Path(name).name == name and name.startswith(("baseline-attempt-", "final-attempt-")):
+        path = folder / name
+        if path.is_file() and not path.is_symlink():
+            attempt = json.loads(path.read_text())
+            if attempt.get("decision") == "PENDING":
+                attempt.update(decision="INTERRUPTED", error_class="ObserverRestart", finished_at=time.time())
+                atomic(path, attempt)
+    if state["state"] == "READY_FOR_BASELINE":
+        state.update(state="WAITING_STABLE", stable_samples=0)
+    else:
+        state.update(state="OBSERVING", interrupted_samples=state.get("interrupted_samples", 0) + 1)
+    state.update(phase="RESUMED", last_error_phase="BOUNDARY_RESTART")
+    atomic(folder / "status.json", state)
+
+
+def baseline_boundary(folder: Path, state: dict[str, Any], expected: str) -> None:
+    baseline = boundary_probe(folder, state, expected, "baseline")
+    if baseline["stability_blockers"]:
+        state.update(state="WAITING_STABLE", stable_samples=0)
+    else:
+        atomic(folder / "baseline.json", baseline)
+        state.update(state="OBSERVING", baseline_ms=baseline["at_ms"], interrupted_samples=0)
 
 
 def advance(state: dict[str, Any], value: dict[str, Any], now: float) -> dict[str, Any]:
@@ -143,22 +223,21 @@ def main() -> int:
             "samples": 0,
         }
         atomic(record, state)
+    recover_boundary(folder, state)
     while state["state"] in ("WAITING_STABLE", "OBSERVING"):
         try:
+            state.update(phase="SAMPLE", phase_started_at=time.time())
+            atomic(record, state)
             sample = sample_for_state(expected, state["state"])
             state = advance(state, sample, time.time())
+            state["last_sample_blockers"] = sample["stability_blockers"]
             state["samples"] += 1
             # Each sample keeps counters/files and lifecycle evidence. No raw events or credentials.
             atomic(folder / f"sample-{state['samples']:04d}.json", sample)
             if state["state"] == "READY_FOR_BASELINE":
-                baseline = probe(expected, deep=True)
-                if baseline["stability_blockers"]:
-                    state.update(state="WAITING_STABLE", stable_samples=0)
-                else:
-                    atomic(folder / "baseline.json", baseline)
-                    state.update(state="OBSERVING", baseline_ms=baseline["at_ms"], interrupted_samples=0)
+                baseline_boundary(folder, state, expected)
             elif state["state"] == "READY_FOR_FINAL":
-                after = probe(expected, deep=True)
+                after = boundary_probe(folder, state, expected, "final")
                 before = json.loads((folder / "baseline.json").read_text(encoding="utf-8"))
                 atomic(folder / "final.json", after)
                 summary = comparison(before, after)
@@ -170,7 +249,8 @@ def main() -> int:
                 atomic(folder / "result.json", summary)
                 state.update(state="COMPLETE", result_state=summary["state"], finished_at=time.time())
             state["consecutive_probe_failures"] = 0
-        except (ValueError, OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+        except PROBE_ERRORS as exc:
+            state["last_error_phase"] = state.get("phase", "SAMPLE")
             if state["state"] == "READY_FOR_BASELINE":
                 state["state"] = "WAITING_STABLE"
             elif state["state"] == "READY_FOR_FINAL":
@@ -183,6 +263,7 @@ def main() -> int:
             state["last_error_class"] = type(exc).__name__
             if isinstance(exc, ValueError) or state["consecutive_probe_failures"] >= 3:
                 state.update(state="FAILED", finished_at=time.time())
+        state.update(phase="WAIT" if state["state"] in ("WAITING_STABLE", "OBSERVING") else "TERMINAL")
         atomic(record, state)
         if state["state"] not in ("WAITING_STABLE", "OBSERVING"):
             break

@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import time
 import uuid
 from contextlib import closing
@@ -78,7 +79,14 @@ def restore_private(store: Store, value: dict[str, Any]) -> None:
 
 
 def prepare(
-    source: Path, destination: Path, recovery: Path, owner: int, *, now_ms: int | None = None
+    source: Path,
+    destination: Path,
+    recovery: Path,
+    owner: int,
+    *,
+    now_ms: int | None = None,
+    expected_generation: str | None = None,
+    preserved_archive_sha256: str | None = None,
 ) -> dict[str, Any]:
     if any(
         not p.is_absolute() or p.resolve() != p or any(q.is_symlink() for q in (p, *p.parents))
@@ -89,9 +97,29 @@ def prepare(
         raise StateError("Reset destination already exists")
     started = time.monotonic()
     deadline = started + 120
+    measurement = expected_generation is not None or preserved_archive_sha256 is not None
+    if measurement:
+        if (
+            not expected_generation
+            or not preserved_archive_sha256
+            or re.fullmatch("[0-9a-f]{64}", preserved_archive_sha256) is None
+        ):
+            raise StateError("Fresh measurement needs exact generation and preserved archive identity")
+        digest = hashlib.sha256()
+        with source.open("rb") as archive:
+            for block in iter(lambda: archive.read(1024 * 1024), b""):
+                if time.monotonic() >= deadline:
+                    raise StateError("Archive identity time budget exceeded")
+                digest.update(block)
+        if digest.hexdigest() != preserved_archive_sha256:
+            raise StateError("Preserved archive identity mismatch")
     with closing(Store(source, owner, readonly=True)) as old:
         old.db.execute("BEGIN")
-        if old.get_runtime("history_generation") is not None:
+        previous_generation = old.get_runtime("history_generation")
+        if measurement:
+            if not previous_generation or previous_generation.get("id") != expected_generation:
+                raise StateError("Fresh measurement predecessor generation mismatch")
+        elif previous_generation is not None:
             raise StateError("History reset already performed; no automatic repeat")
         preserved = private_state(old)
     raw = encode(preserved).encode()
@@ -115,8 +143,14 @@ def prepare(
             "schema": "cryptowatcher.history-generation.v1",
             "id": uuid.uuid4().hex,
             "started_ms": start,
-            "reason": "OWNER_AUTHORIZED_TEST_HISTORY_RESET_20261016",
-            "previous_market_history": "DISCARDED_BY_OWNER_DECISION",
+            "reason": (
+                "OWNER_AUTHORIZED_FRESH_MEASUREMENT_20261017"
+                if measurement
+                else "OWNER_AUTHORIZED_TEST_HISTORY_RESET_20261016"
+            ),
+            "previous_market_history": "PRESERVED_IN_ARCHIVE"
+            if measurement
+            else "DISCARDED_BY_OWNER_DECISION",
             "bootstrap": "CALCULATION_WINDOW_ONLY",
             "prior_detail_available": False,
             "comparator_limitations": "NEW_HISTORY_INSUFFICIENT_PRIOR_DATA",
@@ -162,6 +196,12 @@ def prepare(
             "candidate_bytes": destination.stat().st_size,
             "elapsed_seconds": round(time.monotonic() - started, 3),
         }
+        if measurement:
+            receipt.update(
+                previous_generation_id=expected_generation,
+                preserved_archive_sha256=preserved_archive_sha256,
+                archive_source=str(source),
+            )
     with closing(Store(destination, owner)) as reopened:
         if (
             signature(private_state(reopened)) != receipt["private_fresh_sha256"]
@@ -192,8 +232,17 @@ def main() -> int:
     parser.add_argument("--private-recovery", type=Path, required=True)
     parser.add_argument("--owner-id", type=int, required=True)
     parser.add_argument("--receipt", type=Path, required=True)
+    parser.add_argument("--expected-generation")
+    parser.add_argument("--preserved-archive-sha256")
     args = parser.parse_args()
-    receipt = prepare(args.source, args.candidate, args.private_recovery, args.owner_id)
+    receipt = prepare(
+        args.source,
+        args.candidate,
+        args.private_recovery,
+        args.owner_id,
+        expected_generation=args.expected_generation,
+        preserved_archive_sha256=args.preserved_archive_sha256,
+    )
     write_new(args.receipt, encode(receipt).encode())
     print(encode(receipt))
     return 0

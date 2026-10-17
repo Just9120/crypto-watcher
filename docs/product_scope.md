@@ -359,3 +359,20 @@ Telegram, сохраняет retry/cursor/restart и исходные данны
 бесконечно. После фактического завершения bootstrap/backfill/repack automatic finite
 observer начинает24h только на стабильной revision/config/generation. RAM и обычные
 backup/CD<=15min сохраняются. Полный24h итог отделен от завершения реализации.
+
+## D26 — Observer diagnostics и чистое накопление для замера (2026-10-17)
+
+По явному поручению владельца отклонённые baseline attempts сохраняют полный
+измеренный snapshot, phase, blockers и sanitized error metadata. Quick sample и
+deep boundary не подменяют друг друга; сброс stable counter не стирает причину.
+Успешный baseline требует прежних stability/source/config/generation gates.
+
+Отдельно разрешено начать новый период на чистой working DB. В отличие от
+прежнего удаления тестовой истории D22 вся текущая БД/sidecars сохраняется в
+проверяемом архиве вне working total, вместе со всеми observation files.
+Owner settings/preferences/mutes/legacy identity и credentials/infra сохраняются;
+новая generation явно отделяет новое накопление. Это explicit exact-target
+операция, не startup/автоматический reset, не повтор consumed permit. Необходимы
+full archive integrity/hash/private restore и post-checks. Scheduled tasks не
+создаются. Запуск нового24h подтверждается фактическим OBSERVING/baseline;
+ожидание завершения суток не входит в исправление и поставку.
