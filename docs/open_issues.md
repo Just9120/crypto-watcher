@@ -1,333 +1,177 @@
 # CryptoWatcher — delivery plan
 
-Canonical spec: [product_scope.md](product_scope.md). Этот план содержит текущие AC/Goal/findings/Evidence; подробный audit report, raw logs и исследовательские fixtures не включаются в tracked repository. История предыдущих implementation checkpoints сохранена в Git, отмененная full-history conversion не является текущим обязательством.
+Canonical requirements: [product_scope.md](product_scope.md). Этот план хранит статусы AC, Goal, все findings и компактное Evidence. Raw logs, исследовательские probes и подробный audit report остаются вне tracked repository. История прежних checkpoints доступна в Git; отмененные конвертация старой тестовой истории и повторный reset не являются обязательствами.
 
-## Историческая аудиторская оценка G6 — 2026-10-16, до S06
+## Полный аудит 65 AC — 2026-10-17
 
-Проверенный `origin/main`: **130225d2f641b4d9d8c616aa791ef6919afd9c31**. Требования: полностью прочитанный S01 modified2026-10-16T08:48:31.536Z (170 paragraphs/t.0, native revision в spec) и последующие owner решения S05. Git/main/protections/Environment, исходные CI/CD и bounded actual runtime records сверены16Oct2026. Audit PR только актуализирует spec/plan; не меняет runtime.
+Основание: явное поручение владельца сверить все65AC с требованиями, кодом, tests и actual runtime, обновить план и не прерывать суточный замер. Проверенный свежий `origin/main`: **affdd7bc71e1c8eb362bcf08f0e898b52095d9cd**, совпадает с deployed source. S01: metadata17Oct не изменились, modified2026-10-16T08:48:31.536Z; полностью прочитаны170paragraphs/t.0/native revision из spec. Учитываются последующие решения S05–S08/D23–D25. В источнике prose requirements, а не отдельный список AC:65 стабильных критериев =58 исходных+7storage, без новых/исключенных IDs.
 
-На момент audit, до разделения проектов S06/D23, готовность = **64/65 READY AC = 98.5%**. Тогда E09/AC-09-02 был BLOCKED B02: код/автоматические контракты существуют, но actual authorized delivery не подтверждена без owner credential/binding. READY остальных критериев ограничен перечисленными fixtures/revisions; оценка не означает, что integration уже активна, 20GB steady-state доказаны или defaults прибыльны.
+Независимая готовность на этой revision: **61/65 READY =93.8%**, **4 IN_PROGRESS**, BACKLOG0/BLOCKED0. READY подтверждает реализованный критерий и подходящие automatic checks; runtime evidence и его пределы показаны отдельно. Это не65 живых destructive/manual smoke tests и не доказательство20GB. PR57 не включен: draft code отсутствует в origin/main/runtime.
 
-Предыдущий полный audit:2026-10-10, `8ace3638b9193444948d0beb88e0c49e9f2f068e`, **7/58=12.1%**. Разница+86.4п.п. объясняется поставкой G1–G5 и storage scope после того аудита; denominator увеличен на7 E13 из обновленных требований, прежние58 не исключены. Реализованные незамерженные изменения в готовность не включаются. F35 исправлен до текущей оценки; F36 совместимость receiver проверяется по отдельным primary records EVID-05.
+Предыдущий полный snapshot:16Oct2026/main130225d2f641b4d9d8c616aa791ef6919afd9c31, **64/65=98.5%**, до S06. Изменение **−4.6п.п.** при том же denominator:09-02 теперь READY по явному переносу live connection в принимающий проект;06-06/11-01/13-03 по воспроизводимым новым краям больше не READY;13-06 по полному S08 требует незавершенного capacity evidence. Старое IN_PROGRESS03-01 в оперативной таблице устранено фактическими hotfix/CI/runtime, это был stale checkpoint, а не основание прошлой аудиторской оценки. Более старые snapshots сохранены в Git, здесь не накапливаются.
 
-| Эпик | READY/все AC | Готовность | Ограничение |
+| Эпик | READY / все | Готовность | Оставшееся / граница Evidence |
 | --- | --- | --- | --- |
-| E01 Назначение/владелец | 5/5 | 100.0% | Evidence ниже; READY кода не обещает долгосрочную capacity |
-| E02 Universe/watchlist | 4/4 | 100.0% | Evidence ниже; READY кода не обещает долгосрочную capacity |
-| E03 Realtime/TF | 5/5 | 100.0% | Evidence ниже; READY кода не обещает долгосрочную capacity |
-| E04 Detectors/metrics | 5/5 | 100.0% | Evidence ниже; READY кода не обещает долгосрочную capacity |
-| E05 Episodes/freshness | 4/4 | 100.0% | Evidence ниже; READY кода не обещает долгосрочную capacity |
-| E06 History/outcomes | 7/7 | 100.0% | Evidence ниже; READY кода не обещает долгосрочную capacity |
-| E07 Telegram/manual | 7/7 | 100.0% | Evidence ниже; READY кода не обещает долгосрочную capacity |
-| E08 Owner settings | 3/3 | 100.0% | Evidence ниже; READY кода не обещает долгосрочную capacity |
-| E09 Trading agent | 5/6 | 83.3% | Исторический cross-project scope до S06; actual signed delivery не активна |
-| E10 Persistence/recovery | 4/4 | 100.0% | Evidence ниже; READY кода не обещает долгосрочную capacity |
-| E11 Digest/enrichment | 4/4 | 100.0% | Evidence ниже; READY кода не обещает долгосрочную capacity |
-| E12 CI/CD/operations | 4/4 | 100.0% | Evidence ниже; READY кода не обещает долгосрочную capacity |
-| E13 Bounded storage/reset | 7/7 | 100.0% | Evidence ниже; READY кода не обещает долгосрочную capacity |
+| E01 Назначение/владелец | 5/5 | 100.0% | Auth отрицательные случаи изолированы; standalone actual PASS |
+| E02 Universe/watchlist | 4/4 | 100.0% | Live оба рынка; empty watchlist preference, add/remove fixtures |
+| E03 Realtime/TF | 5/5 | 100.0% | AllACK обоих рынков/4TF, restart/reconnect tests; universe динамичен |
+| E04 Detectors/metrics | 5/5 | 100.0% | Five families active; эффективность thresholds не обещана |
+| E05 Episodes/freshness | 4/4 | 100.0% | Lifecycle/races controlled; persisted episodes/Telegram actual |
+| E06 History/outcomes | 6/7 | 85.7% | 06-06 F48: period после detail expiry |
+| E07 Telegram/manual | 7/7 | 100.0% | Natural delivery PASS; все кнопки вручную заново не проверялись |
+| E08 Owner settings | 3/3 | 100.0% | Config3/private preservation; mutation/race fixtures |
+| E09 Producer/handoff | 6/6 | 100.0% | Live activation N/A здесь по S06; producer controlled PASS |
+| E10 Persistence/recovery | 4/4 | 100.0% | Ordinary exact-source backup/CD PASS; no audit restart |
+| E11 Digest/enrichment | 3/4 | 75.0% | 11-01 F47: most-active list; optional features сейчас OFF |
+| E12 CI/CD/operations | 4/4 | 100.0% | CI/current artifact/runtime PASS; deferred package matches F26 |
+| E13 Bounded storage/reset | 5/7 | 71.4% | 13-03 F48;13-06 F34/F42 capacity UNPROVEN |
 
-## Current Goal — MAINTENANCE: завершение backfill/repack и старт24h
+## Roadmap и текущее поручение
 
-Основание: поручение владельца16Oct2026 устранить узкие места backfill/repack,
-сохранить history/analytics/alerts, RAM и ordinary backup/CD<=900s. Результат:
-независимое bounded обслуживание очередей, конечный durable repack и фактический
-stable baseline конечного24h observer. Сам24h итог — последующее наблюдение.
-
-Проверенный main/source `1b4e0cd4e903de8b2b0084d75150784b507ebc48`, PR55:
-CI38994262366/CD38994598740 PASS. Production278s, full disk backup54.154s;
-source/image/health/persistence/market PASS. Private/env/config3/generation и64
-immutable public samples совпали с исходным состоянием Goal. Оба рынка, четыре TF,
-1120active streams/allACK, analytics и Telegram delivery подтверждены. Own branches
-PR48–55 удалены после merge/delivery/tree equality; root worktree/чужие сохранены.
-
-Repack завершен17Oct03:08:19.910UTC: records1674197, headers1787604,
-next3441866>captured upper3441865, records/decisions/legacy expiry/quality COMPLETE.
-Новые writes не расширили interval; история не сбрасывалась. Старый referenced
-backlog достиг0; обычные новые задания на1–4 закрытые свечи продолжают появляться
-и обрабатываться. Readonly03:19:47UTC: backfill0/live queues0/empty blockers,
-analytics/recovery/repack OK, свежая Telegram delivery. Working2288357560bytes
-включает DB2066104320 (с индексами), WAL222220472 и SHM32768; это не суточный темп.
-
-Necessary hotfix `codex/observer-settling-20261017`, base указанного main.
-Наблюдатель в03:15/20/25/33UTC попадал в краткую текущую analytics queue и сбрасывал
-stable count. Отдельные bounded проверки фиксировали0, ошибочных/старых jobs нет.
-Однократный restart только observer со всем сохраненным state дал одну чистую
-проверку, но не устранил phase sensitivity. Scope: только WAITING_STABLE и только
-единственный blocker ANALYTICS_RECOVERY_PENDING перепроверять максимум3 раза с
-10s паузой. Сохранять timestamps/blockers попыток в sample; не считать их чистыми.
-Две фактически чистые проверки по-прежнему разделены >=300s; deep boundary,
-исходный12h wait limit и все остальные blockers сохраняются. OBSERVING samples
-не retry: interruptions не скрываются. RAM/CPU caps, history, расчеты и pipeline
-не меняются. Обычная CI/CD поставка и final-image observer обязательны.
-
-| Задача / DoD | Состояние |
-| --- | --- |
-| M01: independent backfill/fairness/retry/restart и source integrity | PASS: PR48–55/CI, historical backlog0, новые current jobs обрабатываются |
-| M02: finite repack/equality/checkpoint/rollback/yield/snapshot | PASS: actual COMPLETE03:08:19UTC, все фазы/finite physical boundary |
-| M03: required CI/merge/CD<=900s, прежняя RAM, private/history/alerts | PR55 PASS278s/backup54.154s; necessary observer hotfix CI/CD PENDING |
-| M04: actual completion и baseline final finite observer | IN_PROGRESS: transient pending queue мешает двум чистым samples; baseline отсутствует |
-
-Validation Plan, root repository:
-
-| Риск/результат | Команда/tool и среда | Этап / обязательность |
+| Приоритет / работа | Результат / зависимости | Состояние |
 | --- | --- | --- |
-| Conventions/types/docs | `python scripts/checks.py quality`, локальный Windows env | Local REQUIRED |
-| Pending clears/persists, other blockers, observed interruptions и two-clean-sample gate | `python -m pytest tests/test_capacity.py`, controlled clock/isolated DB | Local REQUIRED |
-| Retry/restart/cancel, finite boundaries/source integrity | Existing maintenance/recovery/storage tests, текущая полная CI suite | CI REQUIRED; локально по затронутому риску |
-| Полная suite/native/image | Existing `ci-required`, Python3.11/Linux | CI REQUIRED |
-| Сохранность и поставка | Normal CD/full backup<=900s; source/image/private/env/config/generation/public samples, health/market/Telegram | Production REQUIRED |
-| Запуск24h | Final-image finite observer, source/config/generation/StartedAt, actual completion и две stable samples>=300s | Post-delivery REQUIRED;24h результат последующий |
+| AUDIT65 | Один docs PR только spec/plan,65 индивидуальных evidence rows, fresh source/runtime, findings/quality review; code fixes/CD не поручены этим аудитом | Текущая docs branch; validation/checkpoint ниже |
+| P1 F48 | Единые period semantics/visible UTC-day coverage, numeric equality/restart/export regression; AC-06-06/13-03. Policy Q07 согласовать при выбранной implementation Goal | OPEN, следующий предлагаемый scope; не реализуется audit PR |
+| P1 F34/F42 | Закончить существующий24h observer, проверить interruptions/partial boundary, обновить filled-window estimate/варианты при>20GB. Не ждать агентом и не подменять model измерением | Observer продолжает; final PENDING |
+| P2 F46/COHORTS | Доставить prepared PR57 после observer completion и resume текущей paused Goal; normal backup/CD<=900s | Draft CI PASS; не merged/deployed |
+| P2 F47 | Добавить наиболее активные instruments в digest, сохранив strongest/ongoing/counts | OPEN; выбранная implementation Goal нужна |
+| P2 F26/F22 | Плановый installer update и measured further tuning после проверки reachability/эффекта | DOCUMENT/DEFER; не снижать gates/охват/точность/сроки |
+| P3 F24/F31/F32 | Не подтвержденные orphan usage/resource limits/UX polish — только по основанию и выбранному scope | DOCUMENT/DEFER |
+| External TA-CW | Credentials/binding/receiver activation/live signed acceptance по checklist handoff | Принимающий trading-agent проект, не CW blocker |
 
-Local20capacity scenarios и canonical quality PASS; old single-probe behavior
-воспроизводит regression FAIL, bounded settling проходит. Self-review PASS:
-только WAITING_STABLE/sole queue retry, persist attempt timestamps, other blockers
-и OBSERVING interruptions не скрываются;300s separation/deep/12h limits прежние.
-Required Linux CI/image и обычный CD PENDING. Нет новой schema, конвертации/копии
-рабочей DB, новых codecs или публичного контракта.
-Ожидание в observer выполняется вне приложения; исходные read-only probe caps,
-zero-queue gate и запрет baseline при других blockers не ослабляются.
+### Current implementation Goal — COHORTS, PAUSED
 
-Observer55 `cryptowatcher-capacity-20261017T022950Z-d17381ba.service`, private path
-`/opt/crypto_watcher/observations/capacity-20261017T022950Z-d17381ba`, PID1546498
-после одного phase restart; no failures/WAITING_STABLE, baseline/final/result нет.
-При смене source сохранить records и проверить точный unit/path/наличие baseline
-до replacement. Не объединять epochs/revisions. Existing one-shot17Oct06:40MSK
-пока привязана к55; после поставки обновить тот же объект. После actual baseline
-финальная проверка через24h+20min, без ожидания агентом суток.
+Встроенная Goal фактически **PAUSED**; этот аудит не возобновляет ее и не запускает merge/CD PR57. Результат: ускоренный validated cohort reader без новых codecs/формата/writer/метрик/retention. Scope F46/diagnostics; non-goals: изменение production history/settings, новый reset/old conversion, сокращение аналитики или охвата, рост RAM, смена ordinary900s gates. Baseaffdd7bc, branch `codex/cohort-diagnostics-performance-20261017`, draft PR57/head5be499da59497a392c747debda8c42cda589155c.
 
-Primary history: PR48/4c3a362 CI38966791666 PASS/CD38967393380 POST_CHECK_FAILED;
-PR49/7015ff6 CI38969740225/CD38970152846 PASS297s;
-PR50/15daa13 CI38971799676 PASS/CD38972288968 POST_CHECK_FAILED;
-PR51/444f9c2 CI38974437399/CD38974896223 PASS355s/backup50.858s;
-PR52/b841f81 CI38982180165/CD38982604072 PASS223s/backup50.42s;
-PR53/4c5684e CI38986875524/CD38987333983 PASS221s/backup51.639s;
-PR54/5e6c6f8 CI38989052236/CD38989302666 PASS212s/backup52.108s.
-Failures не переписаны как PASS. Primary records восстанавливают delivery, даже
-если Markdown checkpoint до merge. Полные исследовательские материалы вне repo.
-
-Non-goals: reset/отмененная test-history conversion/cleanup backups/experiments,
-изменение codecs/retention/coverage/точности/REST/RAM/gates. Проценты проекта не
-пересчитываются;20GB UNPROVEN. Далее targeted validation/self-review, necessary
-hotfix PR, normal CI/CD и actual stable baseline. Goal ACTIVE.
-
-## Previous Goal — CAPACITY: реальные источники и заполненная база
-
-Основание: поручение владельца16Oct2026 после GROW handoff: измерить источники,
-кардинальность cohorts/revisions/comparators/services; исправлять только подтвержденную
-избыточность; доказать controlled-time retention и организовать автоматическое24h
-наблюдение после стабилизации без ожидания агентом. Один основной PR.
-Base `c922700c6db7a9cc6cb543f3170d0d83917b547b`, branch
-`codex/capacity-evidence-20261016`; Git/GitHub/protections/SSH проверены.
-Основной PR45 merged `ef5652d99c2fb898fa12ccfd7d5b06c81d211a8f`;
-CI38955487956 PASS766/image, CD38956621801 production PASS330s, full disk backup
-1,234,268,160bytes/copy+integrity43.378s/hash. После поставки hotfix branch
-`codex/capacity-stability-hotfix-20261016`, base `ef5652d99c2fb898fa12ccfd7d5b06c81d211a8f`:
-условие старта observer должно учитывать отдельную analytics recovery queue.
-Hotfix46 merged `dd8bf441e14b07fb84587c855d7bb5f1325b0ff8`, CI38958054568 PASS;
-CD38958643381 POST_CHECK_FAILED после switch (source/image healthy, full gates
-до switch PASS). Observer не запускался. Compatible startup hotfix branch
-`codex/startup-bucket-fairness-20261016`, base `dd8bf441e14b07fb84587c855d7bb5f1325b0ff8`:
-seed каждого market/TF до ordinary gap/bootstrap/history priorities, не пропуск gate.
-
-| Задача / критерий завершения | Статус |
+| Задача / DoD | Фактическое состояние |
 | --- | --- |
-| CAP-01: ledger физических bytes/индексов/WAL отдельно от payloads; counts/TTL/formulas, cohorts/revisions/comparators/jobs и limits | CODE READY; exact runtime ledger и full prospective cohort study PASS |
-| CAP-02: подтвержденные повторы исправлены с equality/restart/retry/causal evidence; новые codec/batching только после оценки эффекта | CODE READY; decision pointer / ownerless recovery / terminal re-arm / sliced repack tests PASS |
-| CAP-03: репрезентативный controlled-clock полный цикл30/35d/12mo, GC/dependencies/аналитика/plateau | CODE READY;62week fixture и20-comparator/multiple-method boundaries PASS |
-| CAP-04: auto24h после ingestion/bootstrap/repack stability, размер/прирост/data/index/WAL/cleanup; finite sampling, без Actions ожидания | CODE READY; unit/start после applicable CD, actual24h PENDING |
-| CAP-05: validation/self-review/CI/merge/CD<=900s, отчет actual/model/range и оставшиеся причины >20GB | IN_PROGRESS; PR45 PASS,46 post-check FAIL; startup fairness CI/runtime PENDING |
+| C01 профиль и before/after | PASS: synthetic12005events/156133rows, median1.832→1.364s (-25.5%), exact cohort result SHA |
+| C02 validated reader/byte indexing, bounded/corrupt handling | PASS по draft/local tests; отсутствует в audited main |
+| C03 targeted/quality/self-review/required PR CI | Local97unique scenarios PASS; CI39006876324 PASS, current draft revision5be499d |
+| C04 merge + normal CD + runtime readback | PENDING: observer еще OBSERVING, Goal PAUSED. Оба условия должны быть разрешены до delivery; actual production gain UNSET |
 
-DoD текущей реализации: measurable ledger и подтвержденные fixes, meaningful tests,
-ordinary gates и post-checks PASS, автоматический конечный observation подготовлен/
-запущен. Финальный24h результат имеет отдельный PENDING до фактического окончания;
-capacity PASS не следует из tests/CD. Наблюдение не заменять короткой экстраполяцией.
-Область — E06/E10/E12/E13 и findings;65AC и исторические проценты не пересчитываются.
-Non-goals: новый reset, старая test-history conversion, удаление backups/experiments,
-новые sources, снижение точности/markets/detectors/TF/events/retention, consumer setup,
-увеличение RAM/ordinary backup/CD900s или ослабление gates.
+DoD: required checks актуального head, self-review и protections, merge, normal CI→CD<=900s, same private/history/alerts и applied source/image/health readback; действующее наблюдение сначала завершено, pause снята владельцем. В будущей обработке automation учитывать PAUSED: напоминание/старый prompt не снимает ее автоматически.
 
-Validation: local canonical quality и targeted existing storage/analytics/retention
-fixtures; новые tests только для подтвержденных gaps/рисков; required full Linux CI/
-image. Runtime readonly budgets явно ограничены;24h sampler только CW metadata,
-bounded payload samples/counters, physical index walk только на границах. Во всех
-этапах сохраняются settings/generation, retry/dedup и signed immutable delivery.
+### Завершенная основа MAINTENANCE и продолжающееся наблюдение
 
-## Previous Goal — GROW: хранение без потери аналитики
+PR56 mergedaffdd7bc; CI38999539232 и release38999831287 PASS. Production210s, полная source/backup validation52.526s, CPU1/RAM4GiB maintenance без увеличения. История не сбрасывалась, private/env/config3/generation и64fixed immutable public hashes совпали с baseline.
 
-Основание: явное поручение владельца16Oct2026 реализовать предложенные исправления
-роста базы и поставить через CD. Base `447a08a703f7c864e419be504d8c340da1863e1c`,
-основной PR43 merged `e9cc24b94ed35d206033973ef82f31b1514d11e0`.
-Hotfix branch `codex/local-window-recovery-20261016`, base `e9cc24b`;
-clean Git/GitHub/protections/worktree повторно проверены.
-Предыдущий handoff PR42 merged447a08a, CI38919152279 и postmerge38919292133 PASS;
-consumer activation остается вне проекта по D23.
+Repack COMPLETE17Oct03:08:19.910UTC:1674197records,1787604headers scanned; next3441866>captured upper3441865; records/decisions/legacy expiry/quality COMPLETE. Новые writes не расширяют конечную границу. Исторический referenced backlog достиг0. Нормальные новые short jobs могут появляться: R2 current8/workerOK, это не возвращение старого backlog. F37/F39–41/F43–45 закрыты соответствующими code/tests/runtime records; итог емкости F42 отдельно.
 
-Результат: recovery не накапливает уже заполненные запросы; подробные records и
-годовые numeric facts используют обратимое компактное представление; существующие
-rows сохраняются и постепенно уплотняются с durable progress; forecast различает
-оборот очередей, retained data, измерения и модели. Один основной PR.
+Существующий observer: `cryptowatcher-capacity-20261017T035202Z-cd71e125.service`, PID1586329, private directory `/opt/crypto_watcher/observations/capacity-20261017T035202Z-cd71e125`. Реальный baseline **17Oct2026 07:02:41.185МСК** (04:02:41.185UTC), ожидаемый24h конец **18Oct07:02:41МСК**, затем конечная boundary check. One-shot `cryptowatcher` назначен18Oct07:23МСК; дубликат не создавался. Observer256MiB/CPU10%/finite deadline прежние.
 
-| Задача / closure criterion | Статус |
-| --- | --- |
-| GROW-01 / F37: local completeness, overlap recovery, bounded retirement/restart, без лишнего REST | CODE READY; targeted PASS |
-| GROW-02 / F34: typed lossless records и resumable bounded repack накопленного, public bytes/results сохранены | CODE READY; CI38935830076 PASS745 tests |
-| GROW-03 / F34: compact numeric quality blocks, methods/settings/comparators/completeness и controlled expiry equality | CODE READY; CI/image PASS |
-| GROW-04 / F38: measured category rates, queue lifetime/turnover, versioned forecast model и ограничения | CODE READY; CI/image PASS |
-| GROW-05: required CI, merge, normal CD<=900s, source/image/settings/history/alerts readback и measured post-report | DONE: PR44/c922700, CI38939657096 PASS754; CD38940357976 PASS298s, full backup27.639s; private/env/generation equality |
+R2/R3 на17Oct09:02МСК: OBSERVING/26samples/failed0; **5interrupted samples** с единственным ANALYTICS_RECOVERY_PENDING. Последние2samples чистые. Эти intervals не скрывать, не retry во время OBSERVING и не называть uninterrupted steady day. Baseline SHA `fa92cd2ec4b6fa79c6ff8d041257fc324ea6c1e05c185863f02cebd3848698eb`; script SHA `5b1a4d4d61ca6a8ce5d399dee586bb9c1ee6d458ea3be21d2d60dc46117c98c7`. Новый observer/deep probe/restart/deploy ради аудита не запускались.
 
-Затрагиваются E06/E10/E12/E13; существующие65AC/исторические проценты сохраняются,
-новые AC не вводятся. Работа отслеживается по пяти задачам. AC-13-02/13-05 уточняются
-по выявленным gaps; code READY не заменяет required checks и delivery.
+## Validation Plan текущего аудита
 
-DoD: задачи подтверждены meaningful regression/equality/restart/corruption/retention
-checks и измерением bytes/event/outcomes/services; CI на latest revision PASS;
-merge+CD по действующей full source/backup validation, health/ingestion/private
-settings preservation, no historical alert replay. Показать фактический объем,
-скорость и новый прогноз относительно20GB с ограничениями; не объявлять fit без
-измерений. Постоянное ожидание статистики не входит в DoD.
+Все команды — из root. REQUIRED runtime probes только bounded/read-only, без отправки alerts/consumer requests, конфигурационных изменений, full DB scans или нагрузочного прогона. Evidence в следующем разделе.
 
-Non-goals: reset/удаление полезной истории, сокращение markets/detectors/TF/events/
-метрик/сроков, PostgreSQL/Redis, owner threshold changes, consumer activation,
-удаление backups/experiments, повышение RAM или backup/CD900s. Старые форматы
-остаются читаемыми; schema/encoding changes сопровождаются compatibility evidence.
-
-## Validation Plan
-
-Canonical команды — [README](../README.md#checks); из root repository. Local Python3.12/Windows имеет ограничение native checks; required CI/image — Linux/Python3.11. Все test data disposable, secrets не нужны.
-
-| AC/риск | Проверка / ожидаемый результат | Среда/этап | Gate/результат |
+| AC/риск | Проверка / ожидаемый результат | Tool/среда/этап | Gate / результат |
 | --- | --- | --- | --- |
-| Spec/commands/config | `python scripts/checks.py quality`: docs/lint/format/types | local до push; docs CI | REQUIRED PASS до последнего code push; audit docs проверить отдельно |
-| Auth/config/migration/revision race | Existing pytest bot/config/storage/CLI; strangers/groups/invalid/future/corrupt/empty-list/CAS | local targeted, full PR CI | REQUIRED EVID-02 PASS |
-| Markets/TF/formulas/episodes | Ingestion/universe/detectors/events replay/gap/reconnect/re-arm/coalescing/fault tests | local targeted/full CI/image | REQUIRED PASS; runtime EVID-04 |
-| Analytics/retention/services | Known series, neutral/directed/gaps/late worker, all methods/frozen event revisions, comparator/no future leakage, controlled expiry30/35d/12mo, terminal queues/restart/dedup | targeted local + `python scripts/checks.py all` CI | REQUIRED EVID-02 PASS731 tests; real 30d expiry не ожидался |
-| Export/Telegram/integration | NDJSON completion/pagination/filter/provenance, UI/outcome navigation, independent consumers, signed immutable retries/authority guards | isolated CI/image; live доступный контур | REQUIRED producer/mock contract PASS; live signed consumer acceptance передана receiving project (S06) |
-| Reset/private settings | Exact-target/allowlist/refusal/restore/equality/queues/cursors/generation/no historical alerts | isolated fixture + approved one-time CD37 | REQUIRED EVID-01 PASS; reset permit CONSUMED |
-| Storage/capacity | Synthetic event+4outcomes+services/indexes; cheap counts/files/pages/sample model; bounded index snapshot; category/external inventory | isolated image + bounded readonly VPS | REQUIRED EVID-04 PASS; 20GB fit НЕ доказан, forecast warning виден |
-| Ordinary CD/recovery | Required protection/latest CI/tree/source/image, full source integrity + disk snapshot/hash/readback, target lock, health/ingestion/private equality | production CW CD38/39 | REQUIRED EVID-03 PASS; entire job<=900s, CPU1/RAM4GiB/no swap |
-| Handoff / S06 | Existing producer5+14 targeted fixtures, exact example/schema/hash/source equality, stable65 AC и6TA-CW items, bounded readonly CW smoke | local + required docs CI | REQUIRED local PASS; latest PR CI/merge PENDING; runtime deploy N/A |
-| Representative load / longer trend | Separate owner observation; CPU/RAM/backlog/disk by representative workload, stop criteria до load | не запускался как длительный Actions monitoring | RECOMMENDED; не блокирует завершенный storage/reset scope |
+| Full scope | S01 native170paragraphs + metadata/revision, stable65IDs/13epics и S05–S08; нет invented features | Google Drive read + repository docs, audit | REQUIRED PASS S1 |
+| Все65 | Individual code path + meaningful existing tests; подтвердить сохранение ID, READY и отрицательные cases | source review/AST inventory; Windows offline product tests; exact-main Linux CI | REQUIRED T1/G1 PASS; четыре AC partial в матрице |
+| Подозреваемые false READY | Isolated digest activity и archived period before/after retention | `.cache-g1/operator` repros, isolated schema2, local Python3.12 | REQUIRED T2 FAIL reproduced => F47/F48, без code fixes |
+| Actual runtime | Source/image/health/private/config/gen, both markets/4TF, bounded retained events/outcomes, workers/natural receipt; settings unchanged | Contabo SSH, read-only small samples/<=8s DB query budget | REQUIRED R1/R2 PASS/PARTIAL по охвату |
+| Daily observation | Existing PID/unit/baseline SHA/current metadata; не reset/restart/deploy | Read-only record/file metadata R3 | REQUIRED observer unchanged/active; final PENDING, аудит суток не ожидает |
+| Dependencies | Locks/native pins + actual21distributions, exact advisory queries, no install | Local read-only OSV inventory D2 | REQUIRED review PASS; matches F26 deferred, no exhaustive OS/security claim |
+| Docs-only PR | `python scripts/checks.py quality`, stable65/findings48/links/no external URLs, only spec/plan diff, self-review | Local + latest required `ci-required`; merge protections | REQUIRED local quality/65IDs/48findings/test-node check/self-review PASS; latest CI/merge PENDING |
+| No delivery | Post-merge release selector `code=false`, build/production skips applicable; source/container/StartedAt/observer unchanged | GitHub Actions + bounded readonly target metadata | REQUIRED; runtime CD N/A by docs scope |
 
-### GROW Validation Plan
+После аудита implementation validation сохраняется по соответствующей Goal: F48 needs controlled expiry/non-aligned periods/formats/cohorts/revisions; F47 needs activity vs strength fixtures/both markets/toggles/length; COHORTS C04 latest CI и ordinary CD. Findings сами по себе не разрешают эти изменения.
 
-| Риск / критерий | Проверка, команда из root | Среда/этап / gate |
-| --- | --- | --- |
-| Recovery F37 | Existing analytics_recovery + bounded fixtures: local fill, overlapping requests, priority/restart/conflict and terminal cleanup | Local targeted pytest / REQUIRED |
-| Lossless records/quality | Old/new decode/public canonical equality, corrupt/truncated/bounds, mixed formats, all methods/frozen revisions, NDJSON/analytics before/after expiry | Local targeted pytest + full CI / REQUIRED |
-| Progress/history preservation | Bounded repack interruption/restart/concurrent new write/rollback, counters/links/private and no re-notification | Local fixture + Linux image / REQUIRED |
-| Capacity F38 | Existing isolated measurement, dense multi-event numeric blocks and comparator case; measured bytes separately from forecast; queue turnover plateau | Local targeted + CI measurement / REQUIRED |
-| Delivery | Canonical quality locally, full PR CI/image; existing ordinary full disk source+backup checks and bounded post-checks | Production only after merge / REQUIRED;900s unchanged |
-| Restart hotfix | Local current/complete persisted windows skip redundant REST; stale/gap/short/conflict/settings cases retain recovery, both markets/4TF, cooperative scheduling/no historical live replay | Targeted ingestion tests, full required CI, ordinary CD / REQUIRED |
-| Wide WS ACK | Shards<=100topics с полным покрытием, strict15s ACK deadline даже при непрерывных updates, independent shard ACK до обработки closed observations | Targeted fake WS burst/timeout + required CI / REQUIRED |
+## Все 65 AC: код, tests и actual runtime
 
-## Текущее состояние AC
+T1 — успешные fixtures на указанной revision, T2 — новый воспроизводимый FAIL. R1/R2/R3 — bounded actual Evidence ниже; PARTIAL ограничивает именно runtime охват. N/A обосновано optionalOFF/внешней ответственностью, не отсутствием доступа. Один representative test в строке дополнен связанными auth/race/error tests того же модуля и полным exact-main G1. Для универсальных negative requirements применен также inventory entrypoints/imports/network adapters.
 
-Текущие статусы учитывают explicit S06/D23: E09 оценивается по producer и handoff, а actual consumer activation передана в TA-CW checklist. Это изменение ответственности владельцем, не утверждение о выполненном live E2E. Исторический audit snapshot не пересчитывается. Продуктовые и технические AC равноправны.
-
-| AC / критерий | Статус | Evidence / проверка |
-| --- | --- | --- |
-| AC-01-01 Детерминированный Python runtime | READY | test_bot/test_config/test_logging; config.authorized; EVID-02/04 |
-| AC-01-02 Нет торговых полномочий | READY | test_bot/test_config/test_logging; config.authorized; EVID-02/04 |
-| AC-01-03 Bybit-only ingestion | READY | test_bot/test_config/test_logging; config.authorized; EVID-02/04 |
-| AC-01-04 Доступ только владельцу | READY | test_bot/test_config/test_logging; config.authorized; EVID-02/04 |
-| AC-01-05 Отдельный сервис без собственного Web UI | READY | test_bot/test_config/test_logging; config.authorized; EVID-02/04 |
-| AC-02-01 Два широких universe | READY | test_universe/test_ingestion/test_bot; universe.py; EVID-04 |
-| AC-02-02 Eligibility инструментов | READY | test_universe/test_ingestion/test_bot; universe.py; EVID-04 |
-| AC-02-03 Настраиваемая liquidity | READY | test_universe/test_ingestion/test_bot; universe.py; EVID-04 |
-| AC-02-04 Watchlist по рынкам | READY | test_universe/test_ingestion/test_bot; universe.py; EVID-04 |
-| AC-03-01 WebSocket обоих рынков | IN_PROGRESS | F39 startup bucket starvation на runtime46; compatible fairness hotfix local52 PASS, required CI/runtime PENDING |
-| AC-03-02 Одновременные timeframes | READY | test_ingestion/test_sources/test_async_runtime; ingestion.py; EVID-04 |
-| AC-03-03 Закрытые свечи | READY | test_ingestion/test_sources/test_async_runtime; ingestion.py; EVID-04 |
-| AC-03-04 Gaps и recovery | READY | test_ingestion/test_sources/test_async_runtime; ingestion.py; EVID-04 |
-| AC-03-05 Разделение cadence и TF | READY | test_ingestion/test_sources/test_async_runtime; ingestion.py; EVID-04 |
-| AC-04-01 Composite formula | READY | test_detectors/test_events/test_enrichment_runtime; detectors.py; EVID-02/04 |
-| AC-04-02 Набор detectors на двух рынках | READY | test_detectors/test_events/test_enrichment_runtime; detectors.py; EVID-02/04 |
-| AC-04-03 Provenance и direction | READY | test_detectors/test_events/test_enrichment_runtime; detectors.py; EVID-02/04 |
-| AC-04-04 Изоляция ошибок | READY | test_detectors/test_events/test_enrichment_runtime; detectors.py; EVID-02/04 |
-| AC-04-05 Без auto calibration | READY | test_detectors/test_events/test_enrichment_runtime; detectors.py; EVID-02/04 |
-| AC-05-01 Episode aggregation | READY | test_events/test_agent_delivery; EventEngine/TelegramDelivery; EVID-02/04 |
-| AC-05-02 Meaningful notifications | READY | test_events/test_agent_delivery; EventEngine/TelegramDelivery; EVID-02/04 |
-| AC-05-03 Завершение и re-arm | READY | test_events/test_agent_delivery; EventEngine/TelegramDelivery; EVID-02/04 |
-| AC-05-04 Freshness и timestamps | READY | test_events/test_agent_delivery; EventEngine/TelegramDelivery; EVID-02/04 |
-| AC-06-01 Полная история | READY | test_outcomes/test_analytics/test_export/test_bounded_storage; F35; EVID-02/04 |
-| AC-06-02 Настраиваемые horizons | READY | test_outcomes/test_analytics/test_export/test_bounded_storage; F35; EVID-02/04 |
-| AC-06-03 Returns и развитие | READY | test_outcomes/test_analytics/test_export/test_bounded_storage; F35; EVID-02/04 |
-| AC-06-04 MFE/MAE | READY | test_outcomes/test_analytics/test_export/test_bounded_storage; F35; EVID-02/04 |
-| AC-06-05 Статистика качества | READY | test_outcomes/test_analytics/test_export/test_bounded_storage; F35; EVID-02/04 |
-| AC-06-06 Export и неизменность | READY | test_outcomes/test_analytics/test_export/test_bounded_storage; F35; EVID-02/04 |
-| AC-06-07 Нет future leakage | READY | test_outcomes/test_analytics/test_export/test_bounded_storage; F35; EVID-02/04 |
-| AC-07-01 Полный realtime alert | READY | test_bot/test_outcome_ui/test_events/test_digest; bot/render; EVID-01/04 |
-| AC-07-02 Ссылка на правильный рынок | READY | test_bot/test_outcome_ui/test_events/test_digest; bot/render; EVID-01/04 |
-| AC-07-03 Control deck | READY | test_bot/test_outcome_ui/test_events/test_digest; bot/render; EVID-01/04 |
-| AC-07-04 Правдивый active status | READY | test_bot/test_outcome_ui/test_events/test_digest; bot/render; EVID-01/04 |
-| AC-07-05 Управление доставкой | READY | test_bot/test_outcome_ui/test_events/test_digest; bot/render; EVID-01/04 |
-| AC-07-06 Просмотр outcome | READY | test_bot/test_outcome_ui/test_events/test_digest; bot/render; EVID-01/04 |
-| AC-07-07 Объяснение manual | READY | test_bot/test_outcome_ui/test_events/test_digest; bot/render; EVID-01/04 |
-| AC-08-01 Owner configuration | READY | test_config/test_storage/test_bot/test_enrichment_runtime; EVID-02/04 |
-| AC-08-02 Изменение без restart | READY | test_config/test_storage/test_bot/test_enrichment_runtime; EVID-02/04 |
-| AC-08-03 Profiles и manual parameters | READY | test_config/test_storage/test_bot/test_enrichment_runtime; EVID-02/04 |
-| AC-09-01 Structured contract | READY | test_agent_delivery; reference consumer qualification EVID-05; current handoff |
-| AC-09-02 Готовность авторизованного producer | READY | Existing HMAC raw-body/retry/restart/expiry/independent-consumer fixtures PASS; config absent сохраняет manual radar; live activation transferred TA-CW-01…06 по S06 |
-| AC-09-03 Outbox и recovery | READY | test_agent_delivery; reference consumer qualification EVID-05; current handoff |
-| AC-09-04 Identity/revisions для consumer | READY | test_agent_delivery; reference consumer qualification EVID-05; current handoff |
-| AC-09-05 Delivery diagnostics | READY | test_agent_delivery; reference consumer qualification EVID-05; current handoff |
-| AC-09-06 Handoff и causal analytics | READY | Canonical handoff в agent-delivery, exact producer example/schema/hash, responsibility+TA-CW checklist, prior contract tests и producer context/export/causal fixtures; receiving runtime acceptance не выполнялась |
-| AC-10-01 Разделение хранения | READY | test_storage/test_history_heads/test_history_codec/test_market_reset_delivery; EVID-01/03/04 |
-| AC-10-02 Расширяемая история | READY | test_storage/test_history_heads/test_history_codec/test_market_reset_delivery; EVID-01/03/04 |
-| AC-10-03 Безопасная миграция/recovery | READY | test_storage/test_history_heads/test_history_codec/test_market_reset_delivery; EVID-01/03/04 |
-| AC-10-04 Restart continuity | READY | test_storage/test_history_heads/test_history_codec/test_market_reset_delivery; EVID-01/03/04 |
-| AC-11-01 Digest aggregation | READY | test_digest/test_enrichment/test_enrichment_runtime; EVID-02 |
-| AC-11-02 Digest schedule/toggles | READY | test_digest/test_enrichment/test_enrichment_runtime; EVID-02 |
-| AC-11-03 Безопасный derivatives enrichment | READY | test_digest/test_enrichment/test_enrichment_runtime; EVID-02 |
-| AC-11-04 Provenance enrichment | READY | test_digest/test_enrichment/test_enrichment_runtime; EVID-02 |
-| AC-12-01 Docker/VPS runtime | READY | test_delivery/test_cd_bootstrap/test_async_runtime/test_logging; EVID-02/03/04/06 |
-| AC-12-02 GitHub Actions delivery | READY | test_delivery/test_cd_bootstrap/test_async_runtime/test_logging; EVID-02/03/04/06 |
-| AC-12-03 Domain boundaries и diagnostics | READY | test_delivery/test_cd_bootstrap/test_async_runtime/test_logging; EVID-02/03/04/06 |
-| AC-12-04 Secrets и проверяемые изменения | READY | test_delivery/test_cd_bootstrap/test_async_runtime/test_logging; EVID-02/03/04/06 |
-| AC-13-01 Общие данные без полных дублей | READY | test_bounded_storage/test_market_reset_delivery; EVID-01/02/03/04 |
-| AC-13-02 Автоматическая bounded retention | READY | test_bounded_storage/test_market_reset_delivery; EVID-01/02/03/04 |
-| AC-13-03 Качество detectors 12 месяцев | READY | test_bounded_storage/test_market_reset_delivery; EVID-01/02/03/04 |
-| AC-13-04 Укрупненный context | READY | test_bounded_storage/test_market_reset_delivery; EVID-01/02/03/04 |
-| AC-13-05 Конечные служебные зависимости | READY | F37 исправлен; local/restart/overlap tests и Linux CI38935043692 PASS; actual delivery pending |
-| AC-13-06 Контроль 20 GB | READY | F38 separated queue turnover/occupancy/current-layout scenarios PASS; stale index cache явно STALE; required latest CI/delivery pending, fit не заявлен |
-| AC-13-07 Разовый reset | READY | test_bounded_storage/test_market_reset_delivery; EVID-01/02/03/04 |
+| AC / критерий | Статус | Проверенный код / representative automatic test | Actual Evidence / ограничения / остаток |
+| --- | --- | --- | --- |
+| AC-01-01 Детерминированный Python runtime | READY | `detectors.py`: pure evaluate/previous-only formulas; без LLM; `test_detectors.py::test_five_families_and_previous_only_metrics` T1/G1 | R1/R2 PASS: Python3.11.17, five published versions; одинаковый replay проверен изолированно |
+| AC-01-02 Нет торговых полномочий | READY | `agent_contract.py`: strict advisory fields/trading_authorized=false/model_invoked=false; `test_agent_delivery.py::test_peer_projection_preserves_legacy_snapshot_and_all_market_timeframe_units` T1/G1 | R1 PASS: отдельный radar без торговых credentials; endpoint/import inventory без execution |
+| AC-01-03 Bybit-only ingestion | READY | `universe.py`: Bybit metadata/REST/public WS; legacy CMC не в active router; `test_universe.py::test_full_linear_pagination_spot_no_cursor_and_more_than_100` T1/G1 | R1 PASS: public Spot/linear streams; third-party network code inventory проверен |
+| AC-01-04 Доступ только владельцу | READY | `config.py`: Infrastructure validation + authorized; Controller.handle общий guard; `test_bot.py::test_every_command_rejects_stranger_without_state_access` T1/G1 | R2 PASS: owner/private chat233382575/bot7523865123; hostile production requests не отправлялись; group/empty/callback negatives T1 |
+| AC-01-05 Отдельный сервис без собственного Web UI | READY | `bot.py`: отдельный entrypoint/unit; no web server/LLM/execution runtime; `test_agent_delivery.py::test_unset_integration_does_not_mutate_radar_or_pending_history` T1/G1 | R1/R2 PASS: standalone bot healthy при agent UNSET/OFF |
+| AC-02-01 Два широких universe | READY | `universe.py`: full metadata + eligible instruments; нет fixed Top100; `test_universe.py::test_full_linear_pagination_spot_no_cursor_and_more_than_100` T1/G1 | R1 PASS: metadata377Spot/519linear,1104 active streams; liquidity/universe динамичны |
+| AC-02-02 Eligibility инструментов | READY | `universe.py`: type/status/USDT/settle/prelisting/classification quarantine; `test_universe.py::test_quarantine_reasons` T1/G1 | R1 PARTIAL: реальные eligible feeds; все отрицательные классы проверены fixtures, не вводились в production |
+| AC-02-03 Настраиваемая liquidity | READY | `universe.py`: active_instruments использует сохраненную liquidity отдельно от formulas; `test_universe.py::test_liquidity_boundary_typed_watchlist_and_saved_sensitivity` T1/G1 | R2 PASS: broad universe/current config3; thresholds не менялись аудитом |
+| AC-02-04 Watchlist по рынкам | READY | `bot.py`: typed list + eligibility + revision/CAS + sensitivity; `test_ingestion.py::test_typed_owner_list_validation_restart_and_market_mutes` T1/G1 | R2 PARTIAL: пустой saved watchlist0 сохранен; add/remove/restart T1, live настройки не менялись |
+| AC-03-01 WebSocket обоих рынков | READY | `ingestion.py`: reconcile/_session; independent <=100-topic shards/strict ACK deadline/reconnect; `test_ingestion.py::test_wide_linear_shards_ack_independently_before_closed_candle_work` T1/G1 | R1 PASS:12 connected/allACK shards, оба рынка; PR56 actual restart/normal CD PASS; F39/F40 CLOSED |
+| AC-03-02 Одновременные timeframes | READY | `ingestion.py`: native TIMEFRAMES1m/3m/5m/15m; market/TF identity; `test_ingestion.py::test_native_interleaved_streams_duplicates_and_no_bootstrap_alert` T1/G1 | R1 PASS: четыре TF обоих рынков; R2 bounded event sample не является полным TF census |
+| AC-03-03 Закрытые свечи | READY | `ingestion.py`: WS confirm=true, normalized boundaries/server clock; REST closed windows; `test_ingestion.py::test_invalid_end_conflict_and_old_frame_are_not_live` T1/G1 | R1 PARTIAL: fresh closed data; open/future/clock adversarial boundaries T1 |
+| AC-03-04 Gaps и recovery | READY | `sources.py`: duplicate/out-of-order/conflict/gap blocking + REST recovery without live replay; `test_sources.py::test_duplicate_out_of_order_gap_conflict_and_recovery` T1/G1 | R1 PASS: bootstrap/live recovery/historical gaps0; R2 current analytics queue8 обрабатывается, не старый backlog |
+| AC-03-05 Разделение cadence и TF | READY | `config.py`: signal_timeframe/radar_poll_sec раздельны; ingestion uses native intervals; `test_bot.py::test_preset_status_and_sample_show_effective_values_not_legacy_fields` T1/G1 | R1/R2 PASS: all four native TF при одной config; изменение cadence проверено T1 |
+| AC-04-01 Composite formula | READY | `detectors.py`: composite min(price strength,turnover strength), previous baseline/equality/liquidity; `test_detectors.py::test_custom_composite_preserves_legacy_equality` T1/G1 | R2 PASS: natural composite event/source ref; equality/zero/gaps T1 |
+| AC-04-02 Набор detectors на двух рынках | READY | `detectors.py`: price/turnover/breakout/volatility/composite version1, separate market data; `test_detectors.py::test_five_families_and_previous_only_metrics` T1/G1 | R1/R2 PASS: five versions; observer prospective baseline покрывает5families/2markets/4TF; текущая32-event sample только4families |
+| AC-04-03 Provenance и direction | READY | `events.py`: immutable version/settings/source-window/market-time/units/direction; `test_events.py::test_atomic_history_identity_markets_settings_and_inputs` T1/G1 | R2 PASS:32/32 sampled events имеют source_window_id и frozen revision; positive/negative/neutral T1 |
+| AC-04-04 Изоляция ошибок | READY | `events.py`: per-detector exception isolation + enrichment/worker diagnostics; `test_events.py::test_detector_fault_isolated_and_secret_safe` T1/G1 | R1 PASS: healthy source/analytics/recovery; fault injection только T1 |
+| AC-04-05 Без auto calibration | READY | `detector_config.py`: explicit owner preset/manual operations; analytics не пишет thresholds; `test_enrichment_runtime.py::test_owner_controls_frozen_event_independent_perpetual_and_no_threshold_changes` T1/G1 | R2 PASS: config3/private SHA неизменны; effectiveness/profitability defaults не доказаны и не обещаны |
+| AC-05-01 Episode aggregation | READY | `events.py`: atomic event/source/episode history; independent detector/TF observations; `test_events.py::test_coalesce_escalation_success_baseline_and_restart` T1/G1 | R2 PASS: sampled episode/event links читаются; coalescing2s и подтверждения T1 |
+| AC-05-02 Meaningful notifications | READY | `telegram_delivery.py`: frozen notification decision; new family/TF/strength; success only after ACK; `test_events.py::test_confirmation_during_send_gets_followup_with_frozen_revisions` T1/G1 | R1 PASS: natural Telegram DELIVERED; send-time races/failures T1, аудит ничего не отправлял |
+| AC-05-03 Завершение и re-arm | READY | `events.py`: inactivity/maxlife/two nonsignal bars/re-arm; restart persisted; `test_events.py::test_forced_closure_and_two_complete_bars_rearm` T1/G1 | R2 PASS:31 CLOSED/1 SUPPRESSED sampled episodes; re-arm/restart controlled T1 |
+| AC-05-04 Freshness и timestamps | READY | `detectors.py`: type/TF freshness anchored to immutable observation time; `test_detectors.py::test_type_tf_freshness_uses_immutable_market_time` T1/G1 | R2 PARTIAL: original market timestamps сохранены; late/future/retry/expiry boundaries T1 |
+| AC-06-01 Полная история | READY | `events.py`: append immutable revisions/episode links; history not coupled to delivery; `test_events.py::test_alert_toggle_mute_preserve_all_history` T1/G1 | R2 PASS:32 retained source-linked events и128 outcome heads; полнота всей БД не заявлена |
+| AC-06-02 Настраиваемые horizons | READY | `outcomes.py`: validated saved horizons; immutable event horizon plan/restart worker; `test_outcomes.py::test_pending_restart_gaps_recovery_reference_and_no_silent_recalculation` T1/G1 | R2 PASS: saved5/15/30/60;128/128 sampled mature outcomes COMPLETE |
+| AC-06-03 Returns и развитие | READY | `outcomes.py`: reference close/time, directed/neutral returns, frozen noise/methodology; `test_outcomes.py::test_full_window_exact_target_direction_excursions_and_missing` T1/G1 | R2 PASS: mature outcomes обоих рынков; exact numeric values/late worker fixtures T1 |
+| AC-06-04 MFE/MAE | READY | `outcomes.py`: full subsequent1m highs/lows MFE/MAE; missing != zero; `test_outcomes.py::test_noise_boundary_and_missing_context` T1/G1 | R2 PARTIAL: persisted COMPLETE results; exact MFE/MAE/negative/neutral cases T1, live series не пересчитывалась |
+| AC-06-05 Статистика качества | READY | `analytics.py`: cohort_rows frozen event revision + no-signal prior28d/hour/ATR/nonoverlap; `test_analytics.py::test_prior_complete_matching_quartile_nonoverlap_and_frozen_context` T1/G1 | R1/R2 PARTIAL: analytics OK, short new epoch/comparator limits явны; archived period filters ограничены F48 в06-06/13-03 |
+| AC-06-06 Export и неизменность | IN_PROGRESS | `export.py`: snapshot NDJSON/CSV; paged revisions/settings/outcomes; archived UTC-day bounds различаются; `test_export.py::test_paged_consistent_export_all_revisions_filters_and_no_transport` T1/G1 | T2 FAIL/F48: после expiry intraday period CSV5→0, unfiltered5 и NDJSON5; CSV не сообщает effective period. Live export не запускался |
+| AC-06-07 Нет future leakage | READY | `analytics.py`: available_at cutoff per revision; future outcomes/enrichment separate; `test_analytics.py::test_workers_restart_protection_cohorts_and_causal_revisions` T1/G1 | R2 PARTIAL: stored observation/revision provenance; causal time-travel отрицательные случаи T1; expired details explicitly unavailable |
+| AC-07-01 Полный realtime alert | READY | `render.py`: compact alert/reason/metrics/units/TTL/confirmation; TelegramDelivery owner target; `test_events.py::test_compact_notification_full_confirmation_set_and_controls` T1/G1 | R1 PASS natural DELIVERED; render/length/parse controlled T1, полная ручная UI приемка не повторялась |
+| AC-07-02 Ссылка на правильный рынок | READY | `render.py`: separate Spot/linear Bybit URLs, no order action; `test_bot.py::test_sample_uses_active_settings_and_preserves_alert_controls` T1/G1 | R2 PARTIAL: both-market events; URL fixtures и прежний owner screenshot/sample PASS, новые браузерные переходы не выполнялись |
+| AC-07-03 Control deck | READY | `bot.py`: owner menu/keyboards/list/mutes/terms/no-op guard; `test_bot.py::test_owner_control_deck_list_mutations_and_restart` T1/G1 | R2 PARTIAL: bot identity/owner settings PASS; owner prior sample «вроде работает», все текущие button paths T1, не live ручной census |
+| AC-07-04 Правдивый active status | READY | `bot.py`: effective active settings + frozen revision/CAS race discard; `test_bot.py::test_settings_changed_during_fetch_discards_poll_and_status` T1/G1 | R1/R2 PASS: real broad universe/4TF/config3, explicit source/worker health; concurrent cases T1 |
+| AC-07-05 Управление доставкой | READY | `telegram_delivery.py`: alerts/digest/agent preferences independent; mute does not discard history; `test_bot.py::test_mute_and_delivery_off_keep_market_calculation` T1/G1 | R2 PASS: alertsON/composite preference, digestOFF/agentOFF; two-consumer outage/isolation T1 |
+| AC-07-06 Просмотр outcome | READY | `bot.py`: event→outcome menu preserves original reference/horizons; `test_outcome_ui.py::test_event_to_outcome_original_reference_frozen_horizons_and_manual_validation` T1/G1 | R2 PARTIAL:128 mature outcomes readable; Telegram navigation controlled T1 без новых live сообщений |
+| AC-07-07 Объяснение manual | READY | `render.py`: terms/explanations all families/effective thresholds; no credentials needed; `test_bot.py::test_profiles_manual_detectors_history_and_callbacks_remain_owner_scoped` T1/G1 | R2 PASS standalone radar с agentUNSET; explanations/render T1, пользовательская оценка удобства не выдается за automatic proof |
+| AC-08-01 Owner configuration | READY | `storage.py`: owner_settings separate from delivery prefs/runtime/secrets; immutable revisions; `test_storage.py::test_persisted_settings_cas_noop_restart_and_backup` T1/G1 | R2 PASS private SHA/config3/watchlist/thresholds/preferences; no config edits |
+| AC-08-02 Изменение без restart | READY | `bot.py`: finite/range/schema validation + CAS revision + no-op preserve; `test_bot.py::test_manual_invalid_value_and_legacy_callbacks_preserve_values` T1/G1 | R1/R2 PASS same private settings after normal restart; invalid/race updates T1 |
+| AC-08-03 Profiles и manual parameters | READY | `detector_config.py`: normal/conservative/sensitive/custom + watchlist factor/manual validation; `test_detectors.py::test_profiles_are_explicit_persistable_and_manual_edits_are_custom` T1/G1 | R2 PARTIAL custom profile/effective values; preset switching T1, no thresholds changed during audit |
+| AC-09-01 Structured contract | READY | `agent_contract.py`: v2 schema + settings/source/freshness/episode/revision; forbidden execution; `test_agent_delivery.py::test_peer_projection_preserves_legacy_snapshot_and_all_market_timeframe_units` T1/G1 | N/A live consumer по S06/D23; T1 producer contract PASS, historical external parser40/40 E0 ограничен своей revision |
+| AC-09-02 Готовность авторизованного producer | READY | `agent_delivery.py`: HTTPS/HMAC exact raw bytes, configuration isolation, independent owner toggle; `test_agent_delivery.py::test_atomic_admission_coalescing_and_telegram_independence` T1/G1 | R2 PASS graceful UNSET/OFF; signed controlled receiver T1; actual connection/credential/binding receiving-project scope |
+| AC-09-03 Outbox и recovery | READY | `agent_delivery.py`: durable attempts/retry/backoff/expiry/historical replay without freshening; `test_agent_delivery.py::test_expired_retry_is_explicit_historical_revision_without_freshening` T1/G1 | R2 N/A live delivery disabled; ambiguous ack/outage/restart/expired cases T1 |
+| AC-09-04 Identity/revisions для consumer | READY | `agent_delivery.py`: immutable serialized transport payload and independent source/transport revisions; `test_agent_delivery.py::test_restart_ambiguous_ack_reuses_identical_bytes_and_success_state` T1/G1 | R2 N/A live; dedup/reorder/conflict producer contract T1, consumer live acceptance transferred |
+| AC-09-05 Delivery diagnostics | READY | `diagnostics.py`: separate agent state/attempt/blocked/pending diagnostics and owner replay guard; `test_agent_delivery.py::test_owner_toggle_is_independent_and_unknown_sender_cannot_replay` T1/G1 | R2 PASS actual agent UNSET/OFF visible, не ошибочно DELIVERED; fault cases T1 |
+| AC-09-06 Handoff и causal analytics | READY | `export.py`: producer artifacts/causal exports + agent-delivery TA-CW checklist; `test_agent_delivery.py::test_manual_replay_resolves_complete_outcome_heads_and_signs_original_inputs` T1/G1 | H1 PASS contract/example/checklist source alignment; R2 standalone PASS; actual receiving activation N/A here |
+| AC-10-01 Разделение хранения | READY | `storage.py`: Store ownership/schema/lease; owner and delivery separate from normalized market; `test_storage.py::test_single_writer_lease` T1/G1 | R1 PASS one unit/persistent /data bind; R2 private/market records independent |
+| AC-10-02 Расширяемая история | READY | `events.py`: immutable revisions/head references/mixed legacy decode/versioned metadata; `test_history_heads.py::test_compact_head_preserves_full_record_revisions_and_mixed_legacy_reads` T1/G1 | R1 PASS main56 compatible public64-sample SHA; repack COMPLETE; future schema refusal T1 |
+| AC-10-03 Безопасная миграция/recovery | READY | `storage.py`: explicit migrate/corrupt/future refusal/restore; no empty state overwrite; `test_storage.py::test_corrupt_forward_ambiguous_state_preserved` T1/G1 | D1/E0 PASS migration/private recovery; actual full source+backup validation52.526s; unknown/corrupt fixtures T1 |
+| AC-10-04 Restart continuity | READY | `storage.py`: persistent workers/cursors/subscriptions/outbox across restart; `test_async_runtime.py::test_backlog_batches_drain_and_restart_preserves_completed_sources` T1/G1 | D1/R1 PASS current source after ordinary CD/restart, preserved private/gen/samples; crashes/faults T1, no audit restart |
+| AC-11-01 Digest aggregation | IN_PROGRESS | `digest.py`: counts/strongest/ongoing implemented; active_instruments only count, no most-active list; `test_digest.py::test_shared_history_fixed_boundary_and_independent_preferences` T1/G1 | T2 FAIL/F47: BUSYUSDT20/25events отсутствует,5 stronger singletons вместо activity ranking; R2 digestOFF, audit send N/A |
+| AC-11-02 Digest schedule/toggles | READY | `digest.py`: fixed interval identity/latest-only restart/frozen retry/preference race; `test_digest.py::test_restart_latest_only_and_interval_change_no_historical_flood` T1/G1 | R2 N/A delivery intentionallyOFF; controlled scheduler/retry/toggle cases T1; content gap отдельно11-01 |
+| AC-11-03 Безопасный derivatives enrichment | READY | `enrichment.py`: exact asset mapping/OI/funding/basis; stale/missing/ambiguous isolation; `test_enrichment.py::test_mapping_exact_identity_missing_duplicate_and_scaled_alias` T1/G1 | R2 N/A featureOFF по owner preference; T1 mapping/metric failures PASS, live source acceptance не заявлена |
+| AC-11-04 Provenance enrichment | READY | `enrichment.py`: units/source/time/skew1m/5m/frozen enrichment, independent Perpetual events; `test_enrichment_runtime.py::test_export_contains_frozen_enrichment_method_and_no_future_replacement` T1/G1 | R2 N/A optionalOFF; both-market core works; exact units/causal/freshness T1 |
+| AC-12-01 Docker/VPS runtime | READY | `bot.py`: Docker/Python3.11/volume, non-root/read-only root/health/RuntimeLease; `test_market_reset_delivery.py::test_disk_backup_keeps_source_and_destination_checks_hashes_and_memory_cap` T1/G1 | D1/R1 PASS source/image25ee4ca2/healthy/nonroot10001; app hard RAM/CPU0 не выдается за cap4GiB |
+| AC-12-02 GitHub Actions delivery | READY | `scripts/deploy_receiver.py`: PR strict ci-required→identified main artifact→restricted target receiver/normal CD; `test_receiver_update.py::test_unknown_receiver_or_failed_gate_prevents_update` T1/G1 | D1/G1 PASS CI38999539232/release38999831287 production210s/full backup52.526s; audit docs release code=false required |
+| AC-12-03 Domain boundaries и diagnostics | READY | `diagnostics.py`: source/domain/store/analytics/delivery modules; bounded state and PENDING on query budget; `test_async_runtime.py::test_readonly_worker_rejects_writes_and_diagnostics_do_not_fake_zero` T1/G1 | R1 PASS independent WS/worker/consumer state; F22 measured further tuning DEFER; no sustained load/SLO claim |
+| AC-12-04 Secrets и проверяемые изменения | READY | `logging_utils.py`: SecretFilter + minimized config/exports/exception redaction + hash locks/checks; `test_logging.py::test_third_party_message_and_exception_redacted` T1/G1 | T1/G1 PASS leakage negatives; D2 installer advisory inventory has7 unique matches/F26, exploitability not established; base OS not scanned |
+| AC-13-01 Общие данные без полных дублей | READY | `market_storage.py`: shared candles/revisions/settings/context + compact heads/quality numeric blocks; `test_bounded_storage.py::test_normalized_overlapping_windows_replay_and_restart_keep_exact_analytics` T1/G1 | R1 PASS finite repack COMPLETE and private/public samples; real per-event/page cost distinct from forecast |
+| AC-13-02 Автоматическая bounded retention | READY | `storage_lifecycle.py`: bounded batches/transactions, aggregate-before-delete/exact refs/finite pending holds; `test_capacity.py::test_controlled_62week_population_plateaus_and_all_numeric_results_survive` T1/G1 | R2 PASS retention worker2347runs; actual expired counts0 в epoch<30d; T1 full controlled62week/GC доказательство lifecycle, не real annual workload |
+| AC-13-03 Качество detectors 12 месяцев | IN_PROGRESS | `quality_summary.py`: 12 calendar months/frozen numeric methods/settings/comparators preserved; partial-day read defect; `test_bounded_storage.py::test_retention_keeps_exact_cohorts_and_method_settings_after_detail_expiry` T1/G1 | T1 whole-period equality/calendar PASS; T2/F48 FAIL intraday selection after expiry; actual market_quality0 expected before30d |
+| AC-13-04 Укрупненный context | READY | `storage_lifecycle.py`: coarse context conditional90/selected Spot180d; native small-TF35d; `test_bounded_storage.py::test_summary_expiry_is_twelve_calendar_months_and_context_inputs_are_leased` T1/G1 | N/A production coarse30m/1h context не используется; inventory + conditional retention fixtures T1 PASS, new feed не требуется |
+| AC-13-05 Конечные служебные зависимости | READY | `storage_lifecycle.py`: finite jobs/receipts/leases/recovery owner-first retirement/re-arm + durable retries; `test_capacity.py::test_ownerless_recovery_skips_source_scan_and_terminal_receipt_can_rearm` T1/G1 | R1/R2 PASS old backlog0/repackCOMPLETE/current8jobs progressing, workerOK; fault/restart/expiry T1; F37/F44 CLOSED |
+| AC-13-06 Контроль 20 GB | IN_PROGRESS | `capacity.py`: counters/physical pages/index boundary/queue occupancy/models + finite stable observer; `test_capacity.py::test_forecast_attribution_does_not_add_indexes_twice_and_sampling_is_finite` T1/G1 | R2/R3 PARTIAL: working2.803GB;24h PENDING/5queue interruptions, prospective PARTIAL_BUDGET; point162.8GB/synthetic100.9–164.8GB не steady fit; F34/F42 |
+| AC-13-07 Разовый reset | READY | `reset_history.py`: exact-target once-only private-preserving reset/generation/no replay guards; `test_market_reset_delivery.py::test_reset_promotion_and_exact_old_working_file_cleanup_preserve_settings_and_existing_backups` T1/G1 | E0/D1/R2 PASS existing generation78ed847e…/private/env same; reset consumed16Oct, never repeated during audit |
 
 ## Evidence и baseline
 
-- **EVID-01/reset:** PR37 merged6ba915e3135db5cdd2fbf482fcbb6dbd92f02954, CI38889583594(719 tests/image), CD38890043475 PASS10:54:43–10:57:42UTC179s. Exact-target permit применен однократно. Private source/fresh/recovery/post-start SHA256 `1bcf2bbad2880bb2b03d6e3975cdb75574f76a0007943d9fb2e6b220079543df`, config revision3. EnvSHA `96cc5d7016e395ce63e3c263ce528186c2dcd5117746c5ba8fdb7828aede297a` сохранен. Удалены только прежние3 working DB/WAL/SHM files. Другие backups/experiments/проекты не очищались.
-- **Новая history generation:** `78ed847e25554612bdfa34b29362787d`, начало2026-10-16T10:56:23.914Z. Candidate188416bytes; initial working11859800bytes. Seed/bootstrap только calculation window; prior details unavailable, insufficient comparator history явно отмечена. Старую history не восстанавливать из retention cursors/backfill как новые alerts.
-- **EVID-02/CI:** PR38 main5376911, CI38892270186(727 tests); PR39 main130225d2, CI38897051479 **731 tests PASS** Linux3.11 + native artifacts + image checks. F35 isolated mixed-method/revision/comparator/split-expiry fixtures PASS; Windows targeted125 PASS/1native skip, затем34 bounded tests PASS с legacy-method regression. Image200events/800complete outcomes/оба markets/5families/4TF: analytics equality PASS, working4521984bytes (22609.92/event с sources/services/indexes), indexes1445888bytes, quality316400encodedbytes (1582/event). Это synthetic mix, sparse cohorts и один outcome-method, не production rate/годовой размер.
-- **EVID-03/routine delivery:** PR38 CD38892625097 PASS production133s; PR39 CD38897380425 PASS12:01:35–12:04:36UTC181s. PR39 full source integrity DISK/schema2, full disk backup195670016bytes/6.021s/SHA `10526013be85ec0be99396df22ea9f58b380d586055374b49e98ec83256d93bc`. Нет delivery_policy/reset exception. Primary record `/opt/crypto_watcher/releases/130225d2f641b4d9d8c616aa791ef6919afd9c31-4391145a462bf16a/deployment.json`; adjacent bounded-storage-postchecks.json и bounded-storage-warm-postchecks.json. Running image `sha256:26b64aeea1712f7e88e2356bc522423221ea01269db756622ac5bbbf5d87d767`/source130225d2 healthy, private/env hashes прежние.
-- **EVID-04/runtime:** bounded readback16Oct12:11:28UTC:1248 active streams, bootstrap/gap/recovery0, оба markets/4TF; poll1245/1248 DEGRADED по3 insufficient_history_or_zero_baseline (не missing feed). Sample2000outcome heads truncated:1952 COMPLETE по5/15/30/60min,48INCOMPLETE, не полный census. TelegramDELIVERED, analyticsOK, sampling/retention timestamps свежие. Working247078264bytes/index78925824; net3.247MB/min over4493s включает bootstrap/restarts/outcome mix. Annual/retention model462.15GB — EXTRAPOLATION, не steady-state доказательство и не гарантия верхнего предела; largest logical model quality/details/service indexes. Forecast>20GB явно предупреждает. Density compression/terminal turnover/retention и page-factor могут менять модель; scope/сроки не уменьшались.
-- **External files отдельно:**12:05UTC metadata inventory COMPLETE: backups1.069GB, experiments14.471GB logical/11.372GB unique allocated, release artifacts1.653GB, reset-private/staging109713bytes. Файлы не удалялись.12:13:50UTC one-point app115MiB/82.75% CPU, host free44.215GB/NTPyes. Не является load/SLO доказательством. App UID10001/read-only root, hard CPU/RAM limits0; maintenance CPU1/RAM4GiB не увеличены.
-- **EVID-05/consumer:** Consumer PR949 merged8c207edf6fc21e050bdca937e8f3bca49380a2ee; required PR CI38898629578 и push CI38899151685 PASS (включая v2 contract/PostgreSQL concurrency). Normal API CD38899376113 PASS12:16:32–12:22:28UTC356s, migration already_at_target_head/source fingerprint matched/DEPLOY_OK. Actual image sha256:d4e16629d6bf44efa9837eb70e0a5dda1b6a0f43f88e884e91d29a8ee089a8a2; readonly parser12:23:54UTC40 producer payloads PASS/40 execution-authority rejects, readyz200; CW/Postgres container IDs unchanged, ни одно event не отправлено. Ранее receiver v2 PR935/936/CI/CD11Oct PASS, current schema checked actual parser16Oct; producer v2 default settings с новыми TTLs потребовал F36. Consumer activation остается owner-deferred; actual ingest OFF/binding false/max-ageUNSET подтверждены16Oct12:13:50UTC. Zero Trust не добавлялся; прежний urllib403/CF1010 не означает Access requirement, HTTPx доходил до503 ingest_disabled.
-- **EVID-06/dependencies/codebase:** 44 app Python modules,41 test modules,241 tracked files/112 vendor files на audit inventory; после добавления fixtures количество test cases731. One entrypoint wrapper, one deployable, native/build scripts, config/hash locks. Source/vendor pins yyjson0.12.0/SQLite3.53.4/Zstd1.5.7 проверяются build. Actual CPython3.11.17/SQLite3.46.1 inventory21 distributions/OSV query16Oct: runtime app deps matches0; pip24.0 шесть advisories (GHSA-4xh5-x5gv-qwph/58qw-9mgm-455v/6vgw-5pg2-w6jp/jp4c-xjxw-mgf9/qwm4-qh6w-59xr/wf93-45jw-7689), setuptools79.0.1 GHSA-h35f-9h28-mq5c. F26 reachability/disposition ниже, отсутствие matching advisory не доказывает отсутствие всех vulnerabilities.
+- **S1/source:**17Oct2026 полностью прочитан текущий S01, native revision/spec совпали с metadata; later explicit decisions S05–S08 действуют в своих областях. Оценка code/main — affdd7bc; draft PR57/5be499d исследован отдельно. Свежий origin/main/local main идентичны перед audit branch; audit base SHA фиксирован, worktree tracked clean, другие ветки/материалы сохранены.
+- **G1/primary CI:** PR56 required CI38999539232 PASS на e6890b648d1c1185d7df3088ed116883af9db492; head и merge имеют exact tree876d423d4ae1e9691afb8bbacf8a54ea951c7001. Trusted release38999831287 на actual mainaffdd7bc повторно выполнил full Linux3.11/native/image/package checks: build03:42:59–03:47:06UTC PASS, production03:47:08–03:50:38UTC PASS. Native/Windows differences учтены; это не live validation каждого сценария. Main strict ci-required/enforce_admins/0required human approvals/force-push/delete forbidden подтверждены17Oct; author permissionsADMIN. Remaining included Actions minutes UNSET; speculative monitoring/reruns не запускались.
+- **T1/local regression:**17Oct2026, Windows/Python3.12, unchanged main runtime code affdd7bc,34 targeted module suites: **574passed/3skipped/74.65s**. Skips: native converter qualification required Linux; Linux procfs handles; Windows hardlinks unavailable. Все три platform paths покрыты target Linux/native G1; locally не выдаются за выполненные. AST inventory46test modules/441test functions (parametrization увеличивает число cases). Старую canceled conversion целиком локально не прогоняли: полный trusted Linux run G1 сохранен. Controlled62week population covers2markets/5families/4TF, restart/rolling detail+source+12calendar-month expiry, exact numeric/group/settings/method/comparator equality, terminal/hold/GC; final all-expired empty. Отдельный richer20comparator fixture проверяет boundaries/версии. Это synthetic lifecycle, не реальная annual cohort density/capacity.
+- **T2/new repros:** affdd7bc, isolated bounded schema2/local Python3.12. F47:25events/6instruments, BUSY20 отсутствует в digest, strongest5singletons не activity list. F48: один intraday interval до expiry CSV5, послеCSV0, unfiltered5, NDJSON20qualityblocks/5completefacts; numeric facts не потеряны, форматы используют разные day bounds, CSV не показывает actual coverage. Existing green suite этих краев не обнаружила. Raw inputs/results в private operator directory, не tracked report; production не затронута.
+- **R1/runtime:** bounded readback17Oct05:56:10.799UTC, sourceaffdd7bc, image`sha256:25ee4ca2d8726f138db4c8267cb2f659a8400d0bd8b8424afa8e72654b2738ff`, container`f201271f42fca9d0747972c5f95eb97c88d9fe294fea268350961094e3d19fac`, StartedAt2026-10-17T03:50:08.854973158Z/healthy/Python3.11.17. Both markets metadata377spot/519linear;4TF,1104active streams.12shards fullACK/CONNECTED:336spot topics/772linear; topics и active-stream counts могут различаться при динамической reconcile, не fixed universe limit. Bootstrap/blocked/live recovery/historical gaps0. Analytics/recovery/repackOK; natural TelegramDELIVERED05:55:29UTC, audit messages не отправлялись. Working2795715880bytes=DB2421018624(includes indexes)+WAL373943592+SHM753664; это snapshot, не daily slope.
+- **R2/detail/retention/storage:**17Oct06:02:53.434UTC, bounded32events older65min (ordered sample, не random census):18linear/14spot,18×1m/14×3m, breakout16/turnover9/volatility6/composite1; все32source_window links.128/128 four-horizon outcome headsCOMPLETE;31CLOSED/1SUPPRESSED episode. Отсутствие price/5m/15m в малой выборке не означает их отсутствия в runtime; broader prospective baseline содержит5families/2markets/4TF. Owner/privatechat233382575/bot7523865123, config3, broad top mode,watchlist0,custom profile,horizons5/15/30/60,detail30/candle35. AlertsON/notification preferencecomposite, остальные families продолжают history; digestOFF/enrichmentOFF/agentUNSET+OFF. RetentionworkerOK/2347runs,expired/removals0 из-за молодого epoch<30d,last transaction0.005229s; future real expiry не наблюдалась. Existing sample26: working2802674984bytes, pointmodel162803377956bytes. Model scenarios100.887–164.816GB измерены на isolated layouts и экстраполированы на short mix; это не доверительный интервал/upper bound/steady24h forecast. Старый routine index cache STALE явно, measured boundary indexes отдельно R3; indexes внутри DB повторно не прибавлять.
+- **R3/observer:** source/config/generation/StartedAt/PID1586329/указанные baseline+script hashes неизменны; OBSERVING,26samples,failed0,5current-queue interruptions на06:02UTC. Baseline working2466743600bytes=DB2181713920(includes measured indexes578547712)+WAL284996912+SHM32768. Baseline full runtime ledger2259582records MEASURED; prospective114956event revisions/37736cohort-days/density12.1853 **PARTIAL_BUDGET**. Полная cohort cardinality/суточные deltas/filled-production quality неизвестны; final/result PENDING. Два clean baseline samples не доказывают все дальнейшие интервалы чистыми.
+- **D1/delivery/recovery:** primary `/opt/crypto_watcher/releases/affdd7bc71e1c8eb362bcf08f0e898b52095d9cd-9fb410a33e68ea9e/deployment.json` PASS/COMPLETE; source/image/health/persistence/marketPASS. Production210s<=900s. Full disk-streaming source/backup2154164224bytes/copy15.908s/integrity36.618s/total52.526s/SHA`413e35e48829e08713ddc91a5c93f3febd08ee74806bdbf4ae7c57309629b734`. Private SHA`1bcf2bbad2880bb2b03d6e3975cdb75574f76a0007943d9fb2e6b220079543df`, envSHA`96cc5d7016e395ce63e3c263ce528186c2dcd5117746c5ba8fdb7828aede297a`, config3/history generation сохранены;64fixed immutable public samples совпали (не full-database proof). Только application health без artifact identity не считался бы достаточным. App hard RAM/CPU0; isolated maintenance4GiB/CPU1 и observer256MiB/CPU10% не менялись.
+- **D2/dependencies:**17Oct read-only inventory actual21Python distributions + runtime/dev hash locks,37unique(name,version) OSV queries,7unique advisory matches after aliases: pip24.0 GHSA-4xh5-x5gv-qwph/58qw-9mgm-455v/6vgw-5pg2-w6jp/jp4c-xjxw-mgf9/qwm4-qh6w-59xr/wf93-45jw-7689; setuptools79.0.1 GHSA-h35f-9h28-mq5c. App/dev lock packages matches0; current app не устанавливает input-dependent packages, Linux build uses hashes. Advisory reachability/exploit не доказаны, planned installer upgrade F26; base OS/native exhaustive scan не выполнялся. Native/vendor source pins/build checks G1, наличие vendor/retained historical CLI не значит мусор.
+- **E0/historical relevant records:** one-time reset PR37/main6ba915e3135db5cdd2fbf482fcbb6dbd92f02954,CI38889583594/CD38890043475 PASS179s, generation`78ed847e25554612bdfa34b29362787d`start2026-10-16T10:56:23.914Z, prior test details deliberatelyDISCARDED. Useful owner settings/watchlist/thresholds/mutes/notification prefs/credentials/infra preserved; old DB files were exact-target scope, other backups/experiments excluded. F35 mixed-method fix PR39/main130225d2,CI38897051479/CD38897380425 PASS181s. Docs consolidation PR41/main2e242abf/CI38901694618+post38901939152 docs-only. Earlier maintenance failed CD46/48/50 remain failures in primary records; later49/51/55/56 supplied corrective PASS, не переписаны как успешные.
+- **H1/handoff:** canonical [agent-delivery](runbooks/agent-delivery.md) contract/example/TA-CW checklist. Prior producer fixture7716bytes/SHA`2a65a5d0de157deb6039c0dfb9c4551ded95f89d00135604d36a483c88bc6bbf`, no credentials, v2 full settings/freshness/units/history semantics. T1 current signed producer/replay/causal tests PASS. Historical consumer PR949/main8c207edf6fc21e050bdca937e8f3bca49380a2ee,CI38898629578/38899151685/CD38899376113 PASS; read-only actual parser40/40producer payloads и40/40execution-authority rejects16Oct. Это ограничено той revision; current live signed acceptance не выполнялась, credentials/binding не создавались. Cloudflare Access не является заявленным prerequisite.
 
-### EVID-07 — S06 handoff readiness
-
-- Source/base2e242abf; producer five positive HMAC/restart/expiry/isolation/projection
-  scenarios PASS,14 invalid-config/ack/header-isolation cases PASS. Все controlled,
-  без production requests/credentials. Новые runtime tests/code не добавлялись.
-- Example7716bytes/SHA256 `2a65a5d0de157deb6039c0dfb9c4551ded95f89d00135604d36a483c88bc6bbf`,
-  exact output текущего40-envelope producer fixture; canonical settings hash и
-  false authority проверены; secret/config credential fields отсутствуют.
-  Contract/example/ownership/checklist источники связаны относительными ссылками.
-- Readonly CW smoke16Oct2026T14:42:55UTC (17:42:55МСК): source130225d2/image26b64aee…,
-  healthy/config revision3/same history generation/alertsON/custom/composite preference.
- 1248streams/4TF/оба рынка, bootstrap/recovery/blocked0; poll1245/1248 с3 явно
- insufficient-history/zero-baseline. AnalyticsOK, TelegramDELIVERED; sample200outcome
- heads truncated:197COMPLETE/3INCOMPLETE. AgentUNSET/OFF не мешает manual работе.
- Ни сообщения, ни config/DB writes, ни обращения к consumer не выполнялись.
-- Working625864056bytes (DB605556736/WAL20274552/SHM32768), net2.748MB/min over13580s;
-  forecast425.12GB — model extrapolation,20GB fit не доказан. Автоматические sampler/
-  retention timestamps свежие. Это ограниченный smoke, не новое длительное наблюдение
-  и не пересчет аудиторских процентов.
+Backups/experiments/release artifacts — отдельный inventory, не часть20GB working target. Последний полный external snapshot16Oct12:05UTC:backups1.069GB,experiments14.471GB logical/11.372GB unique allocated,release1.653GB; **не текущий объем17Oct**. Аудит ничего не удалял и не делал новый дорогой обход. Preserved private ignored materials/foreign branches не называются ненужными.
 
 ## Полный реестр findings
 
-Исходные проблемы F01…33 относятся к audit8ace3638 и сохранены для трассировки; Evidence ниже заменяет устаревшие «IN_BRANCH/PENDING». Confidence HIGH — код/fixtures/primary records; MEDIUM — неподтвержденные orphan/hardening/UX candidates. DEFER/DOCUMENT не означает исправление или новое требование. Detailed historical logs/snapshots остаются вне tracked документов.
+Все F01–F45 сохранены; F46 из отдельного draft учтен без включения в готовность main; F47/F48 новые. CLOSED означает устранение исходной проблемы на указанном scope, а не отсутствие будущих дефектов подсистемы. Исторические номера строк legacy findings относятся к8ace3638, текущие пути/test evidence приведены в65-строчной матрице. Finding не создает новое requirement или разрешение исправлять его.
 
-| ID | Проблема / область / исходный объект | Влияние / priority | Действие / обоснование / зависимости | Evidence | Confidence / disposition |
+| ID / область | Проблема / объект / AC | Влияние / priority | Действие / обоснование / зависимости | Evidence | Confidence / disposition |
 | --- | --- | --- | --- | --- | --- |
 | F01 DOC/SPEC | S01 полностью меняет прежний Spot MVP; отсутствовали AC и трассировка; product_scope.md / все эпики | P1 | CONSOLIDATE: Scope источника, без новых features. | S01/S05 полностью сверены; D22/E13,65 stable AC; PR19 и PR37/39. | HIGH / CLOSED |
 | F02 DOC | Legacy schema1/storage/recovery формулировки противоречили current schema2; README/state_contract/architecture/agent-delivery | P2: риск выбора неверного backup/rollback path | CONSOLIDATE: current contract поднят перед legacy, logical v1 отделен от physical2, routine disk backup имеет один canonical runbook; useful historical anchors/tooling сохранены | G1/PR37 адаптация + PR41/main2e242abf. Сверка Store/Sources/History/receiver dispatch, relative links и local docs PASS; CI38901694618 PASS, merged41, postmerge38901939152 docs-only PASS | HIGH / CLOSED |
@@ -343,134 +187,73 @@ Canonical команды — [README](../README.md#checks); из root repository
 | F12 DETECTORS | Реализован только legacy composite; код 918–961; AC-04-02/03 | P1 | IMPLEMENT: Composite развивается как одно семейство. | Five pure versioned detector families/effective parameters; fixtures boundaries/negative/neutral/zero/gaps и live event sample обоих markets/TF. | HIGH / CLOSED |
 | F13 EPISODES | Cooldown без event identity не заменяет episodes; код 2090–2105; AC-05-01..03 | P1 | IMPLEMENT: Episode aggregation не удаляет source events. | EventEngine episode/re-arm/maxlife/strength/coalescing/restart fixtures, durable source revisions. | HIGH / CLOSED |
 | F14 DELIVERY | Failed Telegram send расходует cooldown без retry; код 2101–2120; AC-07-01/05 | P1 | FIX: Failed send не расходует successful notification state. | TelegramDelivery durable retries/retry_after/ambiguous ACK/permanent target и success-baseline fixtures; runtime DELIVERED. | HIGH / CLOSED |
-| F15 ANALYTICS | Нет event history, outcome worker, analytics/export; state 331–450, весь tracked inventory; E06 | P1 | IMPLEMENT: История ограничена D22; после detail expiry явно только summaries. | G3 outcomes/cohorts/export/digest + PR37 retention + PR39 F35; original reference/method/revisions preserved, controlled-time equality PASS. | HIGH / CLOSED |
+| F15 ANALYTICS | Исторически отсутствовали history/outcome/analytics/export; E06 | P1 | IMPLEMENT: подсистемы поставлены; обнаруженный archived-period defect выделен F48, не закрывать весь06-06 прежним PASS | G3 + bounded format/PR39/F35; T1 numeric/cohort/causal/full-period equality; R2 sampled128COMPLETE | HIGH / исходная подсистема CLOSED; F48 OPEN |
 | F16 OWNER SETTINGS | Market domain зависит от chat; profiles/manual settings не реализованы; код 302–399, 1084–1133, 1759–1795; E08/AC-02-04 | P1 | IMPLEMENT: CAS/no-op/invalid settings tests и hash readback PASS. | Owner revision3 private preservation; profiles/manual/typed watchlist/enrichment/horizons/retention отдельно от delivery preferences/secrets. | HIGH / CLOSED |
-| F17 INTEGRATION | Исторически отсутствовали advisory contract/delivery; E09 | P1 | IMPLEMENT/DOCUMENT: producer готов и передается через handoff; activation принадлежит принимающему проекту по S06/D23 | Producer v2/HMAC/outbox/retry/replay/diagnostics fixtures PASS; receiver snapshots/CI/CD в EVID-05; contract/example/TA-CW-01…06 handoff в текущей branch. Credential/binding не создавались | HIGH / PRODUCER_READY_HANDOFF; external activation transferred |
-| F18 DIGEST | Нет periodic digest и независимых delivery toggles; код 2171 и handlers; AC-11-01/02/07-05 | P2 | IMPLEMENT: Default digest OFF не является дефектом. | Digest fixed-period identity/latest-only restart/frozen bytes/retry/preferences race; tests_digest PASS, alerts независимы. | HIGH / CLOSED |
+| F17 INTEGRATION | Исторически отсутствовал producer/handoff; E09 | P1 | IMPLEMENT/DOCUMENT: producer готов; live credentials/binding/activation receiving-project scope S06/D23 | T1/H1 controlled HMAC/ack/expiry/restart/no-authority; R2 UNSET/OFF не мешает manual radar | HIGH / PRODUCER_READY_HANDOFF; activation transferred |
+| F18 DIGEST | Исторически нет digest и независимых toggles; AC-11-01/02 | P2 | IMPLEMENT: scheduler/toggles/retries поставлены; содержимое не полностью соответствует source, F47 | test_digest four scheduler/retry/race cases PASS; T2 active-coin ranking отсутствует | HIGH / schedule CLOSED; aggregation remainder F47 OPEN |
 | F19 ENRICHMENT | Нет derivatives context для Spot; весь fetch layer; AC-11-03/04 | P2 | IMPLEMENT: Optional feature может быть OFF; new market source не добавлен. | G5 exact asset mapping/OI/funding/basis/source timestamps/cadence/fault isolation; CI/CD27 PASS, current suite includes enrichment regressions. | HIGH / CLOSED |
-| F20 OBSERVABILITY | Symbol errors/timeouts скрываются как отсутствующие данные; код 963–1023; AC-04-04/12-03 | P1 | FIX: 3 insufficient-history/zero-baseline streams показываются DEGRADED отдельно от missing feed. | Bounded readonly CLI/Telegram diagnostics, independent stream reporter, per-family/source/consumer errors, ingestion age and PENDING-on-budget; CI/actual readback PASS. | HIGH / CLOSED |
+| F20 OBSERVABILITY | Ошибки источника маскировались как no-signal; AC-04-04/12-03 | P1 | FIX: bounded independent source/worker/delivery state; query budget дает PENDING | T1 async/ingestion/detector fault tests; R1 allACK/zero source blockers, analytics/recovery/repackOK | HIGH / CLOSED |
 | F21 CONCURRENCY | Settings могут смениться во время fetch, old result доставляется как active; код 2068–2112, status_cmd; AC-07-04/08-02 | P1 | FIX: Нет silent применения старого результата к новой config. | Settings revision CAS/frozen notification and worker snapshots, old-result discard/send-time race fixtures PASS. | HIGH / CLOSED |
-| F22 ARCHITECTURE/PERFORMANCE | Monolith и per-chat REST fanout мешают расширению; telegram_crypto_watcher.py 2177 строк; AC-12-03 | P2 | REFACTOR: Основной monolith/fanout устранен; дальнейший measured tuning по representative workload без silent cuts. Рост/индексы F34 контролируются отдельно. | 44 Python modules, shared dataset, bounded SQL/worker batches, no network under DB locks. Реальный scope1248 streams; one-point115MiB/82.75% CPU16Oct12:13:50UTC не является steady-state capacity/load доказательством. | HIGH / DOCUMENT / DEFER |
+| F22 ARCHITECTURE/PERFORMANCE | Legacy monolith/per-chat fanout устранены; дальнейшие hot-path costs требуют измерения; AC-12-03 | P2 | REFACTOR/DOCUMENT/DEFER: сохранять shared data/короткие transactions; profile новых подтвержденных узких мест. Digest aggregation внутри writer transaction — кандидат без измеренного production impact | Module/source review, T1 yielding/CAS; R1 1104streams. F46 local benchmark отдельно, не actual production effect. Sustained load/SLO не измерялись | HIGH по former fix / MEDIUM по further tuning; DEFER |
 | F23 LEGACY | CMC/source/core/reset действия остаются достижимыми вне v1; код 536–874, 1583–1643, 1798–1881, 1967–2041, 2163–2168; AC-01-03 | P2 | DEPRECATE: Основание удаления UX — D01-D04, не отсутствие imports. | Активных CMC/reset network handlers нет; old callbacks объясняют изменение. Startup wrapper и legacy import compatibility сохранены. | HIGH / CLOSED |
 | F24 ORPHAN CANDIDATES | Невызванные legacy helpers/caches; внешние consumers неизвестны; код _fetch_async/_prepare_core_context/tracked_desc/price_unit/_mode_label/_rank_prefix/_sub_metrics/_directional_marker | P3 | DEFER: Новое удаление без необходимости не выполнено. Consolidate duplicate helper при затрагивании diagnostics; source-pinned tooling сохраняется. | Original private helpers отсутствуют в текущем wrapper/module inventory после G1. Historical converter/native helpers используются CLI/tests/retained archives, не dead. Controller.diagnostics старый дублирующий helper не вызывается production CLI; внешние users UNSET. | MEDIUM / DOCUMENT / DEFER |
-| F25 TEST GAP | Нет tracked воспроизводимой regression suite; EV01 tracked inventory; E01/E03/E08/E10/E12 | P1 | IMPLEMENT: Не заявлять line coverage как выполнение AC; consumer actual signed smoke отдельно B02. | 41 test modules; CI38897051479:731 tests PASS Linux3.11 плюс native/image measurement; regressions auth/migration/retention/restart/contracts. | HIGH / CLOSED |
-| F26 DEPENDENCIES | Нет lock/hash constraints; разрешены уязвимые requests releases; requirements.txt:2–3; Dockerfile:1,9 | P2 | FIX: Pip paths относятся установке artifacts, setuptools case macOS sdist; текущий Linux app не устанавливает packages по market input. Плановый build-tool upgrade отдельно; matched advisory не равен подтвержденной runtime exploitability. | Hash locks/base/native pins и actual21-distribution inventory проверены16Oct. OSV: app dependency matches0; pip24.0 шесть advisories, setuptools79.0.1 GHSA-h35f-9h28-mq5c. | HIGH / DOCUMENT / DEFER |
-| F27 CI/CD | CI/protections/build foundation и new-write CD подтверждены; ordinary full current-history gate ещё не qualified; AC-12-02 | P1 | FIX: Полные обычные gates восстановлены <=900s/CPU1/RAM4GiB; прежние failed records не переименованы. | PR37 reset CD38890043475 PASS179s; обычные PR38/39 CD38892625097/38897380425 PASS133/181s. Source integrity DISK/full backup/hash/health/source; без reset exception. | HIGH / CLOSED |
-| F28 OPS EVIDENCE | Target/config/source inventory и first migration/restore/runtime подтверждены; automatic CD ещё не завершён; AC-12-01/02/10-04 | P1 | DOCUMENT: Не повторять deploy/migration ради статуса. | Contabo target/unit/path/config ownership/hostkey/SSH/CD primary records известны; normal current source/image/private hash checked16Oct. | HIGH / CLOSED |
+| F25 TEST GAP | Изначально нет regression suite; E01/E03/E08/E10/E12 | P1 | IMPLEMENT: содержательные auth/data/restart/contracts/retention tests; отсутствие regression на новые края отражено F47/F48 | 46modules/441test functions на affdd7b; T1 574PASS/3platform skips; G1 full Linux/native/image PASS | HIGH / suite CLOSED; новые содержательные gaps F47/F48 |
+| F26 DEPENDENCIES | Lock/hashes отсутствовали; current image сохраняет installer advisories; AC-12-04 | P2 | FIX/DOCUMENT/DEFER: locks/native pins есть; плановый pip/setuptools upgrade после проверки build. Advisory match не равен runtime exploitability | D2 17Oct:37 exact package-version OSV queries,7unique advisories:6pip24.0 и1setuptools79.0.1; app/dev lock matches0. Linux app не устанавливает packages по market input; OS packages не сканировались | HIGH match / MEDIUM reachability; DOCUMENT/DEFER upgrade |
+| F27 CI/CD | Исторически отсутствовали pipeline/gates и qualified ordinary backup; AC-12-02 | P1 | FIX: main protection/CI/artifact/ordinary full integrity+backup восстановлены, <=900s; failures сохраняются в primary records | G1/D1 exact main56 CI38999539232/release38999831287 PASS; production210s/full disk validation52.526s, no gate exception | HIGH / CLOSED |
+| F28 OPS EVIDENCE | Target/unit/config/version первоначально UNSET; AC-12-01/02/10-04 | P1 | DOCUMENT: actual source/image/target/host identity известны; deploy ради статуса не повторять | R1/D1 Contabo /opt/crypto_watcher, Compose crypto_watcher, image25ee4ca2…, sourceaffdd7b, healthy; owner config equality R2 | HIGH / CLOSED |
 | F29 CONFIG/UX | Env category/runtime knobs могут противоречить Spot UI и raw input; BYBIT_CATEGORY, settings_text/status_text/alert_keyboard, .env.example | P2 | CONSOLIDATE: Legacy selected market не ограничивает shared ingestion. | Typed spot/linear identity, Bybit URLs, current universe/TF/effective settings и env precedence fixtures; source config revision3 readback. | HIGH / CLOSED |
 | F30 BUILD HYGIENE | Docker context не исключает data/ и .git;  .dockerignore, Dockerfile | P3 | FIX: Data не передаются builder через широкий COPY. | Docker whitelist исключает .git/.env/data/cache; native source-only включен явно. CI build/image checks PASS. | MEDIUM / CLOSED |
-| F31 HARDENING | Docker runtime использует root default; resource/health policy UNSET; Dockerfile/Compose; AC-12-01 | P3 | DEFER: Новых runtime hard limits без измеренного основания не вводить; отсутствие limit само по себе не defect. | Actual app UID10001/read-only root/cap-drop/no-new-privileges/health PASS. CPU/RAM hard app limits0; single-point115MiB/82.75% CPU. Maintenance только CPU1/4GiB. | MEDIUM / DOCUMENT / DEFER |
+| F31 HARDENING | Legacy root default; resource policy candidate; AC-12-01 | P3 | DOCUMENT/DEFER: hard app CPU/RAM caps без requirement/измеренного основания не добавлять | R1 UID10001:10001/read-only root/cap-dropALL/no-new-privileges/health PASS; app limits0. Maintenance4GiB/CPU1 и observer256MiB/CPU10% прежние | MEDIUM / hardening implemented; further caps DEFER |
 | F32 UX CANDIDATE | Legacy polish/preset strategy без конкретного нового дефекта; прежний open_issues #6/#7; E07/E08 | P3 | DEFER: Неподтвержденный visual polish/подбор прибыльных thresholds вне текущих обязательств; по owner feedback. | Five-family terms/explanations/profiles/history→outcomes/comparison views и no-auto-calibration fixtures PASS. | MEDIUM / DOCUMENT / DEFER |
 | F33 G1 REGRESSION | `/sample_alert` потерял baseline Bybit/mute/coin controls и не учитывает active TF; cryptowatcher/bot.py/render.py; G1 preservation / AC-07-03 | P2: неверный sample и потеря manual controls | FIX: Ограничение: owner assertion не заменяет все browser scenarios. | PR22/CD38087285142 + owner screenshot/«вроде работает»; current sample/menu/no-op tests PASS. | HIGH / CLOSED |
-| F34 HISTORY CAPACITY | Full heads/shared overlapping windows и indefinite service/source references увеличивают БД; AC-06/10/12 и13-01…07 | P1: disk/write amplification,20GB target не доказан | REFACTOR: Reset37 выполнен. GROW реализует typed records, shared quality dimensions/provenance, normalized expiry, durable repack и honest forecast; сроки/метрики/охват сохраняются. Старую conversion не возобновлять. | Compact shared candles/settings/context, bounded services/30d details/35d candles/12mo quality, reset37 и normal CD38/39. Working247078264bytes/index78925824,3.247MB/min over4493s. Model462.15GB предупреждает;20GB fit не доказан. | HIGH / GROW IN_PROGRESS; target fit UNPROVEN |
+| F34 HISTORY CAPACITY | Payload/head/window/service duplication и20GB target; AC13/E06/E10 | P1 | REFACTOR: shared/typed records, exact numeric summaries, finite dependencies/repack внедрены. Текущая задача — подтвердить filled-window cost и причины/model, без нового reset/старой conversion | R1 actual repack COMPLETE; R2 working2.803GB. Current point162.8GB и isolated scenarios100.9–164.8GB — model, не steady day/upper bound; F42/F46 | HIGH / fixes delivered; capacity fit UNPROVEN |
 | F35 ANALYTICS COMPATIBILITY | AC-06-05/06-06/10-02/13-03; quality_summary.archive_event выбирал global method/latest event revision | P1 | FIX: все methods/comparator versions, frozen revisions и metadata-only expiry reader | Repros before expiry методы1/2→после только1 и strength1→101. PR39/main130225d2, CI38897051479 731 PASS/image equality; normal CD38897380425 PASS. Source/candidate quality0 еще не достиг30d; переписывать summaries не требовалось | HIGH / CLOSED |
 | F36 CONSUMER COMPATIBILITY | AC-09-01/09-02; actual consumer PublicSettings отвергает новые retention metadata | P1 | FIX: backward-compatible optional positive ints, полный snapshot/hash без fabricated defaults; unknown/secret fields остаются forbidden | Actual cacdfda parser40 fixtures FAIL только detail_retention_days/candle_retention_days. Consumer PR949 merged8c207edf; CI38898629578/38899151685 и CD38899376113 PASS. Actual parser40/40 payloads и40/40 authority rejects, snapshot/hash preservation/legacy/invalid metadata fixtures PASS; no events sent | HIGH / CLOSED |
+| F37 RECOVERY QUEUE | Локально заполненные/ownerless ranges оставались PENDING; AC-03-04/13-05 | P1 | FIX: local completeness/reuse, owner-first terminal retirement/re-arm, fairness и bounded duty | T1 analytics_recovery/capacity/maintenance; G1/D1 main56. R1 historical backlog0; R2 current8jobs с fresh worker, их наличие не новый старый backlog | HIGH / CLOSED |
+| F38 FORECAST | Gross queue turnover умножался на30d и общий page-factor на годовые facts; AC-13-06 | P1 | FIX: separate lifetimes/queue occupancy/retained slope и explicit measured isolated scenarios; текущая корректность steady forecast остается F42 | T1 forecast/no-double-index/count tests; R2 negative pending net не умножается как retained detail, synthetic models помечены; G1/D1 поставлено | HIGH / mechanism CLOSED; capacity evidence F42 OPEN |
+| F39 RESTART RECOVERY | Cold windows/starved first market/TF buckets; AC-03-01 | P1 | FIX: local restore/yield/seed fairness/affected gaps; прежние deadlines/budgets | G1/D1 PR56 normalCD PASS210s; R1 both markets/4TF,1104streams, all12shardsACK; old failed CD46/48/50 retained | HIGH / CLOSED |
+| F40 SUBSCRIPTION BACKLOG | Oversized linear shard и continuously-ready receive обходили ACK deadline; AC-03-01/02 | P1 | FIX: <=100topics/shard и independent strict15s ACK before candle handling | T1 continuous update timeout/fake WS/allACK tests; R1 Spot336/linear772topics в12shards/allCONNECTED; no coverage cuts | HIGH / CLOSED |
+| F41 DECISION DUPLICATE | Decision head/revision дублировали полный payload; AC-13-01 | P2 | FIX: compact checked pointer/durable finite repack, no public value changes | T1 pointer/corruption/rollback/restart tests; R1 decisions pass COMPLETE,60352heads compacted; public64fixed hashes/private preservation D1 | HIGH / CLOSED |
+| F42 CAPACITY EVIDENCE | Полная real cohort cardinality/24h deltas/filled-window estimate не подтверждены; AC-13-06 | P1 | IMPLEMENT: дождаться существующего finite observer без ожидания агента; учесть partial boundary и interruption flags. F46 подготовлен отдельно, до resume/конца замера не deploy | R3 baseline runtime ledger2259582rows MEASURED, prospective114956event revisions/37736cohort-days PARTIAL_BUDGET. R2 sample26/5queue interruptions; final/result PENDING | HIGH / IN_PROGRESS; target UNPROVEN |
+| F43 RETENTION PROOF | Малый fixture не покрывал rolling population/реальные20comparator arrays/methods; AC-13-02/03/05 | P1 | IMPLEMENT: controlled62week plateau/rolling cleanup/GC/restart + richer comparator/method boundaries | T1/G1 main56 exact numeric/group/method/settings/comparator multiset preserved; fully expired GC empty. Synthetic mix, не annual production capacity. Period query gap отдельно F48 | HIGH / lifecycle proof CLOSED; F48 separate |
+| F44 RECOVERY TERMINAL REUSE | Ownerless source scan и terminal receipt мешали новым valid owners; AC-13-05 | P1 | FIX: owner-first retirement/no source mutation и terminal re-arm при valid retained owner | T1 ownerless scan forbidden/arrived-data/noREST/re-arm tests; G1/D1 main56/current worker R1/R2 | HIGH / CLOSED |
+| F45 MAINTENANCE THROUGHPUT | Backfill/repack starvation/transient current queue мешали baseline; E06/E13 | P1 | FIX: independent duty/fair scheduling/finite physical boundary; bounded prebaseline settling, interruptions OBSERVING не скрывать | R1 repackCOMPLETE/historical backlog0. PR56 CI/CD PASS; R3 actual baseline17Oct07:02:41MSK/observerOBSERVING. Суточный вывод отдельно F42 | HIGH / CLOSED; observation in progress |
+| F46 DECODE OVERHEAD | Validated typed records проходили decode→JSON→parse; varint byte slicing; diagnostics/F42 | P2 | REFACTOR: prepared direct validated object reader/byte indexing без смены format/writer/checks; delivery только после наблюдения и resume paused Goal | PR57 draft5be499d, CI39006876324 PASS; local12005events/156133rows median1.832→1.364s (-25.5%), exact result SHA; actual production effect UNSET | HIGH / code in draft; not audited main; Goal PAUSED |
+| F47 DIGEST CONTENT | digest.aggregate/text не показывают наиболее активные instruments; AC-11-01/source S01 digest | P2 | FIX: отдельный activity список из общей history; strongest list/count не заменяет его. Ranking metric уточнить при реализации | T2 on affdd7b:25events/6instruments, BUSYUSDT20events отсутствует, top5 сильных singleton episodes вместо activity. Existing test_digest не проверяет этот край; live digestOFF | HIGH / OPEN; IN_PROGRESS AC-11-01 |
+| F48 ARCHIVED PERIOD FILTER | quality_summary.union_sql ceil(start/DAY), export.ndjson floor(start/DAY); CSV без effective bounds; AC-06-06/13-03 | P1 | FIX/CONSOLIDATE: единая явная UTC-day selection policy Q07 и consistent CSV/NDJSON/cohorts; не восстанавливать выдуманную intraday точность | T2 isolated before/after expiry intraday period: CSV5→0, unfiltered5, NDJSON20blocks/5completefacts. Numeric facts сохранены; production epoch еще<30d, runtime impact пока prospective | HIGH / OPEN; IN_PROGRESS AC-06-06/13-03 |
 
-| F37 RECOVERY QUEUE | Уже заполненные локально ranges остаются PENDING; analytics_recovery.work не перепроверяет наличие перед REST | P1 | FIX: local completeness/reuse и bounded retirement, сохранить реальные gaps/retries | Read-only16Oct18:48MSK:16/16 checked PENDING ranges complete, attempts0/age48–266min; bounded non-random sample | HIGH / IN_PROGRESS |
-| F38 FORECAST | Валовый оборот временных очередей умножается на30d; общий page factor применяется к годовым numeric facts | P1 | FIX: разные lifetimes/queue occupancy/retained slope и measured format model; не скрывать превышение | storage_meter.report и measured438.2GB; details alone30.1GB encoded30d при текущей частоте | HIGH / IN_PROGRESS |
-| F39 RESTART RECOVERY | Cold windows/recovery priority задерживали первые market/TF buckets; AC-03-01 | P1: wide-universe warmup/CD failure | FIX: local restore/yield, seed fairness и affected-gap repair; cached first-ready status | PR51–55 CI, final normalCD55 PASS278s; оба markets/4TF recovered,1120active streams/allACK/current queues0/source healthy03:19UTC. Old failed CD46/48/50 сохранены | HIGH / CLOSED |
-| F40 SUBSCRIPTION BACKLOG | Один linear shard788topics; continuously ready recv может продлевать ACK ожидание после deadline | P1: reconnect/blocked streams при широком universe | FIX: shards<=100topics без потери покрытия; strict15s ACK deadline | Bounded read-only17:23UTC25s: ACK200/788,buffer_overflows22; fake continuous-open stream воспроизводит обход deadline | HIGH / IN_PROGRESS; тот же hotfix |
-| F41 DECISION DUPLICATE | Актуальная decision и immutable revision полностью дублируются;104,860rows на52,430events | P2: лишний payload и writes | FIX: bounded checked pointer на latest immutable revision; отдельный durable repack cursor, public read/retry/restart/expiry unchanged | Exact ledger18:36UTC; sample128heads17,071→3,456bytes до реализации | HIGH / CODE READY; CI/CD PENDING |
-| F42 CAPACITY EVIDENCE | Нет полноценного per-namespace ledger/24h physical deltas; старая annual density синтетическая | P1:20GB не подтверждены | IMPLEMENT: explicit readonly ledger/cardinality/formulas и finite stable24h observation, не менять scope | Actual summaries0; prospective20,684cohort-days/211,000facts, median5; historical110.55GB/model, not daily measurement | HIGH / IN_PROGRESS; observation/result PENDING |
-| F43 RETENTION PROOF | Прежний малый fixture не доказывал rolling filled-window/restart и реальные20 comparator arrays вместе с methods | P1: lifecycle/capacity evidence gap | IMPLEMENT: controlled62week population plateau, exact facts/group equality и full GC; separate richer comparator/method boundary fixture | Local tests/rehearsal PASS; production annual mix unobserved | HIGH / CODE READY; CI PENDING |
-| F45 MAINTENANCE THROUGHPUT | Backfill/repack starvation и transient-queue sampling перед baseline; E06/E13 | P1: stable24h baseline задержан | FIX: independent jobs/guarded duty/finite snapshot/gap repair/admission55 поставлены; bounded retry только перед baseline при единственном current-queue blocker | PR48–55 CI, finalCD55 PASS; actual repack COMPLETE03:08UTC/historical backlog0, immutable/private preservation PASS. Observer repeatedly samples transient new jobs; final-image baseline PENDING | HIGH code/runtime; IN_PROGRESS |
-| F44 RECOVERY TERMINAL REUSE | Ownerless requests читают candles до owner check; terminal receipt блокирует новый valid owner до cleanup | P1: лишний scan/backlog и задержка repair | FIX: owner-first terminal retirement без source mutation; terminal job re-arm при valid retained owner; dedup/retry preserved |65/128pending без owner; regression re-arm/arrived data/noREST PASS | HIGH / CODE READY; CI/CD PENDING |
+## Документы, artifacts и консолидация
 
-## Документы, legacy и artifacts
+Canonical paths сохранены: README — purpose/commands/navigation; spec — требования/решения/AC; plan — статусы/работы/Evidence; state_contract — physical schema2 и legacy logical/import compatibility; bounded-storage-reset — текущая retention/one-time reset/routine disk backup. Смысл старых D12 raw90/indefinite details явно superseded D22. F02 current-schema consolidation выполнена PR41; дублирующий spec/plan/development-rules не создавался.
 
-Canonical README — назначение/commands/navigation; spec — requirements/decisions/AC; этот plan — statuses/findings/Goal/Evidence; state_contract — ownership/schema1 compatibility и schema2; bounded-storage-reset — current retention/reset/routine disk backup. Полезные historical converter/native CLI и source licenses сохраняются: их наличие не означает текущую обязанность конвертировать discarded history.
+В этом audit PR объединены stale MAINTENANCE/GROW/checkpoint секции плана в текущие primary facts и PAUSED COHORTS; canonical destination — этот план, references из README/spec остаются прежними. Исторический подробный ход PR хранится в Git/Actions, active obligations/findings/evidence сохранены здесь. Old converters/native/vendor лицензии/CLI сохраняются для существующих архивов/fixtures: отсутствие использования текущей Goal не доказывает dead code. F24 optional duplicate private helper cleanup — DOCUMENT/DEFER до external usage evidence. Новых других-doc fixes, moves/archive/delete в этом scope нет.
 
-F02 consolidation выполнена PR41: canonical paths и полезные historical anchors сохранены; schema2 contract перенесен в начало state_contract, architecture и agent runbook описывают actual normalized/disk flow. Destination — existing state_contract schema2 + bounded runbook; links README/architecture/agent-delivery проверены. Новый конкурирующий документ не создан. Исторические rules D12/raw90/indefinite details явно superseded D22. F24 private duplicate helpers — DOCUMENT/DEFER, удаления только из-за отсутствия imports не выполнялись. Local ignored `.cache-g1`, env/caches/pycache и прежние branches/worktrees учитываются отдельно от tracked source; статус ignored не означает ненужность.
+## Blockers и остаток
 
-## Blockers и следующий шаг
-
-| ID | Состояние | Необходимое действие |
+| ID | Фактическое состояние | Нужное действие / ответственность |
 | --- | --- | --- |
-| B01 | RESOLVED: first migration/reset и ordinary current source/backup/CD подтверждены | Не повторять reset/ручную передачу образа |
-| B02 | Передан принимающему проекту по S06/D23; не блокер manual radar/handoff. Live integration по последней проверке OFF/UNSET | TA-CW-01…06 в handoff: receiver credential/recovery/binding/max-age900s, coordinated producer config, signed acceptance; актуализировать внешнее Evidence при подключении |
-| B03 | RESOLVED: numeric policies/owner mapping/retention определены D09-D22 | Сохранять актуальные правила и settings equality |
-| B04 | RESOLVED: GitHub admin, strict ci-required/production Environment/DEPLOY_ENABLEDtrue, restricted SSH | Перед каждым merge reread head/protections; не обходить gates |
+| B01 | RESOLVED: first migration/reset/ordinary current backup/CD квалифицированы | Не повторять migration/reset/deploy ради восстановления статуса |
+| B02 | TRANSFERRED по S06/D23; current CW agentUNSET/OFF не blocker manual/handoff | Receiving project TA-CW-01…06: credentials/recovery/binding/max-age900s/receiver/live acceptance; coordinating producer config там |
+| B03 | RESOLVED: owner mapping/formulas/retention приняты D09–D25 | Thresholds/retention не менять скрытно; Q07 еще открытый essential behavior choice |
+| B04 | RESOLVED: admin/protection/Environment/restricted SSH доступны | Проверять latest revision/gates перед каждым permitted merge, без обхода |
+| B05 | F42: stable24h/полный prospective cohort boundary еще не завершены | Дождаться существующей finite observation; учесть5interrupted intervals/partial scan. Аудит их не скрывает и не прерывает |
+| B06 | COHORTS Goal PAUSED, draft PR57 CI PASS, runtime effect UNSET | Владелец возобновляет Goal; C04 только после окончания observation. Новый audit PR не снимает pause |
+| B07 | F47/F48 known code gaps, Q07 policy UNSET | Выбрать implementation scope и решить explicit partial-day behavior, затем исправить/tests/CI/CD; audit только документирует |
 
-F34 budget/capacity выбран владельцем в текущую GROW Goal; fit остается проверяемой целью, не ожиданием статистики агентом. Контроль работает автоматически каждую минуту через counters/files/pages; exact later index walk — отдельная bounded snapshot. При устойчивом forecast>20GB сначала проверить largest category/dense compression/index/service cost; затем предложить решения с сохранением аналитики. Сокращать сроки/события/метрики скрытно запрещено. Remaining included Actions minutes UNSET; speculative monitoring/reruns не запускались.
+Предлагаемый следующий scope: F48 + F47 одним основным PR, если выбран владельцем, без пересчета процентов в ходе Goal. Результат: правдивые consistent архивные periods и digest с activity list; закрытие06-06/13-03/11-01 controlled before/after expiry/both formats/cohorts и activity-vs-strength fixtures, latest CI/normalCD<=900s/owner-history preservation. Зависимость Q07; не трогать runtime до завершения замера. Non-goals: новый reset, старые conversions, retention/рынки/TF/detectors/точность/RAM changes, consumer activation. F42/PR57 остаются отдельными existing commitments, не автоматически включены в этот предложенный PR.
 
 ## Audit quality review
 
-Охват: весь updated S01/S05,65AC и обратная трассировка active features; entrypoint/routers/config/lock/source schema/queues/delivery/analytics/WS/REST/TG/agent boundaries; tracked и vendor/native/generation/scripts/workflows; separate ignored/runtime backups/experiments; primary GitHub gates/CI/CD/actual image/private hashes. Required code gates PASS; operating integration не выдается за PASS; по S06 она вне CW DoD и передана принимающему проекту. Обнаруженные F35 и F36 показывают предел прежних single-method/producer-only fixtures; исправления проверяются на смешанных версиях и фактическом consumer parser.
+Полнота: каждый из65AC имеет отдельные code/test/runtime строки,13epics/58+7 stable IDs и source trace. Проверены active requirements→paths и reverse active features→requirements; no model/order authority, optional context/feed, legacy callbacks/native/vendor/CLI выделены по intent. Исторические pipeline failures отличены от current delivered PASS; draft PR57 не присоединен к main readiness. Устаревшие statuses F37/F40/F41/F43/F44/F45 и03-01 заменены проверенными records, а не обещанием следующего CI.
 
-False positives проверены: optional enrichment/digest OFF — preference; три insufficient-history/zero-baseline streams не названы outage; совпадающие symbols разделены market identity; runtime hard limits не объявлены обязательными без requirement; old converter/vendor не назван мусором; package advisory match не равен exploit; 20GB не объявлены доказанными initial small DB; сохранение точных numeric summary metrics не названо хранением полной старой event history.
+Новые false READY воспроизведены T2 независимо от зеленого suite. F47 не назван отсутствием всего digest scheduler. F48 не назван потерей сохраненных facts: ошибка — period semantics/coverage; intraday точность из day summary не выдумывается. Одно underlying F48 влияет на два AC, не создавая два разных finding. AC-06-05 whole-period group/distributions/comparator/method functions проверены; его period/export limitation явно связан с06-06/13-03. Capacity13-06 PARTIAL: работающий monitor не равно доказанному filled-window target.
 
-Confidence HIGH по auth/config/atomic persistence/formulas/retention/replay/CI/source identity на проверенных fixtures. MEDIUM по long-term capacity/оптимальной частоте/optional UX/external private helper usage. Limitations/possible false negatives: steady-state annual/dense cohort layout и новый реальный30d expiry еще не наблюдались; controlled-clock tests их моделируют. Полный stream load/SLO, третьесторонние native/dependency undisclosed bugs и все Telegram/browser/client paths не доказаны этим аудитом. Этот audit не заменяет отдельный exhaustive security scan. Real signed receipt/consumer cutoff smoke передан принимающему проекту; отсутствие этого Evidence не мешает standalone use и готовности handoff по S06.
+Проверенные false-positive кандидаты: missing price/TF в32sample не отсутствие detector/TF; transient analytics8jobs не historical backlog; optional digest/enrichmentOFF — preference; receiving activation не задача CW; quality0/expired0 до30d не отсутствие outcomes/cleanup. Cohorts учитывает archived incomplete facts — ложная гипотеза об их потере отвергнута code review. Market source admit валидирует Candle.parse, отсутствие validation не заявляется. Stale index cache не подменен current exact size; physical DB включает indexes и не складывается с logical payload повторно. Native/historical helpers/vendor без usage evidence не объявлены мусором. Installer CVE match не равен exploitable app path; отсутствию новых advisory не приписывается security guarantee.
 
-## Checkpoint
+Confidence HIGH по репродуцированным F47/F48, tested deterministic formulas/auth/persistence/retention/queue behavior и exact artifact identity. MEDIUM по представительности future cohort mix/20comparator share, sustained load/capacity и внешним helper consumers. Possible false negatives: все65проверки не означают exhaustively все UI/client/network states; actual annual production expiry еще не наступил;62week fixture synthetic, не предсказывает market intensity. Base OS/native exhaustive security scan, длительный load/recovery incident и fresh optional enrichment/consumer live E2E вне выполненного audit. Текущие source/settings snapshots не гарантируют неизменность после указанного времени.
 
-CAPACITY active16Oct2026, branch/base above; one main PR. Source baseline c922700,
-PR44 CI38939657096 PASS754, CD38940357976 PASS298s; backup1,015,951,360bytes full
-copy/hash/integrity PASS27.639s,CPU1/RAM4GiB. No reset/persistent history deletion.
-Discovery18:28UTC healthy/TelegramDELIVERED/analyticsOK;1192streams/4TF, bootstrap/
-blocked/live recovery/historical gaps0. Repack IN_PROGRESS31,869rows; completion
-не заявлено. Working1,180,349,680bytes; forecast133.42GB — short model, не суточный факт.
+## Checkpoint аудита
 
-Exact sequential runtime snapshot18:36UTC:1,073,959rows. Event52,430rev/52,430heads;
-episode65,697/30,282; outcome251,658/197,222; comparison52,408/52,408. Encoded payload:
-event52,026,714 +heads11,868,318; episode25,577,769+6,191,607; outcomes126,727,124+
-34,635,179; comparison22,007,119+9,294,149bytes. Keys/physical pages/indexes отдельно.
-Decision104,860rows/13,970,138payloadbytes — по две копии на event. Actual year facts0
-(еще не наступило30d expiry). Full prospective study52,750event revisions→211,000facts/
-20,684cohort-days; density mean10.20/median5. Instrument иTF/horizon — главные факторы;
-strength49,372unique хранится в facts, не cohort key. Published method/settings/version
-по одной; future variation и comparator availability не измерены.
+17Oct2026: audit branch `codex/audit-ac65-20261017`, baseaffdd7bc71e1c8eb362bcf08f0e898b52095d9cd, root worktree. Разрешенный diff только `docs/product_scope.md`/`docs/open_issues.md`; code/runtime fixes не внесены. Источник/code/tests/runtime и65матрица проверены, new F47/F48/4partial AC; plan/spec согласованы без новых AC. Local canonical quality,65ID/48finding/test-node checks и self-review PASS. Latest required docs CI и docs PR merge — следующие gates; их PASS не предсказывается. После merge release selector должен датьcode=false/build+production N/A; source56/container/StartedAt/observer/baseline readback unchanged обязателен. Никакой metadata-only followup PR не нужен.
 
-Bounded samples128 comparison revisions:128 empty sets; не доказательство полезного
-nonempty dedup. Episode/outcome revisions меняют confirmations/closure/metrics/
-completeness, event revisions=1 в полном study; безосновательное удаление не сделано.
-Ownerless recovery65/128ordered pending (не случайная выборка), source scan не нужен.
-Expected effect до изменения: decision heads17,071→3,456encoded bytes на128rows (~80%);
-малый выигрыш не объявлен решением20GB. Новый compressor/batch format не вводился.
-
-Local Windows/Python3.12:99 targeted PASS включая62week controlled fixture33s;
-после owner-first/re-arm fix25 targeted PASS. Rehearsal: обоих рынков/5families/4TF,
-settings changes/restart, точный multiset numeric/comparator/group equality, private
-unchanged. После заполнения windows stable50detail events/840source rows/1920quality
-facts; file3.14–3.15MB на synthetic weekly workload. Final400d drain удаляет истекшие
-source/context/holds/summaries/dictionaries/body refs; producer DB не затронута.
-Отдельный test20 matching comparator windows + multiple methodology versions PASS
-через30d/35d/12mo, без duplicate summary admissions. Это не capacity/load proof.
-
-Latest local quality/docs/Ruff/mypy PASS;24 focused tests PASS после compatibility
-guard. Self-review: tiny decision heads сохраняют immutable revisions/public bytes;
-atomic repack/checkpoint и retention counters rollback проверены fault injection.
-Source/gen/config changes и probe interruptions исключают stable-day extrapolation.
-Runtime readback19:28UTC: bootstrap/recovery0, полные1192ACK; repack47,710records,
-за час+15,841 при>1m runtime rows. Added bounded asynchronous8x40ms slices, yield
-между отдельными transactions/checkpoints; общий intended work320ms/cycle, no long
-single lock. Local76 capacity/bot/storage checks и canonical quality PASS; fairness,
-finite completion и действующие bot paths проверены. Actual throughput после CD
-измеряется отдельно, ускорение8x заранее не объявляется фактом.
-
-CI38954699435: tests PASS, image build FAIL — новый observer был исключен Docker
-allowlist. Добавлено разрешение только `scripts/observe_capacity.py`; прочие scripts,
-private experiments и runtime data в build context не включаются. Required latest
-CI/image, merge и ordinary CD пока PENDING.
-
-PR45 latest CI38955487956 PASS766/image; merged ef5652d, ordinary CD38956621801
-PASS330s. Readback19:50UTC: exact source/image healthy, private/env/generation
-preserved, full backup43.378s; working1,353,592,216bytes включает113,798,552WAL.
-После restart bootstrap еще выполняется — это не steady interval. При проверке
-gate выявлен пропуск отдельной referenced analytics recovery queue: hotfix добавляет
-indexed existence lookup/LIMIT1 без count/scan; нормальные future horizons допустимы.
-
-Hotfix46/CD38958643381: POST_CHECK_FAILED, после150s нет fresh coverage всех8buckets;
-original failed record сохранен.20:08 runtime healthy/all ACK, poll WARMING862/1168,
-recovery еще не завершено. Worker выбирал priority0 gaps до bootstrap10 без bucket
-seed. Compatible hotfix вводит первые успешные windows8market/TF, без изменения
-REST budgets/coverage/150s post-check/900s CD. Потом прежние priorities0/10/20.
-Working bucket исключен из параллельного seed; failure не отмечает bucket готовым.
-Local52 ingestion/source/async tests и quality PASS; actual delivery PENDING.
-Seed требует свежую usable composite baseline; zero baseline/stale window не дают
-ложной готовности. Условие не заменяет unchanged full ACK/fresh coverage post-check.
-
-Next: self-review/latest required CI/image startup hotfix, merge и normal CD900s,
-source/private readback, затем finite observer на окончательном artifact.
-Observation waits up to12h for two5min stable samples and COMPLETE repack/admission;
-then24h. Sample statuses/partial deep boundary/failure explicit; actual24h PENDING.
-No unrelated branch/worktree cleanup. Backups/experiments сохраняются.
+PR57/5be499d draft, его code/test/ветка и прочие существующие branches/materials сохранены. При будущем resume PR57 актуализировать base/spec/plan и разрешить пересечение документации с этим аудитом, сохранив все findings/AC/observation data. Current built-in implementation Goal PAUSED; audit не имитирует ее completion/resume. Обычные backup/CD<=15min и RAM limits прежние. Наблюдение продолжается до собственного конечного результата, агент не ждет сутки в непрерывном цикле.
