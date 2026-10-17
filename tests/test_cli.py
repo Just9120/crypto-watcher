@@ -94,7 +94,7 @@ def test_integrity_failure_cli_has_safe_distinct_code(
     def fail(*args, **kwargs):
         raise IntegrityError(code, "Safe integrity failure")
 
-    monkeypatch.setattr("cryptowatcher.__main__.check_integrity", fail)
+    monkeypatch.setattr("cryptowatcher.disk_validation.validated_disk", fail)
     assert cli(monkeypatch, infrastructure, "state-check") == exit_status
     assert json.loads(capsys.readouterr().err) == {
         "status": "blocked",

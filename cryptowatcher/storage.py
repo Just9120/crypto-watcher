@@ -410,6 +410,9 @@ class Store:
                 )
 
         try:
+            from .disk_validation import large_database, validated_disk
+
+            native_disk = False
             with closing(sqlite3.connect(destination)) as backup:
                 with closing(
                     sqlite3.connect(f"{self.path.resolve().as_uri()}?mode=ro", uri=True, timeout=1)
@@ -420,8 +423,16 @@ class Store:
                     source.backup(backup, pages=256, progress=progress, sleep=0.01)
                 copied_at = time.monotonic()
                 phase = "INTEGRITY"
-                if validation_directory is None:
+                native_disk = validation_directory is None and large_database(destination)
+                if validation_directory is None and not native_disk:
                     check_integrity(backup, deadline=deadline)
+            if native_disk:
+                with validated_disk(destination, deadline=deadline) as validated:
+                    row = validated.execute("SELECT sqlite_version()").fetchone()
+                    if row is None:
+                        raise IntegrityError("DATABASE_ERROR", "Validation engine unavailable")
+                    version = str(row[0])
+                validation_details.update(sqlite_version=version, integrity_backend="APSW_DISK_MMAP")
             if validation_directory is not None:
                 from .validation import validate_backup
 

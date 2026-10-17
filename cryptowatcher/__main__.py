@@ -19,7 +19,7 @@ from .config import ConfigError, Infrastructure, OwnerSettings
 from .events import History
 from .lease import RuntimeLease
 from .logging_utils import configure_logging
-from .storage import IntegrityError, StateError, Store, check_integrity, encode, migrate_legacy
+from .storage import IntegrityError, StateError, Store, encode, migrate_legacy
 
 
 def main() -> int:
@@ -174,34 +174,29 @@ def main() -> int:
                     if not math.isfinite(args.timeout_seconds) or not 0 < args.timeout_seconds <= 900:
                         raise ConfigError("Invalid integrity time budget")
                     deadline = time.monotonic() + args.timeout_seconds
-                    if args.validation_directory is None:
-                        check_integrity(store.db, deadline=deadline)
-                        imported = store.db.execute("SELECT source_sha256 FROM legacy_import").fetchone()
-                        enabled = store.enabled()
-                    else:
-                        from .storage import Snapshot
-                        from .validation import validated_snapshot
+                    from .storage import Snapshot
+                    from .validation import validated_snapshot
 
-                        with validated_snapshot(
-                            database,
-                            args.validation_directory,
-                            deadline=deadline,
-                            compressed=args.compressed_validation,
-                        ) as validated:
-                            owner_row = validated.execute(
-                                "SELECT owner_id,revision,settings_json FROM owner_settings"
-                            ).fetchone()
-                            if owner_row is None:
-                                raise StateError("Validated owner settings unavailable")
-                            owner_id, revision, payload = owner_row
-                            if owner_id != store.owner_id:
-                                raise StateError("Validated snapshot owner mismatch")
-                            snapshot = Snapshot(revision, OwnerSettings.from_payload(json.loads(payload)))
-                            imported = validated.execute("SELECT source_sha256 FROM legacy_import").fetchone()
-                            preference = validated.execute(
-                                "SELECT enabled FROM delivery_preferences WHERE chat_id=?", (owner_id,)
-                            ).fetchone()
-                            enabled = bool(preference and preference[0])
+                    with validated_snapshot(
+                        database,
+                        args.validation_directory,
+                        deadline=deadline,
+                        compressed=args.compressed_validation,
+                    ) as validated:
+                        owner_row = validated.execute(
+                            "SELECT owner_id,revision,settings_json FROM owner_settings"
+                        ).fetchone()
+                        if owner_row is None:
+                            raise StateError("Validated owner settings unavailable")
+                        owner_id, revision, payload = owner_row
+                        if owner_id != store.owner_id:
+                            raise StateError("Validated snapshot owner mismatch")
+                        snapshot = Snapshot(revision, OwnerSettings.from_payload(json.loads(payload)))
+                        imported = validated.execute("SELECT source_sha256 FROM legacy_import").fetchone()
+                        preference = validated.execute(
+                            "SELECT enabled FROM delivery_preferences WHERE chat_id=?", (owner_id,)
+                        ).fetchone()
+                        enabled = bool(preference and preference[0])
                     print(
                         json.dumps(
                             {

@@ -124,9 +124,15 @@ def validate_backup(
 
 @contextmanager
 def validated_snapshot(
-    path: Path, directory: Path, *, deadline: float, compressed: bool = False
+    path: Path, directory: Path | None, *, deadline: float, compressed: bool = False
 ) -> Iterator[sqlite3.Connection | apsw.Connection]:
-    """Release the live WAL snapshot before the expensive full integrity check."""
+    """Validate a disk snapshot, or release live WAL before full copy validation."""
+    if directory is None:
+        from .disk_validation import validated_disk
+
+        with validated_disk(path, deadline=deadline) as database:
+            yield database
+        return
     try:
         budget(deadline)
         scratch_space(directory, 0)
