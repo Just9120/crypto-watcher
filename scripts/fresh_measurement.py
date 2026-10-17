@@ -263,6 +263,14 @@ def execute(
                 "Writer did not stop",
             )
             require(identity(source)[:2] == source_identity, "Working database identity changed")
+            memory = {
+                line.split(":", 1)[0]: int(line.split()[1]) * 1024
+                for line in Path("/proc/meminfo").read_text().splitlines()
+            }
+            require(
+                memory.get("MemAvailable", 0) >= 4 * 1024**3 + 1536 * 1024**2,
+                "Insufficient validation memory reserve",
+            )
             phase("FULL_ARCHIVE_INTEGRITY" if archive_original else "FULL_ARCHIVE_BACKUP")
             budget = min(630, int(deadline - time.monotonic() - 180))
             require(budget >= 60, "Insufficient full archive budget")
@@ -378,6 +386,7 @@ def execute(
                 container_started_at=actual["State"]["StartedAt"],
                 generation=after["generation"],
                 all_original_data_retained=True,
+                disk_available_bytes=os.statvfs(source.parent).f_bavail * os.statvfs(source.parent).f_frsize,
             )
             phase("COMPLETE")
             os.chown(folder, 0, 0)
