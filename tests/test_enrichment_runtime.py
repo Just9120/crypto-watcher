@@ -194,7 +194,7 @@ async def test_owner_controls_frozen_event_independent_perpetual_and_no_threshol
     with store.db:
         save(store, "ticker", "linear/BTCUSDT", {**ticker(fundingRate="0.9"), "available_at_ms": NOW + 1})
     shown = event_text(History(store).get("event-head:" + spot["event_id"]), NOW + 60_001)
-    assert "STALE" in shown and "BYBIT_REST_TICKERS" in shown
+    assert "Funding: 0.01 % · устарел" in shown and "BYBIT_REST_TICKERS" in shown
     assert (
         History(store).get("event-head:" + spot["event_id"])["enrichment"]["metrics"]["funding_rate_pct"][
             "value"
@@ -241,7 +241,11 @@ async def test_context_plus_all_timeframes_confirmation_fits_telegram_limit(enri
     pending = candidate(engine.history)
     event = engine.history.get("event-head:" + pending["event_ids"][0])
     text = notification_text(event, pending, NOW + 2000)
-    assert "funding_rate_pct" in text and "snapshot_basis_pct" in text
+    assert "Есть дополнительный контекст деривативов — в подробностях." in text
+    details = event_text(event, NOW + 2000)
+    assert "Funding: 0.01 % · свежий" in details and "Разница Spot/Perpetual:" in details
+    assert "BYBIT_REST_TICKERS" in details
+    assert event["enrichment"] == context
     assert len(text.encode("utf-16-le")) // 2 < 4096
 
 

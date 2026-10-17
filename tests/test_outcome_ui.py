@@ -36,10 +36,10 @@ async def test_event_to_outcome_original_reference_frozen_horizons_and_manual_va
     request = update(callback="outcomes:" + event["event_id"])
     await controller.handle(request, None)
     shown = "\n".join(c.args[0] for c in request.effective_message.reply_text.call_args_list)
-    assert "5 min · COMPLETE" in shown and "15 min · INCOMPLETE" in shown
+    assert "5 мин · готово" in shown and "15 мин · данные неполные" in shown
     assert f"{event['reference_price']:g} USDT" in shown
-    assert "Late analytics" in shown and "mfe_pct" in shown
-    assert "1 min ·" not in shown
+    assert "Последующая аналитика" in shown and "Максимальное движение в сторону" in shown
+    assert "1 мин ·" not in shown
 
 
 async def test_digest_toggle_is_independent_and_status_button_is_readonly(infrastructure, store):

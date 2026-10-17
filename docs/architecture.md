@@ -27,10 +27,13 @@ Binding/activation/recovery — в [agent procedure](runbooks/agent-delivery.md)
 | Detectors / profiles | `detector_config.py`, `detectors.py` | Validated explicit presets/manual values; five pure versioned formulas без I/O, previous-only baselines |
 | History / episode producer | `events.py` | Atomic events/inputs/revisions, episode lifecycle/re-arm, notification decisions и independent pending work |
 | Telegram consumer | `telegram_delivery.py` | Bounded durable attempts, retry/expiry/config checks; network вне DB transaction, successful state после ack |
-| Views | `cryptowatcher/render.py` | Plain-text status/settings/alert, market links и keyboards без state mutation |
+| Views | `cryptowatcher/render.py`, `telegram_views.py` | Compact status/settings/alert, readable units/time, market links и keyboards без изменения domain data |
+| Telegram control deck | `cryptowatcher/telegram_ui.py` | Read-only navigation, explicit actions, bounded history/statistics pages, owner input/CAS/cancel и full-report downloads |
 | Telegram application | `cryptowatcher/bot.py` | Один guard до каждого entrypoint, revision snapshot вокруг await, owner control deck, send result |
 | Entrypoint / operations | `cryptowatcher/__main__.py` | CLI run/config/diagnostics/health/state-check/migrate/backup; safe error output |
 | Compatibility | `telegram_crypto_watcher.py` | Сохраняет прежний startup entrypoint; private legacy Python helpers не являются объявленным API |
+
+Owner configuration loop применяет смену selected source scope независимо от REST discovery/backoff. Reconcile сериализован; завершившийся старый REST refresh перечитывает owner revision и не возвращает прежний scope. Диагностика отдельно показывает revision applied scope, metadata readiness, freshness и completeness.
 
 Network I/O выполняется вне DB transactions. Snapshot до market fetch имеет revision; смена settings во время fetch отменяет применение результата. Alerts маркируют использованную revision. SQLite update использует compare-and-swap; отправка сообщения не удерживает DB/state lock.
 

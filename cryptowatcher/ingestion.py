@@ -82,19 +82,29 @@ class BybitRadar(BybitREST):
         self._last_market = "linear"
         self._recovered_buckets: set[tuple[str, str]] = set()
         self._started = False
+        self._scope_revision: int | None = None
+        self._scope_lock = asyncio.Lock()
         self.on_observation: Callable[[str, list[Candle], float, float, int, bool], None] | None = None
 
     def publish_observation(self, stream: str, *, live: bool, through: int | None = None) -> None:
         if self.on_observation is None or stream in self.sources.blocked:
             return
         instrument = stream.rsplit("/", 1)[0]
+        settings = self.store.snapshot().settings
+        if instrument not in self.instruments:
+            return
+        if settings.alert_universe_mode == "custom" and instrument not in settings.instruments():
+            return
+        liquidity = finite(self.tickers[instrument]["turnover24h"])
+        if liquidity < settings.liquidity_floor_24h:
+            return
         candles = sorted(self.sources.windows[stream].values(), key=lambda c: c.start)
         if through is not None:
             candles = [c for c in candles if c.start <= through]
         self.on_observation(
             stream,
             candles,
-            finite(self.tickers[instrument]["turnover24h"]),
+            liquidity,
             self.instruments[instrument].tick_size,
             self.server_now(),
             live,
@@ -117,7 +127,11 @@ class BybitRadar(BybitREST):
         if self._started:
             return
         self._started = True
-        self._tasks = [asyncio.create_task(self._manager()), asyncio.create_task(self._diagnostic_loop())]
+        self._tasks = [
+            asyncio.create_task(self._manager()),
+            asyncio.create_task(self._diagnostic_loop()),
+            asyncio.create_task(self._configuration_loop()),
+        ]
         self._tasks += [asyncio.create_task(self._worker()) for _ in range(4)]
 
     async def close(self) -> None:
@@ -132,6 +146,7 @@ class BybitRadar(BybitREST):
         await super().close()
 
     async def refresh(self, settings: OwnerSettings) -> None:
+        revision = self.store.snapshot().revision
         for market in ("spot", "linear"):
             try:
                 if time.monotonic() - self.metadata_at.get(market, float("-inf")) >= 600:
@@ -195,7 +210,8 @@ class BybitRadar(BybitREST):
                 self.market_errors[market] = (
                     str(exc) if isinstance(exc, MarketError) else "invalid_discovery_response"
                 )
-        await self.reconcile(settings)
+        current = self.store.snapshot()
+        await self.reconcile(current.settings if current.revision != revision else settings)
         self.persist_diagnostics()
 
     async def refresh_tickers(self, market: str, max_age: int = 300) -> None:
@@ -235,8 +251,14 @@ class BybitRadar(BybitREST):
             self.ticker_server_ms[market] = int(result["time"])
 
     async def reconcile(self, settings: OwnerSettings) -> None:
+        async with self._scope_lock:
+            await self._reconcile(settings)
+
+    async def _reconcile(self, settings: OwnerSettings) -> None:
         active, _ = active_instruments(self.instruments, self.tickers, settings)
         new_streams = {f"{instrument.key}/{tf}" for instrument in active for tf in TIMEFRAMES}
+        current = self.store.snapshot()
+        self._scope_revision = current.revision if settings == current.settings else None
         if new_streams == self.streams:
             return
         removed = self.streams - new_streams
@@ -306,6 +328,16 @@ class BybitRadar(BybitREST):
         # REST discovery/backoff must not freeze the persisted WS/recovery snapshot.
         while True:
             self.persist_diagnostics()
+            await asyncio.sleep(5)
+
+    async def _configuration_loop(self) -> None:
+        # A REST request/backoff must not delay an explicit owner scope change.
+        # Metadata/ticker refresh remains owned by the manager, with the same policy.
+        while True:
+            snapshot = self.store.snapshot()
+            if snapshot.revision != self._scope_revision:
+                await self.reconcile(snapshot.settings)
+                self.persist_diagnostics()
             await asyncio.sleep(5)
 
     def request_recovery(self, stream: str, priority: int = 0) -> None:
@@ -844,6 +876,14 @@ class BybitRadar(BybitREST):
         self.store.put_runtime(
             "ingestion",
             {
+                "configuration_revision": self._scope_revision,
+                "discovery": {
+                    market: {
+                        "metadata_ready": market in self.metadata_at,
+                        "tickers_ready": market in self.tickers_at,
+                    }
+                    for market in ("spot", "linear")
+                },
                 "classification": CLASSIFICATION_VERSION,
                 "timeframes": list(TIMEFRAMES),
                 "eligible_metadata": {
