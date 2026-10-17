@@ -33,77 +33,82 @@ Canonical spec: [product_scope.md](product_scope.md). Этот план соде
 независимое bounded обслуживание очередей, конечный durable repack и фактический
 stable baseline конечного24h observer. Сам24h итог — последующее наблюдение.
 
-Проверенный main/source `5e6c6f8082fb373ea9a75c86b248a1a1561a7827`, PR54:
-CI38989052236/CD38989302666 PASS. Production212s, full disk backup52.108s;
+Проверенный main/source `1b4e0cd4e903de8b2b0084d75150784b507ebc48`, PR55:
+CI38994262366/CD38994598740 PASS. Production278s, full disk backup54.154s;
 source/image/health/persistence/market PASS. Private/env/config3/generation и64
-immutable public samples совпали, fresh Telegram DELIVERED. Physical checkpoint,
-floor/schema88/upper3441865 сохранены. Own branch54 безопасно удалена по exact
-squash tree equality; исходный worktree и чужие/private материалы сохранены.
+immutable public samples совпали с исходным состоянием Goal. Оба рынка, четыре TF,
+1120active streams/allACK, analytics и Telegram delivery подтверждены. Own branches
+PR48–55 удалены после merge/delivery/tree equality; root worktree/чужие сохранены.
 
-Necessary hotfix `codex/recovery-admission-budget-20261017`, base указанного main.
-Изолированный controlled-scheduler reproducer:2owned pending windows, retirement
-уступает event loop на1.1s; текущий work() не допускает ни одной REST страницы,
-поскольку общий deadline запущен до retirement. Local retirement имеет собственный
-25ms лимит, но await может задержать возврат. Scope: начать существующий1s бюджет
-REST admission после retirement, сохранить batch32, live priority, shared5req/s,
-concurrency4, retries/cancellation и данные. Численные defaults, RAM, методы,
-retention, source validation и backup/CD gates не меняются.
+Repack завершен17Oct03:08:19.910UTC: records1674197, headers1787604,
+next3441866>captured upper3441865, records/decisions/legacy expiry/quality COMPLETE.
+Новые writes не расширили interval; история не сбрасывалась. Старый referenced
+backlog достиг0; обычные новые задания на1–4 закрытые свечи продолжают появляться
+и обрабатываться. Readonly03:19:47UTC: backfill0/live queues0/empty blockers,
+analytics/recovery/repack OK, свежая Telegram delivery. Working2288357560bytes
+включает DB2066104320 (с индексами), WAL222220472 и SHM32768; это не суточный темп.
+
+Necessary hotfix `codex/observer-settling-20261017`, base указанного main.
+Наблюдатель в03:15/20/25/33UTC попадал в краткую текущую analytics queue и сбрасывал
+stable count. Отдельные bounded проверки фиксировали0, ошибочных/старых jobs нет.
+Однократный restart только observer со всем сохраненным state дал одну чистую
+проверку, но не устранил phase sensitivity. Scope: только WAITING_STABLE и только
+единственный blocker ANALYTICS_RECOVERY_PENDING перепроверять максимум3 раза с
+10s паузой. Сохранять timestamps/blockers попыток в sample; не считать их чистыми.
+Две фактически чистые проверки по-прежнему разделены >=300s; deep boundary,
+исходный12h wait limit и все остальные blockers сохраняются. OBSERVING samples
+не retry: interruptions не скрываются. RAM/CPU caps, history, расчеты и pipeline
+не меняются. Обычная CI/CD поставка и final-image observer обязательны.
 
 | Задача / DoD | Состояние |
 | --- | --- |
-| M01: independent backfill/fairness/retry/restart и source integrity | Исторический backlog достиг0; gap recovery54 PASS; обнаружен scheduler-admission starvation, hotfix в работе |
-| M02: finite repack/equality/checkpoint/rollback/yield/snapshot | Code/CI/CD53/54 PASS, runtime продвигается; actual completion PENDING |
-| M03: required CI/merge/CD<=900s, прежняя RAM, private/history/alerts | PR54 PASS212s/backup52.108s; current necessary hotfix CI/CD PENDING |
-| M04: actual completion и baseline final finite observer | PENDING: observer54 WAITING_STABLE, baseline отсутствует |
+| M01: independent backfill/fairness/retry/restart и source integrity | PASS: PR48–55/CI, historical backlog0, новые current jobs обрабатываются |
+| M02: finite repack/equality/checkpoint/rollback/yield/snapshot | PASS: actual COMPLETE03:08:19UTC, все фазы/finite physical boundary |
+| M03: required CI/merge/CD<=900s, прежняя RAM, private/history/alerts | PR55 PASS278s/backup54.154s; necessary observer hotfix CI/CD PENDING |
+| M04: actual completion и baseline final finite observer | IN_PROGRESS: transient pending queue мешает двум чистым samples; baseline отсутствует |
 
 Validation Plan, root repository:
 
 | Риск/результат | Команда/tool и среда | Этап / обязательность |
 | --- | --- | --- |
 | Conventions/types/docs | `python scripts/checks.py quality`, локальный Windows env | Local REQUIRED |
-| Scheduler delay, actual page/source persistence, new live priority и unchanged network admission cap | `python -m pytest tests/test_maintenance.py tests/test_analytics_recovery.py`, controlled clock/isolated DB | Local REQUIRED |
-| Retry/restart/cancel, source conflicts и retained owner/expiry | Existing bounded recovery/maintenance tests, текущая полная CI suite | CI REQUIRED; локально targeted |
+| Pending clears/persists, other blockers, observed interruptions и two-clean-sample gate | `python -m pytest tests/test_capacity.py`, controlled clock/isolated DB | Local REQUIRED |
+| Retry/restart/cancel, finite boundaries/source integrity | Existing maintenance/recovery/storage tests, текущая полная CI suite | CI REQUIRED; локально по затронутому риску |
 | Полная suite/native/image | Existing `ci-required`, Python3.11/Linux | CI REQUIRED |
-| Сохранность и поставка | Normal CD/full backup<=900s; source/image/private/env/config/generation/public samples, health/market/Telegram/progress | Production REQUIRED |
-| Запуск24h | Final-image finite observer, source/config/generation/StartedAt, actual queue completion и две stable5min samples | Post-delivery REQUIRED;24h результат последующий |
+| Сохранность и поставка | Normal CD/full backup<=900s; source/image/private/env/config/generation/public samples, health/market/Telegram | Production REQUIRED |
+| Запуск24h | Final-image finite observer, source/config/generation/StartedAt, actual completion и две stable samples>=300s | Post-delivery REQUIRED;24h результат последующий |
 
-Local42maintenance/recovery scenarios и canonical quality PASS. Новая regression
-на старом коде давала2FAIL/1PASS; после исправления scheduler delay не голодает
-REST, live priority сохраняется, slow page не расширяет1s admission budget.
-Self-review PASS; required Linux CI/image и обычный CD PENDING. Нет новой schema,
-конвертации/копии DB, новых codecs или публичного контракта. Existing finite
-physical interval не сбрасывается; новые writes не расширяют проход. Отдельный
-REST deadline не отменяет live priority или network rate/concurrency/retry gates.
+Local20capacity scenarios и canonical quality PASS; old single-probe behavior
+воспроизводит regression FAIL, bounded settling проходит. Self-review PASS:
+только WAITING_STABLE/sole queue retry, persist attempt timestamps, other blockers
+и OBSERVING interruptions не скрываются;300s separation/deep/12h limits прежние.
+Required Linux CI/image и обычный CD PENDING. Нет новой schema, конвертации/копии
+рабочей DB, новых codecs или публичного контракта.
+Ожидание в observer выполняется вне приложения; исходные read-only probe caps,
+zero-queue gate и запрет baseline при других blockers не ослабляются.
 
-Runtime54 в01:59–02:10UTC: repack851825→896183/IN_PROGRESS, upper/floor/schema
-не меняются; live queues0. Backfill0→181→109; проверенные146/120entries всеPENDING,
-attempts0/reasonNONE, recent1–4candle windows и oldest nextdue<41s. Это не доказало
-upstream failure; coalescing обновляет job identity, поэтому recent due сам по
-себе не доказывает отсутствие задержки. Кодовый scheduler defect подтвержден
-controlled fixture; runtime attribution остается ограниченной. Working≈2.1GB
-включает индексы/WAL/SHM; не является суточным темпом или доказательством20GB.
-
-Observer54 `cryptowatcher-capacity-20261017T011319Z-daefd790.service`, private path
-`/opt/crypto_watcher/observations/capacity-20261017T011319Z-daefd790`, PID1298755
-при readback,12samples/no failures/WAITING_STABLE. Baseline/final/result отсутствуют.
-При смене source сохранить records, проверить точный unit/path и отсутствие
-baseline/второго observer, затем один final-image observer с прежними лимитами.
-Existing one-shot17Oct06:30MSK привязана к54; после поставки обновить тот же объект.
-После actual baseline финальная проверка через24h+20min, без ожидания агентом суток.
+Observer55 `cryptowatcher-capacity-20261017T022950Z-d17381ba.service`, private path
+`/opt/crypto_watcher/observations/capacity-20261017T022950Z-d17381ba`, PID1546498
+после одного phase restart; no failures/WAITING_STABLE, baseline/final/result нет.
+При смене source сохранить records и проверить точный unit/path/наличие baseline
+до replacement. Не объединять epochs/revisions. Existing one-shot17Oct06:40MSK
+пока привязана к55; после поставки обновить тот же объект. После actual baseline
+финальная проверка через24h+20min, без ожидания агентом суток.
 
 Primary history: PR48/4c3a362 CI38966791666 PASS/CD38967393380 POST_CHECK_FAILED;
 PR49/7015ff6 CI38969740225/CD38970152846 PASS297s;
 PR50/15daa13 CI38971799676 PASS/CD38972288968 POST_CHECK_FAILED;
 PR51/444f9c2 CI38974437399/CD38974896223 PASS355s/backup50.858s;
 PR52/b841f81 CI38982180165/CD38982604072 PASS223s/backup50.42s;
-PR53/4c5684e CI38986875524/CD38987333983 PASS221s/backup51.639s.
+PR53/4c5684e CI38986875524/CD38987333983 PASS221s/backup51.639s;
+PR54/5e6c6f8 CI38989052236/CD38989302666 PASS212s/backup52.108s.
 Failures не переписаны как PASS. Primary records восстанавливают delivery, даже
 если Markdown checkpoint до merge. Полные исследовательские материалы вне repo.
 
 Non-goals: reset/отмененная test-history conversion/cleanup backups/experiments,
 изменение codecs/retention/coverage/точности/REST/RAM/gates. Проценты проекта не
 пересчитываются;20GB UNPROVEN. Далее targeted validation/self-review, necessary
-hotfix PR, normal CI/CD, actual completion и baseline. Goal ACTIVE.
+hotfix PR, normal CI/CD и actual stable baseline. Goal ACTIVE.
 
 ## Previous Goal — CAPACITY: реальные источники и заполненная база
 
@@ -363,12 +368,12 @@ Canonical команды — [README](../README.md#checks); из root repository
 
 | F37 RECOVERY QUEUE | Уже заполненные локально ranges остаются PENDING; analytics_recovery.work не перепроверяет наличие перед REST | P1 | FIX: local completeness/reuse и bounded retirement, сохранить реальные gaps/retries | Read-only16Oct18:48MSK:16/16 checked PENDING ranges complete, attempts0/age48–266min; bounded non-random sample | HIGH / IN_PROGRESS |
 | F38 FORECAST | Валовый оборот временных очередей умножается на30d; общий page factor применяется к годовым numeric facts | P1 | FIX: разные lifetimes/queue occupancy/retained slope и measured format model; не скрывать превышение | storage_meter.report и measured438.2GB; details alone30.1GB encoded30d при текущей частоте | HIGH / IN_PROGRESS |
-| F39 RESTART RECOVERY | Cold windows/recovery priority могут задержать первые окна отдельных market/TF за bounded post-check | P1: wide-universe warmup/CD failure; AC-03-01 | FIX: validated local restore/yield + первые успешные buckets обоих markets/4TF до ordinary priorities; без historical live flood | CD38958643381 POST_CHECK_FAILED;20:08UTC healthy/all ACK, poll WARMING862/1168, referenced backfill25,183; bootstrap/gaps еще выполнялись. Fixture воспроизводит вытеснение bootstrap непрерывной1m gap queue;51 targeted PASS | HIGH / IN_PROGRESS; fairness hotfix CI/runtime PENDING |
+| F39 RESTART RECOVERY | Cold windows/recovery priority задерживали первые market/TF buckets; AC-03-01 | P1: wide-universe warmup/CD failure | FIX: local restore/yield, seed fairness и affected-gap repair; cached first-ready status | PR51–55 CI, final normalCD55 PASS278s; оба markets/4TF recovered,1120active streams/allACK/current queues0/source healthy03:19UTC. Old failed CD46/48/50 сохранены | HIGH / CLOSED |
 | F40 SUBSCRIPTION BACKLOG | Один linear shard788topics; continuously ready recv может продлевать ACK ожидание после deadline | P1: reconnect/blocked streams при широком universe | FIX: shards<=100topics без потери покрытия; strict15s ACK deadline | Bounded read-only17:23UTC25s: ACK200/788,buffer_overflows22; fake continuous-open stream воспроизводит обход deadline | HIGH / IN_PROGRESS; тот же hotfix |
 | F41 DECISION DUPLICATE | Актуальная decision и immutable revision полностью дублируются;104,860rows на52,430events | P2: лишний payload и writes | FIX: bounded checked pointer на latest immutable revision; отдельный durable repack cursor, public read/retry/restart/expiry unchanged | Exact ledger18:36UTC; sample128heads17,071→3,456bytes до реализации | HIGH / CODE READY; CI/CD PENDING |
 | F42 CAPACITY EVIDENCE | Нет полноценного per-namespace ledger/24h physical deltas; старая annual density синтетическая | P1:20GB не подтверждены | IMPLEMENT: explicit readonly ledger/cardinality/formulas и finite stable24h observation, не менять scope | Actual summaries0; prospective20,684cohort-days/211,000facts, median5; historical110.55GB/model, not daily measurement | HIGH / IN_PROGRESS; observation/result PENDING |
 | F43 RETENTION PROOF | Прежний малый fixture не доказывал rolling filled-window/restart и реальные20 comparator arrays вместе с methods | P1: lifecycle/capacity evidence gap | IMPLEMENT: controlled62week population plateau, exact facts/group equality и full GC; separate richer comparator/method boundary fixture | Local tests/rehearsal PASS; production annual mix unobserved | HIGH / CODE READY; CI PENDING |
-| F45 MAINTENANCE THROUGHPUT | Backfill/repack coupling, in-range writes, incomplete gap cache и scheduler delay до REST admission; E06/E13 | P1: stable24h baseline задержан | FIX: independent jobs/guarded duty/finite snapshot/gap repair54 поставлены; отделить existing REST admission budget от retirement yield | PR51–54 CI/CD PASS, historical backlog0. Current live pass progresses; controlled2owned windows+1.1s scheduler yield допускают0REST pages. Hotfix42local scenarios/quality/self-review PASS; required CI/CD и actual completion PENDING | HIGH code / MEDIUM runtime attribution; IN_PROGRESS |
+| F45 MAINTENANCE THROUGHPUT | Backfill/repack starvation и transient-queue sampling перед baseline; E06/E13 | P1: stable24h baseline задержан | FIX: independent jobs/guarded duty/finite snapshot/gap repair/admission55 поставлены; bounded retry только перед baseline при единственном current-queue blocker | PR48–55 CI, finalCD55 PASS; actual repack COMPLETE03:08UTC/historical backlog0, immutable/private preservation PASS. Observer repeatedly samples transient new jobs; final-image baseline PENDING | HIGH code/runtime; IN_PROGRESS |
 | F44 RECOVERY TERMINAL REUSE | Ownerless requests читают candles до owner check; terminal receipt блокирует новый valid owner до cleanup | P1: лишний scan/backlog и задержка repair | FIX: owner-first terminal retirement без source mutation; terminal job re-arm при valid retained owner; dedup/retry preserved |65/128pending без owner; regression re-arm/arrived data/noREST PASS | HIGH / CODE READY; CI/CD PENDING |
 
 ## Документы, legacy и artifacts

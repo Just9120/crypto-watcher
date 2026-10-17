@@ -53,6 +53,26 @@ raise SystemExit(main())
     return value
 
 
+def sample_for_state(expected: str, state: str) -> dict[str, Any]:
+    """Avoid aliasing a brief current-candle queue with the five-minute cadence.
+
+    All original blockers still apply. Only before the baseline may a sole
+    analytics queue get three additional quick probes; no deep scan is retried.
+    Keep failed observations visible, and never hide interruptions once observing.
+    The main loop still sleeps300s between accepted samples.
+    """
+    value = probe(expected)
+    attempts = []
+    if state == "WAITING_STABLE":
+        for _ in range(3):
+            if value["stability_blockers"] != ["ANALYTICS_RECOVERY_PENDING"]:
+                break
+            attempts.append({"at_ms": value["at_ms"], "blockers": value["stability_blockers"]})
+            time.sleep(10)
+            value = probe(expected)
+    return {**value, "baseline_settling_attempts": attempts} if attempts else value
+
+
 def advance(state: dict[str, Any], value: dict[str, Any], now: float) -> dict[str, Any]:
     result = dict(state)
     blockers = value["stability_blockers"]
@@ -125,7 +145,7 @@ def main() -> int:
         atomic(record, state)
     while state["state"] in ("WAITING_STABLE", "OBSERVING"):
         try:
-            sample = probe(expected)
+            sample = sample_for_state(expected, state["state"])
             state = advance(state, sample, time.time())
             state["samples"] += 1
             # Each sample keeps counters/files and lifecycle evidence. No raw events or credentials.

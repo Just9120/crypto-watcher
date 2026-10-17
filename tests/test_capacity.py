@@ -18,6 +18,7 @@ from cryptowatcher.events import DECISION_HEAD, PREFIX, EventEngine, History, id
 from cryptowatcher.market_storage import enable
 from cryptowatcher.storage import StateError, Store
 from cryptowatcher.storage_repack import async_work, work
+from scripts import observe_capacity as observer
 from scripts.observe_capacity import advance, atomic
 
 from .test_outcomes import DAY, NOW, OutcomeWorker, Retention, Sources, future, observe
@@ -263,6 +264,81 @@ def test_observer_metadata_write_is_atomic_and_private(tmp_path):
     assert not path.with_suffix(".tmp").exists()
     with patch.object(path.__class__, "is_symlink", return_value=True), pytest.raises(ValueError):
         atomic(path, {"state": "must not write"})
+
+
+def test_baseline_settles_current_queue_without_accepting_the_blocked_probe():
+    initial = {"at_ms": 1000, "stability_blockers": []}
+    pending = {"at_ms": 301000, "stability_blockers": ["ANALYTICS_RECOVERY_PENDING"]}
+    cleared = {"at_ms": 311000, "stability_blockers": [], "measured": "actual later snapshot"}
+    with (
+        patch.object(observer, "probe", side_effect=[pending, cleared]) as probe,
+        patch.object(observer.time, "sleep") as sleep,
+    ):
+        value = observer.sample_for_state("f" * 40, "WAITING_STABLE")
+    assert probe.call_count == 2 and all(not call.kwargs for call in probe.call_args_list)
+    sleep.assert_called_once_with(10)
+    assert value["at_ms"] == cleared["at_ms"] and value["stability_blockers"] == []
+    assert value["baseline_settling_attempts"] == [
+        {"at_ms": pending["at_ms"], "blockers": pending["stability_blockers"]}
+    ]
+    assert "baseline_settling_attempts" not in cleared
+    state = advance({"state": "WAITING_STABLE", "created_at": 0}, initial, 1)
+    assert state["state"] == "WAITING_STABLE" and state["stable_samples"] == 1
+    assert advance(state, value, 311)["state"] == "READY_FOR_BASELINE"
+    # The original wait deadline still takes precedence over a cleared queue.
+    assert advance(state, value, 12 * 3600 + 1)["state"] == "WAIT_LIMIT_REACHED"
+
+
+def test_persistent_queue_cannot_pass_baseline_and_rechecks_are_finite():
+    pending = {"at_ms": 301000, "stability_blockers": ["ANALYTICS_RECOVERY_PENDING"]}
+    with (
+        patch.object(observer, "probe", return_value=pending) as probe,
+        patch.object(observer.time, "sleep") as sleep,
+    ):
+        value = observer.sample_for_state("f" * 40, "WAITING_STABLE")
+    assert probe.call_count == 4 and sleep.call_count == 3
+    assert len(value["baseline_settling_attempts"]) == 3
+    assert value["stability_blockers"] == pending["stability_blockers"]
+    state = advance({"state": "WAITING_STABLE", "stable_samples": 1, "created_at": 0}, value, 301)
+    assert state["state"] == "WAITING_STABLE" and state["stable_samples"] == 0
+
+
+@pytest.mark.parametrize(
+    "blockers",
+    [[], ["REPACK"], ["ANALYTICS_RECOVERY_PENDING", "INGESTION_STALE"]],
+)
+def test_baseline_rechecks_never_ignore_other_blockers(blockers):
+    actual = {"at_ms": 301000, "stability_blockers": blockers}
+    with (
+        patch.object(observer, "probe", return_value=actual) as probe,
+        patch.object(observer.time, "sleep") as sleep,
+    ):
+        value = observer.sample_for_state("f" * 40, "WAITING_STABLE")
+    assert value == actual and probe.call_count == 1
+    sleep.assert_not_called()
+
+
+def test_observed_current_queue_is_an_interruption_without_rechecks():
+    actual = {"at_ms": 301000, "stability_blockers": ["ANALYTICS_RECOVERY_PENDING"]}
+    with (
+        patch.object(observer, "probe", return_value=actual) as probe,
+        patch.object(observer.time, "sleep") as sleep,
+    ):
+        value = observer.sample_for_state("f" * 40, "OBSERVING")
+    assert value == actual and probe.call_count == 1
+    sleep.assert_not_called()
+    state = advance({"state": "OBSERVING", "baseline_ms": 1000}, value, 301)
+    assert state["state"] == "OBSERVING" and state["interrupted_samples"] == 1
+
+
+def test_baseline_recheck_failure_is_not_a_clean_sample():
+    pending = {"at_ms": 301000, "stability_blockers": ["ANALYTICS_RECOVERY_PENDING"]}
+    with (
+        patch.object(observer, "probe", side_effect=[pending, ValueError("Changed revision")]),
+        patch.object(observer.time, "sleep"),
+        pytest.raises(ValueError, match="Changed revision"),
+    ):
+        observer.sample_for_state("f" * 40, "WAITING_STABLE")
 
 
 def test_legacy_capacity_is_explicitly_unmetered_and_flags_do_not_affect_other_commands(
