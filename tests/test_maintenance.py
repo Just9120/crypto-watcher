@@ -87,6 +87,46 @@ async def test_backfill_batches_retry_restart_and_preserves_exact_sources(store,
     await radar.close()
 
 
+@pytest.mark.parametrize("condition,pages", [("normal", 2), ("live_priority", 0), ("slow_page", 1)])
+async def test_retirement_scheduler_delay_cannot_starve_rest_admission(store, monkeypatch, condition, pages):
+    radar, recovery, h, fetch = seed(store, monkeypatch, 2)
+    clock = [0.0]
+    yielded = False
+    original_sleep = asyncio.sleep
+
+    async def delayed_yield(seconds):
+        nonlocal yielded
+        if seconds == 0 and not yielded:
+            # Retirement's own work is small; another coroutine runs while it
+            # yields. Its elapsed wall time must not consume REST admission.
+            clock[0] += 1.1
+            yielded = True
+            if condition == "live_priority":
+                radar._pending["linear/BTCUSDT/1m"] = (0, 1)
+        await original_sleep(0)
+
+    async def response(endpoint, params):
+        if condition == "slow_page":
+            clock[0] += 1.1
+        return await fetch(endpoint, params)
+
+    radar._get.side_effect = response
+    try:
+        with (
+            patch("cryptowatcher.analytics_recovery.time.monotonic", side_effect=lambda: clock[0]),
+            patch("cryptowatcher.analytics_recovery.asyncio.sleep", side_effect=delayed_yield),
+        ):
+            await recovery.work(NOW + 10 * MINUTE, seconds=1)
+        assert yielded and radar._get.await_count == pages
+        assert h.count("analytics-gap-pending:") == 2 - pages
+        assert sum(job["state"] == "COMPLETE" for _, job in h.items("analytics-gap:")) == pages
+        assert store.db.execute("SELECT count(*) FROM market_candles").fetchone()[0] == pages
+        assert not radar.sources.windows and not radar.sources.live
+        assert not store.db.in_transaction
+    finally:
+        await radar.close()
+
+
 async def test_backfill_yields_to_new_live_gap_and_cancellation_preserves_pending(store, monkeypatch):
     radar, recovery, h, fetch = seed(store, monkeypatch)
 
