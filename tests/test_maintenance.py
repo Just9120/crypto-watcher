@@ -155,6 +155,106 @@ async def test_backfill_yields_to_new_live_gap_and_cancellation_preserves_pendin
     await radar.close()
 
 
+async def test_independent_backfill_pages_overlap_with_two_slot_and_batch_bounds(store, monkeypatch):
+    radar, recovery, h, fetch = seed(store, monkeypatch, 6)
+    ready, release = asyncio.Event(), asyncio.Event()
+    active = peak = 0
+    symbols = []
+
+    async def delayed(endpoint, params):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        symbols.append(params["symbol"])
+        if active == 2:
+            ready.set()
+        try:
+            await release.wait()
+            await asyncio.sleep(0)
+            return await fetch(endpoint, params)
+        finally:
+            active -= 1
+
+    radar._get.side_effect = delayed
+    task = asyncio.create_task(recovery.work(NOW + 10 * MINUTE, batch=5, seconds=10))
+    try:
+        await asyncio.wait_for(ready.wait(), 2)
+        assert active == peak == 2 and radar._get.await_count == 2
+        release.set()
+        await task
+        assert active == 0 and peak == 2 and len(symbols) == len(set(symbols)) == 5
+        assert h.count("analytics-gap-pending:") == 1
+        assert store.db.execute("SELECT count(*) FROM market_candles").fetchone()[0] == 5
+        assert not radar.sources.windows and not store.db.in_transaction
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await radar.close()
+
+
+async def test_parallel_backfill_cancellation_joins_every_page_without_consuming_jobs(store, monkeypatch):
+    radar, recovery, h, _ = seed(store, monkeypatch, 3)
+    ready = asyncio.Event()
+    active = 0
+    cancelled = []
+
+    async def blocked(endpoint, params):
+        nonlocal active
+        active += 1
+        if active == 2:
+            ready.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            active -= 1
+            cancelled.append(params["symbol"])
+
+    radar._get.side_effect = blocked
+    before = h.items("analytics-gap:")
+    task = asyncio.create_task(recovery.work(NOW + 10 * MINUTE))
+    try:
+        await asyncio.wait_for(ready.wait(), 2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert active == 0 and len(cancelled) == len(set(cancelled)) == 2
+        assert h.items("analytics-gap:") == before and h.count("analytics-gap-pending:") == 3
+        assert store.db.execute("SELECT count(*) FROM market_candles").fetchone()[0] == 0
+        assert not store.db.in_transaction
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await radar.close()
+
+
+async def test_live_recovery_arriving_during_parallel_io_preempts_next_pages(store, monkeypatch):
+    radar, recovery, h, fetch = seed(store, monkeypatch, 6)
+    ready, release = asyncio.Event(), asyncio.Event()
+    calls = 0
+
+    async def blocked(endpoint, params):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            ready.set()
+        await release.wait()
+        return await fetch(endpoint, params)
+
+    radar._get.side_effect = blocked
+    task = asyncio.create_task(recovery.work(NOW + 10 * MINUTE, seconds=10))
+    try:
+        await asyncio.wait_for(ready.wait(), 2)
+        radar._pending["linear/BTCUSDT/1m"] = (0, 1)
+        release.set()
+        await task
+        assert calls == 2 and h.count("analytics-gap-pending:") == 4
+        assert store.db.execute("SELECT count(*) FROM market_candles").fetchone()[0] == 2
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await radar.close()
+
+
 async def test_inflight_superseded_backfill_cannot_resurrect_old_pending(store, monkeypatch):
     radar, recovery, h, fetch = seed(store, monkeypatch, 1)
 

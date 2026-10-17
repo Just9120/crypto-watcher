@@ -136,27 +136,50 @@ class AnalyticsRecovery:
         # Retirement has its own bounded quantum and can yield to other jobs.
         # Start the REST admission budget only when this phase is reached.
         deadline = time.monotonic() + seconds
-        for _ in range(batch):
+        processed = 0
+        while processed < batch:
             if time.monotonic() >= deadline:
                 break
             # Recheck live priority between pages, not just at batch admission.
             if any(v[0] < 20 for v in self.market._pending.values()) or self.market._working:
                 break
-            due = self.history.items("analytics-gap-pending:", 1)
+            current = max(now, self.market.server_now())
+            due = []
+            for item in self.history.items("analytics-gap-pending:", min(2, batch - processed)):
+                job = self.history.get("analytics-gap:" + item[1]["id"])
+                if (
+                    job is not None
+                    and job["state"] in ("PENDING", "RETRY")
+                    and job["next_attempt_ms"] > current
+                ):
+                    break
+                due.append(item)
             if not due:
                 break
-            job = self.history.get("analytics-gap:" + due[0][1]["id"])
-            current = max(now, self.market.server_now())
-            if job is not None and job["state"] in ("PENDING", "RETRY") and job["next_attempt_ms"] > current:
-                break
-            await self.one(current)
+            # Independent pages share the existing four-slot/rate limiter. Two
+            # slots remain available if live recovery arrives during network I/O.
+            # TaskGroup cancels/joins siblings before releasing the worker lock.
+            async with asyncio.TaskGroup() as group:
+                for item in due:
+                    group.create_task(self.one(current, selected=item, admission_deadline=deadline))
+            processed += len(due)
             await asyncio.sleep(0)
 
-    async def one(self, now: int) -> None:
+    async def one(
+        self,
+        now: int,
+        *,
+        selected: tuple[str, dict[str, Any]] | None = None,
+        admission_deadline: float | None = None,
+    ) -> None:
         # Live gaps and bootstrap keep priority over historical analytics in the same REST budget.
+        if admission_deadline is not None and time.monotonic() >= admission_deadline:
+            return
         if any(v[0] < 20 for v in self.market._pending.values()) or self.market._working:
             return
-        for pending, binding in self.history.items("analytics-gap-pending:", 1):
+        for pending, binding in (
+            [selected] if selected is not None else self.history.items("analytics-gap-pending:", 1)
+        ):
             job = self.history.get("analytics-gap:" + binding["id"])
             if (
                 job is None
@@ -179,6 +202,8 @@ class AnalyticsRecovery:
                 return
             market, symbol, tf = job["stream"].split("/")
             step = int(tf[:-1]) * MINUTE
+            if admission_deadline is not None and time.monotonic() >= admission_deadline:
+                return
             try:
                 response = await self.market._get(
                     "/v5/market/kline",
