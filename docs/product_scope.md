@@ -138,6 +138,9 @@ Requirement `REQ-E07`; трассировка: S01 / TELEGRAM / REALTIME ALERTS;
 
 Telegram — основной интерфейс владельца. Компактный event показывает instrument/market, detector/TF/direction/metrics/strength/freshness; optional derivatives context только полезный и не перегружает сообщение. Alert открывает корректный рынок Bybit. Control deck доступен без запоминания slash-команд; ручной сценарий полезен независимо от trading agent.
 
+
+Уточнение ручного интерфейса17Oct2026 по выбранной TELEGRAM-UX Goal: основные разделы компактно сгруппированы по задачам; открытие deck/status/settings/delivery panels не меняет сохраненное состояние уведомлений. Включение/выключение и применение параметров — явные действия владельца. Настройка отдельных TF отличается от применения ко всем; manual input имеет отмену и проверку актуальной revision. Active source coverage, выбранный owner scope и разрешенные Telegram detectors показаны раздельно. Краткая карточка сохраняет обязательные metrics/freshness и переход к полным сохраненным данным; существующие command identifiers/old callbacks сохраняют совместимость. Это уточнение AC-07/08, не новые AC и не изменение formulas/retention/торговых границ.
+
 | AC | Критерий и способ проверки |
 | --- | --- |
 | AC-07-01 — Полный realtime alert | При meaningful live event владелец видит compact instrument/market/type/TF/direction/metrics/strength/freshness; optional context помечен. Проверка: render fixtures, length/parse tests и owner Bot API smoke. |

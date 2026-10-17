@@ -113,7 +113,7 @@ async def test_preset_status_and_sample_show_effective_values_not_legacy_fields(
     message = update("/settings")
     await controller.handle(message, None)
     text = "".join(call.args[0] for call in message.effective_message.reply_text.call_args_list)
-    assert "15m: ≥ 4%" in text and "SMA periods: 12" in text and "Спайк оборота: ≥ x3" in text
+    assert "15m: 4%" in text and "среднее за 12 свечей" in text and "Оборот: ×3" in text
     message = update("/sample_alert")
     await controller.handle(message, None)
     assert "TF 15m · +4.3%" in message.effective_message.reply_text.call_args.args[0]

@@ -2,6 +2,92 @@
 
 Canonical requirements: [product_scope.md](product_scope.md). Этот план хранит статусы AC, Goal, все findings и компактное Evidence. Raw logs, исследовательские probes и подробный audit report остаются вне tracked repository. История прежних checkpoints доступна в Git; отмененные конвертация старой тестовой истории и повторный reset не являются обязательствами.
 
+## Goal TELEGRAM-UX — ACTIVE
+
+Основание:17Oct2026 владелец после итогового screenshot-аудита41замечания поручил «Хорошо. Тогда бери как единую goal». Встроенная Goal активирована17Oct; весь scope UX-001…UX-041, без добавления AC/пересчета процентов. Результат — рабочий понятный Telegram manual radar; неизвестности закрываются проверкой и правдивым UI, а не удалением функций.
+
+Baseline свежего origin/main46c5513ea8e5ef72c4fc1f262080bcf09e4cdd07; branch `codex/telegram-ux-20261017`, root worktree. Git fetch/FF/remote main и protections проверены: strict ci-required/app15368, enforce admins, required approvals0. PR57 остается draft/OPEN/head5be499d; COHORTS PAUSED и не является частью этой Goal. Один основной PR для всех41пунктов. Класс поставки NONE: без physical schema/retention/methodology changes.
+
+Non-goals: F47/F48, capacity optimization/proof, resume COHORTS, reset/конвертация/удаление market data, изменение formulas/precision/source coverage, receiver activation, credentials/infra/workflow policy. Все markets/4TF/5families, public data/provenance/exports, delivery isolation и совместимость существующих явных commands/old callbacks сохраняются.
+
+Решения UI в рамках выбранных замечаний: root6разделов Статус/Радар/История/Аналитика/Настройки/Помощь; open panels и /start не включают alerts/digest/agent. Изменения выполняют явные on/off/apply actions. Defaults/active values и scope параметров видны; per-TF редактирование отдельно от «ко всем». Manual dialog имеет cancel/назад и CAS revision. Краткий alert сохраняет обязательные metrics/freshness, подробности/IDs/provenance доступны из события; отображение чисел не меняет stored/export values. Время UI явно МСК/UTC; source timestamps неизменны. Source health и выбранный охват показываются раздельно. Unknown/disabled состояния не выдаются за0/ошибку; full diagnostic report доступен отдельно без full scans ради UI.
+
+### Порядок, зависимости и DoD
+
+1. Routing/default read-only panels, owner guards, action semantics/старые aliases.
+2. Status/source scope и UX-018 bounded investigation; settings/list/profiles/manual/CAS.
+3. Compact alert/details, readable history/outcome navigation/analytics/context и помощь.
+4. Cheap diagnostic summary/full report, unified block splitter и компактные меню.
+5. Targeted tests/quality/self-review, один commit batch/PR после всего local scope, requiredCI.
+6. Merge/runtime CD только после окончания существующего finite observer: baseline17Oct07:02:41МСК, earliest24h18Oct07:02:41МСК; без restart/повторного замера. Config3→4 во время owner UI tests ограничивает steady-day inference. До этого PR остается draft; auto-merge не включать.
+
+DoD: каждый UX ID закрыт source/evidence и meaningful verification либо доказанно опровергнут; все предусмотренные новые/старые entry paths имеют owner guard и ожидаемые read/write semantics, state читается после изменения; навигация/ввод/ошибки не теряют owner settings. История и настройки остаются воспроизводимыми; optional modules независимы. Latest requiredCI/protections, self-review, merge, exact source/image/health/readiness и bounded application/persistence post-checks ordinaryCD<=900s обязательны для всей Goal. Ad-hoc acceptance рекомендована, не подменяет автоматические gates.
+
+### Validation Plan TELEGRAM-UX
+
+| Риск / критерий | Проверка / результат | Команда / среда / этап | Gate |
+| --- | --- | --- | --- |
+| Six failing entries и все навигационные пути | Reply labels/slash/callback → корректный panel; open не меняет preference, explicit changes читаются обратно; stranger/group без доступа | Существующие test_bot/test_outcome_ui плюс содержательная routing/state regression matrix; root WindowsPython3.12 / local | REQUIRED |
+| Dialog/settings/list/profile | Invalid/NaN/concurrent revision/cancel/back/no-op; heterogeneous TF; сохранение custom; typed markets/empty state/restart | Targeted fixture tests, без production settings mutation | REQUIRED |
+| Status/scope/freshness/diagnostics | Counts с единицами/age, actual vs forecast, optional OFF/unknown, cached/degraded/empty states; UX-018 separate reconcile fixture/bounded read-only state | tests + bounded runtime records без новых full scans | REQUIRED |
+| Alerts/history/outcome/analytics | Все5families/оба рынка/4TF, event→detail→outcome, chronology/flags/retention boundaries; block splitter/length | Existing rendering/event/outcome tests + selected UI regressions | REQUIRED |
+| Cheap quality | docs/ruff/format/mypy, no secrets, no unrelated changes; root | `.venv-g1/Scripts/python.exe scripts/checks.py quality` | REQUIRED local |
+| Main validation | Latest ci-required с full applicable Linux/native/image suite; no skipped applicable job | Existing PR workflow, exact revision | REQUIRED CI |
+| Runtime delivery | Observer finished; primaryCD identity/backup/source/image/health/persistence/source coverage; saved owner values | Existing release flow и bounded read-only smoke; no extra messages/settings actions | REQUIRED after merge |
+| Manual appearance/accessibility | Реальный Telegram client/mobile/zoom/contrast/focus/screen reader | Owner ad-hoc после поставки | RECOMMENDED; screenshots не доказывают WCAG |
+
+### Findings TELEGRAM-UX — стабильные IDs screenshot-аудита
+
+Evidence baseline:61ownerPNG/24экрана17Oct2026, source46c5513/runtime-codeaffdd7bc;16offline probes и4existing relevant testsPASS. Подробные screenshots/research локальны; здесь компактный implementation registry. HIGH/MEDIUM — уверенность полного вывода, не все screenshot risks доказаны как backend failure. Все41пункта IN_PROGRESS до индивидуального closure; нет автоматического REMOVE или удаления возможностей.
+
+| ID | Суть / область | Приоритет / действие | Связанные AC | Evidence / критерий закрытия | Confidence / статус |
+| --- | --- | --- | --- | --- | --- |
+| UX-001 | Главные metrics теряются в alert | P2 / REFACTOR | AC-07-01 | Owner screenshot; interpretation limits; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / IN_PROGRESS |
+| UX-002 | Смешанный язык и raw names | P2 / REFACTOR | AC-07-01/03/07 | Owner screenshot; interpretation limits; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / IN_PROGRESS |
+| UX-003 | Нечитаемые числа и избыточная precision в UI | P2 / REFACTOR | AC-07-01/04 | Owner screenshot; interpretation limits; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / IN_PROGRESS |
+| UX-004 | Служебные IDs/revisions на первом экране | P2 / REFACTOR | AC-07-01; AC-04-03 | Owner screenshot; interpretation limits; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / IN_PROGRESS |
+| UX-005 | Fresh/expired confirmations не объяснены | P2 / REFACTOR | AC-05-04; AC-07-01 | Owner screenshot; interpretation limits; закрытие: правильный раздел/действие/понятный output и regression по scope | MEDIUM / IN_PROGRESS |
+| UX-006 | Причина обновления episode не выделена | P2 / REFACTOR | AC-05-02; AC-07-01 | Owner screenshot; interpretation limits; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / IN_PROGRESS |
+| UX-007 | Неудобные timestamps/timezone | P2 / REFACTOR | AC-05-04; AC-07-01 | Owner screenshot; interpretation limits; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / IN_PROGRESS |
+| UX-008 | Длинные первые экраны | P2 / REFACTOR | AC-07-01/03 | Owner screenshot; interpretation limits; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / IN_PROGRESS |
+| UX-009 | Status смешан с settings и деталями | P2 / REFACTOR | AC-07-04 | Owner screenshot; interpretation limits; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / IN_PROGRESS |
+| UX-010 | Splitter разрывает слова/JSON | P1 / FIX | AC-07-03 (общий renderer) | Code/offline path confirmed; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / READY по коду; targeted86PASS, CI PENDING |
+| UX-011 | Composite-only status выглядит общим | P1 / REFACTOR | AC-07-04; E04 | Code/offline path confirmed; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / IN_PROGRESS |
+| UX-012 | Health/freshness/completeness смешаны | P2 / REFACTOR | AC-07-04; AC-12-03 | Owner screenshot; interpretation limits; закрытие: правильный раздел/действие/понятный output и regression по scope | MEDIUM / IN_PROGRESS |
+| UX-013 | Snapshot cadence названа проверкой сигналов | P2 / REFACTOR | AC-03-05; AC-07-04 | Code/offline path confirmed; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / IN_PROGRESS |
+| UX-014 | Selected card market/TF похожи на global scope | P2 / REFACTOR | AC-03-02; AC-07-04 | Owner screenshot; interpretation limits; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / IN_PROGRESS |
+| UX-015 | Failed threshold выглядит системной ошибкой | P2 / REFACTOR | AC-07-04 | Owner screenshot; interpretation limits; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / IN_PROGRESS |
+| UX-016 | У счетчика coverage не указана единица | P2 / REFACTOR | AC-07-04; AC-12-03 | Code/offline path confirmed; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / IN_PROGRESS |
+| UX-017 | Dump вместо результата изменения режима | P2 / REFACTOR | AC-07-03; AC-08-02 | Owner screenshot; interpretation limits; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / IN_PROGRESS |
+| UX-018 | Пустой custom list и actual source scope не объяснены | P1 / DEFER | AC-02-01/04; AC-08-01 | Screenshot +47th observer sample config4/1104streams; verify owner/reconcile/source отдельно; закрытие: правильный раздел/действие/понятный output и regression по scope | MEDIUM / IN_PROGRESS |
+| UX-019 | Неявный рынок технического ввода списка | P2 / REFACTOR | AC-02-04; AC-07-03 | Owner screenshot; interpretation limits; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / IN_PROGRESS |
+| UX-020 | Add/remove prompts и отмена ввода | P2 / REFACTOR | AC-02-04; AC-07-03 | Owner screenshot; interpretation limits; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / IN_PROGRESS |
+| UX-021 | Empty clear дает ложный результат | P2 / REFACTOR | AC-02-04; AC-07-03 | Owner screenshot; interpretation limits; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / IN_PROGRESS |
+| UX-022 | Alerts reply entry отклоняет label | P1 / FIX | AC-07-03/05 | Code/offline path confirmed; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / READY по коду; targeted86PASS, CI PENDING |
+| UX-023 | Термины без понятных примеров | P2 / REFACTOR | AC-07-07 | Owner screenshot; interpretation limits; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / IN_PROGRESS |
+| UX-024 | Diagnostics flood raw JSON | P1 / REFACTOR | AC-12-03; E07 | Owner screenshot; interpretation limits; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / IN_PROGRESS |
+| UX-025 | Actual/forecast/logical/physical storage не различимы | P2 / REFACTOR | AC-13-06; AC-12-03 | Owner screenshot; interpretation limits; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / IN_PROGRESS |
+| UX-026 | Optional OFF/UNSET выглядит failure/PENDING | P2 / REFACTOR | AC-09-05; AC-11-03; AC-12-03 | Owner screenshot; interpretation limits; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / IN_PROGRESS |
+| UX-027 | Pending counts не объясняют due/overdue | P2 / REFACTOR | AC-06-02; AC-12-03; AC-13-05 | Owner screenshot; interpretation limits; закрытие: правильный раздел/действие/понятный output и regression по scope | MEDIUM / IN_PROGRESS |
+| UX-028 | Profiles не объясняют изменения/возврат custom | P2 / REFACTOR | AC-08-03 | Owner screenshot; interpretation limits; закрытие: правильный раздел/действие/понятный output и regression по scope | MEDIUM / IN_PROGRESS |
+| UX-029 | В history rows нет времени | P2 / REFACTOR | AC-06-01; E07 | Code/offline path confirmed; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / IN_PROGRESS |
+| UX-030 | History/delivery/suppressed flags не различимы | P2 / REFACTOR | AC-06-01; AC-07-05 | Owner screenshot; interpretation limits; закрытие: правильный раздел/действие/понятный output и regression по scope | MEDIUM / IN_PROGRESS |
+| UX-031 | History entrypoint ограничен12 без навигации | P2 / DEFER | E06/E07: уточнение навигации, не новый AC | Code/offline path confirmed; закрытие: правильный раздел/действие/понятный output и regression по scope | MEDIUM / IN_PROGRESS |
+| UX-032 | Outcomes reply entry разбирает label как UUID | P1 / FIX | E07; AC-07-06: event→outcome отдельно | Code/offline path confirmed; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / READY по коду; targeted86PASS, CI PENDING |
+| UX-033 | Analytics/compare reply entries разбирают labels как groups | P1 / FIX | AC-06-05; E07 | Code/offline path confirmed; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / READY по коду; targeted86PASS, CI PENDING |
+| UX-034 | Digest reply entry требует command syntax | P1 / FIX | AC-11-02; AC-07-05 | Code/offline path confirmed; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / READY по коду; targeted86PASS, CI PENDING |
+| UX-035 | Derivatives context путается с core Perpetual | P2 / DOCUMENT | AC-11-03/04 | Owner screenshot; interpretation limits; закрытие: правильный раздел/действие/понятный output и regression по scope | MEDIUM / IN_PROGRESS |
+| UX-036 | Agent reply entry требует command syntax | P1 / FIX | AC-09-05; D23 | Code/offline path confirmed; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / READY по коду; targeted86PASS, CI PENDING |
+| UX-037 | Главное меню21buttons/11rows | P2 / REFACTOR | AC-07-03 | Code/offline path confirmed; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / READY по коду; targeted86PASS, CI PENDING |
+| UX-038 | Плоский каталог32commands | P2 / REFACTOR | AC-07-03 | Code/offline path confirmed; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / IN_PROGRESS |
+| UX-039 | /start включает Alerts вместо простого открытия | P2 / DOCUMENT | AC-07-05; D03, UX-контракт требует решения | Code/offline path confirmed; закрытие: правильный раздел/действие/понятный output и regression по scope | MEDIUM / READY по коду; targeted86PASS, CI PENDING |
+| UX-040 | Manual button ведет в help | P2 / IMPLEMENT | AC-08-03; AC-07-03 | Code/offline path confirmed; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / READY по коду; targeted86PASS, CI PENDING |
+| UX-041 | Price check selected TF при записи всем TF | P2 / FIX | AC-08-03; AC-07-04 | Code/offline path confirmed; закрытие: правильный раздел/действие/понятный output и regression по scope | HIGH / READY по коду; targeted86PASS, CI PENDING |
+
+### Checkpoint TELEGRAM-UX
+
+Реализовано по коду10/41замечаний: UX-010/022/032–034/036–037/039–041. Routing/read-only panels, root6sections, manual/CAS/cancel, profile preview/custom restore и per-TF paths подготовлены; остальные presentation/scope/diagnostics/history findings в работе. Targeted bot/UI/outcome86PASS; mypy52modulesPASS. RequiredCI/self-review полного diff/merge/CD еще PENDING. Local baseline clean, отдельная branch создана. Observer read-only17Oct10:51:54МСК: OBSERVING/47samples/15interruptions, latest47config4/1104streams/analyticsOK, unit active/PID1586329, тот же baseline SHA/container/source/StartedAt; final отсутствует. Новый замер/config/restart не выполнялись. Следующий шаг: source scope/status/details/history/diagnostics и meaningful regressions; цель целиком остается ACTIVE. PR/CI/CD этой Goal пока отсутствуют, merge gate observer PENDING.
+
 ## Полный аудит 65 AC — 2026-10-17
 
 Основание: явное поручение владельца сверить все65AC с требованиями, кодом, tests и actual runtime, обновить план и не прерывать суточный замер. Проверенный свежий `origin/main`: **affdd7bc71e1c8eb362bcf08f0e898b52095d9cd**, совпадает с deployed source. S01: metadata17Oct не изменились, modified2026-10-16T08:48:31.536Z; полностью прочитаны170paragraphs/t.0/native revision из spec. Учитываются последующие решения S05–S08/D23–D25. В источнике prose requirements, а не отдельный список AC:65 стабильных критериев =58 исходных+7storage, без новых/исключенных IDs.
@@ -39,9 +125,9 @@ Canonical requirements: [product_scope.md](product_scope.md). Этот план 
 | P3 F24/F31/F32 | Не подтвержденные orphan usage/resource limits/UX polish — только по основанию и выбранному scope | DOCUMENT/DEFER |
 | External TA-CW | Credentials/binding/receiver activation/live signed acceptance по checklist handoff | Принимающий trading-agent проект, не CW blocker |
 
-### Current implementation Goal — COHORTS, PAUSED
+### Приостановленная отдельная Goal — COHORTS, PAUSED
 
-Встроенная Goal фактически **PAUSED**; этот аудит не возобновляет ее и не запускает merge/CD PR57. Результат: ускоренный validated cohort reader без новых codecs/формата/writer/метрик/retention. Scope F46/diagnostics; non-goals: изменение production history/settings, новый reset/old conversion, сокращение аналитики или охвата, рост RAM, смена ordinary900s gates. Baseaffdd7bc, branch `codex/cohort-diagnostics-performance-20261017`, draft PR57/head5be499da59497a392c747debda8c42cda589155c.
+Goal COHORTS сохранена **PAUSED**; TELEGRAM-UX не возобновляет ее и не запускает merge/CD PR57. Результат: ускоренный validated cohort reader без новых codecs/формата/writer/метрик/retention. Scope F46/diagnostics; non-goals: изменение production history/settings, новый reset/old conversion, сокращение аналитики или охвата, рост RAM, смена ordinary900s gates. Baseaffdd7bc, branch `codex/cohort-diagnostics-performance-20261017`, draft PR57/head5be499da59497a392c747debda8c42cda589155c.
 
 | Задача / DoD | Фактическое состояние |
 | --- | --- |
@@ -256,4 +342,4 @@ Confidence HIGH по репродуцированным F47/F48, tested determin
 
 17Oct2026: audit branch `codex/audit-ac65-20261017`, baseaffdd7bc71e1c8eb362bcf08f0e898b52095d9cd, root worktree. Разрешенный diff только `docs/product_scope.md`/`docs/open_issues.md`; code/runtime fixes не внесены. Источник/code/tests/runtime и65матрица проверены, new F47/F48/4partial AC; plan/spec согласованы без новых AC. Local canonical quality,65ID/48finding/test-node checks и self-review PASS. Latest required docs CI и docs PR merge — следующие gates; их PASS не предсказывается. После merge release selector должен датьcode=false/build+production N/A; source56/container/StartedAt/observer/baseline readback unchanged обязателен. Никакой metadata-only followup PR не нужен.
 
-PR57/5be499d draft, его code/test/ветка и прочие существующие branches/materials сохранены. При будущем resume PR57 актуализировать base/spec/plan и разрешить пересечение документации с этим аудитом, сохранив все findings/AC/observation data. Current built-in implementation Goal PAUSED; audit не имитирует ее completion/resume. Обычные backup/CD<=15min и RAM limits прежние. Наблюдение продолжается до собственного конечного результата, агент не ждет сутки в непрерывном цикле.
+PR57/5be499d draft, его code/test/ветка и прочие существующие branches/materials сохранены. При будущем resume PR57 актуализировать base/spec/plan и разрешить пересечение документации с этим аудитом, сохранив все findings/AC/observation data. COHORTS PAUSED; отдельная TELEGRAM-UX ACTIVE не имитирует ее completion/resume. Обычные backup/CD<=15min и RAM limits прежние. Наблюдение продолжается до собственного конечного результата, агент не ждет сутки в непрерывном цикле.

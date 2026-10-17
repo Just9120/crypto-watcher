@@ -62,6 +62,8 @@ from .render import (
 from .source_context import context as public_context
 from .storage import RevisionConflict, Store
 from .telegram_delivery import TelegramDelivery
+from .telegram_ui import ControlDeck
+from .telegram_views import split_message
 
 logger = logging.getLogger(__name__)
 COMMANDS = {
@@ -123,7 +125,22 @@ MENU_ACTIONS = {
     "Derivatives": "derivatives",
     "Сравнение": "compare",
     "Trading agent": "agent",
+    "📡 Радар": "radar",
+    "🗂 История": "history",
+    "📈 Аналитика": "analytics_home",
+    "❔ Помощь": "help",
 }
+PUBLISHED_COMMANDS = (
+    "start",
+    "status",
+    "watchlist",
+    "history",
+    "analytics",
+    "settings",
+    "alerts",
+    "help",
+    "diagnostics",
+)
 MANUAL_FIELDS = {
     "watchlist_multiplier",
     "signal_timeframe",
@@ -145,6 +162,7 @@ class Controller:
         self.store = store
         self.market = market
         self.history = History(store)
+        self.ui = ControlDeck(self)
         self.agent = AgentDelivery(store, getattr(market, "client", None))
         self.recovery = AnalyticsRecovery(store, market) if isinstance(market, BybitRadar) else None
         self.outcomes = OutcomeWorker(
@@ -204,7 +222,7 @@ class Controller:
         message = update.effective_message
         if message is None:
             return
-        chunks = [text[i : i + 1800] for i in range(0, len(text), 1800)] or [""]
+        chunks = split_message(text)
         for index, chunk in enumerate(chunks):
             await message.reply_text(chunk, reply_markup=markup if index == len(chunks) - 1 else None)
 
@@ -272,19 +290,24 @@ class Controller:
                     parts = text.split(maxsplit=1)
                     command = parts[0][1:].split("@", 1)[0].lower()
                     raw = parts[1] if len(parts) > 1 else ""
+                    if command != "input":
+                        self.ui.cancel()
+                elif text in MENU_ACTIONS:
+                    command, raw = MENU_ACTIONS[text], ""
+                    self.ui.cancel()
                 else:
-                    command, raw = MENU_ACTIONS.get(text, "input"), text
+                    if await self.ui.input(update, text):
+                        return
+                    command, raw = "input", text
                 await self.command(update, command, raw)
         except (ConfigError, RevisionConflict) as exc:
-            await self.send(update, f"Настройка отклонена: {exc}. Активные значения сохранены.")
+            await self.send(update, f"Действие не выполнено: {exc}. Активные значения сохранены.")
         except (MarketError, TelegramError):
             await self.send(update, "Данные/доставка временно недоступны. Подробнее в диагностике.")
 
     async def command(self, update: Update, command: str, raw: str = "") -> None:
-        if command == "start":
-            self.store.set_enabled(True)
-            await self.send(update, "Control deck владельца", menu())
-            command = "settings"
+        if await self.ui.command(update, command, raw):
+            return
         snapshot = self.store.snapshot()
         if command == "settings":
             await self.send(update, settings_text(snapshot), settings_keyboard(snapshot))
@@ -424,6 +447,7 @@ class Controller:
             await self.send(update, json.dumps(result["agent_delivery"], ensure_ascii=False, indent=2))
         elif command in ("profiles", "profile"):
             if command == "profile" and raw:
+                self.ui.remember_custom()
                 self.store.update(snapshot.revision, snapshot.settings.with_profile(raw.strip().lower()))
                 self.store.put_runtime("last_poll_ts", 0)
             await self.send(update, settings_text(self.store.snapshot()), profiles_keyboard())
@@ -625,7 +649,9 @@ class Controller:
             return
         await query.answer()
         parts = str(query.data or "").split(":")
-        if parts[0] == "deck" and len(parts) == 2 and parts[1] in ("profiles", "detectors"):
+        if parts[0] == "ui":
+            await self.ui.callback(update, parts[1:])
+        elif parts[0] == "deck" and len(parts) == 2 and parts[1] in ("profiles", "detectors"):
             await self.command(update, parts[1])
         elif parts[0] in ("profile", "event", "outcomes", "derivatives", "recompare") and len(parts) == 2:
             await self.command(update, parts[0], parts[1])
@@ -655,7 +681,7 @@ class Controller:
                 await self.command(update, "terms")
                 return
             if action == "manual":
-                await self.command(update, "help")
+                await self.ui.callback(update, ["parameters"])
                 return
             if action == "status":
                 await self.command(update, "status")
@@ -1016,7 +1042,7 @@ def application(controller: Controller) -> Application[Any, Any, Any, Any, Any, 
             [
                 BotCommand(command, label)
                 for command, label in COMMANDS.items()
-                if not command.startswith("reset")
+                if command in PUBLISHED_COMMANDS
             ],
             scope=BotCommandScopeChat(controller.infrastructure.delivery_chat_id),
         )

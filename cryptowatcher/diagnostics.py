@@ -37,6 +37,7 @@ def snapshot(store: Store, seconds: float = 3) -> dict[str, Any]:
     from .storage_meter import report
 
     return {
+        "at_ms": int(time.time() * 1000),
         "storage": bounded(lambda: report(store)),
         "history_generation": store.get_runtime("history_generation", {"state": "LEGACY"}),
         "database": {

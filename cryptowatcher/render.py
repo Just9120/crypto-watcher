@@ -7,12 +7,13 @@ from typing import Any
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 
-from .config import TIMEFRAMES, OwnerSettings
+from .config import OwnerSettings
 from .detector_config import FAMILIES, effective_parameters
 from .detectors import freshness
 from .enrichment import freshness as metric_freshness
 from .market import RadarResult
 from .storage import Snapshot
+from .telegram_views import FAMILY, PROFILE, event_summary, keyboard, settings_summary, when
 
 SAMPLE_SYMBOL = "SOLUSDT"
 
@@ -22,41 +23,15 @@ def market_label(settings: OwnerSettings) -> str:
 
 
 def settings_text(snapshot: Snapshot) -> str:
-    s = snapshot.settings
-    parameters = effective_parameters(s)
-    prices = ", ".join(f"{tf}: ≥ {parameters['price_' + tf]:g}%" for tf in TIMEFRAMES)
-    return (
-        f"⚙️ Bybit Spot USDT + USDT Perpetual · пять detectors\n"
-        f"Режим: {'Широкий universe' if s.alert_universe_mode == 'top' else 'Мой список'}\n"
-        f"Проверка сигналов: {s.radar_poll_sec}s\nStreams: 1m/3m/5m/15m одновременно\n"
-        f"Карточка/пример: {market_label(s)} · {s.signal_timeframe}\n"
-        f"Движение цены: {prices}\nСпайк оборота: ≥ x{parameters['turnover_ratio']:g}\n"
-        f"Ликвидность 24ч: ≥ {s.liquidity_floor_24h:,.0f} USDT\nSMA periods: {int(parameters['turnover_lookback'])}\n"
-        f"Composite: все три условия одновременно.\nEpisodes: новый detector/TF либо strength×1.5; coalesce2s.\n"
-        f"Profile: {s.profile}\nTelegram detectors: {', '.join(s.alert_detectors) or 'выключены'}\n"
-        f"Watchlist sensitivity multiplier: {s.watchlist_multiplier:g}\n"
-        f"Outcome horizons: {','.join(map(str, s.outcome_horizons))} min · digest interval {s.digest_interval_min} min\n"
-        f"Optional derivatives context: {'ON' if s.enrichment_enabled else 'OFF'} · ticker1min/OI5min\n"
-        f"Configuration revision: {snapshot.revision}"
-        + "\nActual detector parameters:\n"
-        + ", ".join(f"{key}={value:g}" for key, value in effective_parameters(s).items())
-    )
+    return settings_summary(snapshot)
 
 
 def menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         [
-            ["📊 Статус", "⚙️ Настройки"],
-            ["Радар: Universe", "Радар: Мой список"],
-            ["Список", "Добавить монету"],
-            ["Удалить монету", "Очистить список"],
-            ["🔔 Alerts", "🔕 Mutes"],
-            ["Термины", "Диагностика"],
-            ["Detectors", "Profiles"],
-            ["История", "Outcomes"],
-            ["Статистика", "Digest"],
-            ["Derivatives", "Сравнение"],
-            ["Trading agent"],
+            ["📊 Статус", "📡 Радар"],
+            ["🗂 История", "📈 Аналитика"],
+            ["⚙️ Настройки", "❔ Помощь"],
         ],
         resize_keyboard=True,
         is_persistent=True,
@@ -64,93 +39,49 @@ def menu() -> ReplyKeyboardMarkup:
 
 
 def settings_keyboard(snapshot: Snapshot) -> InlineKeyboardMarkup:
-    s = snapshot.settings
-    parameters = effective_parameters(s)
-    rows: list[list[InlineKeyboardButton]] = []
-    groups = (
-        ("Проверка рынка", "rdr", (60, 90, 120, 180), s.radar_poll_sec),
-        ("Таймфрейм карточки (все streams активны)", "sgtf", TIMEFRAMES, s.signal_timeframe),
-        (
-            "Движение цены (%) — manual для всех TF",
-            "pm",
-            (1.0, 1.5, 2.0, 3.0),
-            parameters[f"price_{s.signal_timeframe}"],
-        ),
-        ("Спайк оборота (x)", "sp", (2.0, 3.0, 4.0, 5.0), parameters["turnover_ratio"]),
-        (
-            "Ликвидность 24ч (USDT)",
-            "lq",
-            (1_000_000, 5_000_000, 10_000_000, 25_000_000),
-            s.liquidity_floor_24h,
-        ),
-    )
-    for label, key, values, active in groups:
-        rows.append([InlineKeyboardButton(label, callback_data="st:noop")])
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    f"{'✅ ' if value == active else ''}{value:g}"
-                    if isinstance(value, (float, int))
-                    else f"{'✅ ' if value == active else ''}{value}",
-                    callback_data=f"st:{key}:{value}",
-                )
-                for value in values
-            ]
-        )
-    rows.append(
+    return keyboard(
         [
-            InlineKeyboardButton("Ручное значение", callback_data="st:manual"),
-            InlineKeyboardButton("Термины", callback_data="st:help"),
+            [("Профили", "ui:profiles"), ("Пороги детекторов", "ui:parameters")],
+            [("Уведомления", "ui:alerts"), ("Семейства уведомлений", "ui:detectors")],
+            [("Контекст деривативов", "ui:enrichment"), ("Доставка агенту", "ui:agent")],
+            [("Карточка и ввод", "ui:card"), ("Сроки результатов", "ui:field:outcome_horizons")],
         ]
     )
-    rows.append(
-        [
-            InlineKeyboardButton("Статус", callback_data="st:status"),
-            InlineKeyboardButton("Обновить", callback_data="st:refresh"),
-        ]
-    )
-    rows.append(
-        [
-            InlineKeyboardButton("Profiles", callback_data="deck:profiles"),
-            InlineKeyboardButton("Detectors", callback_data="deck:detectors"),
-        ]
-    )
-    return InlineKeyboardMarkup(rows)
 
 
 def detectors_keyboard(snapshot: Snapshot) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
+    return keyboard(
         [
             [
-                InlineKeyboardButton(
-                    f"{'🔔' if family in snapshot.settings.alert_detectors else '🔕'} {family}",
-                    callback_data=f"detector:{family}:{'off' if family in snapshot.settings.alert_detectors else 'on'}",
+                (
+                    ("Включены: " if family in snapshot.settings.alert_detectors else "Выключены: ")
+                    + FAMILY[family],
+                    f"detector:{family}:{'off' if family in snapshot.settings.alert_detectors else 'on'}",
                 )
             ]
             for family in FAMILIES
-        ]
+        ],
+        back="settings",
     )
 
 
 def profiles_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton(name, callback_data="profile:" + name)]
-            for name in ("normal", "conservative", "sensitive")
-        ]
+    return keyboard(
+        [[(PROFILE[name], "ui:profile:" + name)] for name in ("normal", "conservative", "sensitive")],
+        back="settings",
     )
 
 
 def history_keyboard(events: list[dict[str, Any]]) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
+    return keyboard(
         [
             [
-                InlineKeyboardButton(
-                    f"{e['symbol']} {e['market_type']} {e['detector_id']} {e['timeframe']}",
-                    callback_data="event:" + e["event_id"],
+                (
+                    f"{when(e['market_observation_ms'])} · {e['symbol']} · {e['timeframe']}",
+                    "event:" + e["event_id"],
                 )
             ]
-            for e in events[:12]
+            for e in events[:6]
         ]
     )
 
@@ -160,14 +91,15 @@ def event_keyboard(event: dict[str, Any]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             *rows,
+            [InlineKeyboardButton("Пересчитать сравнение", callback_data="recompare:" + event["event_id"])],
             [
                 InlineKeyboardButton(
-                    "Пересчитать prior comparators", callback_data="recompare:" + event["event_id"]
+                    "Полные исходные данные", callback_data="ui:eventfile:" + event["event_id"]
                 )
             ],
             [
-                InlineKeyboardButton("Событие", callback_data="event:" + event["event_id"]),
-                InlineKeyboardButton("Outcome", callback_data="outcomes:" + event["event_id"]),
+                InlineKeyboardButton("Подробности", callback_data="event:" + event["event_id"]),
+                InlineKeyboardButton("Результат", callback_data="outcomes:" + event["event_id"]),
             ],
         ]
     )
@@ -287,18 +219,21 @@ def enrichment_text(value: dict[str, Any], now_ms: int) -> str:
 def notification_text(event: dict[str, Any], candidate: dict[str, Any], now_ms: int) -> str:
     episode = candidate["episode_snapshot"]
     reasons = {
-        "first_detection": "первое уведомление",
-        "new_detector": "новое семейство detector",
-        "new_timeframe": "новый подтверждающий TF",
-        "strengthening": "strength выросла ≥1.5×",
+        "first_detection": "Первое уведомление",
+        "new_detector": "Новое семейство подтверждения",
+        "new_timeframe": "Новый подтверждающий TF",
+        "strengthening": "Усиление эпизода: интенсивность выросла не менее чем в1,5раза",
     }
-    confirmations = ", ".join(
-        f"{key}(rev{value['settings_revision']},{freshness(value, now_ms)})"
-        for key, value in episode["confirmations"].items()
-    )
+    active = [key for key, value in episode["confirmations"].items() if freshness(value, now_ms) == "FRESH"]
+    expired = len(episode["confirmations"]) - len(active)
+    confirmations = ", ".join(f"{FAMILY.get(key.split('/')[0], key)} {key.split('/')[-1]}" for key in active)
     return (
-        event_text(event, now_ms) + f"\nПричина: {reasons[candidate['reason']]}\n"
-        f"Episode revision: {episode['revision']}\nПодтверждения: {confirmations}\nDelivery: {candidate['delivery_id']}"
+        reasons[candidate["reason"]]
+        + "\n"
+        + event_summary(event, now_ms)
+        + f"\nАктуальные подтверждения: {confirmations or 'нет'}."
+        + (f" Ранее подтверждений: {expired}; их свежесть истекла." if expired else "")
+        + "\nПодробности, исходные данные и последующее движение — по кнопкам."
     )
 
 
@@ -366,29 +301,19 @@ def sample_alert_text(snapshot: Snapshot) -> str:
 
 
 def status_text(snapshot: Snapshot, result: RadarResult, enabled: bool) -> str:
-    text = settings_text(snapshot) + f"\n\nAlerts: {'ON' if enabled else 'OFF'}\n"
-    text += f"Данные: {len(result.quotes)}/{result.requested}; ошибки/неполнота: {len(result.errors)}\n"
-    ranked = sorted(result.quotes.items(), key=lambda item: item[1]["turnover_spike_ratio"], reverse=True)[
-        :12
-    ]
-    for symbol, q in ranked:
-        s = (
-            OwnerSettings.from_payload(q["effective_settings"])
-            if "effective_settings" in q
-            else snapshot.settings
-        )
-        text += (
-            f"\n{symbol} · {q.get('freshness', 'N/A')}\nДвижение цены ({q['signal_timeframe']}): {q['price_change_tf']:+.2f}% "
-            f"{'✅' if abs(q['price_change_tf']) >= s.price_move_min else '❌'}\n"
-            f"Спайк оборота: x{q['turnover_spike_ratio']:.2f} "
-            f"{'✅' if q['turnover_spike_ratio'] >= s.turnover_spike_min else '❌'}\n"
-            f"Ликвидность 24ч: {q['turnover24h']:,.0f} USDT "
-            f"{'✅' if q['turnover24h'] >= s.liquidity_floor_24h else '❌'}\n"
-            f"Итог: {'сигнал есть' if q['meets_signal'] else 'сигнала нет'}\n"
-        )
-    if result.errors:
-        text += "\nНедостаток данных ограничивает расчёт; details в диагностике."
-    return text
+    s = snapshot.settings
+    return (
+        "📊 Радар Bybit\n"
+        "Рынки: Spot USDT + USDT Perpetual\n"
+        "Свечи: 1m / 3m / 5m / 15m одновременно\n"
+        "Детекторы: цена, оборот, пробой, диапазон, совпадение\n"
+        f"Охват: {'весь подходящий рынок' if s.alert_universe_mode == 'top' else 'мой список: ' + str(len(s.instruments()))}\n"
+        f"Мгновенные уведомления: {'включены' if enabled else 'выключены'}\n"
+        "Разрешены в Telegram: "
+        + (", ".join(FAMILY[f] for f in s.alert_detectors) or "нет")
+        + f"\nСлужебный composite-снимок: {len(result.quotes)}/{result.requested} оценок инструмент/рынок/TF; неполных/ошибок: {len(result.errors)}."
+        + "\nЭта оценка не означает наличие или отсутствие событий остальных детекторов."
+    )
 
 
 TERMS = (
