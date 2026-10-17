@@ -1,5 +1,8 @@
 import hashlib
+import json
 import os
+import subprocess
+import sys
 import time
 from contextlib import closing
 
@@ -155,3 +158,39 @@ def test_original_archive_never_qualifies_a_failed_integrity_result(tmp_path, ar
     with pytest.raises(RuntimeError, match="full integrity failed"):
         operation.original_archive_proof(source, {"status": "FAILED", "schema": 2})
     assert source.read_bytes() == raw
+
+
+def test_offline_integrity_binds_owner_when_runtime_env_file_omits_it(archived, monkeypatch, capsys):
+    from cryptowatcher import __main__ as cli
+
+    source, raw, _, _ = archived
+    monkeypatch.delenv("OWNER_USER_ID", raising=False)
+    monkeypatch.setattr(cli, "load_dotenv", lambda **kwargs: None)
+    command = operation.offline_command(
+        "qualified-image", str(source), ["-m", "cryptowatcher", "state-check"]
+    )
+    for index, argument in enumerate(command):
+        if argument == "-e":
+            key, value = command[index + 1].split("=", 1)
+            monkeypatch.setenv(key, value)
+    monkeypatch.setattr(sys, "argv", ["cryptowatcher", *command[command.index("cryptowatcher") + 1 :]])
+    assert cli.main() == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "integrity_ok" and result["owner_id"] == OWNER
+    assert source.read_bytes() == raw
+
+
+def test_failed_archive_records_safe_code_without_command_or_stderr_secrets():
+    exc = subprocess.CalledProcessError(
+        2,
+        ["command", "secret-token"],
+        stderr=json.dumps({"failure_code": "IO_ERROR", "reason": "secret-token"}),
+    )
+    assert operation.failure_details(exc) == {
+        "failure": "CalledProcessError",
+        "returncode": 2,
+        "failure_code": "IO_ERROR",
+    }
+    assert "secret-token" not in json.dumps(operation.failure_details(exc))
+    exc.stderr = "unstructured secret-token"
+    assert operation.failure_details(exc) == {"failure": "CalledProcessError", "returncode": 2}

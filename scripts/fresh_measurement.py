@@ -115,6 +115,58 @@ def original_archive_proof(source: Path, validation: dict[str, Any]) -> dict[str
     }
 
 
+def offline_command(image: str, database: str, args: list[str]) -> list[str]:
+    return [
+        *DOCKER,
+        "run",
+        "--rm",
+        "--pull=never",
+        "--network=none",
+        "--read-only",
+        "--no-healthcheck",
+        "--cap-drop=ALL",
+        "--security-opt=no-new-privileges",
+        "--user=10001:10001",
+        "--memory=4g",
+        "--memory-swap=4g",
+        "--cpus=1",
+        "--pids-limit=64",
+        "--env-file",
+        str(APP / ".env"),
+        "-e",
+        "OWNER_USER_ID=233382575",
+        "-e",
+        "DATABASE_FILE=" + database,
+        "--mount",
+        f"type=bind,src={APP}/data,dst=/data",
+        "--entrypoint=python",
+        image,
+        "-B",
+        *args,
+    ]
+
+
+def failure_details(exc: Exception) -> dict[str, Any]:
+    details: dict[str, Any] = {"failure": type(exc).__name__}
+    if isinstance(exc, subprocess.CalledProcessError):
+        details["returncode"] = exc.returncode
+        try:
+            diagnostic = json.loads(exc.stderr or "{}")
+        except (ValueError, TypeError):
+            diagnostic = {}
+        if isinstance(diagnostic, dict):
+            code = diagnostic.get("failure_code")
+            if code in {
+                "TIME_BUDGET_EXCEEDED",
+                "DATABASE_CORRUPT",
+                "INTERRUPTED",
+                "IO_ERROR",
+                "DATABASE_ERROR",
+            }:
+                details["failure_code"] = code
+    return details
+
+
 def execute(
     expected_source: str, expected_generation: str, *, approved: bool, archive_original: bool = False
 ) -> dict[str, Any]:
@@ -218,35 +270,7 @@ def execute(
             sync_directory(folder)
 
         def offline(database: str, args: list[str], timeout: float) -> str:
-            return run(
-                [
-                    *DOCKER,
-                    "run",
-                    "--rm",
-                    "--pull=never",
-                    "--network=none",
-                    "--read-only",
-                    "--no-healthcheck",
-                    "--cap-drop=ALL",
-                    "--security-opt=no-new-privileges",
-                    "--user=10001:10001",
-                    "--memory=4g",
-                    "--memory-swap=4g",
-                    "--cpus=1",
-                    "--pids-limit=64",
-                    "--env-file",
-                    str(env),
-                    "-e",
-                    "DATABASE_FILE=" + database,
-                    "--mount",
-                    f"type=bind,src={APP}/data,dst=/data",
-                    "--entrypoint=python",
-                    c["Image"],
-                    "-B",
-                    *args,
-                ],
-                timeout=timeout,
-            )
+            return run(offline_command(c["Image"], database, args), timeout=timeout)
 
         relative = "/data/sqlite/" + name
         private_code = "import json,os;from pathlib import Path;from cryptowatcher.storage import Store;from cryptowatcher.reset_history import private_state,signature;s=Store(Path(os.environ['DATABASE_FILE']),233382575,readonly=True);print(json.dumps({'private_sha256':signature(private_state(s)),'generation':s.get_runtime('history_generation')}));s.close()"
@@ -393,7 +417,7 @@ def execute(
             folder.chmod(0o700)
             return record
         except Exception as exc:
-            record.update(state="FAILED", failure=type(exc).__name__)
+            record.update(state="FAILED", **failure_details(exc))
             failed_phase = record["phase"]
             phase("FAILED_" + failed_phase)
             if (
