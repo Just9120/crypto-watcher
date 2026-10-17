@@ -2,7 +2,30 @@
 
 Canonical requirements: [product_scope.md](product_scope.md). Этот план хранит статусы AC, Goal, все findings и компактное Evidence. Raw logs, исследовательские probes и подробный audit report остаются вне tracked repository. История прежних checkpoints доступна в Git; отмененные конвертация старой тестовой истории и повторный reset не являются обязательствами.
 
-## Goal TELEGRAM-UX — ACTIVE
+## Работа OBSERVER — ACTIVE (17Oct2026)
+
+Основание: владелец поручил исправить диагностику observer, установить фактическую причину отклонения baseline и добиться нового OBSERVING; затем явно потребовал чистую рабочую БД для новых данных. Все прежние market data и observation files сохраняются, scheduled tasks запрещены. TELEGRAM-UX завершена PR59/60 и production39023354179/sourceadc230fa; прежний checkpoint ниже является историческим.
+
+Baseline: проверенный origin/main `adc230fa8d8d265e3b6c8463c27312e1e57e9eb3`, branch `codex/observer-baseline-diagnostics-20261017`, root worktree, clean; strict ci-required/app15368/admin enforcement/approvals0 проверены. Один основной PR. COHORTS/PR57 остаётся PAUSED.
+
+Scope: O01 — durable baseline attempts/phase/blockers/errors без потери rejected evidence; O02 — установить действующий blocker, исправить подтверждённую причину в этом scope без ослабления stability gates; O03 — отдельная exact-target fresh-measurement операция с полным сохранением текущей БД/sidecars в проверенном архиве, private-state restore и новой generation; O04 — required CI/merge/CD, сохранность всех observation folders и запуск нового24h observer с фактическими source/config/generation/baseline.
+
+Связанные критерии: AC-13-06, AC-13-07, AC-12-02/03. Denominator/проценты не пересчитываются. Non-goals: capacity fit/ожидание суток, formula/precision/retention/coverage changes, receiver activation, COHORTS, infra/CI policy, автоматический повтор reset. Прежний consumed reset permit не переиспользуется. Архивы и старые snapshots не удаляются.
+
+DoD: O01…O04 завершены; подтверждённая причина записана; новая working schema2 содержит сохранённый owner/private state и новый период market history; прежняя БД и все samples сохранены с hashes/validation; новый observer OBSERVING с baseline и временем конца>=24h. Полные сутки не ожидаются в агенте/Actions. Scheduled tasks отсутствуют.
+
+Validation Plan: REQUIRED local quality и targeted observer rejection/exception/resume/phase/private-state/reset/archive safety tests; REQUIRED latest full applicable Linux/native/image CI и ordinary exact-source CD<=900s. REQUIRED VPS: точный host/project/image, deployment lock/no conflicting operation, immutable archival identities/full integrity/hash, private restore/integrity/reopen, source/image/health/generation/config/preservation smoke, реальные baseline attempt diagnostics и OBSERVING. Неудача gates остаётся failure; обход или увеличение budgets запрещены. Routine CD и отдельная owner-approved fresh-data операция имеют самостоятельные records; последняя не изменяет consumed migration permit.
+
+| Finding / задача | Область, priority/action | Evidence и текущий результат | Confidence / зависимость |
+| --- | --- | --- | --- |
+| O01 DIAGNOSTICS | AC-13-06; `scripts/observe_capacity.py`; P1/FIX | Полный rejected/error attempt сохраняется отдельно; phase/last_sample_blockers/last_baseline_rejection различимы. Restart сохраняет INTERRUPTED, orphan attempts не перезаписываются; targeted PASS | HIGH; CI/runtime PENDING |
+| O02 HISTORICAL REASON | AC-13-06; старый111418 baseline attempt; P2/DOCUMENT | Старый код не сохранял rejected deep snapshot; точный blocker первого отказа исторически UNRECOVERABLE. Следующая попытка принята14:31МСК. Один readonly diagnostic14:42МСК/123.33s сохранён, blockers пусты; ledger/cohorts PARTIAL_BUDGET, indexes UNAVAILABLE не выдаются за причины отказа или полный boundary. Новый actual отказ требует нового сохранённого attempt, не догадки | HIGH для потери Evidence; LOW для конкретного прежнего blocker |
+| O03 FRESH DATA | AC-13-07/12-02; `scripts/fresh_measurement.py`, `reset_history.py`; P1/IMPLEMENT | Новый explicit exact-generation/archive-hash путь оставляет default repeat guard; full backup, private restore, все raw working files сохраняются, env/preferences не меняются. Archive safety/private-state/negative fixtures PASS | HIGH по коду; actual fresh operation PENDING, зависит от CD |
+| O04 DELIVERY | AC-12-02/03; PR/CD/VPS/observer; P1/IMPLEMENT | Local quality PASS; 42targeted PASS/2Windows platform skips, latest changed regression24PASS/2platform skips. Linux CI должен покрыть Unix checks. Runtime/sourceadc230fa/config5 прежний healthy; scheduled task удалена и отсутствует | HIGH; latest CI/merge/CD/archive/new generation/baseline PENDING |
+
+Checkpoint: O01/O03 реализованы, quality/docs/ruff/format135files/mypy53PASS, meaningful local regressions PASS, self-review текущего scope PASS. One bounded diagnostic retained в `/opt/crypto_watcher/observations/baseline-diagnostic-20261017T114204Z-e5d6031d`; existing observer111418 был OBSERVING с baseline14:31:55МСК на прежней выросшей generation. Перед merge/CD сохранить manifest всех observation files и остановить только identified observer. После ordinary CD выполнить reviewed fresh-measurement CLI с exact expected source/generation/approval, сохранить qualified archive и raw originals, проверить private/new generation/health, затем один новый observer до фактического OBSERVING. Старую незафиксированную причину не объявлять установленной. Следующий шаг: initial push одного полного PR, latest CI/review/merge, затем указанные delivery gates; успех не предсказывается.
+
+## Goal TELEGRAM-UX — COMPLETE (primary records)
 
 Основание:17Oct2026 владелец после итогового screenshot-аудита41замечания поручил «Хорошо. Тогда бери как единую goal». Встроенная Goal активирована17Oct; после временного BLOCKED владелец17Oct явно поручил «Как это связано? Выполняй поставку сейчас», затем подтвердил продолжение без ожидания замера. Этот запрос снимает прежний observer hold; весь scope UX-001…UX-041, без добавления AC/пересчета процентов. Результат — рабочий понятный Telegram manual radar; неизвестности закрываются проверкой и правдивым UI, а не удалением функций.
 

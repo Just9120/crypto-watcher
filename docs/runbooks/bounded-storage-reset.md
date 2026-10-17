@@ -29,6 +29,46 @@ Target: Contabo167.86.68.98, `/opt/crypto_watcher`, Compose project/service `cry
 
 ## Routine schema2 backup/CD
 
+### Чистая БД для нового замера с сохранением всей истории
+
+Отдельное поручение владельца17Oct2026 разрешает новую working DB, но требует
+сохранить все прежние данные. Это не повтор consumed reset permit: receiver,
+его policy и permit не меняются. Сначала обычные PR/CI/merge/CD exact revision.
+Затем оператор сохраняет/останавливает только identified capacity observer,
+проверяет все его files/hashes и запускает reviewed
+[fresh_measurement.py](../../scripts/fresh_measurement.py) из нового exact image.
+
+На подтверждённом host/root, под existing `.deploy.lock`, команда имеет вид:
+
+```bash
+python3 fresh_measurement.py --expected-source MERGED_SOURCE_SHA --expected-generation CURRENT_GENERATION_ID --approve-fresh-database
+```
+
+Значения берутся из фактических primary CD/runtime records. Script/hash сверяются
+с merged source; approval flag выражает уже данное поручение, не новое разрешение.
+Операция требует отсутствие active observer/conflicting delivery и disk reserve,
+проверяет source/image/project/mount/config/generation, останавливает один writer,
+создаёт полную SQLite snapshot copy с full integrity/SHA256 и готовит fresh schema2.
+Точный expected generation и hash проверенного архива обязательны для нового
+explicit CLI пути reset_history; обычный repeated reset остаётся запрещённым.
+
+Private tables/preferences независимо восстанавливаются/reopen-проверяются.
+После отсутствия handles прежние working DB и sidecars переименовываются в
+private `fresh-measurement-*/previous-working/`, candidate занимает working path.
+Ни один прежний файл не удаляется. Дополнительно остаются qualified archive,
+private recovery, candidate/operation receipts. Новый период помечен
+`PRESERVED_IN_ARCHIVE`, старые events/queues не импортируются. После запуска
+проверяются exact image/source, health, generation/private/config/hash и все
+архивы; рабочий bootstrap и его partial coverage явно проверяет следующий observer.
+
+Общий предел операции900s с recovery reserve; проверка archive CPU1/RAM4GiB,
+candidate/default guards прежние. До promotion failure разрешает запуск того же
+writer на прежней DB. После начала rename — exact record inspection/forward-fix,
+без blind retry, overwrite или автоматического restore поверх новых данных.
+Проверяющий observer устанавливается после этой операции, один на новый
+source/config/generation. Все прежние observation folders сохраняются;
+запланированные Codex задачи не создаются.
+
 После reset автоматические delivery используют full source integrity и SQLite online backup на диске с полной integrity и streaming SHA256. Вся DB в RAM/tmpfs не копируется; cap4GiB/CPU1/no swap остается. Source+backup делят оставшееся время общего900s deadline с резервом переключения/post-checks. При нехватке места/времени stage завершается failure до switch; gates не ослабляются. Target20GB не является гарантией выполнения полного scan любой20GB базы за15min: фактическая скорость и длительность видны в records, превышение требует переработки, не автоматического увеличения deadline.
 
 Retention работает batches через indexes/transactional counters, summaries12 календарных месяцев; routine control не сканирует все DB pages. `storage-indexes` — отдельное ограниченное измерение, размер snapshot помечен временем. Его отсутствие/timeout не считается доказанным размером индексов. Forecast отражает short-window/model limitations и предупреждает о20GB без скрытого сокращения данных. Последующее наблюдение — отдельная задача владельца после завершения исправлений/reset.
@@ -164,6 +204,16 @@ Status/каждый sample/baseline/final/result сохраняются atomical
 DB/index/WAL deltas, logical namespace deltas и cumulative cleanup counters; отсутствие
 полного boundary ledger явно UNSET. Даже успешные24h и controlled-clock tests сами
 по себе не подтверждают population mix следующего года или20GB fit.
+
+Каждый deep boundary имеет отдельный `baseline-attempt-NNNN.json` либо
+`final-attempt-NNNN.json`: PENDING до probe, полный snapshot/blockers и решение
+после него, sanitized error class/returncode при failure. `status.phase` показывает
+текущую фазу; `last_sample_blockers` относится только к quick sample,
+`last_baseline_attempt`/`last_baseline_rejection` — к реальной deep проверке.
+Отклонённый snapshot не удаляется при сбросе stable counter. Restart сохраняет
+in-flight attempt как INTERRUPTED и безопасно возвращается к прежним gates;
+exception body/command/stderr/env не публикуются. Ранее потерянные причины нельзя
+восстановить по пустому last_blockers: такой исторический пробел явно отмечается.
 
 Rehearsal моделирует62 weekly epochs, settings changes, restart, partial horizons,
 all markets/families/TF и весь30d/35d/calendar12mo lifecycle. Numeric/comparator facts

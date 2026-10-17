@@ -28,6 +28,7 @@ COPY --from=native-builder /build/native/vendor/zstd/LICENSE ./cryptowatcher/_na
 COPY --from=native-builder /build/native/vendor/sqlite/LICENSE ./cryptowatcher/_native/LICENSE.sqlite
 COPY telegram_crypto_watcher.py ./
 COPY scripts/observe_capacity.py ./operator/observe_capacity.py
+COPY scripts/fresh_measurement.py ./operator/fresh_measurement.py
 USER 10001:10001
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
     CMD ["python", "-m", "cryptowatcher", "health"]
