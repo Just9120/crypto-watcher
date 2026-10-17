@@ -117,7 +117,7 @@ async def test_preset_status_and_sample_show_effective_values_not_legacy_fields(
     message = update("/sample_alert")
     await controller.handle(message, None)
     assert "TF 15m · +4.3%" in message.effective_message.reply_text.call_args.args[0]
-    assert "Средний оборот (12 candles)" in message.effective_message.reply_text.call_args.args[0]
+    assert "Средний оборот (12 свечей)" in message.effective_message.reply_text.call_args.args[0]
     assert controller.store.snapshot() == snapshot
 
 
@@ -145,11 +145,11 @@ async def test_sample_uses_active_settings_and_preserves_alert_controls(controll
     text = reply.args[0]
     assert "Пример алерта" in text and "Демонстрационные данные" in text
     assert f"TF {timeframe} · +7.3%" in text
-    assert "Спайк оборота: x6.2" in text
-    assert "Оборот 24ч: 20,000,000.0 USDT" in text
-    assert "Средний оборот (20 candles)" in text
-    assert "≥ 7%, ≥ x6, ≥ 20,000,000 USDT" in text
-    assert f"Configuration revision: {before.revision}" in text
+    assert "Всплеск оборота: ×6.2" in text
+    assert "Оборот 24ч: 20 млн USDT" in text
+    assert "Средний оборот (20 свечей)" in text
+    assert "≥ 7%, ≥ ×6, ≥ 20 000 000 USDT" in text
+    assert f"Версия настроек: {before.revision}" in text
     assert ("Spot USDT" if category == "spot" else "USDT Perpetual") in text
     buttons = [button for row in reply.kwargs["reply_markup"].inline_keyboard for button in row]
     assert [button.url for button in buttons if button.url] == [url]

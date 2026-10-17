@@ -77,6 +77,75 @@ def radar(store):
     yield instance
 
 
+async def test_owner_scope_applies_while_rest_manager_is_waiting(radar, monkeypatch):
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def waiting_refresh(settings):
+        entered.set()
+        await release.wait()
+
+    monkeypatch.setattr(radar, "refresh", waiting_refresh)
+    manager = asyncio.create_task(radar._manager())
+    await asyncio.wait_for(entered.wait(), 1)
+    before = radar.store.snapshot()
+    changed = radar.store.update(before.revision, before.settings.changed(alert_universe_mode="custom"))
+    configuration = asyncio.create_task(radar._configuration_loop())
+    try:
+        await wait_condition(lambda: not radar.streams)
+        diagnostic = radar.store.get_runtime("ingestion")
+        assert diagnostic["configuration_revision"] == changed.revision
+        assert diagnostic["active_streams"] == 0
+        assert set(diagnostic["discovery"]) == {"spot", "linear"}
+        assert not manager.done() and not release.is_set()
+        assert radar.store.snapshot() == changed
+    finally:
+        manager.cancel()
+        configuration.cancel()
+        await asyncio.gather(manager, configuration, return_exceptions=True)
+        await radar.close()
+
+
+def test_closed_observation_honors_current_scope_before_subscription_reconcile(radar):
+    radar.on_observation = Mock()
+    stream = "spot/BTCUSDT/1m"
+    radar.publish_observation(stream, live=True)
+    radar.on_observation.assert_called_once()
+    radar.on_observation.reset_mock()
+    before = radar.store.snapshot()
+    radar.store.update(before.revision, before.settings.changed(alert_universe_mode="custom"))
+    radar.publish_observation(stream, live=True)
+    radar.on_observation.assert_not_called()
+    assert stream in radar.streams and radar.sources.windows[stream]
+    current = radar.store.snapshot()
+    radar.store.update(
+        current.revision, current.settings.changed(alert_universe_mode="top", liquidity_floor_24h=2e6)
+    )
+    radar.publish_observation(stream, live=True)
+    radar.on_observation.assert_not_called()
+
+
+async def test_rest_refresh_cannot_restore_scope_from_before_owner_change(radar, monkeypatch):
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def waiting_tickers(market):
+        entered.set()
+        await release.wait()
+
+    now = __import__("time").monotonic()
+    radar.metadata_at = {"spot": now, "linear": now}
+    monkeypatch.setattr(radar, "refresh_tickers", waiting_tickers)
+    before = radar.store.snapshot()
+    refresh = asyncio.create_task(radar.refresh(before.settings))
+    await asyncio.wait_for(entered.wait(), 1)
+    changed = radar.store.update(before.revision, before.settings.changed(alert_universe_mode="custom"))
+    release.set()
+    await asyncio.wait_for(refresh, 2)
+    assert not radar.streams and radar._scope_revision == changed.revision
+    await radar.close()
+
+
 def test_initial_bucket_windows_are_not_starved_by_an_ongoing_one_minute_gap_queue(radar):
     buckets = {(market, tf) for market in ("spot", "linear") for tf in TIMEFRAMES}
     streams = {f"{market}/BTCUSDT/{tf}" for market, tf in buckets}
@@ -475,7 +544,7 @@ async def test_typed_owner_list_validation_restart_and_market_mutes(radar, infra
     invalid = update("/setlist spot/PAXG")
     await controller.handle(invalid, None)
     assert radar.store.snapshot() == saved
-    assert "отклонена" in invalid.effective_message.reply_text.call_args.args[0]
+    assert "не выполнено" in invalid.effective_message.reply_text.call_args.args[0]
     await controller.handle(update(callback="al:mute:BYBIT:linear:BTCUSDT:3600"), None)
     assert radar.store.muted("linear/BTCUSDT", 0)
     assert not radar.store.muted("spot/BTCUSDT", 0)
@@ -759,8 +828,9 @@ async def test_persisted_ws_producer_durable_delivery_no_legacy_double_send(
     await controller.deliver(SimpleNamespace(bot=bot))
     bot.send_message.assert_awaited_once()
     text = bot.send_message.call_args.args[1]
-    assert "composite v1" in text and "FRESH" in text and "Settings revision: 1" in text
-    assert "Причина: первое уведомление" in text and "Episode revision" in text
+    assert "Совпадение цены и оборота" in text and "свежее" in text and "1m" in text
+    assert "Первое уведомление" in text and "Интенсивность" in text and "Оборот свечи" in text
+    assert all(e["settings_revision"] == 1 for e in events)
     radar.sources.blocked[stream] = "candle_gap"
     count = len(history_store.events())
     radar.publish_observation(stream, live=True)

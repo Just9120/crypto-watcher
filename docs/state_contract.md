@@ -7,7 +7,7 @@
 
 ## Новая policy хранения и разовый reset (D22)
 
-Updated S01/owner request2026-10-16 отменяют raw90d и бессрочное хранение event/outcome/comparator inputs. Актуальные сроки/AC: [E13](product_scope.md#e13--компактное-хранение-сроки-и-новый-период-истории). Implementation state и gates: [Current Goal](open_issues.md#current-goal--capacity-реальные-источники-и-заполненная-база). Полная конвертация прежней тестовой market history больше не задача. Описания прежних converter/qualification tools относятся к историческому tooling и не являются precondition нового reset.
+Updated S01/owner request2026-10-16 отменяют raw90d и бессрочное хранение event/outcome/comparator inputs. Актуальные сроки/AC: [E13](product_scope.md#e13--компактное-хранение-сроки-и-новый-период-истории). Implementation state и gates: [Current Goal](open_issues.md). Полная конвертация прежней тестовой market history больше не задача. Описания прежних converter/qualification tools относятся к историческому tooling и не являются precondition нового reset.
 
 Bounded Telegram decision head содержит только `_cw_decision_revision`; неизменная
 revision хранит полный результат. Reader проверяет ключ/event identity/revision и
@@ -130,6 +130,10 @@ Product requirements задаёт [spec](product_scope.md); текущие за�
 Один владелец и его private delivery chat. Infrastructure secrets, owner/bot binding и пути — environment/host `.env`. Env процесса выше `.env` (`load_dotenv(override=False)`). Owner settings уже в DB выше initial defaults; Telegram изменение создаёт новую revision без restart. Invalid values не заменяют сохранённые данные и не выводятся в error text. Invalid infrastructure или corrupt owner record блокирует startup с field/class diagnostic.
 
 Retired `.env` keys: ALLOWED_CHAT_IDS, PRICER/CMC, BYBIT_PAIRS/WATCHLIST seeds. Они не включают второй chat и не перезаписывают существующий список. Infrastructure defaults отсутствующих обычных settings описаны `.env.example`; raw legacy payload определяет migration behavior.
+
+### Owner UI state
+
+`ui:v1:input` — один bounded input context владельца (kind/field/market, expected owner revision, время); навигация/cancel очищает его, ввод старше15min или другой revision не применяется. `ui:v1:custom_parameters` — один сохраненный набор собственных параметров перед явным применением preset. Он не является active domain config: только owner restore валидирует и переносит его в owner_settings через CAS. Эти private rows не содержат secrets, не ссылаются на market inputs и не удерживают retention. Обычный all-table backup сохраняет их; migration/schema/default rewrites при добавлении UI не нужны. Единственный in-memory statistics snapshot ограничен20группами и становится недоступен через5min; он не создает persistence jobs.
 
 ## SQLite schema1
 

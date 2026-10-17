@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from telegram import Update
 
+from .analytics import cohorts
 from .analytics_worker import read_snapshot
 from .config import TIMEFRAMES, ConfigError, instrument_key
 from .detector_config import PARAMETERS, effective_parameters
@@ -19,12 +20,15 @@ from .diagnostics import snapshot as diagnostic_snapshot
 from .ingestion import BybitRadar
 from .storage import RevisionConflict, json_payload
 from .telegram_views import (
+    DIRECTION,
     FAMILY,
     FIELDS,
     HELP,
     PROFILE,
     TERMS_SHORT,
+    agent_state,
     amount,
+    diagnostic_section,
     diagnostic_summary,
     keyboard,
     market,
@@ -40,12 +44,13 @@ if TYPE_CHECKING:
 
 INPUT = "ui:v1:input"
 CUSTOM = "ui:v1:custom_parameters"
-PAGE_SIZE = 6
+PAGE_SIZE = 4
 
 
 class ControlDeck:
     def __init__(self, controller: Controller) -> None:
         self.c = controller
+        self.statistics: dict[str, Any] = {}
 
     def cancel(self) -> None:
         if self.c.store.get_runtime(INPUT):
@@ -57,6 +62,32 @@ class ControlDeck:
         s = self.c.store.snapshot().settings
         if s.profile == "custom":
             self.c.store.put_runtime(CUSTOM, effective_parameters(s))
+
+    def delivery_note(self, event_id: str) -> str:
+        decision = self.c.history.get("decision:telegram:" + event_id, {})
+        receipt = (
+            self.c.history.get("outbox:telegram:" + decision["delivery_id"], {})
+            if decision.get("delivery_id")
+            else {}
+        )
+        reasons = {
+            "alerts_disabled": "уведомления были выключены",
+            "muted": "монета была заглушена",
+            "detector_silent": "семейство не выбрано для уведомлений",
+            "not_fresh": "наблюдение уже не было свежим",
+            "historical_observation": "историческое наблюдение",
+            "awaiting_rearm": "ожидалось новое независимое движение",
+        }
+        return {
+            "DELIVERED": "доставлено по сохранённой квитанции",
+            "RETRY": "ожидает повторной попытки",
+            "PENDING": "ожидает отправки",
+            "EXPIRED": "истёк срок отправки",
+            "BLOCKED": "доставка заблокирована",
+        }.get(
+            str(receipt.get("state")),
+            reasons.get(str(decision.get("reason")), "сохранённого статуса доставки нет"),
+        )
 
     async def data(self) -> dict[str, Any]:
         return await asyncio.to_thread(
@@ -93,12 +124,17 @@ class ControlDeck:
                 ", ".join(map(str, current)) if isinstance(current, tuple) else amount(current)
             )
             text += (
-                "\nОтправьте новое значение. Пороги положительные; окна — целые свечи; отношения — больше1."
+                "\nОтправьте новое значение. Пороги положительные; окна — целые свечи; отношения — больше 1."
             )
             if field == "price_move_min":
+                text = (
+                    FIELDS[field]
+                    + "\nСейчас: "
+                    + "; ".join(f"{tf}: {amount(p['price_' + tf])}%" for tf in TIMEFRAMES)
+                )
                 text += "\nЗаменятся пороги цены всех четырёх TF. Для отдельного TF выберите его параметр."
             if field == "outcome_horizons":
-                text += "\nМинуты через запятую, например5,15,30,60. Только для новых событий."
+                text += "\nМинуты через запятую, например 5,15,30,60. Только для новых событий."
             rows = []
         await self.c.send(update, text, keyboard(rows + [[("Отменить ввод", "ui:cancel")]], back=None))
 
@@ -148,9 +184,9 @@ class ControlDeck:
                     raise ConfigError("Нужны целые положительные минуты через запятую")
                 settings = snapshot.settings.changed(outcome_horizons=tuple(map(int, parts)))
             elif field in PARAMETERS:
-                settings = snapshot.settings.with_parameter(field, text)
+                settings = snapshot.settings.with_parameter(field, text.replace(",", "."))
             else:
-                settings = snapshot.settings.changed(**{field: text})
+                settings = snapshot.settings.changed(**{field: text.replace(",", ".")})
         after = self.c.store.update(snapshot.revision, settings)
         self.c.store.put_runtime("last_poll_ts", 0)
         self.cancel()
@@ -184,9 +220,10 @@ class ControlDeck:
         for index, event in enumerate(entries, 1):
             lines.append(
                 f"{index}. {when(event['market_observation_ms'])} · {event['symbol']} · {market(event['market_type'])}\n"
-                f"{FAMILY[event['detector_id']]} · {event['timeframe']} · {event['direction']} · ×{amount(event['strength'])}\n"
+                f"{FAMILY[event['detector_id']]} · {event['timeframe']} · {DIRECTION.get(event['direction'], event['direction'])} · ×{amount(round(event['strength'], 2))}\n"
                 + observation_kind(event)
-                + "; статус Telegram — в подробностях"
+                + "; Telegram: "
+                + self.delivery_note(event["event_id"])
             )
             controls.append(
                 [(f"{index}. {event['symbol']} · {event['timeframe']}", "event:" + event["event_id"])]
@@ -202,12 +239,80 @@ class ControlDeck:
             controls.append([("К последним", "ui:history")])
         await self.c.send(update, "\n".join(filter(None, lines)), keyboard(controls))
 
+    async def analytics_page(self, update: Update, token: str, page: int) -> None:
+        value = self.statistics
+        if value.get("token") != token or time.time() - value.get("at", 0) > 300:
+            raise ConfigError("Снимок статистики устарел. Выберите разрез заново")
+        data = value["data"]
+        rows = data["cohorts"]
+        if page < 0 or page * 5 >= max(len(rows), 1):
+            raise ConfigError("Страница статистики не найдена")
+        labels = {
+            "detector": "детектор",
+            "profile": "профиль",
+            "version": "версия",
+            "market": "рынок",
+            "timeframe": "TF",
+            "direction": "направление",
+            "settings": "настройки",
+            "instrument": "инструмент",
+            "universe": "охват",
+            "strength": "интенсивность",
+            "horizon_min": "срок, мин",
+        }
+        lines = [
+            "Сравнение" if value["command"] == "compare" else "Статистика детекторов",
+            "Снимок: " + when(value["at"] * 1000),
+        ]
+        for row in rows[page * 5 : page * 5 + 5]:
+            group = row["group"]
+            if isinstance(group, dict):
+                description = "; ".join(
+                    f"{labels.get(k, k)}: {FAMILY.get(str(v), PROFILE.get(str(v), str(v)))}"
+                    for k, v in group.items()
+                )
+            else:
+                description = str(group)
+            lines.append(
+                f"{description}\nНаблюдений: {row['sample_size']}; среднее {amount(row['mean'])}%; медиана {amount(row['median'])}%\n"
+                f"Сравнимых периодов без сигнала: {row['comparator_sample_size']}; среднее {amount(row['comparator_mean'])}%\n"
+                f"Шум: {amount(row['noise_min_pct'])}…{amount(row['noise_max_pct'])}%; наблюдений шума {row['noise_sample_size']}."
+            )
+        if not rows:
+            lines.append("Для этого разреза завершённых результатов пока нет.")
+        lines.append(
+            f"Неполных результатов: {data['incomplete_outcomes']}. Каждый срок оценивается отдельно. События могут быть зависимы; малое N ограничивает выводы. Это не доходность стратегии."
+        )
+        if data["truncated"]:
+            lines.append("Снимок ограничен первыми 20 группами. Полная выборка доступна через CLI export.")
+        controls = []
+        navigation = []
+        if page:
+            navigation.append(("← Предыдущие", f"ui:stats:{token}:{page - 1}"))
+        if (page + 1) * 5 < len(rows):
+            navigation.append(("Следующие →", f"ui:stats:{token}:{page + 1}"))
+        if navigation:
+            controls.append(navigation)
+        controls.append([("Точные данные снимка", "ui:statsfile:" + token)])
+        await self.c.send(update, "\n\n".join(lines), keyboard(controls, back="analytics_home"))
+
     async def command(self, update: Update, command: str, raw: str) -> bool:
-        from .render import detectors_keyboard, menu, settings_keyboard, settings_text
+        from .render import (
+            detectors_keyboard,
+            event_keyboard,
+            event_text,
+            menu,
+            settings_keyboard,
+            settings_text,
+            status_text,
+        )
 
         snapshot = self.c.store.snapshot()
         s = snapshot.settings
-        if command in ("start", "home"):
+        if command == "cancel":
+            self.cancel()
+            await self.c.send(update, "Ввод закрыт. Настройки не изменены.", keyboard([]))
+        elif command in ("start", "home"):
             await self.c.send(
                 update, "Радар Bybit\nВыберите раздел. Открытие меню не меняет уведомления.", menu()
             )
@@ -228,14 +333,81 @@ class ControlDeck:
             )
         elif command == "settings":
             await self.c.send(update, settings_text(snapshot), settings_keyboard(snapshot))
+        elif command == "set" and not raw:
+            await self.callback(update, ["parameters"])
+        elif command == "horizons" and not raw:
+            await self.c.send(
+                update,
+                "Сроки оценки результата: "
+                + ", ".join(map(str, s.outcome_horizons))
+                + " минут. Изменения применяются только к новым событиям.",
+                keyboard([[("Изменить", "ui:field:outcome_horizons")]], back="settings"),
+            )
+        elif command == "profile" and not raw:
+            await self.command(update, "profiles", "")
+        elif command == "status":
+            result = await self.c.market.snapshot(s)
+            if self.c.store.snapshot().revision != snapshot.revision:
+                await self.c.send(
+                    update,
+                    "Настройки изменились во время запроса; прежняя сводка не применена. Откройте статус заново.",
+                )
+                return True
+            await self.c.send(
+                update,
+                status_text(snapshot, result, self.c.store.enabled())
+                + "\n\n"
+                + source_summary(snapshot, self.c.store.get_runtime("ingestion", {}), time.time()),
+                keyboard(
+                    [
+                        [("Обновить", "ui:status"), ("Разбор composite", "ui:composite")],
+                        [("Охват и список", "ui:radar"), ("Диагностика", "ui:diagnostics")],
+                    ]
+                ),
+            )
+        elif command == "event" and raw:
+            try:
+                event_id = str(uuid.UUID(raw.strip()))
+            except ValueError as exc:
+                raise ConfigError("Событие не найдено: некорректная ссылка") from exc
+            event = self.c.history.get("event-head:" + event_id)
+            if event is None:
+                await self.c.send(
+                    update, "Событие недоступно в текущем сроке хранения.", keyboard([], back="history")
+                )
+                return True
+            now = (
+                self.c.market.server_now()
+                if isinstance(self.c.market, BybitRadar)
+                else int(time.time() * 1000)
+            )
+            state = self.delivery_note(event_id)
+            await self.c.send(
+                update,
+                event_text(event, now) + "\nТип: " + observation_kind(event) + "\nTelegram: " + state,
+                event_keyboard(event),
+            )
         elif command in ("radar", "watchlist"):
             current = s.instruments()
+            offset = int(raw) if command == "watchlist" and raw.isdecimal() else 0
+            if offset >= max(len(current), 1):
+                offset = 0
             text = source_summary(snapshot, self.c.store.get_runtime("ingestion", {}), time.time())
             text += "\n\nМой список:\n" + (
-                "\n".join(f"{market(key.split('/')[0])}: {key.split('/')[1]}" for key in current)
+                "\n".join(
+                    f"{market(key.split('/')[0])}: {key.split('/')[1]}"
+                    for key in current[offset : offset + 10]
+                )
                 or "Список пуст"
             )
             text += f"\nПороги монет списка умножаются на {amount(s.watchlist_multiplier)}; история и доставка — разные подсистемы."
+            if len(current) > 10:
+                text += f"\nПоказаны {offset + 1}–{min(offset + 10, len(current))} из {len(current)}."
+            pages = []
+            if offset:
+                pages.append(("← Предыдущие", f"ui:listpage:{max(offset - 10, 0)}"))
+            if offset + 10 < len(current):
+                pages.append(("Следующие →", f"ui:listpage:{offset + 10}"))
             await self.c.send(
                 update,
                 text,
@@ -248,6 +420,7 @@ class ControlDeck:
                         [("Добавить", "ui:addcoin"), ("Удалить", "ui:removecoin")],
                         [("Очистить список", "ui:clear"), ("Уведомления", "ui:alerts")],
                         [("Заглушённые монеты", "ui:mutes")],
+                        *([pages] if pages else []),
                     ]
                 ),
             )
@@ -296,7 +469,11 @@ class ControlDeck:
                         [(PROFILE[name], "ui:profile:" + name)]
                         for name in ("normal", "conservative", "sensitive")
                     ]
-                    + [[("Вернуть свои пороги", "ui:restore:" + str(snapshot.revision))]],
+                    + (
+                        [[("Вернуть свои пороги", "ui:restore:" + str(snapshot.revision))]]
+                        if self.c.store.get_runtime(CUSTOM)
+                        else []
+                    ),
                     back="settings",
                 ),
             )
@@ -328,6 +505,8 @@ class ControlDeck:
                 ),
             )
         elif command == "history":
+            await self.history(update)
+        elif command == "event" and not raw:
             await self.history(update)
         elif command == "outcomes" and not raw:
             await self.c.send(
@@ -364,6 +543,22 @@ class ControlDeck:
                     back="analytics_home",
                 ),
             )
+        elif command in ("analytics", "compare"):
+            groups = tuple(raw.replace(",", " ").split())
+            try:
+                data = await asyncio.to_thread(
+                    read_snapshot,
+                    self.c.store.path,
+                    self.c.store.owner_id,
+                    lambda store: cohorts(store, groups, limit=20),
+                )
+            except ValueError as exc:
+                raise ConfigError(
+                    "Неизвестный разрез. Выберите детектор, профиль, версию, рынок или TF кнопками"
+                ) from exc
+            token = uuid.uuid4().hex[:12]
+            self.statistics = {"token": token, "at": time.time(), "command": command, "data": data}
+            await self.analytics_page(update, token, 0)
         elif command == "digest" and not raw:
             enabled = self.c.digest.preference()["enabled"]
             await self.c.send(
@@ -394,32 +589,48 @@ class ControlDeck:
             )
         elif command == "agent" and raw.strip() in ("", "status"):
             d = (await self.data())["agent_delivery"]
-            state = (
-                "не подключена"
-                if d.get("configuration") != "READY"
-                else "включена"
-                if d.get("enabled")
-                else "выключена"
-            )
+            state = agent_state(d)
             await self.c.send(
                 update,
                 f"Доставка контекста агенту: {state}\nОжидают: {amount(d.get('pending'))}; доставлены: {amount(d.get('delivered'))}.\n"
-                "Ручной радар работает независимо. Подключение и credentials настраиваются в принимающем проекте. "
-                "Просмотр не включает доставку, retry или replay.",
-                keyboard([[("Подробности в отчёте", "ui:diag:file")]], back="settings"),
+                "Ручной радар работает независимо. Ключи и подключение настраиваются в проекте агента. "
+                "Просмотр не выполняет доставку повторно.",
+                keyboard(
+                    (
+                        [
+                            [
+                                (
+                                    "Выключить доставку" if d.get("enabled") else "Включить доставку",
+                                    "ui:agenttoggle:" + ("off" if d.get("enabled") else "on"),
+                                )
+                            ]
+                        ]
+                        if d.get("configuration") == "READY"
+                        else []
+                    )
+                    + [[("Подробности в отчёте", "ui:diag:file")]],
+                    back="settings",
+                ),
             )
         elif command == "mutes":
+            offset = int(raw) if raw.isdecimal() else 0
             rows = self.c.store.db.execute(
-                "SELECT symbol,mute_until FROM mutes WHERE mute_until>? ORDER BY symbol LIMIT 30",
-                (time.time(),),
+                "SELECT symbol,mute_until FROM mutes WHERE mute_until>? ORDER BY symbol LIMIT 11 OFFSET ?",
+                (time.time(), offset),
             ).fetchall()
-            controls = [[("Снять: " + row[0], "ui:unmute:" + row[0])] for row in rows]
+            controls = [[("Снять: " + row[0], "ui:unmute:" + row[0])] for row in rows[:10]]
             text = "Заглушённые монеты\n" + (
-                "\n".join(f"{row[0]} до {when(row[1] * 1000)}" for row in rows) or "Нет активных заглушений."
+                "\n".join(f"{row[0]} до {when(row[1] * 1000)}" for row in rows[:10])
+                or "Нет активных заглушений на этой странице."
             )
-            text += (
-                "\nЗаглушение влияет только на Telegram. Расчёт и история продолжаются. Показано до30монет."
-            )
+            text += "\nЗаглушение влияет только на Telegram. Расчёт и история продолжаются."
+            pages = []
+            if offset:
+                pages.append(("← Предыдущие", f"ui:mutespage:{max(offset - 10, 0)}"))
+            if len(rows) > 10:
+                pages.append(("Следующие →", f"ui:mutespage:{offset + 10}"))
+            if pages:
+                controls.append(pages)
             await self.c.send(update, text, keyboard(controls, back="alerts"))
         elif command in ("enrichment", "derivatives") and not raw:
             from .render import enrichment_keyboard
@@ -465,6 +676,27 @@ class ControlDeck:
                     back="settings",
                 ),
             )
+        elif action == "composite":
+            result = await self.c.market.snapshot(snapshot.settings)
+            if self.c.store.snapshot().revision != snapshot.revision:
+                raise RevisionConflict("Настройки изменились во время расчёта")
+            lines = [
+                "Разбор composite — не общий статус пяти детекторов",
+                "До 6 оценок с наибольшим всплеском оборота; недостижение порога не является ошибкой источника.",
+            ]
+            for key, q in sorted(
+                result.quotes.items(), key=lambda item: item[1]["turnover_spike_ratio"], reverse=True
+            )[:6]:
+                lines.append(
+                    f"{key}\nЦена: {amount(q['price_change_tf'])}% · оборот ×{amount(q['turnover_spike_ratio'])}\n"
+                    f"Оборот 24ч: {amount(q['turnover24h'], compact=True)} USDT · "
+                    + ("условия выполнены" if q["meets_signal"] else "не все пороги достигнуты")
+                    + " · "
+                    + q.get("freshness", "свежесть неизвестна")
+                )
+            if not result.quotes:
+                lines.append("Для выбранного охвата готовых оценок нет.")
+            await self.c.send(update, "\n\n".join(lines), keyboard([], back="status"))
         elif action == "parameter_group" and len(parts) == 2:
             groups = {
                 "price": [*("price_" + tf for tf in TIMEFRAMES), "price_move_min"],
@@ -496,7 +728,7 @@ class ControlDeck:
             await self.c.send(
                 update,
                 f"Карточка и ввод\nСейчас: {market(s.bybit_category)}, {s.signal_timeframe}.\n"
-                "Это пример/карточка и рынок ввода монет без префикса. Основной радар обрабатывает оба рынка и все4TF.",
+                "Это пример/карточка и рынок ввода монет без префикса. Основной радар обрабатывает оба рынка и все 4 TF.",
                 keyboard(
                     [
                         [
@@ -547,8 +779,8 @@ class ControlDeck:
             if not revision.isdecimal() or int(revision) != snapshot.revision:
                 raise RevisionConflict("Панель устарела. Откройте профили заново")
             if action == "apply" and len(parts) == 3:
-                self.remember_custom()
                 settings = snapshot.settings.with_profile(parts[1])
+                self.remember_custom()
             elif action == "restore" and len(parts) == 2:
                 saved = self.c.store.get_runtime(CUSTOM)
                 if not saved:
@@ -570,6 +802,10 @@ class ControlDeck:
             )
         elif action == "history":
             await self.history(update, ":".join(parts[1:]))
+        elif action == "listpage" and len(parts) == 2 and parts[1].isdecimal():
+            await self.command(update, "watchlist", parts[1])
+        elif action == "mutespage" and len(parts) == 2 and parts[1].isdecimal():
+            await self.command(update, "mutes", parts[1])
         elif action == "clear":
             if len(parts) == 1 and snapshot.settings.instruments():
                 await self.c.send(
@@ -588,12 +824,23 @@ class ControlDeck:
                 raise RevisionConflict("Список изменился. Откройте очистку заново")
         elif action == "alerts" and len(parts) == 2 and parts[1] in ("on", "off"):
             await self.c.command(update, "alerts", parts[1])
+        elif action == "agenttoggle" and len(parts) == 2 and parts[1] in ("on", "off"):
+            await self.c.command(update, "agent", parts[1])
         elif action == "groups" and len(parts) == 3 and parts[1] in ("analytics", "compare"):
             await self.c.command(update, parts[1], parts[2])
+        elif action == "stats" and len(parts) == 3 and parts[2].isdecimal():
+            await self.analytics_page(update, parts[1], int(parts[2]))
+        elif action == "statsfile" and len(parts) == 2:
+            if self.statistics.get("token") != parts[1] or time.time() - self.statistics.get("at", 0) > 300:
+                raise ConfigError("Снимок статистики устарел")
+            await self.document(update, self.statistics["data"], "cryptowatcher-statistics.json")
         elif action == "unmute" and len(parts) == 2:
             await self.c.command(update, "unmute", parts[1])
         elif action == "eventfile" and len(parts) == 2:
-            event_id = str(uuid.UUID(parts[1]))
+            try:
+                event_id = str(uuid.UUID(parts[1]))
+            except ValueError as exc:
+                raise ConfigError("Некорректная ссылка на событие") from exc
             event = self.c.history.get("event-head:" + event_id)
             if event is None:
                 await self.c.send(
@@ -608,33 +855,51 @@ class ControlDeck:
             elif parts[1] == "queues":
                 await self.c.send(
                     update,
-                    "Очереди — снимок\n"
-                    + json.dumps(
-                        {key: data.get(key) for key in ("outcomes", "analytics", "analytics_recovery")},
-                        ensure_ascii=False,
-                        indent=2,
-                    )
-                    + "\nPending включает будущие сроки; возраст/просрочка здесь не измерены, нулём их не считаем.",
+                    diagnostic_section(data, "queues"),
                     keyboard([], back="diagnostics"),
                 )
             elif parts[1] in ("ingestion", "storage"):
                 await self.c.send(
                     update,
-                    json.dumps(data[parts[1]], ensure_ascii=False, indent=2),
+                    diagnostic_section(data, parts[1]),
                     keyboard([[("Полный JSON файлом", "ui:diag:file")]], back="diagnostics"),
                 )
             else:
                 raise ConfigError("Неизвестный раздел диагностики")
         elif action == "commands":
-            from .bot import COMMANDS
+            from .bot import COMMANDS, MANUAL_FIELDS
+
+            usage = {
+                "setlist": "spot/BTC,linear/ETH",
+                "profile": "normal|conservative|sensitive",
+                "set": "price_1m 2.5",
+                "mute": "spot/BTC 60",
+                "unmute": "spot/BTC (или all)",
+                "event": "EVENT_ID",
+                "outcomes": "[EVENT_ID]",
+                "horizons": "5,15,30,60",
+                "analytics": "[detector,market,timeframe]",
+                "compare": "[profile,version]",
+                "recompare": "EVENT_ID",
+                "digest": "on [минуты] | off",
+                "enrichment": "on|off",
+                "derivatives": "spot/BTC",
+                "agent": "status|on|off|retry; replay EVENT_ID",
+                "alerts": "on|off",
+                "cancel": "",
+            }
 
             await self.c.send(
                 update,
                 "Дополнительные команды\n"
                 + "\n".join(
-                    f"/{name} — {label}" for name, label in COMMANDS.items() if not name.startswith("reset")
+                    f"/{name} {usage.get(name, '')} — {label}"
+                    for name, label in COMMANDS.items()
+                    if not name.startswith("reset")
                 )
-                + "\nКоманды изменения требуют аргументов. Обычные действия доступны кнопками; /help показывает примеры ввода.",
+                + "\nПоля /set: "
+                + ", ".join(sorted(MANUAL_FIELDS))
+                + "\nEVENT_ID берётся из подробностей события. В обычном меню внутренние ID вводить не нужно. Команды изменения требуют аргументов; обычные действия доступны кнопками.",
                 keyboard([], back="help"),
             )
         elif action == "formulas":

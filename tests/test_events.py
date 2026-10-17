@@ -454,7 +454,11 @@ async def test_compact_notification_full_confirmation_set_and_controls(state):
     )
     text = notification_text(event, item, NOW + 2000)
     assert len(text.encode("utf-16-le")) // 2 < 4096
-    assert all(value in text for value in ("Spot USDT", "Strength", "FRESH", "Причина", "revision"))
+    assert all(
+        value in text
+        for value in ("Spot USDT", "Интенсивность", "свежее", "Первое уведомление", "подтверждения")
+    )
+    assert event["event_id"] not in text and "Episode ID" not in text
     markup = event_keyboard(event)
     assert markup.inline_keyboard[0][0].url.endswith("/BTC/USDT")
     assert markup.inline_keyboard[-1][0].callback_data == "event:" + event["event_id"]

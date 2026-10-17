@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 import uuid
 from typing import Any
 
-from telegram import BotCommand, BotCommandScopeChat, Update
+from telegram import BotCommand, BotCommandScopeChat, InlineKeyboardMarkup, Update
 from telegram.error import BadRequest, TelegramError
 from telegram.ext import (
     Application,
@@ -21,7 +20,7 @@ from telegram.ext import (
 )
 
 from .agent_delivery import AgentDelivery
-from .analytics import ComparisonWorker, cohorts
+from .analytics import ComparisonWorker
 from .analytics_recovery import AnalyticsRecovery
 from .config import (
     ConfigError,
@@ -40,15 +39,10 @@ from .market import BybitREST, MarketError
 from .outcomes import OutcomeWorker, Retention
 from .render import (
     SAMPLE_SYMBOL,
-    TERMS,
     alert_keyboard,
-    detectors_keyboard,
-    digest_keyboard,
     enrichment_keyboard,
     enrichment_text,
     event_keyboard,
-    event_text,
-    history_keyboard,
     menu,
     notification_text,
     outcome_text,
@@ -57,17 +51,16 @@ from .render import (
     sample_alert_text,
     settings_keyboard,
     settings_text,
-    status_text,
 )
 from .source_context import context as public_context
 from .storage import RevisionConflict, Store
 from .telegram_delivery import TelegramDelivery
 from .telegram_ui import ControlDeck
-from .telegram_views import split_message
+from .telegram_views import split_message, when
 
 logger = logging.getLogger(__name__)
 COMMANDS = {
-    "start": "Открыть control deck",
+    "start": "Открыть главное меню",
     "help": "Помощь",
     "status": "Рынок и состояние данных",
     "settings": "Активные настройки",
@@ -77,28 +70,29 @@ COMMANDS = {
     "addcoin": "Добавить монету",
     "removecoin": "Удалить монету",
     "clearlist": "Очистить список",
-    "radar_top": "Широкий universe",
+    "radar_top": "Весь подходящий рынок",
     "radar_custom": "Мой список",
-    "sample_alert": "Пример alert",
-    "mute": "Отключить alerts монеты",
-    "unmute": "Включить alerts монеты",
-    "alerts": "Включить/выключить alerts",
+    "sample_alert": "Пример уведомления",
+    "mute": "Заглушить уведомления монеты",
+    "unmute": "Снять заглушение монеты",
+    "alerts": "Управление уведомлениями",
     "set": "Ручная настройка",
     "diagnostics": "Диагностика",
     "agent": "Доставка рыночного контекста",
-    "profiles": "Sensitivity profiles",
-    "profile": "Выбрать profile",
-    "detectors": "Telegram detectors",
+    "profiles": "Профили чувствительности",
+    "profile": "Применить профиль",
+    "detectors": "Уведомления по детекторам",
     "history": "История событий",
     "event": "Сохранённое событие",
     "outcomes": "Последующее движение события",
-    "horizons": "Настроить outcome horizons",
-    "analytics": "Статистика detectors",
-    "compare": "Сравнение profiles и versions",
-    "recompare": "Пересчитать prior comparators события",
-    "enrichment": "Включить derivatives context",
-    "derivatives": "Derivatives context Spot монеты",
+    "horizons": "Сроки оценки результата",
+    "analytics": "Статистика детекторов",
+    "compare": "Сравнение профилей и версий",
+    "recompare": "Пересчитать сравнение события",
+    "enrichment": "Дополнительный контекст деривативов",
+    "derivatives": "Контекст деривативов Spot-монеты",
     "digest": "Управление дайджестом",
+    "cancel": "Отменить ввод",
     "resetbase": "Устаревшее действие",
     "resetallbase": "Устаревшее действие",
 }
@@ -223,6 +217,23 @@ class Controller:
         if message is None:
             return
         chunks = split_message(text)
+        query = update.callback_query
+        if (
+            query is not None
+            and str(query.data or "").startswith("ui:")
+            and not str(query.data).startswith(("ui:eventfile:", "ui:statsfile:", "ui:diag:file"))
+            and isinstance(markup, InlineKeyboardMarkup)
+            and len(chunks) == 1
+        ):
+            try:
+                await query.edit_message_text(chunks[0], reply_markup=markup)
+                return
+            except BadRequest as exc:
+                reason = str(exc).lower()
+                if "message is not modified" in reason:
+                    return
+                if "message to edit not found" not in reason and "message can't be edited" not in reason:
+                    raise
         for index, chunk in enumerate(chunks):
             await message.reply_text(chunk, reply_markup=markup if index == len(chunks) - 1 else None)
 
@@ -234,18 +245,12 @@ class Controller:
     def history_notice(self) -> str:
         if not self.store.bounded:
             return ""
-        from datetime import datetime, timezone
-
         generation = self.store.get_runtime("history_generation", {})
         start = generation.get("started_ms")
-        since = (
-            datetime.fromtimestamp(start / 1000, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-            if start
-            else "UNSET"
-        )
+        since = when(start)
         return (
             f"Период новой истории: с {since}. Старая тестовая история недоступна.\n"
-            f"Подробности: {self.store.snapshot().settings.detail_retention_days} дней; quality summaries: 12 месяцев. "
+            f"Подробности: {self.store.snapshot().settings.detail_retention_days} дней; сводные результаты: 12 месяцев. "
             "Доступная глубина и N ограничены накопленными данными.\n"
         )
 
@@ -283,6 +288,7 @@ class Controller:
             return
         try:
             if update.callback_query:
+                self.ui.cancel()
                 await self.callback(update, context)
             elif update.effective_message and update.effective_message.text:
                 text = update.effective_message.text.strip()
@@ -309,30 +315,7 @@ class Controller:
         if await self.ui.command(update, command, raw):
             return
         snapshot = self.store.snapshot()
-        if command == "settings":
-            await self.send(update, settings_text(snapshot), settings_keyboard(snapshot))
-        elif command == "help":
-            await self.send(
-                update,
-                "Используйте меню. Ручной параметр: /set price_move_min 2.5\nСписок: /setlist BTC,ETH\nMute: /mute BTC 60 (минуты); /unmute BTC\n/alerts on или /alerts off\nРучные поля: "
-                + ", ".join(sorted(MANUAL_FIELDS)),
-                menu(),
-            )
-        elif command == "terms":
-            await self.send(update, TERMS, menu())
-        elif command == "watchlist":
-            await self.send(
-                update,
-                "Мой список (market/symbol):\n"
-                + (", ".join(snapshot.settings.instruments()) or "Список пуст"),
-            )
-        elif command in ("addcoin", "removecoin"):
-            self.store.put_runtime("pending_action", "add" if command == "addcoin" else "remove")
-            await self.send(
-                update,
-                "Отправьте market/symbol через запятую: spot/BTC,linear/ETH. Без market — выбранный рынок карточки.",
-            )
-        elif command in ("setlist", "input"):
+        if command in ("setlist", "input"):
             action = "set" if command == "setlist" else self.store.get_runtime("pending_action", "")
             if action not in ("add", "remove", "set"):
                 await self.send(update, "Откройте действие в меню или /help", menu())
@@ -356,9 +339,11 @@ class Controller:
             values: dict[str, Any] = {
                 "watchlist": next_pairs,
                 "custom_pairs": tuple(
-                    p.split("/")[1]
-                    for p in next_pairs
-                    if p.startswith(snapshot.settings.bybit_category + "/")
+                    (
+                        p.split("/")[1]
+                        for p in next_pairs
+                        if p.startswith(snapshot.settings.bybit_category + "/")
+                    )
                 ),
             }
             if action == "set":
@@ -367,13 +352,6 @@ class Controller:
             self.store.put_runtime("last_poll_ts", 0)
             self.store.put_runtime("pending_action", "")
             await self.send(update, "Список сохранён:\n" + (", ".join(next_pairs) or "Список пуст"))
-        elif command == "clearlist":
-            self.change(custom_pairs=(), watchlist=())
-            self.store.put_runtime("pending_action", "")
-            await self.send(update, "Пользовательский список очищен.")
-        elif command in ("radar_top", "radar_custom"):
-            self.change(alert_universe_mode="top" if command == "radar_top" else "custom")
-            await self.send(update, settings_text(self.store.snapshot()))
         elif command == "set":
             parts = raw.split()
             if len(parts) != 2 or parts[0] not in MANUAL_FIELDS:
@@ -400,11 +378,6 @@ class Controller:
             duration = number(parts[1], "mute minutes") * 60 if len(parts) == 2 else 3600
             self.store.mute(symbol, 0 if command == "unmute" else time.time() + duration)
             await self.send(update, "Mute сохранён." if command == "mute" else "Mute снят.")
-        elif command == "mutes":
-            rows = self.store.db.execute(
-                "SELECT symbol FROM mutes WHERE mute_until>? ORDER BY symbol", (time.time(),)
-            ).fetchall()
-            await self.send(update, "Активные mutes:\n" + (", ".join(row[0] for row in rows) or "Нет"))
         elif command == "alerts":
             if raw and raw.lower() not in ("on", "off"):
                 raise ConfigError("Invalid alerts preference")
@@ -412,20 +385,16 @@ class Controller:
             self.store.set_enabled(enabled)
             if enabled:
                 self.delivery.resume()
-            await self.send(update, f"Alerts {'ON' if enabled else 'OFF'}. Расчёт рынка продолжается.")
+            await self.send(
+                update,
+                f"Мгновенные уведомления {('включены' if enabled else 'выключены')}. Расчёт рынка продолжается.",
+            )
+            await self.ui.command(update, "alerts", "")
         elif command in ("resetbase", "resetallbase"):
             await self.send(
                 update,
                 "Reset baseline больше не используется. Composite считает движение закрытой свечи; настройки доступны в меню.",
             )
-        elif command == "diagnostics":
-            from .analytics_worker import read_snapshot
-            from .diagnostics import snapshot as diagnostic_snapshot
-
-            result = await asyncio.to_thread(
-                read_snapshot, self.store.path, self.store.owner_id, diagnostic_snapshot
-            )
-            await self.send(update, json.dumps(result, ensure_ascii=False, indent=2))
         elif command == "agent":
             parts = raw.strip().split()
             action = parts[0].lower() if parts else "status"
@@ -438,57 +407,14 @@ class Controller:
                 self.agent.replay(parts[1], now)
             elif action != "status" or len(parts) > 1:
                 raise ConfigError("Используйте /agent status|on|off|retry или /agent replay EVENT_ID")
-            from .analytics_worker import read_snapshot
-            from .diagnostics import snapshot as diagnostic_snapshot
-
-            result = await asyncio.to_thread(
-                read_snapshot, self.store.path, self.store.owner_id, diagnostic_snapshot
-            )
-            await self.send(update, json.dumps(result["agent_delivery"], ensure_ascii=False, indent=2))
+            await self.ui.command(update, "agent", "status")
         elif command in ("profiles", "profile"):
             if command == "profile" and raw:
+                selected = snapshot.settings.with_profile(raw.strip().lower())
                 self.ui.remember_custom()
-                self.store.update(snapshot.revision, snapshot.settings.with_profile(raw.strip().lower()))
+                self.store.update(snapshot.revision, selected)
                 self.store.put_runtime("last_poll_ts", 0)
             await self.send(update, settings_text(self.store.snapshot()), profiles_keyboard())
-        elif command == "detectors":
-            await self.send(
-                update,
-                "Все пять families сохраняют history. Кнопки выбирают Telegram alerts; новые families изначально silent.\n"
-                + settings_text(snapshot),
-                detectors_keyboard(snapshot),
-            )
-        elif command == "history":
-            events = self.history.events(12)
-            await self.send(
-                update,
-                self.history_notice()
-                + (
-                    "Последние сохранённые события, включая historical/suppressed и muted observations.\n"
-                    + "\n".join(
-                        f"{e['symbol']} · {e['market_type']} · {e['detector_id']} · {e['timeframe']} · {e['direction']} · strength {e['strength']:.2f}"
-                        for e in events
-                    )
-                    if events
-                    else "История пока пуста."
-                ),
-                history_keyboard(events),
-            )
-        elif command == "event":
-            try:
-                event_id = str(uuid.UUID(raw.strip()))
-            except ValueError as exc:
-                raise ConfigError("Invalid event ID") from exc
-            event = self.history.get("event-head:" + event_id)
-            if event:
-                now_ms = (
-                    self.market.server_now()
-                    if isinstance(self.market, BybitRadar)
-                    else int(time.time() * 1000)
-                )
-                await self.send(update, event_text(event, now_ms), event_keyboard(event))
-            else:
-                await self.send(update, self.history_notice() + "Событие не найдено.")
         elif command == "horizons":
             if raw:
                 parts = raw.replace(",", " ").split()
@@ -497,9 +423,9 @@ class Controller:
                 self.change(outcome_horizons=tuple(int(part) for part in parts))
             await self.send(
                 update,
-                "Outcome horizons, min: "
+                "Сроки оценки результата, минут: "
                 + ", ".join(map(str, self.store.snapshot().settings.outcome_horizons))
-                + "\n/horizons 5,15,30,60. Изменение применяется к новым событиям; старые reference/settings сохраняются.",
+                + "\nИзменение применяется только к новым событиям; исходная цена, время и настройки прежних событий сохраняются.",
             )
         elif command == "outcomes":
             if raw:
@@ -531,21 +457,14 @@ class Controller:
                 if raw.lower() not in ("on", "off"):
                     raise ConfigError("Формат /enrichment on или /enrichment off")
                 self.change(enrichment_enabled=raw.lower() == "on")
-            await self.send(
-                update,
-                f"Optional derivatives context: {'ON' if self.store.snapshot().settings.enrichment_enabled else 'OFF'}\n"
-                "Ticker1min · OI comparison5min · exact asset identity. При gaps/ошибках Spot продолжает работать.\n"
-                "/enrichment on · /enrichment off · /derivatives spot/BTC\n"
-                + settings_text(self.store.snapshot()),
-                enrichment_keyboard(self.store.snapshot()),
-            )
+            await self.ui.command(update, "enrichment", "")
         elif command == "derivatives":
             key = instrument_key(raw or "spot/BTC")
             now = self.market.server_now() if isinstance(self.market, BybitRadar) else int(time.time() * 1000)
             await self.send(
                 update,
                 enrichment_text(self.enrichment_context(key, now), now)
-                + "\n/enrichment on · /enrichment off · /derivatives spot/BTC. Текущий snapshot, отдельно от event history.",
+                + "\nЭто текущий снимок, отдельно от контекста сохранённого события.",
                 enrichment_keyboard(self.store.snapshot()),
             )
         elif command == "recompare":
@@ -567,48 +486,9 @@ class Controller:
                 update,
                 f"Comparator {state}. Frozen event/settings/reference и предыдущие revisions сохранены. Только prior windows; thresholds не меняются.",
             )
-        elif command in ("analytics", "compare"):
-            groups = (
-                tuple(raw.replace(",", " ").split())
-                if raw
-                else ("detector", "profile", "version", "settings", "market", "timeframe", "direction")
-            )
-            try:
-                from .analytics_worker import read_snapshot
-
-                statistics = await asyncio.to_thread(
-                    read_snapshot,
-                    self.store.path,
-                    self.store.owner_id,
-                    lambda store: cohorts(store, groups, limit=20),
-                )
-            except ValueError as exc:
-                raise ConfigError(
-                    "Groups: detector/profile/version/settings/market/timeframe/instrument/universe/direction/strength"
-                ) from exc
-            lines = [
-                "Статистика detectors · return %, описательная оценка информативности",
-                f"Неполных outcomes: {statistics['incomplete_outcomes']}. Horizons считаются отдельно.",
-            ]
-            for row in statistics["cohorts"]:
-                lines.append(
-                    f"{row['group']}\nN={row['sample_size']} · mean {row['mean']:.3f}% · median {row['median']:.3f}% · p10/p90 {row['p10']:.3f}/{row['p90']:.3f}%\nno-signal N={row['comparator_sample_size']} · mean={row['comparator_mean']} · {row['classifications']}\nFrozen noise: {row['noise_min_pct']}…{row['noise_max_pct']}% · N={row['noise_sample_size']}"
-                )
-            if statistics["truncated"]:
-                lines.append("Показаны первые20 cohorts. Полная выборка доступна через CLI export CSV.")
-            lines.append(
-                "Малое N/неполная история ограничивают выводы; события могут быть зависимы. Это не доходность стратегии и не рекомендация."
-            )
-            if command == "compare":
-                lines += [
-                    "Сравниваются только реально сохранённые profiles/settings. Автоматического изменения thresholds нет.",
-                    "/recompare event_uuid — явный новый расчёт comparators при новых исходных данных. Предыдущие revisions сохраняются.",
-                    "Текущие settings:\n" + settings_text(self.store.snapshot()),
-                ]
-            await self.send(update, "\n".join(lines))
         elif command == "digest":
             now = (
-                (self.market.server_now() or int(time.time() * 1000))
+                self.market.server_now() or int(time.time() * 1000)
                 if isinstance(self.market, BybitRadar)
                 else int(time.time() * 1000)
             )
@@ -620,28 +500,13 @@ class Controller:
                     self.change(digest_interval_min=parts[1])
                 self.digest.configure(parts[0] == "on", now)
             enabled = self.digest.preference()["enabled"]
-            await self.send(
-                update,
-                f"Digest {'ON' if enabled else 'OFF'} · interval {self.store.snapshot().settings.digest_interval_min} min\nНезависим от alerts/mutes. После включения — следующий полный UTC interval. /digest on 60 · /digest off",
-                digest_keyboard(enabled),
-            )
+            await self.ui.command(update, "digest", "")
         elif command == "sample_alert":
             await self.send(
                 update,
                 sample_alert_text(snapshot),
                 alert_keyboard(SAMPLE_SYMBOL, snapshot.settings.bybit_category),
             )
-        elif command == "status":
-            result = await self.market.snapshot(snapshot.settings)
-            current = self.store.snapshot()
-            if current.revision != snapshot.revision:
-                await self.send(
-                    update,
-                    "Настройки изменились во время запроса; данные прежней revision не применены.\n"
-                    + settings_text(current),
-                )
-                return
-            await self.send(update, status_text(snapshot, result, self.store.enabled()))
 
     async def callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         query = update.callback_query

@@ -28,6 +28,7 @@ PROFILE = {
     "conservative": "Строгий",
     "sensitive": "Чувствительный",
 }
+DIRECTION = {"UP": "вверх", "DOWN": "вниз", "NEUTRAL": "без направления"}
 FIELDS = {
     **{f"price_{tf}": f"Движение цены {tf}, %" for tf in TIMEFRAMES},
     "price_move_min": "Цена: применить ко всем TF, %",
@@ -57,13 +58,37 @@ METRIC = {
     "range_low": "Низ диапазона",
     "true_range": "Истинный диапазон",
     "range_mean": "Обычный диапазон",
+    "true_range_mean": "Обычный истинный диапазон",
+    "breakout_buffer": "Отступ пробоя",
+    "breakout_distance": "Расстояние пробоя",
+    "volatility_threshold": "Порог расширения диапазона",
     "volatility_ratio": "К обычному диапазону",
     "return_pct": "Изменение цены",
+    "price_return_pct": "Изменение цены",
+    "directed_return_pct": "Движение по направлению",
+    "max_rise_pct": "Максимальный рост",
+    "max_fall_pct": "Максимальное падение",
+    "range_pct": "Общий диапазон",
     "directional_return_pct": "Движение по направлению",
     "mfe_pct": "Максимальное движение в сторону",
     "mae_pct": "Максимальное движение против",
 }
-FRESHNESS = {"FRESH": "свежее", "STALE": "устаревает", "EXPIRED": "срок истёк"}
+FRESHNESS = {
+    "FRESH": "свежее",
+    "STALE": "устаревает",
+    "EXPIRED": "срок истёк",
+    "FUTURE": "время источника впереди текущего",
+}
+STATE = {
+    "OK": "работает",
+    "FAILED": "сбой",
+    "FRESH": "сводка свежая",
+    "STALE": "сводка устарела",
+    "PENDING": "ожидается результат",
+    "DEGRADED": "работает с ограничениями",
+    "WARMING": "готовит данные",
+    "COMPLETE": "завершено",
+}
 
 
 def amount(value: Any, *, compact: bool = False) -> str:
@@ -80,11 +105,16 @@ def amount(value: Any, *, compact: bool = False) -> str:
 
 
 def when(milliseconds: Any) -> str:
-    if not isinstance(milliseconds, (int, float)) or not math.isfinite(milliseconds):
+    if (
+        isinstance(milliseconds, bool)
+        or not isinstance(milliseconds, (int, float))
+        or not math.isfinite(milliseconds)
+        or milliseconds <= 0
+    ):
         return "время неизвестно"
     try:
         return datetime.fromtimestamp(milliseconds / 1000, timezone(timedelta(hours=3))).strftime(
-            "%d.%m %H:%M:%S МСК"
+            "%d.%m.%Y %H:%M:%S МСК"
         )
     except (ValueError, OverflowError, OSError):
         return "время вне диапазона"
@@ -149,7 +179,7 @@ def settings_summary(snapshot: Snapshot) -> str:
         f"Оборот: ×{amount(p['turnover_ratio'])}; среднее за {int(p['turnover_lookback'])} свечей\n"
         f"Минимальный оборот 24ч: {amount(s.liquidity_floor_24h, compact=True)} USDT\n"
         f"Режим: {'Весь подходящий рынок' if s.alert_universe_mode == 'top' else 'Мой список: ' + str(len(s.instruments()))}\n"
-        "Расчёт: Spot USDT + USDT Perpetual · 1m / 3m / 5m / 15m · 5 детекторов\n"
+        "Возможности: Spot USDT + USDT Perpetual · 1m / 3m / 5m / 15m · 5 детекторов\n"
         "Параметры каждого детектора и технические значения доступны ниже."
     )
 
@@ -165,7 +195,7 @@ def parameters_text(snapshot: Snapshot) -> str:
         + f"\nКарточка/рынок ввода без префикса: {market(s.bybit_category)}, {s.signal_timeframe}."
         + "\nВсе четыре TF работают одновременно. Выбор карточки не отключает другие TF."
         + f"\nВерсия настроек: {snapshot.revision}\nТочные ключи: "
-        + ", ".join(f"{key}={value:g}" for key, value in p.items())
+        + ", ".join(f"{key}={value!r}" for key, value in p.items())
     )
 
 
@@ -175,8 +205,8 @@ def profile_text(snapshot: Snapshot, name: str | None = None) -> str:
         return (
             f"Профили чувствительности\nАктивен: {PROFILE[s.profile]}\n"
             "Обычный — базовые пороги.\nСтрогий — пороги ×1,5.\nЧувствительный — пороги ×0,75.\n"
-            "Размеры окон остаются прежними. Выбор сначала показывает значения. "
-            "Применение заменит пороги всех пяти детекторов; текущие свои пороги можно вернуть. "
+            "Выбор сначала показывает значения. Применение заменяет пороги и окна формул всех пяти детекторов. "
+            "Если активны свои пороги, перед применением они сохраняются для возврата. "
             "Чувствительность не означает прибыльность."
         )
     p = dict(preset(name))
@@ -197,9 +227,7 @@ def observation_kind(event: dict[str, Any]) -> str:
 
 
 def event_summary(event: dict[str, Any], now_ms: int) -> str:
-    direction = {"UP": "вверх", "DOWN": "вниз", "NEUTRAL": "без направления"}.get(
-        event["direction"], event["direction"]
-    )
+    direction = DIRECTION.get(event["direction"], event["direction"])
     lines = [
         f"{event['symbol']} · {market(event['market_type'])}",
         f"{FAMILY.get(event['detector_id'], event['detector_id'])} · {event['timeframe']} · {direction}",
@@ -208,9 +236,12 @@ def event_summary(event: dict[str, Any], now_ms: int) -> str:
         if key.endswith(("threshold", "floor")) or key in ("atr14", "range_high", "range_low"):
             continue
         unit = event.get("units", {}).get(key, "")
-        lines.append(f"{METRIC.get(key, key)}: {amount(value, compact=unit == 'USDT')} {unit}".rstrip())
+        display_value = round(value, 2) if unit in ("%", "ratio") and abs(value) >= 0.01 else value
+        lines.append(
+            f"{METRIC.get(key, key)}: {amount(display_value, compact=unit == 'USDT')} {'×' if unit == 'ratio' else unit}".rstrip()
+        )
     lines += [
-        f"Интенсивность: ×{amount(event['strength'])} от порога",
+        f"Интенсивность: ×{amount(round(event['strength'], 2))} от порога",
         f"{FRESHNESS.get(freshness(event, now_ms), 'свежесть неизвестна')} · "
         + ("данные полные" if event.get("completeness") == "COMPLETE" else "данные неполные"),
         when(event.get("market_observation_ms")),
@@ -238,7 +269,7 @@ def source_summary(snapshot: Snapshot, ingestion: dict[str, Any], now: float) ->
     else:
         result.append(
             f"Источник: {amount(ingestion['active_streams'])} потоков инструмент/рынок/TF; "
-            + (f"сводка {amount(max(age, 0))} с назад" if fresh else "сводка устарела")
+            + (f"сводка {amount(round(max(age, 0), 1))} с назад" if fresh else "сводка устарела")
         )
         result.append(
             f"Пробелы: {amount(ingestion.get('historical_gaps_pending'))}; "
@@ -247,6 +278,13 @@ def source_summary(snapshot: Snapshot, ingestion: dict[str, Any], now: float) ->
         )
     if ingestion.get("configuration_revision") != snapshot.revision:
         result.append("Применение текущего охвата к источнику еще не подтверждено этой сводкой.")
+    discovery = ingestion.get("discovery")
+    if not isinstance(discovery, dict) or set(discovery) != {"spot", "linear"}:
+        result.append("Готовность метаданных и цен обоих рынков этой сводкой не подтверждена.")
+    elif any(not item.get("metadata_ready") or not item.get("tickers_ready") for item in discovery.values()):
+        result.append("Начальная подготовка: метаданные или цены ещё не получены для всех рынков.")
+    if ingestion.get("market_errors"):
+        result.append("Есть ограничения источника; причины доступны в диагностике.")
     return "\n".join(result)
 
 
@@ -258,38 +296,111 @@ def diagnostic_summary(data: dict[str, Any]) -> str:
     lines = [
         "Диагностика — сводка",
         f"Снята: {when(data.get('at_ms'))}",
-        f"Источники: {ingestion.get('diagnostic_state', 'неизвестно')}, возраст {amount(ingestion.get('diagnostic_age_seconds'))} с",
+        f"Источники: {STATE.get(ingestion.get('diagnostic_state'), 'неизвестно')}, возраст {amount(ingestion.get('diagnostic_age_seconds'))} с",
         f"Потоки: {amount(ingestion.get('active_streams'))}; пробелы: {amount(ingestion.get('historical_gaps_pending'))}",
-        f"Аналитика: {analytics.get('state', 'неизвестно')}; обновление {when(analytics.get('at_ms'))}",
+        f"Последний цикл аналитики: {STATE.get(analytics.get('state'), 'неизвестно')}; {when(analytics.get('at_ms'))}",
     ]
     if storage.get("working_bytes") is not None:
         lines.append(
-            f"База + журналы сейчас: {amount(storage['working_bytes'] / 1e9)} ГБ / "
+            f"База + журналы сейчас: {amount(round(storage['working_bytes'] / 1e9, 2))} ГБ / "
             f"{amount(storage.get('budget_bytes', 20e9) / 1e9)} ГБ"
         )
     if storage.get("projected_working_bytes") is not None:
         lines.append(
-            f"Модель заполненной базы: {amount(storage['projected_working_bytes'] / 1e9)} ГБ; "
+            f"Модель заполненной базы: {amount(round(storage['projected_working_bytes'] / 1e9, 2))} ГБ; "
             "это прогноз, не текущий размер и не доказанная верхняя граница."
         )
     if storage.get("indexes", {}).get("state") == "STALE":
         lines.append("Отдельный снимок индексов устарел; индексы уже входят в размер базы.")
+    if data.get("radar", {}).get("detector_errors"):
+        lines.append(
+            "Есть сообщения о недоступных расчётах детекторов; это не обязательно сбой подключения. См. полный отчёт."
+        )
     lines += [
-        f"Деривативы: {'включены' if data.get('enrichment', {}).get('enabled') else 'выключены (необязательно)'}",
-        "Доставка агенту: "
-        + (
-            "не подключена"
-            if agent.get("configuration") != "READY"
-            else "включена"
-            if agent.get("enabled")
-            else "выключена"
-        ),
-        "Дайджест: "
-        + ("включён" if data.get("digest", {}).get("preferences", {}).get("enabled") else "выключен"),
+        "Контекст деривативов (необязательно): " + toggle_state(data.get("enrichment", {}).get("enabled")),
+        "Доставка агенту: " + agent_state(agent),
+        "Дайджест: " + toggle_state(data.get("digest", {}).get("preferences", {}).get("enabled")),
         "Ожидающие задачи включают еще не наступившие сроки. Число pending не равно числу просроченных. "
         "Подробности очередей и точные данные — в полном отчёте.",
     ]
     return "\n".join(lines)
+
+
+def toggle_state(value: Any) -> str:
+    if type(value) is not bool:
+        return "неизвестно"
+    return "включён" if value else "выключен"
+
+
+def agent_state(value: dict[str, Any]) -> str:
+    if value.get("configuration") == "UNSET":
+        return "не подключена"
+    if value.get("configuration") == "BLOCKED":
+        return "ошибка настройки подключения"
+    if value.get("configuration") != "READY" or type(value.get("enabled")) is not bool:
+        return "состояние неизвестно"
+    return "включена" if value["enabled"] else "выключена"
+
+
+def diagnostic_section(data: dict[str, Any], section: str) -> str:
+    if section == "storage":
+        value = data.get("storage", {})
+        lines = ["Хранение — факт и модель", "Снимок: " + when(value.get("at_ms"))]
+        for key, label in (
+            ("working_bytes", "База и журналы сейчас"),
+            ("budget_bytes", "Ориентир"),
+            ("projected_working_bytes", "Модель заполненной базы"),
+        ):
+            lines.append(
+                f"{label}: "
+                + (
+                    amount(value[key] / 1e9) + " ГБ"
+                    if isinstance(value.get(key), (int, float))
+                    else "не измерено"
+                )
+            )
+        for key, label in (
+            ("database", "Файл базы, включая индексы"),
+            ("wal", "Журнал WAL"),
+            ("shm", "Служебный SHM"),
+        ):
+            value_bytes = value.get("files", {}).get(key)
+            lines.append(
+                f"{label}: "
+                + (
+                    amount(value_bytes / 1e6) + " МБ"
+                    if isinstance(value_bytes, (int, float))
+                    else "не измерено"
+                )
+            )
+        lines.append(
+            "Модель не равна занятому диску и не является доказанной верхней границей. Bootstrap, короткое окно и изменения конфигурации ограничивают выводы. Индексы не прибавляются к базе повторно; backups учитываются отдельно."
+        )
+        return "\n".join(lines)
+    if section == "queues":
+        outcomes = data.get("outcomes", {})
+        analytics = data.get("analytics", {})
+        return (
+            "Очереди — снимок "
+            + when(data.get("at_ms"))
+            + f"\nРезультаты событий ожидают: {amount(outcomes.get('pending'))}"
+            + f"\nСравнения ожидают: {amount(outcomes.get('comparison_pending'))}"
+            + f"\nВосстановление данных: {amount(data.get('analytics_recovery', {}).get('pending'))}"
+            + f"\nРабочий цикл: {STATE.get(analytics.get('state'), 'неизвестно')}; {when(analytics.get('at_ms'))}"
+            + f"\nЗа этот цикл: результатов {amount(analytics.get('processed_outcomes'))}, сравнений {amount(analytics.get('processed_comparisons'))}."
+            + "\nОжидание включает будущие сроки. Просрочено и возраст самой старой задачи: не измерены этим снимком. Неполный результат не подменяется нулём."
+        )
+    value = data.get("ingestion", {})
+    return (
+        "Источники — снимок "
+        + when(data.get("at_ms"))
+        + f"\n{STATE.get(value.get('diagnostic_state'), 'состояние неизвестно')}; возраст сводки {amount(value.get('diagnostic_age_seconds'))} с"
+        + f"\nПотоков монета/рынок/TF: {amount(value.get('active_streams'))}"
+        + f"\nМетаданные Spot: {amount(value.get('eligible_metadata', {}).get('spot'))}; Perpetual: {amount(value.get('eligible_metadata', {}).get('linear'))}"
+        + f"\nНе хватает начальной истории: {amount(value.get('bootstrap_pending_streams'))}; пробелы: {amount(value.get('historical_gaps_pending'))}"
+        + f"\nЗаблокировано: {amount(value.get('blocked_streams'))}; восстановление: {amount(value.get('recovery_pending'))}"
+        + "\nСвежесть сводки не доказывает свежесть каждой свечи. Точные состояния соединений и причины доступны в полном файле."
+    )
 
 
 HELP = (
@@ -302,13 +413,13 @@ HELP = (
 TERMS_SHORT = (
     "Как читать сигналы\n"
     "Цена: изменение закрытой свечи к предыдущей; рост и падение различаются.\n"
-    "Всплеск оборота: обычно100тыс.USDT, сейчас300тыс. — это ×3. База — предыдущие свечи, текущая исключена.\n"
+    "Всплеск оборота: обычно 100 тыс. USDT, сейчас 300 тыс. — это ×3. База — предыдущие свечи, текущая исключена.\n"
     "Пробой: цена закрылась за прежним диапазоном с отступом от обычной волатильности.\n"
     "Расширение диапазона: свеча необычно широкая; само по себе не задаёт направление.\n"
-    "Совпадение: одновременно выполнены условия цены, оборота и минимального оборота24ч.\n"
+    "Совпадение: одновременно выполнены условия цены, оборота и минимального оборота 24ч.\n"
     "Интенсивность ×2: превышение порога вдвое, не вероятность успеха.\n"
     "Эпизод объединяет подтверждения. Новое семейство/TF или усиление объясняют повторное уведомление.\n"
-    "Свежесть: для обычного1mсобытия свежее окно1минута, истечение через2; для пробоя —2/4минуты. "
+    "Свежесть: для обычного события 1m свежее окно — 1 минута, истечение через 2; для пробоя — 2/4 минуты. "
     "Поздняя доставка не обновляет исходное время.\n"
     "История включает наблюдения без Telegram-уведомления. Результаты — последующее движение, не доходность стратегии."
 )
