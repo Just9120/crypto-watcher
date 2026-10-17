@@ -4,7 +4,7 @@ Canonical requirements: [product_scope.md](product_scope.md). Этот план 
 
 ## Goal TELEGRAM-UX — ACTIVE
 
-Основание:17Oct2026 владелец после итогового screenshot-аудита41замечания поручил «Хорошо. Тогда бери как единую goal». Встроенная Goal активирована17Oct; весь scope UX-001…UX-041, без добавления AC/пересчета процентов. Результат — рабочий понятный Telegram manual radar; неизвестности закрываются проверкой и правдивым UI, а не удалением функций.
+Основание:17Oct2026 владелец после итогового screenshot-аудита41замечания поручил «Хорошо. Тогда бери как единую goal». Встроенная Goal активирована17Oct; после временного BLOCKED владелец17Oct явно поручил «Как это связано? Выполняй поставку сейчас», затем подтвердил продолжение без ожидания замера. Этот запрос снимает прежний observer hold; весь scope UX-001…UX-041, без добавления AC/пересчета процентов. Результат — рабочий понятный Telegram manual radar; неизвестности закрываются проверкой и правдивым UI, а не удалением функций.
 
 Baseline свежего origin/main46c5513ea8e5ef72c4fc1f262080bcf09e4cdd07; branch `codex/telegram-ux-20261017`, root worktree. Git fetch/FF/remote main и protections проверены: strict ci-required/app15368, enforce admins, required approvals0. PR57 остается draft/OPEN/head5be499d; COHORTS PAUSED и не является частью этой Goal. Один основной PR для всех41пунктов. Класс поставки NONE: без physical schema/retention/methodology changes.
 
@@ -19,7 +19,7 @@ Non-goals: F47/F48, capacity optimization/proof, resume COHORTS, reset/конв�
 3. Compact alert/details, readable history/outcome navigation/analytics/context и помощь.
 4. Cheap diagnostic summary/full report, unified block splitter и компактные меню.
 5. Targeted tests/quality/self-review, один commit batch/PR после всего local scope, requiredCI.
-6. Merge/runtime CD только после окончания существующего finite observer: baseline17Oct07:02:41МСК, earliest24h18Oct07:02:41МСК; без restart/повторного замера. Config3→4 во время owner UI tests ограничивает steady-day inference. До этого PR остается draft; auto-merge не включать.
+6. По новому явному поручению17Oct — merge/runtime CD сейчас после requiredCI/protections. Прежнее ожидание finite observer до18Oct отменено владельцем. Его records сохраняются; source change считается ограничением текущего замера, не доказательством24h/capacity PASS. Новый замер/reset, возобновление COHORTS и изменение owner settings не входят в поставку.
 
 DoD: каждый UX ID закрыт source/evidence и meaningful verification либо доказанно опровергнут; все предусмотренные новые/старые entry paths имеют owner guard и ожидаемые read/write semantics, state читается после изменения; навигация/ввод/ошибки не теряют owner settings. История и настройки остаются воспроизводимыми; optional modules независимы. Latest requiredCI/protections, self-review, merge, exact source/image/health/readiness и bounded application/persistence post-checks ordinaryCD<=900s обязательны для всей Goal. Ad-hoc acceptance рекомендована, не подменяет автоматические gates.
 
@@ -33,7 +33,7 @@ DoD: каждый UX ID закрыт source/evidence и meaningful verification 
 | Alerts/history/outcome/analytics | Все5families/оба рынка/4TF, event→detail→outcome, chronology/flags/retention boundaries; block splitter/length | Existing rendering/event/outcome tests + selected UI regressions | REQUIRED |
 | Cheap quality | docs/ruff/format/mypy, no secrets, no unrelated changes; root | `.venv-g1/Scripts/python.exe scripts/checks.py quality` | REQUIRED local |
 | Main validation | Latest ci-required с full applicable Linux/native/image suite; no skipped applicable job | Existing PR workflow, exact revision | REQUIRED CI |
-| Runtime delivery | Observer finished; primaryCD identity/backup/source/image/health/persistence/source coverage; saved owner values | Existing release flow и bounded read-only smoke; no extra messages/settings actions | REQUIRED after merge |
+| Runtime delivery | Owner17Oct разрешил поставку сейчас; observer records preserved/partial on source change; primaryCD identity/backup/source/image/health/persistence/source coverage; saved owner values | Existing release flow и bounded read-only smoke; no extra messages/settings actions | REQUIRED after merge |
 | Manual appearance/accessibility | Реальный Telegram client/mobile/zoom/contrast/focus/screen reader | Owner ad-hoc после поставки | RECOMMENDED; screenshots не доказывают WCAG |
 
 ### Findings TELEGRAM-UX — стабильные IDs screenshot-аудита
@@ -86,15 +86,15 @@ Evidence baseline:61ownerPNG/24экрана17Oct2026, source46c5513/runtime-code
 
 ### Checkpoint TELEGRAM-UX
 
-Реализовано по коду **41/41 замечаний** в `codex/telegram-ux-20261017` (base46c5513, первый commit a493ff9, полный scope в текущем diff). Scope/denominator прежние: это41finding, а не41новыйAC. Один основной PR59 создан draft, auto-merge OFF; head первого push8eaf7aa. Latest requiredCI/merge/CD и завершение Goal PENDING; актуальная revision определяется primary PR records.
+Реализовано по коду **41/41 замечаний** в `codex/telegram-ux-20261017` (base46c5513, первый commit a493ff9, полный scope в текущем diff). Scope/denominator прежние: это41finding, а не41новыйAC. Один основной PR59; head source96ce504 получил requiredCI39019235005 PASS. После отмены observer hold нужен последний docs checkpoint commit и его requiredCI, затем merge/CD по явному поручению. Актуальная revision определяется primary PR records; завершение Goal PENDING до поставки.
 
 Local Evidence17Oct2026/WindowsPython3.12: **TUX-FINAL PASS154tests/13.94s** (`test_telegram_ui`, `test_bot`, `test_outcome_ui`, `test_events`, `test_ingestion`, targeted-final). **Quality PASS**: canonical docs, ruff, format130files, mypy52source modules; `git diff --check` PASS. Предыдущие targeted151PASS/39UI PASS — промежуточные проверки, не дополнительные уникальные cases. Наборы пересекаются, не складываются. Проверены readonly aliases/callback crawl, owner/group guards, cancel/expiry/CAS (включая inline navigation), heterogeneous TF, typed lists, custom restore/reopen, empty source scope при REST wait/старый refresh, сохранение точных event/statistics JSON, keyset history/list/mute pages, UTF16 limits и fallback редактирования. Runtime formulas/quality/retention/physical schema не менялись. Self-review полного diff PASS: старые handlers и callbacks сохранены, source eligibility policy не ослаблена, domain/public/export данные не округляются, receiver/COHORTS/workflows не затронуты. Первый полный Linux/native CI39018988902:875PASS/2FAIL — только прежние presentation assertions enrichment (STALE/raw keys inline). Проверки обновлены к согласованному compact→details flow с сохранением assertions frozen context/value/source/freshness; TUX-ENR13PASS/2.37s и qualityPASS, review этого batchPASS. Следующий сгруппированный push включает tests/этот checkpoint; requiredCI exact revision и image/package stage должны пройти заново. Поставка PENDING; local evidence не заменяет CI/CD.
 
 Связанные E02/E03/E05/E06/E07/E08/E09/E11/E12/E13 AC сохраняют ID и текущие ограничения F47/F48/capacity. Это update evidence затронутого поведения в незамерженной branch; dated65AC audit ниже не пересчитывается. В частности UX018 уточняет применение AC-02-01/04 и AC-08-02: код исправлен fixtures, live действие ещё не подтверждено.
 
-Observer read-only17Oct11:53:07МСК: OBSERVING/59samples/15interruptions, latest59config4/1104streams/analyticsOK, unit active/PID1586329, тот же baseline SHA/container/source/StartedAt; final отсутствует. Owner readback at_ms1792224190640: config4/custom0, source1104streams, source revision ещё не имел applied-owner marker. Новый замер/config/restart не выполнялись. До18Oct07:02:41МСК и фактического завершения existing finite observer PR остаётся draft, auto-merge запрещён. COHORTS/PR57 остаётся PAUSED.
+Observer read-only17Oct11:53:07МСК: OBSERVING/59samples/15interruptions, latest59config4/1104streams/analyticsOK, unit active/PID1586329, тот же baseline SHA/container/source/StartedAt; final отсутствует. Owner readback at_ms1792224190640: config4/custom0, source1104streams, source revision ещё не имел applied-owner marker. Новый замер/config/restart не выполнялись. Прежний hold до18Oct07:02:41МСК отменён последующим явным поручением владельца выполнить поставку сейчас. Перед merge снять draft после latestCI; observer records сохраняются с ограничениями source/config/неполного интервала. COHORTS/PR57 остаётся PAUSED.
 
-Следующий шаг: дождаться latest requiredCI PR59; подтверждённые failures исправлять в том же PR. После окончания observer — восстановить primary final/interruptions, проверить свежие protections/base и выполнить ordinary merge/CD с exact source/image/health/persistence smoke. Ad-hoc appearance остаётся RECOMMENDED после поставки.
+Следующий шаг: дождаться latest requiredCI PR59; подтверждённые failures исправлять в том же PR. По новому поручению — сохранить текущие observer records, проверить свежие protections/base и выполнить ordinary merge/CD сейчас с exact source/image/health/persistence smoke. Ad-hoc appearance остаётся RECOMMENDED после поставки.
 
 ## Полный аудит 65 AC — 2026-10-17
 
