@@ -78,6 +78,12 @@ compatibility — в [state contract](state_contract.md#compact-history-represen
 `universe.py` владеет metadata eligibility/classification; `sources.py` — closed observations/provenance и bounded windows; `ingestion.py` — shared BybitRadar, subscriptions/clock/refresh/recovery. HTTP client общий, network вне DB transactions. Sources сохраняет logical source:v1 identity: в schema2 свечи и context нормализованы, в legacy schema1 используется runtime namespace. Ordinary startup не переводит одну physical schema в другую. Canonical REST recovery может исправить ordinary source observation; event snapshots остаются immutable. Detectors/notifications читают только persisted sources. Selected owner category/TF выбирают карточку, ingestion получает оба рынка и четыре native TF.
 
 REST budget5req/s/concurrency4, один pending entry на stream; current recovery выше bootstrap и historical pages. Равный приоритет обслуживается с чередованием рынков. WS args шардируются по character budget, Spot subscribe batches≤10, ack обязателен. Отказ/timeout закрывает connection, снимает live eligibility и приводит к heartbeat/resubscribe/backfill с bounded backoff. Open candles в source store не попадают. Duplicate closed candle не расходует запись или live identity; конфликт блокирует affected window до canonical REST recovery. Out-of-order/history никогда не повышаются до нового live observation.
+При memory gap current recovery запрашивает существующее bounded окно<=256candle
+только affected stream: короткий calculation tail не чинит старую дыру в cache.
+Если после REST окно остается blocked, сохраняется5s retry; это не successful
+recovery. Обычный contiguous bootstrap остается коротким; старые данные никогда
+не получают live eligibility. Лимиты окна/RAM/shared REST budget неизменны.
+
 
 Текущий detector window восстанавливается первым. Длинный outage оставляет durable historical gap cursor; каждый worker берёт только одну страницу, уступая более важной recovery. Неполная historical page диагностируется, а missing outcome data не превращаются в zero return. Source retention/protection и outcome completeness реализует G3 worker с durable admission/holds.
 
