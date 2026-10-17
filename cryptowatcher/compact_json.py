@@ -119,34 +119,43 @@ def pack(value: Any) -> bytes:
 
 
 def unpack(raw: bytes, maximum: int) -> Any:
-    if not 0 < len(raw) <= maximum:
+    length = len(raw)
+    if not 0 < length <= maximum:
         raise ValueError("Typed JSON size")
+    collection_limit = min(MAX_NODES, length)
     pos = 0
     nodes = 0
 
     def take(n: int) -> bytes:
         nonlocal pos
-        if n < 0 or n > len(raw) - pos:
+        if n < 0 or n > length - pos:
             raise ValueError("Truncated typed JSON")
         result = raw[pos : pos + n]
         pos += n
         return result
 
     def number() -> int:
+        nonlocal pos
         v = 0
         for shift in range(0, 8192, 7):
-            byte = take(1)[0]
+            if pos >= length:
+                raise ValueError("Truncated typed JSON")
+            byte = raw[pos]
+            pos += 1
             v |= (byte & 127) << shift
             if byte < 128:
                 return v
         raise ValueError("Typed integer bound")
 
     def get(depth: int) -> Any:
-        nonlocal nodes
+        nonlocal nodes, pos
         nodes += 1
         if depth > MAX_DEPTH or nodes > MAX_NODES:
             raise ValueError("Typed JSON bound")
-        tag = take(1)[0]
+        if pos >= length:
+            raise ValueError("Truncated typed JSON")
+        tag = raw[pos]
+        pos += 1
         if tag < 3:
             return (None, False, True)[tag]
         if tag == 3:
@@ -174,7 +183,7 @@ def unpack(raw: bytes, maximum: int) -> Any:
         if tag not in (6, 7, 11):
             raise ValueError("Unknown typed JSON tag")
         n = number()
-        if n > min(MAX_NODES, len(raw)):
+        if n > collection_limit:
             raise ValueError("Typed collection bound")
         if tag == 6:
             return [get(depth + 1) for _ in range(n)]
@@ -201,6 +210,6 @@ def unpack(raw: bytes, maximum: int) -> Any:
         return [{key: columns[j][i] for j, key in enumerate(keys)} for i in range(n)]
 
     result = get(0)
-    if pos != len(raw):
+    if pos != length:
         raise ValueError("Trailing typed JSON bytes")
     return result

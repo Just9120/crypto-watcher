@@ -26,7 +26,67 @@ Canonical spec: [product_scope.md](product_scope.md). Этот план соде
 | E12 CI/CD/operations | 4/4 | 100.0% | Evidence ниже; READY кода не обещает долгосрочную capacity |
 | E13 Bounded storage/reset | 7/7 | 100.0% | Evidence ниже; READY кода не обещает долгосрочную capacity |
 
-## Current Goal — MAINTENANCE: завершение backfill/repack и старт24h
+## Current Goal — COHORTS: ускорение диагностического анализа
+
+Основание: поручение владельца17Oct2026 продолжить оптимизацию проекта во время
+конечного суточного наблюдения. Подтвержденный пробел: baseline source
+`affdd7bc71e1c8eb362bcf08f0e898b52095d9cd` за отведенный бюджет обработал
+114956event revisions/37736prospective cohort-days со статусом PARTIAL_BUDGET.
+Это не вся population и не доказательство достижения20GB.
+
+Результат: измерить стоимость существующего cohort reader на изолированных
+репрезентативных данных, исправить подтвержденную повторную работу и подготовить
+один проверенный PR с неизменными численными результатами и явной partial semantics.
+Branch `codex/cohort-diagnostics-performance-20261017`, base указанного main;
+root worktree чист до начала, чужие семь веток сохранены.
+
+| Задача / критерий закрытия | Статус |
+| --- | --- |
+| C01: профиль затрат и сопоставимый before/after benchmark без production scan | PASS: local synthetic12005events/156133rows, median wall1.832→1.364s (-25.5%), CPU1.828→1.359s, exact result SHA equality |
+| C02: ускоренный reader, exact cohort/revision/horizon equality, bounded partial/corruption handling | PASS по коду/local fixtures; shared Python reader/typed byte loop, writer/format и все checks прежние |
+| C03: targeted tests/quality/self-review/required PR CI | Local97unique scenarios/quality/self-review PASS; required PR CI PENDING |
+| C04: merge и normal CD после завершения текущего24h наблюдения; backup/CD<=900s, прежняя RAM | BLOCKED до завершения наблюдения; это намеренная граница поставки |
+
+Validation Plan из root: `python scripts/checks.py quality` (Local REQUIRED),
+targeted `tests/test_capacity.py` и новые regression fixtures (Local REQUIRED),
+полная existing Linux3.11/native/image suite через `ci-required` (CI REQUIRED).
+Benchmark использует одинаковые fixture/snapshot/clock, фиксирует строки/объем,
+CPU/wall и ограничения synthetic данных; скорость не является flaky test gate
+или прогнозом production ETA. Checks численной эквивалентности и ошибок REQUIRED.
+После merge — normal CD, source/image/health/analytics/Telegram и сохранность
+private/config/generation (Production REQUIRED). До конца наблюдения runtime,
+observer и его caps/source/config/generation не меняются; PR остается reviewable.
+
+Non-goals: новый codec/layout, сокращение history/retention/precision/coverage,
+новые detectors/TF/сервисы, повышение RAM/backup/CD limits, reset/конвертация,
+удаление данных/backup/experiments, изменение текущего observer или его результата.
+Текущий baseline17Oct07:02:41.185MSK, итоговая проверка18Oct07:23MSK.
+После local checks подготовить draft PR, дождаться required CI; отложить merge/CD до окончания этого интервала.
+Проценты проекта не пересчитывать. DoD — C01…C04 PASS; одних tests недостаточно.
+
+Benchmark: три чередующихся before/after запуска без profiler на одной immutable
+изолированной базе125165568B,12005event revisions/156133runtime rows.
+Full cohort result SHA256 `435b95f8b71e58fc31b76fde1f0635da3080eff6acd9c23e028de9d1a0fedbd7`
+совпал во всех шести измерениях. Python traced peak23.83→21.45MB измерен отдельно;
+это не process RSS или SQLite/OS cache. Windows/Python3.12/warm-cache/synthetic mix,
+не production ETA, обещание полного scan за60s или20GB proof. Profiling указывает
+typed decode и повторный parse, новый compression/batching не вводились.
+Существующие97local scenarios включают62week controlled retention, shared history,
+CW2/CW3/JSON/candle compatibility, all truncated prefixes, corrupt hash/size/frame,
+exact numeric types/signed zero и mixed cohort/revision/profile/market/TF equality.
+
+## Previous Goal — MAINTENANCE: завершение backfill/repack и старт24h
+
+**Завершена** по первичным records PR56: source
+`affdd7bc71e1c8eb362bcf08f0e898b52095d9cd`, CI38999539232/CD38999831287 PASS,
+production210s/full backup52.526s. M01…M04 PASS, встроенная Goal COMPLETE.
+Actual final baseline17Oct07:02:41.185MSK, рабочие2466743600bytes включают
+DB2181713920 (indexes578547712 уже внутри), WAL284996912 и SHM32768.
+Repack COMPLETE, historical backlog0, обе market/fourTF subscriptions/analytics/
+Telegram и сохранность config3/generation/private/public samples подтверждены.
+Finite observer `cryptowatcher-capacity-20261017T035202Z-cd71e125.service`
+OBSERVING; одноразовая итоговая проверка18Oct07:23MSK. 20GB UNPROVEN.
+Ниже сохранен pre-merge checkpoint MAINTENANCE, его PENDING superseded этими records.
 
 Основание: поручение владельца16Oct2026 устранить узкие места backfill/repack,
 сохранить history/analytics/alerts, RAM и ordinary backup/CD<=900s. Результат:
@@ -375,6 +435,7 @@ Canonical команды — [README](../README.md#checks); из root repository
 | F43 RETENTION PROOF | Прежний малый fixture не доказывал rolling filled-window/restart и реальные20 comparator arrays вместе с methods | P1: lifecycle/capacity evidence gap | IMPLEMENT: controlled62week population plateau, exact facts/group equality и full GC; separate richer comparator/method boundary fixture | Local tests/rehearsal PASS; production annual mix unobserved | HIGH / CODE READY; CI PENDING |
 | F45 MAINTENANCE THROUGHPUT | Backfill/repack starvation и transient-queue sampling перед baseline; E06/E13 | P1: stable24h baseline задержан | FIX: independent jobs/guarded duty/finite snapshot/gap repair/admission55 поставлены; bounded retry только перед baseline при единственном current-queue blocker | PR48–55 CI, finalCD55 PASS; actual repack COMPLETE03:08UTC/historical backlog0, immutable/private preservation PASS. Observer repeatedly samples transient new jobs; final-image baseline PENDING | HIGH code/runtime; IN_PROGRESS |
 | F44 RECOVERY TERMINAL REUSE | Ownerless requests читают candles до owner check; terminal receipt блокирует новый valid owner до cleanup | P1: лишний scan/backlog и задержка repair | FIX: owner-first terminal retirement без source mutation; terminal job re-arm при valid retained owner; dedup/retry preserved |65/128pending без owner; regression re-arm/arrived data/noREST PASS | HIGH / CODE READY; CI/CD PENDING |
+| F46 DECODE OVERHEAD | Python reader полностью декодирует typed record, затем сериализует JSON и снова разбирает; tags/varints создают отдельные однобайтовые slices; F42/E13 diagnostics | P2: CPU и бюджет cohort boundary scan | REFACTOR: прямой validated object read и bounded byte indexing без нового format/сокращения checks | Isolated12005event revisions/156133runtime rows/125165568B; initial profile5.003s, json_payload path4.224s. Exact cohort result SHA одинаков до/после; production effect UNSET | HIGH / COHORTS IN_PROGRESS; CI/CD PENDING |
 
 ## Документы, legacy и artifacts
 

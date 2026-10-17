@@ -104,9 +104,9 @@ class RevisionConflict(StateError):
 
 
 def json_payload(payload: Any) -> Any:
-    from .record_codec import sql_payload
+    from .record_codec import json_value
 
-    return json.loads(sql_payload(payload))
+    return json_value(payload)
 
 
 def encode(value: Any) -> str:
