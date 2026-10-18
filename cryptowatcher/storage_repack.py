@@ -293,11 +293,19 @@ def quality_rows(store: Store, state: dict[str, Any], batch: int, deadline: floa
 
 def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> dict[str, Any]:
     from .expiry_index import drain
+    from .runtime_meter import drain as drain_namespaces
+    from .runtime_meter import read as namespace_snapshot
 
     if not store.bounded:
         return {"state": "N/A_LEGACY"}
     state = store.get_runtime("storage_repack", {})
-    if state.get("version") == 4 and state.get("state") == "COMPLETE" and state.get("decisions_complete"):
+    if (
+        state.get("version") == 4
+        and state.get("state") == "COMPLETE"
+        and state.get("decisions_complete")
+        and state.get("namespace_meter_complete")
+        and namespace_snapshot(store.db) is not None
+    ):
         return state
     if state.get("version") == 3:
         state = {
@@ -315,11 +323,11 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
     with store.db:
         # One shared deadline, with a durable rotating first phase. A slow SQL
         # read/commit may overrun a slice, but cannot always starve the same tail.
-        for offset in range(4):
+        for offset in range(5):
             if time.monotonic() >= deadline:
                 break
-            phase = (first + offset) % 4
-            state["next_phase"] = (phase + 1) % 4
+            phase = (first + offset) % 5
+            state["next_phase"] = (phase + 1) % 5
             if phase == 0 and not state.get("records_complete"):
                 record_rows(store, state, batch, deadline)
             elif phase == 1 and not state.get("decisions_complete"):
@@ -329,6 +337,8 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
                 state["expiry_legacy_empty"] = result["legacy_empty"]
             elif phase == 3:
                 quality_rows(store, state, batch, deadline)
+            elif phase == 4:
+                state["namespace_meter_complete"] = drain_namespaces(store.db, batch=batch, deadline=deadline)
         state.update(
             state="COMPLETE"
             if all(
@@ -339,6 +349,7 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
                     "expiry_legacy_empty",
                     "quality_complete",
                     "quality_legacy_empty",
+                    "namespace_meter_complete",
                 )
             )
             else "IN_PROGRESS",

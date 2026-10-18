@@ -239,6 +239,9 @@ class Store:
         from .source_windows import references
 
         self.db.create_function("cw_window_refs", 2, references, deterministic=True)
+        from .runtime_meter import namespace
+
+        self.db.create_function("cw_namespace", 1, namespace, deterministic=True)
         self.db.row_factory = sqlite3.Row
         self.bounded = self.db.execute("PRAGMA user_version").fetchone()[0] == 2
         if self.bounded:
@@ -259,6 +262,9 @@ class Store:
                 from .source_windows import install as install_windows
 
                 install_windows(self.db)
+                from .runtime_meter import install as install_runtime_meter
+
+                install_runtime_meter(self.db)
             if not self.bounded:
                 create_schema(self.db)
             if os.name != "nt":

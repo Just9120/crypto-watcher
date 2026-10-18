@@ -383,3 +383,87 @@ def test_source_coordinate_runs_preserve_order_gaps_duplicates_and_revisions():
     for runs in ([[0, 1, 65537, 0]], [[0, -1, 2, 0]], [[2**63 - 1, 1, 2, 0]], [[0, 1, True, 0]]):
         with pytest.raises(ValueError):
             reference_points({"mode": "source-runs", "stream": 1, "runs": runs, "sha256": "a" * 64})
+
+
+def test_namespace_backfill_tracks_interleaved_mutations_restarts_and_rollback(store, monkeypatch):
+    import time
+    from collections import defaultdict
+
+    from cryptowatcher import runtime_meter
+    from cryptowatcher.market_storage import enable
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(runtime_meter, "install", lambda db: None)
+        enable(store.db)
+    store.bounded = True
+    with store.db:
+        for i in range(25):
+            store.db.execute("INSERT INTO runtime VALUES(?,?)", (f"radar:v1:fixture:{i:04d}", "ж" * (i + 1)))
+    runtime_meter.install(store.db)
+    with store.db:
+        assert not runtime_meter.drain(store.db, batch=3, deadline=time.monotonic() + 1)
+    saved = tuple(store.db.execute("SELECT * FROM market_namespace_scan").fetchone())
+    with pytest.raises(RuntimeError), store.db:
+        runtime_meter.drain(store.db, batch=3, deadline=time.monotonic() + 1)
+        store.db.execute("DELETE FROM runtime WHERE key='radar:v1:fixture:0000'")
+        raise RuntimeError("rollback")
+    assert tuple(store.db.execute("SELECT * FROM market_namespace_scan").fetchone()) == saved
+    for i in range(40):
+        with store.db:
+            store.db.execute(
+                "UPDATE runtime SET payload_json=? WHERE key=?",
+                (b"updated" * (i + 1), f"radar:v1:fixture:{i % 25:04d}"),
+            )
+            store.db.execute("DELETE FROM runtime WHERE key=?", (f"radar:v1:fixture:{(i + 5) % 25:04d}",))
+            store.put_runtime(f"new:{i}", {"unicode": "МСК", "i": i})
+            done = runtime_meter.drain(store.db, batch=2, deadline=time.monotonic() + 1)
+        if done:
+            break
+    assert done
+
+    def direct():
+        result = defaultdict(lambda: {"records": 0, "key_bytes": 0, "payload_bytes": 0})
+        for key, size in store.db.execute("SELECT key,length(CAST(payload_json AS BLOB)) FROM runtime"):
+            value = result[runtime_meter.namespace(key)]
+            value["records"] += 1
+            value["key_bytes"] += len(key.encode())
+            value["payload_bytes"] += size
+        return dict(result)
+
+    assert runtime_meter.read(store.db) == direct()
+    store.db.execute("CREATE TABLE unrelated_ddl(value)")
+    assert runtime_meter.read(store.db) is None
+    for _ in range(100):
+        with store.db:
+            done = runtime_meter.drain(store.db, batch=3, deadline=time.monotonic() + 1)
+        if done:
+            break
+    assert done and runtime_meter.read(store.db) == direct()
+    with closing(Store(store.path, store.owner_id, readonly=True)) as reader:
+        assert runtime_meter.read(reader.db) == direct()
+
+
+def test_namespace_scan_includes_negative_ids_and_counts_reused_tail_ids(store, monkeypatch):
+    import time
+
+    from cryptowatcher import runtime_meter
+    from cryptowatcher.market_storage import enable
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(runtime_meter, "install", lambda db: None)
+        enable(store.db)
+    with store.db:
+        for rid in (-(2**63), -1, 0, 50, 100):
+            store.db.execute(
+                "INSERT INTO runtime(rowid,key,payload_json) VALUES(?,?,?)", (rid, f"old:{rid}", "payload")
+            )
+    runtime_meter.install(store.db)
+    with store.db:
+        store.db.execute("DELETE FROM runtime WHERE rowid=100")
+        for _ in range(10):
+            if runtime_meter.drain(store.db, batch=2, deadline=time.monotonic() + 1):
+                break
+    assert sum(v["records"] for v in runtime_meter.read(store.db).values()) == 4
+    with store.db:
+        store.db.execute("INSERT INTO runtime(rowid,key,payload_json) VALUES(100,'new:reused','xx')")
+    assert sum(v["records"] for v in runtime_meter.read(store.db).values()) == 5

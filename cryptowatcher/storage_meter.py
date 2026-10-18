@@ -303,7 +303,7 @@ def measure_indexes(store: Store, seconds: float = 0.25) -> dict[str, Any]:
     deadline = time.monotonic() + seconds
     store.db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
     try:
-        rows = store.db.execute("SELECT name,SUM(pgsize) FROM dbstat GROUP BY name").fetchall()
+        rows = store.db.execute("SELECT name,pgsize FROM dbstat WHERE aggregate=TRUE").fetchall()
         schema = {r[0]: r[1] for r in store.db.execute("SELECT name,type FROM sqlite_master")}
         return {
             "state": "PASS",

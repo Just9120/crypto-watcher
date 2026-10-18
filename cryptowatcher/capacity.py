@@ -85,17 +85,22 @@ def lifetime(kind: str, detail_days: int, candle_days: int) -> str:
 
 def runtime_ledger(store: Store, seconds: float = 50) -> dict[str, Any]:
     """Sequential transient rowid scan; no durable rowid cursor or SQL temp sort."""
+    from .runtime_meter import read
+
+    measured = read(store.db)
     deadline = time.monotonic() + seconds
-    counts: dict[str, dict[str, int]] = {}
-    cursor = 0
-    complete = False
+    counts: dict[str, dict[str, int]] = measured or {}
+    cursor: int | None = None
+    complete = measured is not None
     store.db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
     try:
-        while time.monotonic() < deadline:
+        while not complete and time.monotonic() < deadline:
             rows = store.db.execute(
                 "SELECT rowid,key,CASE typeof(payload_json) WHEN 'blob' THEN length(payload_json) "
-                "ELSE length(CAST(payload_json AS BLOB)) END FROM runtime WHERE rowid>? ORDER BY rowid LIMIT 4096",
-                (cursor,),
+                "ELSE length(CAST(payload_json AS BLOB)) END FROM runtime WHERE rowid"
+                + (">=?" if cursor is None else ">?")
+                + " ORDER BY rowid LIMIT 4096",
+                (-(2**63) if cursor is None else cursor,),
             ).fetchall()
             for rid, key, size in rows:
                 entry = counts.setdefault(namespace(key), {"records": 0, "key_bytes": 0, "payload_bytes": 0})
@@ -114,11 +119,15 @@ def runtime_ledger(store: Store, seconds: float = 50) -> dict[str, Any]:
     settings = store.snapshot().settings
     return {
         "state": "MEASURED" if complete else "PARTIAL_BUDGET",
+        "method": "TRANSACTIONAL_NAMESPACE_COUNTERS_AFTER_COMPLETE_FINITE_SCAN"
+        if measured is not None
+        else "BOUNDED_EXPLICIT_ROWID_SCAN",
         "namespaces": {
             k: {**v, "lifetime": lifetime(k, settings.detail_retention_days, settings.candle_retention_days)}
             for k, v in counts.items()
         },
-        "records_scanned": sum(v["records"] for v in counts.values()),
+        "records_scanned": 0 if measured is not None else sum(v["records"] for v in counts.values()),
+        "records_accounted": sum(v["records"] for v in counts.values()),
         "scope": "runtime snapshot; encoded values and UTF8 keys only; NOT physical pages/indexes",
         "partial_cursor": None if complete else cursor,
         "revision_multiplicity": {

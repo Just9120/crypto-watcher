@@ -150,6 +150,9 @@ def test_ledger_is_exact_no_sql_temp_sort_and_cohort_ablation_matches_frozen_eve
         assert cohorts["dimension_cardinality"]["horizon"] == 4
         assert cohorts["distinct_without_dimension"]["horizon"] * 4 == cohorts["cohort_days_if_archived"]
         partial = runtime_ledger(reader, seconds=0)
+        assert partial["state"] == "MEASURED" and partial["namespaces"] == ledger["namespaces"]
+        with patch("cryptowatcher.runtime_meter.read", return_value=None):
+            partial = runtime_ledger(reader, seconds=0)
         assert partial["state"] == "PARTIAL_BUDGET" and partial["records_scanned"] == 0
 
 
