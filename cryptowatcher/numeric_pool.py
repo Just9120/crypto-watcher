@@ -164,6 +164,24 @@ def encode_reference(db: sqlite3.Connection, value: Any) -> dict[str, Any] | Non
     return {"mode": "numeric2", "id": identity * 4 + view}
 
 
+def existing_reference(db: sqlite3.Connection, value: Any) -> tuple[dict[str, Any], int, int] | None:
+    """Find an exact view without creating a body for a unique archived value."""
+    candidate = canonical(value)
+    if candidate is None:
+        return None
+    body, view = candidate
+    raw = pack(body)
+    if raw is None:
+        raise ValueError("Canonical metric has no exact frame")
+    for identity, payload, details, quality in db.execute(
+        "SELECT id,payload,detail_refs,quality_refs FROM market_numeric WHERE fingerprint=?",
+        (fingerprint(raw),),
+    ):
+        if bytes(payload) == raw:
+            return {"mode": "numeric2", "id": int(identity) * 4 + view}, int(details), int(quality)
+    return None
+
+
 def resolve(db: sqlite3.Connection, reference: dict[str, Any]) -> dict[str, Any]:
     return reference_value(reference, load(db, reference_id(reference)))
 

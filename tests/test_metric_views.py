@@ -84,3 +84,66 @@ def test_mixed_cq2_cq4_and_upgrade_preserve_public_facts_and_physical_ownership(
         identity = quality_packets.intern(store.db, "set4", first[1:] + [4000080], hint="upgrade")
     assert quality_packets.row(store.db, identity, "set4")[1] is not None
     assert quality_packets.sequence(store.db, identity, kind="set4") == first[1:] + [4000080]
+
+
+def test_archive_own_views_reuse_only_shared_or_already_quality_retained_bodies(store):
+    from cryptowatcher.events import identity
+
+    enable(store.db)
+    up = metric(500)
+    values = [up, metric_codec.reflected(up), metric_codec.restore_view(up, 2), up]
+    owners = []
+    with store.db:
+        for i, value in enumerate(values):
+            ref = numeric_pool.encode_reference(store.db, value)
+            key = f"radar:v1:outcome:{identity('shared-own/' + str(i))}:0000000001"
+            owners.append(key)
+            store.put_runtime(
+                key,
+                {
+                    "_history_storage": {
+                        "schema": "cryptowatcher.shared-fields.v1",
+                        "fields": {"metrics": ref},
+                    }
+                },
+            )
+        facts = [{**fact(i), "metrics": value} for i, value in enumerate(values)]
+        raw = save(store, facts)
+    own = [row[1] for row in quality_packets.packet(raw)[0]]
+    assert all(type(v) is int for v in own)
+    assert len({v // 4 for v in own}) == 1
+    assert encode(quality_packets.unpack(store.db, raw)) == encode(facts)
+    body = own[0] // 4
+    with store.db:
+        for key in owners:
+            store.db.execute("DELETE FROM runtime WHERE key=?", (key,))
+        numeric_pool.collect(store.db)
+    assert store.db.execute(
+        "SELECT detail_refs,quality_refs FROM market_numeric WHERE id=?", (body,)
+    ).fetchone()[:] == (0, 1)
+    assert encode(quality_packets.unpack(store.db, raw)) == encode(facts)
+    with store.db:
+        second = save(store, [facts[0]], 20001)
+    assert type(quality_packets.packet(second)[0][0][1]) is int
+    with store.db:
+        store.db.execute("DELETE FROM market_quality WHERE day=20000")
+        quality_packets.collect(store.db)
+        numeric_pool.collect(store.db)
+    assert encode(quality_packets.unpack(store.db, second)) == encode([facts[0]])
+    with store.db:
+        store.db.execute("DELETE FROM market_quality WHERE day=20001")
+        for _ in range(12):
+            quality_packets.collect(store.db)
+        numeric_pool.collect(store.db)
+    assert store.db.execute("SELECT 1 FROM market_numeric WHERE id=?", (body,)).fetchone() is None
+
+
+def test_unique_own_result_remains_inline_and_never_creates_a_dedicated_pool_body(store):
+    enable(store.db)
+    original = {**fact(), "metrics": metric(500)}
+    with store.db:
+        assert numeric_pool.existing_reference(store.db, original["metrics"]) is None
+        raw = save(store, [original])
+    assert quality_packets.packet(raw)[0][0][1] == [original["metrics"]]
+    assert numeric_pool.existing_reference(store.db, original["metrics"]) is None
+    assert encode(quality_packets.unpack(store.db, raw)) == encode([original])

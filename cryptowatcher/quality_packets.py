@@ -370,7 +370,7 @@ def ownership(
 
 
 def pack(db: sqlite3.Connection, facts: list[Any], cohort: str | None = None) -> bytes:
-    from .numeric_pool import encode_reference
+    from .numeric_pool import encode_reference, existing_reference
     from .storage import encode
 
     if not 0 < len(facts) <= 128 or not all(
@@ -391,6 +391,11 @@ def pack(db: sqlite3.Connection, facts: list[Any], cohort: str | None = None) ->
     columns = intern(db, "columns", [[f["strength"], f["noise"]] for f in facts]) if len(facts) >= 8 else None
     rows = []
     for fact in facts:
+        # A unique own result stays inline. Reuse an already retained quality
+        # body, or a body shared by at least four live immutable records. This
+        # avoids paying a separate SQLite row/index for every unique own value.
+        found = existing_reference(db, fact["metrics"])
+        own = found[0]["id"] if found is not None and (found[1] >= 4 or found[2] > 0) else [fact["metrics"]]
         values = []
         for metric in fact["comparator_metrics"]:
             reference = encode_reference(db, metric)
@@ -398,7 +403,7 @@ def pack(db: sqlite3.Connection, facts: list[Any], cohort: str | None = None) ->
         metadata, slots = template_parts(fact)
         value = [
             intern(db, "template2", metadata),
-            [fact["metrics"]],
+            own,
             intern(db, "set4", values, hint=cohort),
             slots,
         ]
