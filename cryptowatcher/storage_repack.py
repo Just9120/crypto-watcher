@@ -13,6 +13,7 @@ def normalized_record(store: Store, key: str, value: Any) -> Any:
     from .events import PREFIX, History
     from .history_codec import SCHEMA, SHARED_FIELDS, WINDOW_FIELDS
     from .market_storage import restore_window
+    from .numeric_pool import intern as intern_numeric
     from .source_windows import intern
 
     history = History(store)
@@ -51,6 +52,17 @@ def normalized_record(store: Store, key: str, value: Any) -> Any:
                     restore_window(store.db, ref)  # Validate original SHA and every immutable coordinate.
                     fields[name] = intern(store.db, ref, expiry[0])
             result["_history_storage"] = {**storage, "fields": fields}
+        if isinstance(result.get("metrics"), dict):
+            metric_id = intern_numeric(store.db, result["metrics"])
+            if metric_id is not None:
+                current = result.get("_history_storage", {"schema": SCHEMA, "fields": {}})
+                if "metrics" in current["fields"]:
+                    raise ValueError("Conflicting numeric metric storage")
+                result["_history_storage"] = {
+                    **current,
+                    "fields": {**current["fields"], "metrics": {"mode": "numeric", "id": metric_id}},
+                }
+                del result["metrics"]
         return result
 
     return visit(value)
@@ -300,23 +312,23 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
         return {"state": "N/A_LEGACY"}
     state = store.get_runtime("storage_repack", {})
     if (
-        state.get("version") == 4
+        state.get("version") == 5
         and state.get("state") == "COMPLETE"
         and state.get("decisions_complete")
         and state.get("namespace_meter_complete")
         and namespace_snapshot(store.db) is not None
     ):
         return state
-    if state.get("version") == 3:
+    if state.get("version") in (3, 4):
         state = {
-            "previous_version": 3,
+            "previous_version": state["version"],
             "previous_run": {
                 k: state[k] for k in ("state", "records", "cursor", "records_rowid_upper") if k in state
             },
             "saved_payload_bytes": state.get("saved_payload_bytes", 0),
             "saved_categories": state.get("saved_categories", {}),
         }
-    state = {"version": 4, "cursor": "", "records": 0, "saved_payload_bytes": 0, **state}
+    state = {"version": 5, "cursor": "", "records": 0, "saved_payload_bytes": 0, **state}
     state.setdefault("saved_categories", {})
     deadline = time.monotonic() + seconds
     first = state.get("next_phase", 0)

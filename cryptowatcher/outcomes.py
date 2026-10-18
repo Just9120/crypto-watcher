@@ -28,10 +28,37 @@ DEFINITION = {
 
 
 def read_candles(store: Store, stream: str, start: int, end: int) -> list[Candle]:
+    frozen = store.bounded and store.readonly and store.db.in_transaction
+    key = (stream, start, end, store.db.execute("PRAGMA data_version").fetchone()[0]) if frozen else None
+    if key is not None and key in store.analytics_ranges:
+        cached = store.analytics_ranges.pop(key)
+        store.analytics_ranges[key] = cached
+        return list(cached[0])
     if store.bounded:
         from .market_storage import read
 
-        return [Candle(**v) for v in read(store.db, stream, start, end)]
+        result = [Candle(**v) for v in read(store.db, stream, start, end)]
+        if key is not None and len(result) <= 4096:
+            import sys
+
+            size = (
+                len(stream.encode())
+                + 256
+                + sys.getsizeof(tuple(result))
+                + sum(
+                    sys.getsizeof(c)
+                    + sys.getsizeof(vars(c))
+                    + sum(sys.getsizeof(v) for v in vars(c).values())
+                    for c in result
+                )
+            )
+            if size <= 4 * 1024 * 1024:
+                while store.analytics_ranges and store.analytics_range_bytes + size > 4 * 1024 * 1024:
+                    removed = store.analytics_ranges.pop(next(iter(store.analytics_ranges)))
+                    store.analytics_range_bytes -= removed[1]
+                store.analytics_ranges[key] = (tuple(result), size)
+                store.analytics_range_bytes += size
+        return result
     prefix = Sources.prefix(stream)
     rows = store.db.execute(
         "SELECT payload_json FROM runtime WHERE key>=? AND key<? ORDER BY key",
@@ -62,7 +89,9 @@ def missing_ranges(candles: list[Candle], start: int, end: int) -> list[tuple[in
     return gaps
 
 
-def calculate(event: dict[str, Any], horizon: int, candles: list[Candle]) -> dict[str, Any]:
+def calculate(
+    event: dict[str, Any], horizon: int, candles: list[Candle], *, include_source_inputs: bool = True
+) -> dict[str, Any]:
     if type(horizon) is not int or horizon <= 0:
         raise ValueError("Invalid outcome horizon")
     start = event["reference_time_ms"]
@@ -127,7 +156,9 @@ def calculate(event: dict[str, Any], horizon: int, candles: list[Candle]) -> dic
     if not all(math.isfinite(v) for v in metrics.values()):
         raise ValueError("Non-finite outcome metric")
     base.update(
-        metrics=metrics, units={key: "%" for key in metrics}, source_inputs=[asdict(c) for c in candles]
+        metrics=metrics,
+        units={key: "%" for key in metrics},
+        source_inputs=[asdict(c) for c in candles] if include_source_inputs else [],
     )
     return base
 
@@ -335,7 +366,13 @@ class OutcomeWorker:
                 self.apply(job, event, binding, result, clock())
                 applied += 1
                 if result["state"] == "COMPLETE":
-                    completed_lags.append(max(0, clock() - job.get("due_ms", job["next_attempt_ms"])))
+                    completed_lags.append(
+                        max(
+                            0,
+                            clock()
+                            - job.get("due_ms", event["reference_time_ms"] + job["horizon_min"] * MINUTE),
+                        )
+                    )
             await asyncio.sleep(0)
         from .queue_health import completed_batch
 

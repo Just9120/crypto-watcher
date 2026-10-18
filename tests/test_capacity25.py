@@ -271,7 +271,7 @@ def test_window_repack_preserves_public_values_and_head_projections_across_resta
         state = work(store, NOW, batch=3, seconds=1)
         if state["state"] == "COMPLETE":
             break
-    assert state["state"] == "COMPLETE" and state["version"] == 4
+    assert state["state"] == "COMPLETE" and state["version"] == 5
     assert state["previous_run"]["records"] == 999 and state["saved_payload_bytes"] > 42
     with closing(Store(store.path, store.owner_id, readonly=True)) as reader:
         assert {k: encode(v) for k, v in History(reader).items("event-head:")} == before
@@ -467,3 +467,342 @@ def test_namespace_scan_includes_negative_ids_and_counts_reused_tail_ids(store, 
     with store.db:
         store.db.execute("INSERT INTO runtime(rowid,key,payload_json) VALUES(100,'new:reused','xx')")
     assert sum(v["records"] for v in runtime_meter.read(store.db).values()) == 5
+
+
+async def test_legacy_retried_outcome_uses_original_due_for_completion_lag(store):
+    from cryptowatcher.market_storage import enable
+    from tests.test_outcomes import NOW, OutcomeWorker, Sources, future, observe
+
+    enable(store.db)
+    store.bounded = True
+    store.clock_ms = lambda: NOW
+    worker = OutcomeWorker(store)
+    observe(store, worker)
+    history = History(store)
+    selected = next(v for _, v in history.items("outcome-job:") if v["horizon_min"] == 5)
+    original_due = selected.pop("due_ms")
+    clock = original_due + 120000
+    selected["next_attempt_ms"] = clock
+    with store.db:
+        for key, _ in history.items("outcome-pending:") + history.items("outcome-job:"):
+            history.delete(key)
+        history.put("outcome-admission", {"complete": True})
+        history.put("outcome-job:" + selected["outcome_id"], selected)
+        history.put(selected["pending_key"], {"outcome_id": selected["outcome_id"]})
+    Sources(store).put("spot/BTCUSDT/1m", future())
+    assert await worker.async_work(lambda: clock) == 1
+    value = store.get_runtime("analytics_progress:outcome")
+    assert value["batch_completed"] == 1 and value["max_completed_due_lag_ms"] == 120000
+    assert value["last_slo_violation_ms"] == clock
+
+
+def test_numeric_metric_candidate_preserves_float_bits_integer_types_and_zero_signs():
+    import random
+
+    from cryptowatcher.metric_codec import pack, unpack
+    from cryptowatcher.storage import encode
+
+    rng = random.Random(3291)
+    cases = []
+    for value in (0.0, -0.0, 2.0, -2.0, 2**80, -(2**80), 1e-300, 1e300):
+        for sign in (-1, 1):
+            cases.append(
+                {
+                    "price_return_pct": value,
+                    "directed_return_pct": value * sign,
+                    "mfe_pct": 0,
+                    "mae_pct": -0.0,
+                }
+            )
+    for _ in range(1000):
+        price = rng.uniform(-1e30, 1e30)
+        cases.append(
+            {
+                "price_return_pct": price,
+                "directed_return_pct": price * rng.choice((-1, 1)),
+                "mfe_pct": rng.random(),
+                "mae_pct": -rng.random(),
+            }
+        )
+        cases.append(
+            {
+                "price_return_pct": price,
+                "max_rise_pct": rng.random(),
+                "max_fall_pct": -rng.random(),
+                "range_pct": rng.random(),
+            }
+        )
+    for original in cases:
+        raw = pack(original)
+        assert raw is not None and len(raw) in (26, 34)
+        assert encode(unpack(raw)) == encode(original)
+    for invalid in ({"other": 1}, {"price_return_pct": float("nan")}, {"price_return_pct": 1 << 9000}):
+        assert pack(invalid) is None
+    for raw in (
+        b"",
+        b"\x01\x00",
+        b"\x04\x00" + b"\x00" * 24,
+        b"\x01\x80" + b"\x00" * 24,
+        b"\x01\x00" + struct.pack(">ddd", float("inf"), 0, 0),
+    ):
+        with pytest.raises(ValueError):
+            unpack(raw)
+
+
+def test_numeric_pool_collision_rollback_gc_and_identity_are_lossless(store, monkeypatch):
+    from cryptowatcher import numeric_pool
+    from cryptowatcher.market_storage import enable
+    from cryptowatcher.storage import encode
+
+    enable(store.db)
+    store.bounded = True
+    first = {
+        "price_return_pct": 0.0175454454105349,
+        "directed_return_pct": 0.0175454454105349,
+        "mfe_pct": 0,
+        "mae_pct": -0.0,
+    }
+    second = {**first, "mfe_pct": 2.75}
+    with monkeypatch.context() as patcher:
+        patcher.setattr(numeric_pool, "fingerprint", lambda raw: b"collision")
+        with store.db:
+            one = numeric_pool.intern(store.db, first)
+            two = numeric_pool.intern(store.db, second)
+        assert one != two
+        assert encode(numeric_pool.load(store.db, one)) == encode(first)
+        assert encode(numeric_pool.load(store.db, two)) == encode(second)
+        with pytest.raises(RuntimeError), store.db:
+            numeric_pool.intern(store.db, {**first, "mae_pct": -2.5})
+            raise RuntimeError("rollback")
+        assert store.db.execute("SELECT COUNT(*) FROM market_numeric").fetchone()[0] == 2
+        with store.db:
+            assert numeric_pool.collect(store.db) == 2
+            three = numeric_pool.intern(store.db, first)
+        assert three > max(one, two)
+        with store.db:
+            numeric_pool.collect(store.db)
+
+
+def test_numeric_metric_owner_projection_and_missing_body_fail_closed(store):
+    import sqlite3
+
+    from cryptowatcher.history_codec import Codec
+    from cryptowatcher.market_storage import enable
+    from cryptowatcher.numeric_pool import collect
+    from cryptowatcher.storage import StateError, encode
+    from tests.test_outcomes import NOW, OutcomeWorker, Sources, future, observe
+
+    enable(store.db)
+    store.bounded = True
+    store.clock_ms = lambda: NOW
+    worker = OutcomeWorker(store)
+    observe(store, worker)
+    Sources(store).put("spot/BTCUSDT/1m", future())
+    worker.work(NOW + 6 * 60000)
+    history = History(store)
+    outcome = next(v for _, v in history.items("outcome-head:") if v["state"] == "COMPLETE")
+    key = f"radar:v1:outcome:{outcome['outcome_id']}:{outcome['revision']:010d}"
+    raw = store.get_runtime(key)
+    metric_id = raw["_history_storage"]["fields"]["metrics"]["id"]
+    assert (
+        store.db.execute("SELECT detail_refs FROM market_numeric WHERE id=?", (metric_id,)).fetchone()[0] > 0
+    )
+    assert collect(store.db) >= 0
+    with closing(Store(store.path, store.owner_id, readonly=True)) as reader:
+        projected = json.loads(
+            reader.db.execute(
+                "SELECT cw_numeric_json(payload_json) FROM runtime WHERE key=?", (key,)
+            ).fetchone()[0]
+        )
+        assert encode(projected["metrics"]) == encode(outcome["metrics"])
+        assert encode(History(reader).get(key[len("radar:v1:") :])) == encode(outcome)
+    broken = json.loads(encode(raw))
+    broken["_history_storage"]["fields"]["metrics"]["id"] = 10**12
+    with pytest.raises(sqlite3.IntegrityError), store.db:
+        store.db.execute("UPDATE runtime SET payload_json=? WHERE key=?", (encode(broken), key))
+    assert encode(history.get(key[len("radar:v1:") :])) == encode(outcome)
+    # Corruption injection is confined to this disposable fixture.
+    store.db.execute("DROP TRIGGER market_numeric_retained")
+    with store.db:
+        store.db.execute("DELETE FROM market_numeric WHERE id=?", (metric_id,))
+    with pytest.raises(StateError, match="numeric"):
+        history.get(key[len("radar:v1:") :])
+    assert "metrics" not in Codec(store.db).unpack(raw, omit_fields=frozenset({"metrics"}))
+
+
+def test_unsupported_large_metric_shapes_keep_existing_inline_encoding(store):
+    from cryptowatcher.history_codec import Codec
+    from cryptowatcher.market_storage import enable
+
+    enable(store.db)
+    store.bounded = True
+    value = {"metrics": {f"custom_metric_{i}": i + 0.25 for i in range(40)}}
+    with store.db:
+        packed = Codec(store.db).pack(value)
+    assert packed == value
+    assert store.db.execute("SELECT COUNT(*) FROM market_numeric").fetchone()[0] == 0
+
+
+def test_meter_preserves_first_new_epoch_sample_and_does_not_mix_legacy_flow(store):
+    from cryptowatcher.market_storage import enable
+    from cryptowatcher.storage_meter import report, sample
+    from tests.test_outcomes import NOW
+
+    enable(store.db)
+    store.bounded = True
+    start = NOW // 3600000 * 3600000 + 600000
+    legacy = [
+        {
+            "at_ms": start - (25 - i) * 3600000,
+            "format_version": 3,
+            "working_bytes": 0,
+            "categories": {},
+            "event_total": 0,
+        }
+        for i in range(25)
+    ]
+    store.put_runtime("storage_samples", legacy)
+    before = report(store, start)
+    assert before["sample_seconds"] == 0 and before["net_bytes_per_second"] is None
+    assert store.get_runtime("storage_samples") == legacy
+    for offset in (0, 60000, 120000):
+        sample(store, start + offset)
+    current = [s for s in store.get_runtime("storage_samples") if s["format_version"] == 4]
+    assert [s["at_ms"] for s in current] == [start, start + 120000]
+    assert report(store, start + 120000)["sample_seconds"] == 120
+
+
+def test_candle_range_cache_is_fixed_snapshot_only_and_cannot_hide_source_changes(store):
+    from cryptowatcher.market_storage import enable
+    from cryptowatcher.outcomes import read_candles
+    from cryptowatcher.sources import Sources
+    from tests.test_outcomes import MINUTE, NOW
+
+    enable(store.db)
+    store.bounded = True
+    stream = "spot/CACHEUSDT/1m"
+    candles = [
+        Candle.parse(
+            [NOW + i * MINUTE, 100, 102, 99, 101, 1, 100], "1m", "fixture", NOW + 5 * MINUTE, NOW + 5 * MINUTE
+        )
+        for i in range(5)
+    ]
+    Sources(store).put(stream, candles)
+    with closing(Store(store.path, store.owner_id, readonly=True)) as reader:
+        reader.db.execute("BEGIN")
+        first = read_candles(reader, stream, NOW, NOW + 5 * MINUTE)
+        assert first == candles and reader.analytics_range_bytes > 0
+        first.clear()
+        assert read_candles(reader, stream, NOW, NOW + 5 * MINUTE) == candles
+        replacement = Candle.parse(
+            [NOW, 100, 102, 99, 100.75, 1, 100], "1m", "fixture", NOW + 5 * MINUTE, NOW + 5 * MINUTE
+        )
+        Sources(store).put(stream, [replacement], recovery=True)
+        assert read_candles(reader, stream, NOW, NOW + 5 * MINUTE) == candles
+        reader.db.rollback()
+        reader.db.execute("BEGIN")
+        assert read_candles(reader, stream, NOW, NOW + 5 * MINUTE)[0] == replacement
+    assert read_candles(store, stream, NOW, NOW + 5 * MINUTE)[0] == replacement
+    assert store.analytics_range_bytes == 0
+
+
+def test_comparison_admission_finds_ready_canonical_siblings_without_processing_future_work(store):
+    import copy
+
+    from cryptowatcher.analytics_worker import prepare, read_snapshot
+    from cryptowatcher.market_storage import enable
+    from cryptowatcher.outcomes import pending_key
+    from tests.test_outcomes import NOW, OutcomeWorker, observe
+
+    enable(store.db)
+    store.bounded = True
+    store.clock_ms = lambda: NOW
+    worker = OutcomeWorker(store)
+    observe(store, worker)
+    history = History(store)
+    events = history.events(20)
+    assert len(events) == 5
+    anchor, future = events[:2]
+    unrelated = copy.deepcopy(anchor)
+    unrelated.update(event_id=identity("different-instrument"), symbol="OTHERUSDT")
+    with store.db:
+        history.version("event", unrelated)
+        worker.admit(unrelated)
+        for event, deadline in ((anchor, NOW - 2), (unrelated, NOW - 1), (future, NOW + 60000)):
+            key = "comparison-job:" + event["event_id"]
+            job = history.get(key)
+            history.delete(job["pending_key"])
+            job["next_attempt_ms"] = deadline
+            job["pending_key"] = pending_key(deadline, event["event_id"]).replace(
+                "outcome-pending:", "comparison-pending:"
+            )
+            history.put(key, job)
+            history.put(job["pending_key"], {"event_id": event["event_id"]})
+    first_two = [v["event_id"] for _, v in history.items("comparison-pending:", 2)]
+    assert first_two == [anchor["event_id"], unrelated["event_id"]]
+    prepared = read_snapshot(
+        store.path,
+        store.owner_id,
+        lambda reader: prepare(
+            reader,
+            "comparison-pending:",
+            "comparison-job:",
+            "event_id",
+            NOW,
+            2,
+            2,
+            lambda _, job, event: {"frozen": event["event_id"]},
+        ),
+    )
+    chosen = [e["event_id"] for _, e, _, _ in prepared]
+    assert len(chosen) == len(set(chosen)) == 2 and chosen[0] == anchor["event_id"]
+    assert unrelated["event_id"] not in chosen and future["event_id"] not in chosen
+    assert all(e["symbol"] == anchor["symbol"] and job["next_attempt_ms"] <= NOW for job, e, _, _ in prepared)
+
+
+def test_interval_reports_real_flow_deltas_and_rejects_counter_reset():
+    import copy
+
+    from cryptowatcher.capacity import interval
+
+    before = {
+        "at_ms": 100000,
+        "configuration_revision": 5,
+        "source_revision": "f" * 40,
+        "history_generation": {"id": "preserved"},
+        "runtime_instance": {"id": "one"},
+        "runtime_ledger": {"state": "MEASURED", "namespaces": {}},
+        "prospective_cohorts": {"state": "MEASURED_PROSPECTIVE"},
+        "quality_actual": {"state": "MEASURED"},
+        "physical_snapshot": {"state": "PASS", "tables": {}, "total_index_bytes": 0},
+        "storage": {"working_bytes": 100, "files": {}},
+        "analytics_progress": {
+            "comparison": {
+                "admitted_total": 100,
+                "completed_total": 90,
+                "work_seconds_total": 3.5,
+                "read_seconds_total": 2.5,
+                "apply_seconds_total": 0.5,
+            }
+        },
+    }
+    after = copy.deepcopy(before)
+    after["at_ms"] += 86400000
+    after["analytics_progress"]["comparison"].update(
+        admitted_total=150,
+        completed_total=150,
+        work_seconds_total=5.5,
+        read_seconds_total=3.5,
+        apply_seconds_total=1.25,
+    )
+    result = interval(before, after)
+    flow = result["analytics_flows"]["comparison"]
+    assert result["state"] == "OBSERVED_24H"
+    assert flow["admitted_total"] == 50 and flow["completed_total"] == 60
+    assert flow["completed_per_work_second"] == 30
+    assert flow["read_seconds_total"] == 1 and flow["apply_seconds_total"] == 0.75
+    assert result["analytics_flows"]["outcome"]["state"] == "UNSET_NO_BOUNDARY_PROGRESS"
+    after["analytics_progress"]["comparison"]["completed_total"] = 0
+    result = interval(before, after)
+    assert result["state"] == "PARTIAL_OR_UNSTABLE" and result["daily_extrapolation_bytes"] is None
+    assert result["analytics_flows"]["comparison"]["state"] == "RESET_OR_INCOMPATIBLE"

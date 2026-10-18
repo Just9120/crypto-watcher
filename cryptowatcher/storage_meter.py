@@ -75,8 +75,8 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         for r in store.db.execute("SELECT * FROM market_counts")
     }
     samples = store.get_runtime("storage_samples", [])
-    current = [s for s in samples if s.get("format_version") == 3]
-    base = current[0] if current else samples[0] if samples else None
+    current = [s for s in samples if s.get("format_version") == 4]
+    base = current[0] if current else None
     frequency_base = samples[0] if samples else None
     elapsed = (now_ms - base["at_ms"]) / 1000 if base else 0
     frequency_elapsed = (now_ms - frequency_base["at_ms"]) / 1000 if frequency_base else 0
@@ -110,7 +110,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
             settings.candle_retention_days
             if category in ("candles", "context", "context_bodies")
             else 366
-            if category == "quality"
+            if category in ("quality", "quality_numeric")
             else settings.detail_retention_days
         )
         projected = None
@@ -193,9 +193,13 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
     if (
         indexes.get("state") == "PASS"
         and store.db.execute("SELECT 1 FROM sqlite_master WHERE name='market_expiry'").fetchone()
-        and not {"market_expiry", "market_quality_blocks", "market_source_windows"}.issubset(
-            indexes.get("tables", {})
-        )
+        and not {
+            "market_expiry",
+            "market_quality_blocks",
+            "market_source_windows",
+            "market_numeric",
+            "market_namespaces",
+        }.issubset(indexes.get("tables", {}))
     ):
         indexes = {**indexes, "state": "STALE", "reason": "STORAGE_EXTENSION_AFTER_SNAPSHOT"}
     return {
@@ -281,14 +285,18 @@ def sample(store: Store, now_ms: int) -> None:
         {
             "at_ms": now_ms,
             "working_bytes": value["working_bytes"],
-            "format_version": 3,
+            "format_version": 4,
             "repack_saved": store.get_runtime("storage_repack", {}).get("saved_categories", {}),
             "categories": value["categories"],
             "event_total": value["observed_events_total"],
         }
     )
     # 24-hour minute samples are bounded. No full database/index scan here.
-    if len(samples) > 2 and samples[-1]["at_ms"] // 3600000 == samples[-2]["at_ms"] // 3600000:
+    if (
+        len(samples) > 2
+        and samples[-1]["at_ms"] // 3600000 == samples[-2]["at_ms"] // 3600000
+        and any(s.get("format_version") == 4 for s in samples[:-2])
+    ):
         samples.pop(-2)
     samples = samples[-26:]
     with store.db:

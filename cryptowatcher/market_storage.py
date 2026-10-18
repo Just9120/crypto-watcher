@@ -102,6 +102,9 @@ def enable(db: sqlite3.Connection) -> None:
     from .source_windows import install as install_windows
 
     install_windows(db)
+    from .numeric_pool import install as install_numeric
+
+    install_numeric(db)
     from .runtime_meter import install as install_runtime_meter
 
     install_runtime_meter(db)

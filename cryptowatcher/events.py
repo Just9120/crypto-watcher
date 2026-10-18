@@ -68,6 +68,10 @@ def identity(value: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, "cryptowatcher/" + value))
 
 
+def event_identity(stream: str, family: str, version: str, settings_revision: int, candle_start: int) -> str:
+    return identity(f"{stream}/{family}/{version}/{settings_revision}/{candle_start}")
+
+
 class History:
     def __init__(self, store: Store) -> None:
         self.store = store
@@ -512,8 +516,8 @@ class EventEngine:
                         self.history.put(key, runtime)
                     if not signal:
                         continue
-                    event_id = identity(
-                        f"{stream}/{family}/{VERSIONS[family]}/{snapshot.revision}/{current.start}"
+                    event_id = event_identity(
+                        stream, family, VERSIONS[family], snapshot.revision, current.start
                     )
                     if self.history.get("event-head:" + event_id):
                         continue

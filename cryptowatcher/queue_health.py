@@ -108,6 +108,10 @@ def completed_batch(
         "completed_total": previous.get("completed_total", 0) + len(lags),
         "batch_completed": len(lags),
         "elapsed_seconds": elapsed,
+        "work_seconds_total": previous.get("work_seconds_total", 0.0) + elapsed,
+        "read_seconds_total": previous.get("read_seconds_total", 0.0) + (read_seconds or 0.0),
+        "apply_seconds_total": previous.get("apply_seconds_total", 0.0)
+        + max(0.0, elapsed - (read_seconds or 0.0)),
         "read_calculate_seconds": read_seconds,
         "apply_seconds": max(0, elapsed - read_seconds) if read_seconds is not None else None,
         "last_slo_violation_ms": now_ms

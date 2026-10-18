@@ -210,6 +210,10 @@ class Store:
         # One population, scoped to a single fixed read transaction. Never used
         # by the writer or carried across snapshots.
         self.comparison_population: tuple[Any, Any] | None = None
+        self.analytics_ranges: dict[tuple[str, int, int, int], tuple[tuple[Any, ...], int]] = {}
+        self.analytics_range_bytes = 0
+        self.reference_cache: dict[tuple[str, str, str | bytes], tuple[str, int]] = {}
+        self.reference_cache_bytes = 0
         self.clock_ms = lambda: int(time.time() * 1000)
         if path.exists():
             probe = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
@@ -238,10 +242,27 @@ class Store:
         self.db.create_function("cw_record_json", 1, sql_payload, deterministic=True)
         from .source_windows import references
 
-        self.db.create_function("cw_window_refs", 2, references, deterministic=True)
+        self.db.create_function(
+            "cw_window_refs",
+            2,
+            lambda key, raw: self.cached_references("windows", key, raw, references),
+            deterministic=True,
+        )
         from .runtime_meter import namespace
 
         self.db.create_function("cw_namespace", 1, namespace, deterministic=True)
+        from .numeric_pool import projection
+        from .numeric_pool import references as numeric_references
+
+        self.db.create_function(
+            "cw_numeric_refs",
+            2,
+            lambda key, raw: self.cached_references("numeric", key, raw, numeric_references),
+            deterministic=True,
+        )
+        self.db.create_function(
+            "cw_numeric_json", 1, lambda raw: encode(projection(self.db, json_payload(raw)))
+        )
         self.db.row_factory = sqlite3.Row
         self.bounded = self.db.execute("PRAGMA user_version").fetchone()[0] == 2
         if self.bounded:
@@ -262,6 +283,9 @@ class Store:
                 from .source_windows import install as install_windows
 
                 install_windows(self.db)
+                from .numeric_pool import install as install_numeric
+
+                install_numeric(self.db)
                 from .runtime_meter import install as install_runtime_meter
 
                 install_runtime_meter(self.db)
@@ -273,6 +297,36 @@ class Store:
     def close(self) -> None:
         self.db.close()
         self.comparison_population = None
+        self.analytics_ranges.clear()
+        self.analytics_range_bytes = 0
+        self.reference_cache.clear()
+        self.reference_cache_bytes = 0
+
+    def cached_references(self, kind: str, key: str, raw: Any, read: Any) -> str:
+        # Only pure extraction is cached, never body existence or payload data.
+        # Every owner INSERT still checks the current referenced rows in SQL.
+        if not isinstance(raw, (str, bytes)) or not key.startswith(
+            ("radar:v1:event:", "radar:v1:outcome:", "radar:v1:comparison:")
+        ):
+            return str(read(key, raw))
+        token = (kind, key, raw)
+        cached = self.reference_cache.get(token)
+        if cached is not None:
+            return cached[0]
+        result = str(read(key, raw))
+        size = (
+            len(key.encode())
+            + (len(raw.encode()) if isinstance(raw, str) else len(raw))
+            + len(result.encode())
+            + 256
+        )
+        if size <= 1024 * 1024:
+            while self.reference_cache and self.reference_cache_bytes + size > 1024 * 1024:
+                removed = self.reference_cache.pop(next(iter(self.reference_cache)))
+                self.reference_cache_bytes -= removed[1]
+            self.reference_cache[token] = (result, size)
+            self.reference_cache_bytes += size
+        return result
 
     def initialize(self, defaults: OwnerSettings, *, legacy: Path | None = None) -> None:
         if self.db.execute("SELECT 1 FROM owner_settings").fetchone():

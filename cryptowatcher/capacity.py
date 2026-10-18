@@ -477,12 +477,45 @@ def interval(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
         else None,
         "namespace_changes": {},
         "namespace_measurement_state": "UNSET_PARTIAL_OR_MISSING_BOUNDARY_LEDGER",
+        "analytics_flows": {},
         "limitations": [
             "Boundary stability alone cannot prove stability between samples; inspect observation log",
             "WAL size is checkpoint-sensitive; DB and journals measured separately",
             "A measured day is not proof of annual population/method/comparator mix",
         ],
     }
+    for name in ("outcome", "comparison", "analytics-gap"):
+        old = before.get("analytics_progress", {}).get(name, {})
+        new = after.get("analytics_progress", {}).get(name, {})
+        if not old or not new:
+            result["analytics_flows"][name] = {"state": "UNSET_NO_BOUNDARY_PROGRESS"}
+            continue
+        delta = {
+            field: new.get(field, 0) - old.get(field, 0)
+            for field in (
+                "admitted_total",
+                "completed_total",
+                "work_seconds_total",
+                "read_seconds_total",
+                "apply_seconds_total",
+            )
+        }
+        if any(v < 0 for v in delta.values()):
+            result["analytics_flows"][name] = {"state": "RESET_OR_INCOMPATIBLE"}
+            result["state"] = "PARTIAL_OR_UNSTABLE"
+            result["daily_extrapolation_bytes"] = None
+            continue
+        result["analytics_flows"][name] = {
+            "state": "MEASURED_BOUNDARY_DELTA",
+            **delta,
+            "admitted_per_second": delta["admitted_total"] / seconds,
+            "completed_per_second": delta["completed_total"] / seconds,
+            "completed_per_work_second": delta["completed_total"] / delta["work_seconds_total"]
+            if delta["work_seconds_total"] > 0
+            else None,
+            "work_fraction": delta["work_seconds_total"] / seconds,
+            "basis": "wall time including read/calculation/apply/yields; gap durations not measured; not CPU attribution or universal capacity",
+        }
     bp, ap = before.get("physical_snapshot", {}), after.get("physical_snapshot", {})
     if bp.get("state") == ap.get("state") == "PASS":
         result["physical_page_changes"] = {

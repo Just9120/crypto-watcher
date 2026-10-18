@@ -26,6 +26,7 @@ BLOB_PREFIX = "historyblob:v1:"
 MAX_BYTES = 32 * 1024 * 1024
 CACHE_BYTES = 4 * 1024 * 1024
 SHARED_FIELDS = {
+    "metrics",
     "settings_snapshot",
     "effective_parameters",
     "source_context",
@@ -201,6 +202,15 @@ class Codec:
         return json.loads(self.field_raw(reference))
 
     def field_raw(self, reference: Any) -> bytes:
+        if isinstance(reference, dict) and reference.get("mode") == "numeric":
+            from .numeric_pool import load
+
+            if set(reference) != {"mode", "id"}:
+                raise StateError("Invalid numeric metric reference")
+            try:
+                return encode(load(self.db, reference["id"])).encode()
+            except (ValueError, TypeError, KeyError) as exc:
+                raise StateError("Invalid retained numeric metric") from exc
         if isinstance(reference, dict) and reference.get("mode") == "value2":
             if set(reference) != {"mode", "id"}:
                 raise StateError("Invalid compact shared reference")
@@ -380,7 +390,18 @@ class Codec:
         result: dict[str, Any] = {}
         references = {}
         for name, item in value.items():
-            raw = encode(item).encode() if name in SHARED_FIELDS and isinstance(item, dict) else None
+            if self.bounded and name == "metrics" and isinstance(item, dict):
+                from .numeric_pool import intern
+
+                metric_id = intern(self.db, item)
+                if metric_id is not None:
+                    references[name] = {"mode": "numeric", "id": metric_id}
+                    continue
+            raw = (
+                encode(item).encode()
+                if name in SHARED_FIELDS - {"metrics"} and isinstance(item, dict)
+                else None
+            )
             if (
                 self.source_stream
                 and name == "source_context"
@@ -444,13 +465,23 @@ class Codec:
         return result
 
     def unpack(self, value: Any, *, omit_fields: frozenset[str] = frozenset()) -> Any:
+        from .numeric_pool import load_many, metric_ids
+
+        value = self.record_value(value)
+        try:
+            metrics = load_many(self.db, metric_ids(value, omit_fields=omit_fields))
+        except (ValueError, TypeError, KeyError) as exc:
+            raise StateError("Invalid retained numeric metric") from exc
+        return self._unpack(value, omit_fields, metrics)
+
+    def _unpack(self, value: Any, omit_fields: frozenset[str], metrics: dict[int, Any]) -> Any:
         value = self.record_value(value)
         if isinstance(value, list):
-            return [self.unpack(item, omit_fields=omit_fields) for item in value]
+            return [self._unpack(item, omit_fields, metrics) for item in value]
         if not isinstance(value, dict):
             return value
         result = {
-            k: self.unpack(v, omit_fields=omit_fields) if isinstance(v, (dict, list)) else v
+            k: self._unpack(v, omit_fields, metrics) if isinstance(v, (dict, list)) else v
             for k, v in value.items()
             if k != MARKER and k not in omit_fields
         }
@@ -469,7 +500,16 @@ class Codec:
                 raise StateError("Unknown shared history field")
             if name in omit_fields:
                 continue
-            restored = self.field(reference)
+            if (
+                isinstance(reference, dict)
+                and reference.get("mode") == "numeric"
+                and reference.get("id") in metrics
+            ):
+                import copy
+
+                restored = copy.deepcopy(metrics[reference["id"]])
+            else:
+                restored = self.field(reference)
             if name in result:
                 projection = (
                     {k: restored[k] for k in ("profile", "alert_universe_mode") if k in restored}

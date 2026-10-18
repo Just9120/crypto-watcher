@@ -338,6 +338,9 @@ class BoundedRetention:
             from .source_windows import collect as collect_windows
 
             removed_windows = collect_windows(store.db, now_ms, batch)
+            from .numeric_pool import collect as collect_numeric
+
+            removed_numeric = collect_numeric(store.db, batch)
             garbage = store.db.execute(
                 "SELECT body FROM market_body_counts WHERE refs=0 LIMIT ?", (batch,)
             ).fetchall()
@@ -354,6 +357,7 @@ class BoundedRetention:
                 "removed_summaries": len(quality),
                 "removed_bodies": len(garbage),
                 "removed_source_windows": removed_windows,
+                "removed_numeric": removed_numeric,
                 "batch": batch,
                 "state": "OK",
                 "terminal_status": "EXPIRED_RETENTION_INCOMPLETE",
@@ -368,6 +372,7 @@ class BoundedRetention:
                 "removed_summary_blocks": len(quality),
                 "removed_bodies": len(garbage),
                 "removed_source_windows": removed_windows,
+                "removed_numeric": removed_numeric,
             }.items():
                 totals[key] = totals.get(key, 0) + count
             totals["at_ms"] = now_ms

@@ -192,7 +192,12 @@ def comparison_dataset(store: Store, event: dict[str, Any]) -> dict[str, Any]:
             "continuation_threshold_pct": noise,
         }
         outcomes = {
-            str(h): calculate(comparator_event, h, [c for c in future if c.end <= current.end + h * MINUTE])
+            str(h): calculate(
+                comparator_event,
+                h,
+                [c for c in future if c.end <= current.end + h * MINUTE],
+                include_source_inputs=False,
+            )
             for h in horizons
         }
         if any(v["state"] != "COMPLETE" for v in outcomes.values()):
@@ -269,6 +274,9 @@ class ComparisonWorker:
                 "outcome-pending:", "comparison-pending:", 1
             )
             self.history.put("comparison-job:" + event_id, job)
+            from .queue_health import arrival
+
+            arrival(self.store, "comparison")
             self.history.put(job["pending_key"], {"event_id": event_id})
             for stream in (native, native.rsplit("/", 1)[0] + "/1m"):
                 self.history.put(
@@ -355,7 +363,10 @@ class ComparisonWorker:
                 self.apply(job, event, binding, result, clock())
                 applied += 1
                 if result["state"] in ("COMPLETE", "COMPLETE_LIMITED"):
-                    completed_lags.append(max(0, clock() - job.get("due_ms", job["next_attempt_ms"])))
+                    due_ms = job.get(
+                        "due_ms", job.get("recalculation_requested_ms", event["available_at_ms"])
+                    )
+                    completed_lags.append(max(0, clock() - due_ms))
             await asyncio.sleep(0)
         from .queue_health import completed_batch
 
@@ -510,7 +521,7 @@ def cohort_rows(
             args.append(value)
     definitions += [
         "base AS (SELECT json_object(" + ",".join(fields) + ") AS group_key, "
-        "COALESCE(json_extract(cw_record_json(o.payload_json),'$.metrics.directed_return_pct'),json_extract(cw_record_json(o.payload_json),'$.metrics.price_return_pct')) AS value, "
+        "COALESCE(json_extract(cw_numeric_json(o.payload_json),'$.metrics.directed_return_pct'),json_extract(cw_numeric_json(o.payload_json),'$.metrics.price_return_pct')) AS value, "
         "json_extract(cw_record_json(o.payload_json),'$.classification') AS class, json_extract(cw_record_json(o.payload_json),'$.noise_threshold_pct') AS noise, "
         "json_extract(cw_record_json(o.payload_json),'$.event_id') AS event_id, json_extract(cw_record_json(o.payload_json),'$.horizon_min') AS horizon "
         "FROM o JOIN runtime e ON e.key='"
@@ -522,7 +533,7 @@ def cohort_rows(
         "stats AS (SELECT group_key,COUNT(*) AS n,MIN(noise) AS noise_min,MAX(noise) AS noise_max,COUNT(noise) AS noise_n,AVG(value) AS mean,MIN(value) AS minimum,MAX(value) AS maximum,AVG(CASE WHEN rn IN ((n+1)/2,(n+2)/2) THEN value END) AS median,MAX(CASE WHEN rn=(n+9)/10 THEN value END) AS p10,MAX(CASE WHEN rn=(n*9+9)/10 THEN value END) AS p90 FROM ordered GROUP BY group_key)",
         "classes AS (SELECT group_key,class,COUNT(*) AS n FROM base GROUP BY group_key,class)",
         "class_json AS (SELECT group_key,json_group_object(class,n) AS counts FROM classes GROUP BY group_key)",
-        "comparators AS (SELECT b.group_key,COUNT(*) AS n,AVG(COALESCE(json_extract(s.value,'$.outcomes.' || json_quote(CAST(b.horizon AS TEXT)) || '.metrics.directed_return_pct'),json_extract(s.value,'$.outcomes.' || json_quote(CAST(b.horizon AS TEXT)) || '.metrics.price_return_pct'))) AS mean FROM base b JOIN c ON json_extract(cw_record_json(c.payload_json),'$.event_id')=b.event_id JOIN json_each(cw_record_json(c.payload_json),'$.samples') s GROUP BY b.group_key)",
+        "comparators AS (SELECT b.group_key,COUNT(*) AS n,AVG(COALESCE(json_extract(s.value,'$.outcomes.' || json_quote(CAST(b.horizon AS TEXT)) || '.metrics.directed_return_pct'),json_extract(s.value,'$.outcomes.' || json_quote(CAST(b.horizon AS TEXT)) || '.metrics.price_return_pct'))) AS mean FROM base b JOIN c ON json_extract(cw_record_json(c.payload_json),'$.event_id')=b.event_id JOIN json_each(cw_numeric_json(c.payload_json),'$.samples') s GROUP BY b.group_key)",
     ]
     if store.bounded and cutoff_ms is None:
         from .quality_summary import union_sql
