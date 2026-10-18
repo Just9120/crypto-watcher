@@ -284,7 +284,7 @@ Export filter относится к selected event observation time `[start,end)
 
 S01 обновлен и S05 явно заменяют D12: подробные events/revisions/episodes/outcomes30d; raw small-TF35d плюс только использованные inputs еще сохраняемых подробных расчетов. Сроки настраиваются, lookback/horizons должны укладываться в поддерживаемые окна. Quality summaries12 календарных месяцев от event date, без полных raw arrays; старые подробности не подменяются агрегатами. Используемый coarse context90d/selected Spot до180d условен и не требует новых источников или минутной детализации180d. После сохранения агрегатов automatic bounded cleanup освобождает ссылки и service dependencies. Ожидание не бесконечно: истечение подробного срока дает явный terminal incomplete/expired status.
 
-Working DB+indexes+journals target20GB — проверяемая цель. Факты и extrapolation разделены; причина превышения и варианты решения видны владельцу. Постоянный full scan не является механизмом контроля. Не сокращать события/detectors/markets/TF/аналитику/retention скрытно.
+Working DB+indexes+journals target25GB по решению D27 — проверяемая цель. Факты и extrapolation разделены; причина превышения и варианты решения видны владельцу. Постоянный full scan не является механизмом контроля. Не сокращать события/detectors/markets/TF/аналитику/retention скрытно.
 
 Прежняя тестовая market history подлежит разовому reset после исправлений/tests; ее перенос, сжатие, полная конвертация и qualification исключены из текущей задачи. Owner settings/watchlist/thresholds/notification preferences/mutes/user config и secrets/infra сохраняются и проверяются. Reset имеет exact перечень, generation boundary и совместимые queues/cursors; не выполняется при обычном startup/deploy. Удаление backups/experiments не разрешено этим reset. Обычные backup/CD остаются<=900s, RAM не увеличивается; последующее наблюдение отделено от закрытия исправлений/reset.
 
@@ -376,3 +376,26 @@ Owner settings/preferences/mutes/legacy identity и credentials/infra сохра
 full archive integrity/hash/private restore и post-checks. Scheduled tasks не
 создаются. Запуск нового24h подтверждается фактическим OBSERVING/baseline;
 ожидание завершения суток не входит в исправление и поставку.
+
+## D27 — Единая CAPACITY25 Goal (18 октября 2026)
+
+Владелец утвердил и поручил полную реализацию backlog/observer/lossless storage,
+прежних findings, ordinary delivery и чистого конечного24h замера. Жёсткий предел
+AC-13-06 теперь25,000,000,000bytes для DB/indexes/free pages/WAL/SHM/journal;
+исторические20GB оценки остаются snapshots прежнего решения. Backups/experiments
+учитываются отдельно. Рынки/TF/detectors/retention/точность/полнота аналитики,
+existing data/generation/archives/settings сохраняются. Новый reset, scheduled
+tasks и повышение RAM/900s gates в эту Goal не входят.
+
+Q07: архивная часть intraday selection явно нормализуется до UTC-дней с requested
+и effective bounds/resolution во всех CSV/NDJSON/cohort views; точные retained
+details фильтруются точно. Это не восстановление выдуманной intraday точности.
+Digest activity — число сохранённых event observations по instrument/market
+в запрошенном периоде; strongest/ongoing остаются самостоятельными разделами.
+
+Observer различает future horizons, текущую работу и overdue backlog; state OK
+не заменяет измерение возраста outcomes/comparisons и arrival/service flow.
+Каждая попытка/error сохраняется. Partial ledger/cohorts/indexes не являются
+полным boundary или capacity PASS. Сначала measured mature-population capacity
+при прежней policy, затем clean24h на fixed source/config/generation; обе проверки
+обязательны. Отклонённые/прерванные прежние замеры и их факты сохраняются.

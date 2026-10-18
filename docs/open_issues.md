@@ -2,7 +2,38 @@
 
 Canonical requirements: [product_scope.md](product_scope.md). Этот план хранит статусы AC, Goal, все findings и компактное Evidence. Raw logs, исследовательские probes и подробный audit report остаются вне tracked repository. История прежних checkpoints доступна в Git; отмененные конвертация старой тестовой истории и повторный reset не являются обязательствами.
 
-## Работа OBSERVER — ACTIVE (17Oct2026)
+## Единая Goal CAPACITY25 — ACTIVE (18Oct2026)
+
+Основание: владелец18Oct утвердил единый план и прямо поручил полностью выполнить backlog/observer/storage25GB, прежние findings, поставку и чистый24h замер. Встроенная Goal ACTIVE. Лимит25,000,000,000bytes относится к DB/indexes/free pages/WAL/SHM/journal; backups/experiments отдельно. Существующий interrupted result сохраняется как Evidence, не переименовывается в PASS.
+
+Baseline: origin/main541c41e90d10a958f46df03b18f66a36998c79d3, root worktree, branch `codex/capacity-25gb-unified-20261018`; clean/synced до изменений. Strict ci-required/app15368/admin enforcement/approvals0 подтверждены18Oct. Один основной PR на весь scope; необходимые hotfix после merge допускаются по общим правилам. PR57/head5be499d OPEN/DRAFT: переносить только проверенный perf commit после сверки; отдельную прежнюю Goal не возобновлять автоматически.
+
+Scope findings: F34/F42 (ёмкость/сутки), F46/PR57 (validated reader), F22 (измеренные hot paths), F48/Q07 (одинаковый архивный период), F47 (activity digest), UX-002/007/008/009/012, AUD-20261018-001/002/003. F24/F26/F31/F32 проверить и принять доказательное FIX/REFACTOR/REMOVE/DOCUMENT/DEFER решение; неизвестное не удалять. CLOSED F01–F48 и прежние UX-001…041 — regression matrix, без автоматического повторного открытия и дублей. Новые backlog/observer gaps учитываются в F22/F42/UX-012.
+
+Preservation/non-goals: все retained данные, source/public IDs/revisions/float bits/settings/provenance/comparators и existing archives сохраняются; detail30d/candles35d/quality12calendar months и finite dependencies прежние. Штатный expiry только после lossless archive. Нет нового reset, scope/точности/формул/retention cuts, удаления backups, RAM increases, ослабления900s backup/CD или consumer activation. Scheduled tasks/automations запрещены. Production load/fault injection не выполнять.
+
+Q07 для этой Goal: явно нормализовать недоступную intraday архивную часть до UTC-day coverage; requested/effective bounds и resolution видны одинаково в CSV/NDJSON/cohorts. Точные доступные details сохраняют exact selection. Рейтинг F47: число сохранённых event observations по instrument/market в выбранном окне, с явной подписью; strongest/ongoing сохраняются. Существующие публичные contracts сохранять либо расширять совместимо.
+
+| Пакет | Результат / DoD | Статус |
+| --- | --- | --- |
+| W01 scope/evidence | Fresh Git/GitHub/VPS baseline, защищённый inventory/data identities, approved policy/25GB и Validation Plan | IN_PROGRESS |
+| W02 F22/F46 backlog | Profile read/calculate/apply/maintenance, lossless optimizations; overdue queue drains и service rate превосходит arrival при полном охвате | BACKLOG |
+| W03 F42 observer | Durable each sample/error/phase/reasons; due-age/throughput checks; complete finite boundaries; no hidden retries/partial PASS | BACKLOG |
+| W04 F34 storage | Measured lossless layout/codec candidates; representative mature population и physical peaks<=25GB; no double indexes | BACKLOG |
+| W05 preservation | Compatible finite repack/restart/CAS/rollback/retention62weeks; exact public/numeric/group/method/comparator multiset equality | BACKLOG |
+| W06 previous functional/UX | Все11 замечаний audit закрыты: settings validation, export policy, digest activity, navigation/action order/status/history/language/time | BACKLOG |
+| W07 deferred findings | F24/F26/F31/F32 fresh evidence и justified actions; confirmed defects fixed, неподтверждённое не удалено | BACKLOG |
+| W08 validation/PR | Targeted local/quality + full required Linux/native/image CI, self-review, all PR gates/merge | BACKLOG |
+| W09 delivery/stability | Ordinary exact-source CD<=900s, backup/recovery/private+retained preservation, actual health/sources/queues/repack | BACKLOG |
+| W10 clean24h | Fixed source/config/generation, complete baseline/final/result, no missing probes/unaccepted blockers, measured capacity<=25GB и mature evidence | BACKLOG |
+
+Validation Plan (root cwd): REQUIRED local `.venv-g1/Scripts/python.exe -m pytest` по touched analytics/recovery/capacity/observer/storage/retention/config/UI/export/digest tests; добавить только meaningful missing regressions. REQUIRED `python scripts/checks.py quality`; full `scripts/build_native.py` + `scripts/checks.py all` + image checks — required CI на текущей revision. REQUIRED isolated performance/mature retention fixtures: оба рынка/4TF/5families/все horizons, sparse/dense/multiple methods/20nonempty comparators, burst/drain/restart/expiry/GC и точное equality; report actual size/CPU/RAM/working peaks отдельно от forecast. REQUIRED runtime: read-only baseline before changes, ordinary backup/CD/recovery gates, current source/image/persistence, generation/private/immutable identities, queue age/arrival-service and full capacity boundaries. Live Telegram owner walkthrough RECOMMENDED, mock PASS не заменяет live evidence. No tests/load against live DB.
+
+Чистота: прежние ingestion<=30s/analytics<=60s/ACK/source/config/generation gates не ослаблять. Предлагаемый job SLO<=60s после due при доступных inputs проверить профилем; явные source limitations не превращать в COMPLETE. Baseline после не менее30min устойчивого состояния без overdue backlog, historical recovery/repack; нормальные future horizons отдельно. Краткая текущая работа допустима только с сохранёнными reason/age/completion, неизвестное/просрочка — blocker. Каждый failed probe/error сохраняется; наблюдение не скрывает пропуски. Финальный24h PASS требует полных границ и отдельной mature capacity qualification; один день сам по себе не доказывает годовую ёмкость. При недостижимом25GB Goal остаётся незавершённой без скрытого scope reduction.
+
+Checkpoint18Oct: Goal активирована; W01 и локальная реализация далее. Старый замер capacity-20261017T133014Z-31453831 COMPLETE/OBSERVED_24H_WITH_INTERRUPTION,281samples/15problem points,delta2,950,547,624bytes; model162.10GB (не upper bound), final ledger/cohorts PARTIAL/index UNAVAILABLE. Read18:26MSK: oldest due outcomes~3h38/comparisons~10h33; этот срез после measurement, не исторический per-point age. Все исходные artifacts сохранены. Новый observer/production restart ещё не выполнялись.
+
+## Историческая работа OBSERVER (17Oct2026)
 
 Основание: владелец поручил исправить диагностику observer, установить фактическую причину отклонения baseline и добиться нового OBSERVING; затем явно потребовал чистую рабочую БД для новых данных. Все прежние market data и observation files сохраняются, scheduled tasks запрещены. TELEGRAM-UX завершена PR59/60 и production39023354179/sourceadc230fa; прежний checkpoint ниже является историческим.
 
