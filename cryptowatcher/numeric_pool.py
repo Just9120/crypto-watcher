@@ -8,7 +8,7 @@ import re
 import sqlite3
 from typing import Any
 
-from .metric_codec import pack, unpack
+from .metric_codec import canonical, pack, restore_view, unpack
 
 
 def fingerprint(raw: bytes) -> bytes:
@@ -132,6 +132,42 @@ def load(db: sqlite3.Connection, identity: int) -> dict[str, Any]:
     return load_many(db, {identity})[identity]
 
 
+def reference_id(reference: dict[str, Any]) -> int:
+    if not isinstance(reference, dict) or set(reference) != {"mode", "id"}:
+        raise ValueError("Invalid numeric metric reference")
+    identity = reference["id"]
+    mode = reference["mode"]
+    if mode not in ("numeric", "numeric2") or type(identity) is not int:
+        raise ValueError("Invalid numeric metric reference")
+    if mode == "numeric2":
+        if not 4 <= identity < 2**65:
+            raise ValueError("Invalid numeric metric view coordinate")
+        identity //= 4
+    if not 0 < identity < 2**63:
+        raise ValueError("Invalid numeric metric identity")
+    return identity
+
+
+def reference_value(reference: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
+    reference_id(reference)
+    return restore_view(body, reference["id"] % 4) if reference["mode"] == "numeric2" else dict(body)
+
+
+def encode_reference(db: sqlite3.Connection, value: Any) -> dict[str, Any] | None:
+    candidate = canonical(value)
+    if candidate is None:
+        return None
+    body, view = candidate
+    identity = intern(db, body)
+    if identity is None:
+        raise ValueError("Canonical metric has no exact frame")
+    return {"mode": "numeric2", "id": identity * 4 + view}
+
+
+def resolve(db: sqlite3.Connection, reference: dict[str, Any]) -> dict[str, Any]:
+    return reference_value(reference, load(db, reference_id(reference)))
+
+
 def collect(db: sqlite3.Connection, batch: int = 128) -> int:
     return db.execute(
         "DELETE FROM market_numeric WHERE id IN(SELECT id FROM market_numeric WHERE detail_refs=0 AND quality_refs=0 ORDER BY id LIMIT ?)",
@@ -152,20 +188,15 @@ def metric_ids(value: Any, depth: int = 0, *, omit_fields: frozenset[str] = froz
             for name, ref in storage.get("fields", {}).items():
                 if name in omit_fields:
                     continue
-                if isinstance(ref, dict) and ref.get("mode") == "numeric":
+                if isinstance(ref, dict) and ref.get("mode") in ("numeric", "numeric2"):
                     if (
                         set(storage) != {"schema", "fields"}
                         or storage.get("schema") != "cryptowatcher.shared-fields.v1"
                     ):
                         raise ValueError("Invalid numeric storage schema")
-                    if (
-                        name != "metrics"
-                        or set(ref) != {"mode", "id"}
-                        or type(ref["id"]) is not int
-                        or not 0 < ref["id"] < 2**63
-                    ):
+                    if name != "metrics":
                         raise ValueError("Invalid numeric metric reference")
-                    result.add(ref["id"])
+                    result.add(reference_id(ref))
             for key, child in item.items():
                 if key != "_history_storage" and key not in omit_fields and isinstance(child, (dict, list)):
                     visit(child, level + 1)
@@ -183,15 +214,13 @@ def references(key: str, payload: Any) -> str:
 
     if not re.fullmatch(r"radar:v1:(?:event|outcome|comparison):[^:]+:[0-9]{10}", key):
         return "[]"
-    if isinstance(payload, str) and '"numeric"' not in payload:
+    if isinstance(payload, str) and '"numeric"' not in payload and '"numeric2"' not in payload:
         return "[]"
     return json.dumps(sorted(metric_ids(json_payload(payload))))
 
 
 def projection(db: sqlite3.Connection, value: Any) -> Any:
     """SQL metrics only: other frozen/shared source fields remain unexpanded."""
-    import copy
-
     if isinstance(value, dict) and value.get("schema") == "cryptowatcher.history-head.v1":
         raise ValueError("Numeric query requires the retained immutable revision")
     values = load_many(db, metric_ids(value))
@@ -212,10 +241,10 @@ def projection(db: sqlite3.Connection, value: Any) -> Any:
             storage = item["_history_storage"]
             fields = dict(storage["fields"])
             for name, ref in list(fields.items()):
-                if isinstance(ref, dict) and ref.get("mode") == "numeric":
+                if isinstance(ref, dict) and ref.get("mode") in ("numeric", "numeric2"):
                     if name in result:
                         raise ValueError("Conflicting numeric metric projection")
-                    result[name] = copy.deepcopy(values[ref["id"]])
+                    result[name] = reference_value(ref, values[reference_id(ref)])
                     del fields[name]
             if fields:
                 result["_history_storage"] = {**storage, "fields": fields}

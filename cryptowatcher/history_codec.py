@@ -202,13 +202,13 @@ class Codec:
         return json.loads(self.field_raw(reference))
 
     def field_raw(self, reference: Any) -> bytes:
-        if isinstance(reference, dict) and reference.get("mode") == "numeric":
-            from .numeric_pool import load
+        if isinstance(reference, dict) and reference.get("mode") in ("numeric", "numeric2"):
+            from .numeric_pool import resolve
 
             if set(reference) != {"mode", "id"}:
                 raise StateError("Invalid numeric metric reference")
             try:
-                return encode(load(self.db, reference["id"])).encode()
+                return encode(resolve(self.db, reference)).encode()
             except (ValueError, TypeError, KeyError) as exc:
                 raise StateError("Invalid retained numeric metric") from exc
         if isinstance(reference, dict) and reference.get("mode") == "value2":
@@ -391,11 +391,11 @@ class Codec:
         references = {}
         for name, item in value.items():
             if self.bounded and name == "metrics" and isinstance(item, dict):
-                from .numeric_pool import intern
+                from .numeric_pool import encode_reference
 
-                metric_id = intern(self.db, item)
-                if metric_id is not None:
-                    references[name] = {"mode": "numeric", "id": metric_id}
+                reference = encode_reference(self.db, item)
+                if reference is not None:
+                    references[name] = reference
                     continue
             raw = (
                 encode(item).encode()
@@ -500,14 +500,10 @@ class Codec:
                 raise StateError("Unknown shared history field")
             if name in omit_fields:
                 continue
-            if (
-                isinstance(reference, dict)
-                and reference.get("mode") == "numeric"
-                and reference.get("id") in metrics
-            ):
-                import copy
+            if isinstance(reference, dict) and reference.get("mode") in ("numeric", "numeric2"):
+                from .numeric_pool import reference_id, reference_value
 
-                restored = copy.deepcopy(metrics[reference["id"]])
+                restored = reference_value(reference, metrics[reference_id(reference)])
             else:
                 restored = self.field(reference)
             if name in result:

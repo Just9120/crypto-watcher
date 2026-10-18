@@ -63,3 +63,66 @@ def unpack(raw: bytes) -> dict[str, Any]:
     if pack(result) != raw:
         raise ValueError("Noncanonical numeric metric frame")
     return result
+
+
+def reflected(value: dict[str, Any]) -> dict[str, Any]:
+    if set(value) != set(DIRECTED):
+        raise ValueError("Direction view requires directed metric fields")
+    return {
+        "price_return_pct": value["price_return_pct"],
+        "directed_return_pct": -value["directed_return_pct"],
+        "mfe_pct": -value["mae_pct"],
+        "mae_pct": -value["mfe_pct"],
+    }
+
+
+def restore_view(value: dict[str, Any], view: int) -> dict[str, Any]:
+    if type(view) is not int or not 0 <= view <= 3:
+        raise ValueError("Unknown metric view")
+    result = reflected(value) if view in (1, 3) else dict(value)
+    if view in (2, 3):
+        if set(result) != set(DIRECTED):
+            raise ValueError("Neutral view requires directed base fields")
+        result = {
+            "price_return_pct": result["price_return_pct"],
+            "max_rise_pct": result["mfe_pct"],
+            "max_fall_pct": result["mae_pct"],
+            "range_pct": float(result["mfe_pct"]) - float(result["mae_pct"]),
+        }
+    return result
+
+
+def canonical(value: Any) -> tuple[dict[str, Any], int] | None:
+    """Share exact mirrored/neutral views only after a full public round trip.
+
+    Non-derivable neutral ranges retain their complete original frame. No
+    decimal rounding, source recalculation or range approximation is allowed.
+    """
+    raw = pack(value)
+    if raw is None:
+        return None
+    if set(value) == set(DIRECTED):
+        mirror = reflected(value)
+        other = pack(mirror)
+        if other is not None and other < raw:
+            result, view = mirror, 1
+        else:
+            result, view = value, 0
+    else:
+        base = {
+            "price_return_pct": value["price_return_pct"],
+            "directed_return_pct": value["price_return_pct"],
+            "mfe_pct": value["max_rise_pct"],
+            "mae_pct": value["max_fall_pct"],
+        }
+        candidate = canonical(base)
+        if candidate is not None:
+            result, reflected_view = candidate
+            view = 2 + reflected_view
+            if pack(restore_view(result, view)) != raw:
+                result, view = value, 0
+        else:
+            result, view = value, 0
+    if pack(restore_view(result, view)) != raw:
+        raise ValueError("Metric view changed public values")
+    return result, view

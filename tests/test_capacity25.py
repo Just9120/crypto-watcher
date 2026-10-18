@@ -271,7 +271,7 @@ def test_window_repack_preserves_public_values_and_head_projections_across_resta
         state = work(store, NOW, batch=3, seconds=1)
         if state["state"] == "COMPLETE":
             break
-    assert state["state"] == "COMPLETE" and state["version"] == 6
+    assert state["state"] == "COMPLETE" and state["version"] == 7
     assert state["previous_run"]["records"] == 999 and state["saved_payload_bytes"] > 42
     with closing(Store(store.path, store.owner_id, readonly=True)) as reader:
         assert {k: encode(v) for k, v in History(reader).items("event-head:")} == before
@@ -603,7 +603,9 @@ def test_numeric_metric_owner_projection_and_missing_body_fail_closed(store):
     outcome = next(v for _, v in history.items("outcome-head:") if v["state"] == "COMPLETE")
     key = f"radar:v1:outcome:{outcome['outcome_id']}:{outcome['revision']:010d}"
     raw = store.get_runtime(key)
-    metric_id = raw["_history_storage"]["fields"]["metrics"]["id"]
+    from cryptowatcher.numeric_pool import reference_id
+
+    metric_id = reference_id(raw["_history_storage"]["fields"]["metrics"])
     assert (
         store.db.execute("SELECT detail_refs FROM market_numeric WHERE id=?", (metric_id,)).fetchone()[0] > 0
     )

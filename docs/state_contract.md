@@ -42,22 +42,25 @@ frozen. Canonical JSON bytes, SHA256, signed outbox body и source revision link
 
 Source windows разделяют immutable coordinate bodies с exact runs/order/revisions/SHA.
 Числовые outcome metrics используют26/34byte frames без изменения float bits и
-int types; неподдерживаемые формы остаются inline. Numeric IDs никогда не
+int types; неподдерживаемые формы остаются inline. Numeric2 refs используют
+bodyID*4+view для exact mirrored/neutral представлений. Общий body допускается
+только при полном bit/type round trip; невыводимый range сохраняется целиком.
+Numeric IDs никогда не
 переиспользуются после удаления. Runtime refs и expiry leases обновляются в той
 же transaction, что immutable revision; отсутствующая зависимость отклоняется.
 
-Архивный CQ2 packet сохраняет прежний public fact JSON. Общие templates,
+Архивный CQ4 packet сохраняет прежний public fact JSON. Общие templates,
 strength/noise columns и точные ordered comparator lists не меняют методику,
 N, ограничения и population_size. Delta имеет не более8ancestor links; numeric
 bodies удерживаются фактическими leaf blocks, а не удалёнными элементами ancestor.
-Старые J/Z/CW2/CW3/CQ1 inputs читаются. Provenance body живёт до последнего
+Старые J/Z/CW2/CW3/CQ1/CQ2 inputs и numeric refs читаются. Provenance body живёт до последнего
 зависимого block. GC всех зависимостей конечен и учитывается как выполненная
 retention work даже после удаления последнего event.
 
 `market_body_links` сохраняет owner/body через compatibility view; новые пары
 хранят integer coordinates существующего owner registry и shared body dictionary.
 Legacy rows остаются видны, пока bounded repack не перенесёт их атомарно.
-Repack6 имеет durable finite phases records/decisions/expiry/quality/namespaces/
+Repack7 имеет durable finite phases records/decisions/expiry/quality/namespaces/
 references/quality-tally/key-registry/prospective-cohorts. Secondary registry CK1 сохраняет исходные
 runtime keys и stable integer IDs; mixed legacy text/tokens видимы через expiry4/
 reference2 views. Point mutations используют индексы, не полный scan view.

@@ -18,7 +18,8 @@ from .market_storage import decoded
 from .record_codec import json_value, pack_binary
 
 LEGACY_MAGIC = b"CQ1\x00"
-MAGIC = b"CQ2\x00"
+PARAMETER_MAGIC = b"CQ2\x00"
+MAGIC = b"CQ4\x00"
 MAXIMUM = 1024 * 1024
 MAX_CHAIN = 8
 
@@ -49,9 +50,27 @@ def install_functions(db: sqlite3.Connection) -> None:
 def install(db: sqlite3.Connection) -> None:
     if db.execute("SELECT 1 FROM sqlite_master WHERE name='market_quality_dictionary'").fetchone():
         marker = db.execute("SELECT value FROM market_meta WHERE key='quality_packets'").fetchone()
-        if marker is None or marker[0] != "1":
+        if marker is None or marker[0] not in ("1", "2"):
             raise ValueError("Unknown quality packets; database preserved")
-        return
+        if marker[0] == "2":
+            return
+        if db.in_transaction:
+            raise ValueError("Quality packet upgrade requires an outer boundary")
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            old = db.execute(
+                "SELECT sql FROM sqlite_master WHERE name='market_quality_dictionary_insert'"
+            ).fetchone()
+            if old is None or "kind='set'" not in old[0]:
+                raise ValueError("Unknown quality ancestor trigger; database preserved")
+            db.execute("DROP TRIGGER market_quality_dictionary_insert")
+            db.execute(old[0].replace("kind='set'", "kind=NEW.kind AND kind IN('set','set4')"))
+            db.execute("UPDATE market_meta SET value='2' WHERE key='quality_packets'")
+            db.commit()
+            return
+        except BaseException:
+            db.rollback()
+            raise
     if db.in_transaction:
         raise ValueError("Quality packet installation requires an outer boundary")
     try:
@@ -73,7 +92,8 @@ def install(db: sqlite3.Connection) -> None:
                 WHEN OLD.refs>0 BEGIN SELECT RAISE(ABORT,'Retained quality dictionary'); END;
             CREATE TRIGGER market_quality_dictionary_insert AFTER INSERT ON market_quality_dictionary BEGIN
                 SELECT CASE WHEN NEW.parent IS NOT NULL AND NOT EXISTS(
-                    SELECT 1 FROM market_quality_dictionary WHERE id=NEW.parent AND kind='set' AND depth=NEW.depth-1)
+                    SELECT 1 FROM market_quality_dictionary WHERE id=NEW.parent
+                    AND kind=NEW.kind AND kind IN('set','set4') AND depth=NEW.depth-1)
                     THEN RAISE(ABORT,'Missing quality delta ancestor') END;
                 UPDATE market_quality_dictionary SET refs=refs+1 WHERE id=NEW.parent;
                 INSERT INTO market_counts VALUES('quality_components',1,length(NEW.payload),length(NEW.payload),0)
@@ -112,7 +132,7 @@ def install(db: sqlite3.Connection) -> None:
                 + " ".join(statements)
                 + " END"
             )
-        db.execute("INSERT INTO market_meta VALUES('quality_packets','1')")
+        db.execute("INSERT INTO market_meta VALUES('quality_packets','2')")
         db.commit()
     except BaseException:
         db.rollback()
@@ -131,7 +151,7 @@ def row(
     if found is None or found[0] != kind or signature(bytes(found[2])) != bytes(found[1]):
         raise ValueError("Missing or corrupt quality dictionary")
     value = compact_json.unpack(bytes(found[2]), MAXIMUM)
-    if kind != "set" and signature(packed(value)) != bytes(found[5]):
+    if kind not in ("set", "set4") and signature(packed(value)) != bytes(found[5]):
         raise ValueError("Quality dictionary content mismatch")
     result = (value, found[3], found[4])
     if cache is not None:
@@ -141,7 +161,12 @@ def row(
 
 
 def sequence(
-    db: sqlite3.Connection, identity: int, seen: tuple[int, ...] = (), cache: dict[Any, Any] | None = None
+    db: sqlite3.Connection,
+    identity: int,
+    seen: tuple[int, ...] = (),
+    cache: dict[Any, Any] | None = None,
+    *,
+    kind: str = "set",
 ) -> list[Any]:
     if cache is None:
         cache = {}
@@ -149,7 +174,7 @@ def sequence(
         raise ValueError("Quality delta chain exceeds bound")
     if (identity, "sequence") in cache:
         return cache[(identity, "sequence")]
-    value, parent, depth = row(db, identity, "set", cache)
+    value, parent, depth = row(db, identity, kind, cache)
     if not isinstance(value, list) or len(value) > 4096 or not 0 <= depth <= MAX_CHAIN:
         raise ValueError("Invalid quality comparison list")
     if parent is None:
@@ -157,10 +182,10 @@ def sequence(
             raise ValueError("Invalid quality literal depth")
         result = value
     else:
-        ancestor, _, ancestor_depth = row(db, parent, "set", cache)
+        ancestor, _, ancestor_depth = row(db, parent, kind, cache)
         if ancestor is None or ancestor_depth + 1 != depth:
             raise ValueError("Invalid quality ancestor depth")
-        base = sequence(db, parent, (*seen, identity), cache)
+        base = sequence(db, parent, (*seen, identity), cache, kind=kind)
         result = []
         for instruction in value:
             if not isinstance(instruction, list):
@@ -181,16 +206,21 @@ def sequence(
             if len(result) > 4096:
                 raise ValueError("Quality comparison bound")
     for value in result:
-        metric_reference(value)
+        metric_reference(value, views=kind == "set4")
     if signature(packed(result)) != cache[(identity, "hash")]:
         raise ValueError("Quality comparison content mismatch")
     cache[(identity, "sequence")] = result
     return result
 
 
-def metric_reference(value: Any) -> None:
+def metric_reference(value: Any, *, views: bool = False) -> None:
     if type(value) is int:
-        positive(value)
+        if views:
+            from .numeric_pool import reference_id
+
+            reference_id({"mode": "numeric2", "id": value})
+        else:
+            positive(value)
     elif not isinstance(value, list) or len(value) != 1 or not isinstance(value[0], dict):
         raise ValueError("Invalid archived metric reference")
 
@@ -202,20 +232,22 @@ def intern(db: sqlite3.Connection, kind: str, value: Any, *, hint: str | None = 
         "SELECT id FROM market_quality_dictionary WHERE kind=? AND hash=?", (kind, digest)
     ):
         # Set hashes identify the full ordered values, not the chosen delta.
-        existing = sequence(db, identity) if kind == "set" else row(db, identity, kind)[0]
+        existing = (
+            sequence(db, identity, kind=kind) if kind in ("set", "set4") else row(db, identity, kind)[0]
+        )
         if packed(existing) == raw:
             return int(identity)
     parent = None
     depth = 0
     payload = raw
-    if hint is not None and kind == "set" and value and all(type(v) is int for v in value):
+    if hint is not None and kind in ("set", "set4") and value and all(type(v) is int for v in value):
         previous = db.execute(
             "SELECT d.id,d.depth FROM market_quality_hints h JOIN market_quality_dictionary d ON d.id=h.identity "
-            "WHERE h.cohort=? AND d.kind='set' AND d.depth<?",
-            (hint, MAX_CHAIN),
+            "WHERE h.cohort=? AND d.kind=? AND d.depth<?",
+            (hint, kind, MAX_CHAIN),
         ).fetchone()
         if previous:
-            base = sequence(db, previous[0])
+            base = sequence(db, previous[0], kind=kind)
             if all(type(v) is int for v in base):
                 instructions = []
                 for op, first, end, left, right in difflib.SequenceMatcher(
@@ -233,7 +265,7 @@ def intern(db: sqlite3.Connection, kind: str, value: Any, *, hint: str | None = 
         (kind, digest, signature(payload), payload, parent, depth),
     )
     identity = int(result.lastrowid or 0)
-    if hint is not None and kind == "set":
+    if hint is not None and kind in ("set", "set4"):
         db.execute(
             "INSERT INTO market_quality_hints VALUES(?,?) ON CONFLICT(cohort) DO UPDATE SET identity=excluded.identity",
             (hint, identity),
@@ -305,7 +337,7 @@ def ownership(
 ) -> dict[str, list[int]]:
     if cache is None:
         cache = {}
-    if not raw.startswith((MAGIC, LEGACY_MAGIC)):
+    if not raw.startswith((MAGIC, PARAMETER_MAGIC, LEGACY_MAGIC)):
         return {"pool": [], "numeric": []}
     rows, columns = packet(raw)
     pool: set[int] = set()
@@ -315,7 +347,8 @@ def ownership(
         values, parent, depth = row(db, columns, "columns", cache)
         if parent is not None or depth or not isinstance(values, list) or len(values) != len(rows):
             raise ValueError("Invalid quality columns")
-    modern = raw.startswith(MAGIC)
+    modern = raw.startswith((MAGIC, PARAMETER_MAGIC))
+    views = raw.startswith(MAGIC)
     for value in rows:
         if not isinstance(value, list) or len(value) != (
             (4 if columns is not None else 6) if modern else (3 if columns is not None else 5)
@@ -329,15 +362,15 @@ def ownership(
             metadata, parent, depth = row(db, template, "template", cache)
             if parent is not None or depth or not isinstance(metadata, dict):
                 raise ValueError("Invalid quality template")
-        for reference in [own, *sequence(db, comparisons, cache=cache)]:
-            metric_reference(reference)
+        for reference in [own, *sequence(db, comparisons, cache=cache, kind="set4" if views else "set")]:
+            metric_reference(reference, views=views)
             if type(reference) is int:
-                numbers.add(reference)
+                numbers.add(reference // 4 if views else reference)
     return {"pool": sorted(pool), "numeric": sorted(numbers)}
 
 
 def pack(db: sqlite3.Connection, facts: list[Any], cohort: str | None = None) -> bytes:
-    from .numeric_pool import intern as numeric
+    from .numeric_pool import encode_reference
     from .storage import encode
 
     if not 0 < len(facts) <= 128 or not all(
@@ -360,13 +393,13 @@ def pack(db: sqlite3.Connection, facts: list[Any], cohort: str | None = None) ->
     for fact in facts:
         values = []
         for metric in fact["comparator_metrics"]:
-            identity = numeric(db, metric)
-            values.append(identity if identity is not None else [metric])
+            reference = encode_reference(db, metric)
+            values.append(reference["id"] if reference is not None else [metric])
         metadata, slots = template_parts(fact)
         value = [
             intern(db, "template2", metadata),
             [fact["metrics"]],
-            intern(db, "set", values, hint=cohort),
+            intern(db, "set4", values, hint=cohort),
             slots,
         ]
         if columns is None:
@@ -379,16 +412,17 @@ def pack(db: sqlite3.Connection, facts: list[Any], cohort: str | None = None) ->
 
 
 def unpack(db: sqlite3.Connection, raw: bytes) -> list[Any]:
-    from .numeric_pool import load_many
+    from .numeric_pool import load_many, reference_value
     from .storage import encode
 
-    if not raw.startswith((MAGIC, LEGACY_MAGIC)):
+    if not raw.startswith((MAGIC, PARAMETER_MAGIC, LEGACY_MAGIC)):
         return decoded(raw, MAXIMUM)
     cache: dict[Any, Any] = {}
     refs = ownership(db, raw, cache)
     numbers = load_many(db, set(refs["numeric"]))
     rows, column_id = packet(raw)
-    modern = raw.startswith(MAGIC)
+    modern = raw.startswith((MAGIC, PARAMETER_MAGIC))
+    views = raw.startswith(MAGIC)
     columns = row(db, column_id, "columns", cache)[0] if column_id is not None else None
     result = []
     for index, value in enumerate(rows):
@@ -404,10 +438,17 @@ def unpack(db: sqlite3.Connection, raw: bytes) -> list[Any]:
         if not isinstance(pair, list) or len(pair) != 2:
             raise ValueError("Invalid quality strength/noise columns")
         fact["strength"], fact["noise"] = pair
-        fact["metrics"] = copy.deepcopy(numbers[own] if type(own) is int else own[0])
+
+        def metric(reference: Any) -> Any:
+            if type(reference) is not int:
+                return copy.deepcopy(reference[0])
+            if views:
+                return reference_value({"mode": "numeric2", "id": reference}, numbers[reference // 4])
+            return copy.deepcopy(numbers[reference])
+
+        fact["metrics"] = metric(own)
         fact["comparator_metrics"] = [
-            copy.deepcopy(numbers[r] if type(r) is int else r[0])
-            for r in sequence(db, comparisons, cache=cache)
+            metric(r) for r in sequence(db, comparisons, cache=cache, kind="set4" if views else "set")
         ]
         result.append(fact)
     if len(encode(result).encode()) > MAXIMUM:

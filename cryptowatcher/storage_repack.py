@@ -13,7 +13,7 @@ def normalized_record(store: Store, key: str, value: Any) -> Any:
     from .events import PREFIX, History
     from .history_codec import SCHEMA, SHARED_FIELDS, WINDOW_FIELDS
     from .market_storage import restore_window
-    from .numeric_pool import intern as intern_numeric
+    from .numeric_pool import encode_reference, resolve
     from .source_windows import intern
 
     history = History(store)
@@ -53,16 +53,18 @@ def normalized_record(store: Store, key: str, value: Any) -> Any:
                         raise ValueError("Source normalization requires a retained parent deadline")
                     restore_window(store.db, ref)  # Validate original SHA and every immutable coordinate.
                     fields[name] = intern(store.db, ref, expiry[0])
+                elif name == "metrics" and ref.get("mode") in ("numeric", "numeric2"):
+                    fields[name] = encode_reference(store.db, resolve(store.db, ref))
             result["_history_storage"] = {**storage, "fields": fields}
         if isinstance(result.get("metrics"), dict):
-            metric_id = intern_numeric(store.db, result["metrics"])
-            if metric_id is not None:
+            reference = encode_reference(store.db, result["metrics"])
+            if reference is not None:
                 current = result.get("_history_storage", {"schema": SCHEMA, "fields": {}})
                 if "metrics" in current["fields"]:
                     raise ValueError("Conflicting numeric metric storage")
                 result["_history_storage"] = {
                     **current,
-                    "fields": {**current["fields"], "metrics": {"mode": "numeric", "id": metric_id}},
+                    "fields": {**current["fields"], "metrics": reference},
                 }
                 del result["metrics"]
         return result
@@ -220,7 +222,10 @@ def record_rows(store: Store, state: dict[str, Any], batch: int, deadline: float
                     if not changed and isinstance(payload, bytes) and payload.startswith(TYPED_MAGIC)
                     else pack_binary(target)
                 )
-                if len(packed) < size:
+                # A shared-view reference can grow by a byte while removing a
+                # retained duplicate numeric body and its index entries. Keep
+                # the exact signed payload delta separate from incoming flow.
+                if changed or len(packed) < size:
                     if sql_payload(packed) != target:
                         raise ValueError("Repack changed public record bytes")
                     store.db.execute("UPDATE runtime SET payload_json=? WHERE key=?", (packed, key))
@@ -322,7 +327,7 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
         return {"state": "N/A_LEGACY"}
     state = store.get_runtime("storage_repack", {})
     if (
-        state.get("version") == 6
+        state.get("version") == 7
         and state.get("state") == "COMPLETE"
         and state.get("decisions_complete")
         and state.get("namespace_meter_complete")
@@ -335,7 +340,7 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
         and namespace_snapshot(store.db) is not None
     ):
         return state
-    if state.get("version") in (3, 4, 5):
+    if state.get("version") in (3, 4, 5, 6):
         state = {
             "previous_version": state["version"],
             "previous_run": {
@@ -344,7 +349,7 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
             "saved_payload_bytes": state.get("saved_payload_bytes", 0),
             "saved_categories": state.get("saved_categories", {}),
         }
-    state = {"version": 6, "cursor": "", "records": 0, "saved_payload_bytes": 0, **state}
+    state = {"version": 7, "cursor": "", "records": 0, "saved_payload_bytes": 0, **state}
     state.setdefault("saved_categories", {})
     deadline = time.monotonic() + seconds
     first = state.get("next_phase", 0)
