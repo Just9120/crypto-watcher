@@ -420,6 +420,8 @@ def report(db: sqlite3.Connection, seconds: float = 60) -> dict[str, Any] | None
     groups = 0
     facts = 0
     complete = False
+    revisions: dict[int, int] = {}
+    strengths = 0
 
     def finish_day() -> None:
         # Every other projection retains day, so disjoint dates can be counted
@@ -451,18 +453,22 @@ def report(db: sqlite3.Connection, seconds: float = 60) -> dict[str, Any] | None
             complete = True
         finish_day()
         without["day"] = len(no_day)
-        revisions = dict(
-            db.execute(
-                "SELECT revision,n FROM market_cohort_revisions WHERE generation=? AND n>0", (state[0],)
+        if time.monotonic() < deadline:
+            revisions = dict(
+                db.execute(
+                    "SELECT revision,n FROM market_cohort_revisions WHERE generation=? AND n>0", (state[0],)
+                )
             )
-        )
-        strengths = db.execute(
-            "SELECT COUNT(*) FROM market_cohort_strengths WHERE generation=? AND n>0", (state[0],)
-        ).fetchone()[0]
+        if time.monotonic() < deadline:
+            strengths = db.execute(
+                "SELECT COUNT(*) FROM market_cohort_strengths WHERE generation=? AND n>0", (state[0],)
+            ).fetchone()[0]
     except sqlite3.OperationalError as exc:
         if getattr(exc, "sqlite_errorcode", None) != sqlite3.SQLITE_INTERRUPT:
             raise
-        return {"state": "PARTIAL_BUDGET", "method": "TRANSACTIONAL_COHORT_COUNTERS"}
+        # Preserve the public report shape under a zero/expired SQL budget.
+        # Any counters read before interruption remain explicitly partial.
+        complete = False
     finally:
         db.set_progress_handler(None, 0)
     median = None

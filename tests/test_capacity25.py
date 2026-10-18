@@ -669,7 +669,7 @@ def test_meter_preserves_first_new_epoch_sample_and_does_not_mix_legacy_flow(sto
     assert store.get_runtime("storage_samples") == legacy
     for offset in (0, 60000, 120000):
         sample(store, start + offset)
-    current = [s for s in store.get_runtime("storage_samples") if s["format_version"] == 4]
+    current = [s for s in store.get_runtime("storage_samples") if s["format_version"] == 5]
     assert [s["at_ms"] for s in current] == [start, start + 120000]
     assert report(store, start + 120000)["sample_seconds"] == 120
 

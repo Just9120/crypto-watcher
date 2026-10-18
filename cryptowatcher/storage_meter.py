@@ -8,6 +8,8 @@ from typing import Any
 from .storage import Store
 
 BUDGET = 25_000_000_000
+QUALITY_CATEGORIES = frozenset({"quality", "quality_numeric", "quality_components"})
+SAMPLE_FORMAT = 5
 
 
 def create(db: Any) -> None:
@@ -75,7 +77,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         for r in store.db.execute("SELECT * FROM market_counts")
     }
     samples = store.get_runtime("storage_samples", [])
-    current = [s for s in samples if s.get("format_version") == 4]
+    current = [s for s in samples if s.get("format_version") == SAMPLE_FORMAT]
     base = current[0] if current else None
     frequency_base = samples[0] if samples else None
     elapsed = (now_ms - base["at_ms"]) / 1000 if base else 0
@@ -111,7 +113,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
             settings.candle_retention_days
             if category in ("candles", "context", "context_bodies")
             else 366
-            if category in ("quality", "quality_numeric")
+            if category in QUALITY_CATEGORIES
             else settings.detail_retention_days
         )
         projected = None
@@ -138,6 +140,9 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
     from .storage_model import quality_scenarios
 
     scenarios = quality_scenarios()
+    quality_flow = sum(
+        item["projected_logical_bytes"] or 0 for item in forecast if item["category"] in QUALITY_CATEGORIES
+    )
     quality_model_per_event = scenarios[0]["encoded_bytes_per_fact"] * len(settings.outcome_horizons)
     quality_projection = (
         event_rate * 86400 * 366 * quality_model_per_event if event_rate is not None else None
@@ -147,17 +152,21 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         if quality is None:
             quality = {"category": "quality", "gross_bytes_per_day": None, "retention_days_for_estimate": 366}
             forecast.append(quality)
-        quality["projected_logical_bytes"] = max(
-            quality.get("projected_logical_bytes") or 0, quality_projection
-        )
+        quality["projected_logical_bytes"] = max(quality_flow, quality_projection)
         quality["model_applied"] = True
-        quality["basis"] = "ISOLATED_SPARSE_NO_COMPARATOR_BASELINE; SEE_DENSITY_AND_COMPARATOR_SCENARIOS"
+        quality["basis"] = (
+            "WHOLE_ARCHIVE_MODEL_REPLACES_QUALITY_NUMERIC_AND_COMPONENTS; SPARSE_NO_COMPARATOR_SCENARIO"
+        )
+        for item in forecast:
+            if item["category"] in QUALITY_CATEGORIES - {"quality"}:
+                item["allocation_excluded"] = "ALREADY_INCLUDED_IN_WHOLE_ARCHIVE_MODEL"
     logical = sum(v["logical_bytes"] for v in counts.values())
     # Current measured page utilization calibrates an explicit estimate; it is
     # neither a guaranteed steady-state size nor a replacement for measured files.
     factor = max(1, (pages - free) * page / max(1, logical))
     projected_without_quality = (
-        sum(v["projected_logical_bytes"] or 0 for v in forecast if v["category"] != "quality") * factor
+        sum(v["projected_logical_bytes"] or 0 for v in forecast if v["category"] not in QUALITY_CATEGORIES)
+        * factor
         + files["wal"]
         + files["shm"]
     )
@@ -166,8 +175,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         if event_rate is not None
         else 0
     )
-    if quality is not None and quality.get("projected_logical_bytes") is not None:
-        quality_physical = max(quality_physical, quality["projected_logical_bytes"] or 0)
+    quality_physical = max(quality_physical, quality_flow * factor)
     projected = (
         max(sum(files.values()), projected_without_quality + quality_physical) if elapsed > 0 else None
     )
@@ -176,11 +184,14 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
             {
                 **scenario,
                 "projected_working_bytes": projected_without_quality
-                + event_rate
-                * 86400
-                * 366
-                * scenario["physical_bytes_per_fact"]
-                * len(settings.outcome_horizons),
+                + max(
+                    quality_flow * factor,
+                    event_rate
+                    * 86400
+                    * 366
+                    * scenario["physical_bytes_per_fact"]
+                    * len(settings.outcome_horizons),
+                ),
             }
             for scenario in scenarios
         ]
@@ -230,11 +241,13 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "forecast": forecast,
         "projected_working_bytes": projected,
         "page_overhead_factor": factor,
+        "quality_physical_allocation_bytes": quality_physical,
+        "quality_replaced_categories": sorted(QUALITY_CATEGORIES),
         "sample_seconds": elapsed,
         "observed_events_total": event_total,
         "observed_events_per_day_extrapolated": event_rate * 86400 if event_rate is not None else None,
         "quality_forecast_model": {
-            "kind": "ISOLATED_CURRENT_CODEC_AND_SQLITE_LAYOUT_EXTRAPOLATION",
+            "kind": "ISOLATED_CURRENT_CODEC_ALL_QUALITY_POOLS_AND_INDEXES_EXTRAPOLATION",
             "encoded_bytes_per_event": quality_model_per_event,
             "scenarios": list(scenarios),
             "point_scenario": "SPARSE_NO_COMPARATOR_BASELINE",
@@ -286,7 +299,7 @@ def sample(store: Store, now_ms: int) -> None:
         {
             "at_ms": now_ms,
             "working_bytes": value["working_bytes"],
-            "format_version": 4,
+            "format_version": SAMPLE_FORMAT,
             "repack_saved": store.get_runtime("storage_repack", {}).get("saved_categories", {}),
             "categories": value["categories"],
             "event_total": value["observed_events_total"],
@@ -296,7 +309,7 @@ def sample(store: Store, now_ms: int) -> None:
     if (
         len(samples) > 2
         and samples[-1]["at_ms"] // 3600000 == samples[-2]["at_ms"] // 3600000
-        and any(s.get("format_version") == 4 for s in samples[:-2])
+        and any(s.get("format_version") == SAMPLE_FORMAT for s in samples[:-2])
     ):
         samples.pop(-2)
     samples = samples[-26:]
