@@ -176,6 +176,11 @@ def comparator_sample(store: Store, limit: int = 128) -> dict[str, Any]:
 
 def prospective_cohorts(store: Store, seconds: float = 60) -> dict[str, Any]:
     """Measure frozen event grouping, explicitly distinct from actually archived facts."""
+    from .cohort_meter import report as cohort_counters
+
+    measured = cohort_counters(store.db, seconds)
+    if measured is not None:
+        return measured
     deadline = time.monotonic() + seconds
     codec = Codec(store.db)
     counts: Counter[tuple[Any, ...]] = Counter()

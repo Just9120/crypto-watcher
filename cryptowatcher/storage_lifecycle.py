@@ -340,6 +340,9 @@ class BoundedRetention:
 
             removed_packets = collect_packets(store.db, batch)
             removed_numeric = collect_numeric(store.db, batch)
+            from .cohort_meter import collect_current
+
+            removed_cohort_counters = collect_current(store.db, batch)
             garbage = store.db.execute(
                 "SELECT body FROM market_body_counts WHERE refs=0 LIMIT ?", (batch,)
             ).fetchall()
@@ -358,6 +361,7 @@ class BoundedRetention:
                 "removed_source_windows": removed_windows,
                 "removed_numeric": removed_numeric,
                 "removed_quality_components": removed_packets,
+                "removed_cohort_counters": removed_cohort_counters,
                 "batch": batch,
                 "state": "OK",
                 "terminal_status": "EXPIRED_RETENTION_INCOMPLETE",
@@ -374,6 +378,7 @@ class BoundedRetention:
                 "removed_source_windows": removed_windows,
                 "removed_numeric": removed_numeric,
                 "removed_quality_components": removed_packets,
+                "removed_cohort_counters": removed_cohort_counters,
             }.items():
                 totals[key] = totals.get(key, 0) + count
             totals["at_ms"] = now_ms
@@ -393,6 +398,7 @@ class BoundedRetention:
             + removed_windows
             + removed_numeric
             + removed_packets
+            + removed_cohort_counters
         )
 
     def _terminal(self, category: str, state: str) -> None:

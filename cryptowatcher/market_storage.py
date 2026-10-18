@@ -114,9 +114,15 @@ def enable(db: sqlite3.Connection) -> None:
     from .quality_meter import install as install_quality_meter
 
     install_quality_meter(db)
+    from .cohort_meter import install as install_cohort_meter
+
+    install_cohort_meter(db)
     from .runtime_meter import install as install_runtime_meter
 
     install_runtime_meter(db)
+    from .cohort_meter import align_empty
+
+    align_empty(db)
 
 
 def active(db: sqlite3.Connection) -> bool:

@@ -241,6 +241,9 @@ class Store:
         from .record_codec import sql_payload
 
         registry_functions(self.db)
+        from .cohort_meter import install_functions as cohort_functions
+
+        cohort_functions(self.db)
 
         self.db.create_function("cw_record_json", 1, sql_payload, deterministic=True)
         from .source_windows import references
@@ -298,9 +301,15 @@ class Store:
                 from .quality_meter import install as install_quality_meter
 
                 install_quality_meter(self.db)
+                from .cohort_meter import install as install_cohort_meter
+
+                install_cohort_meter(self.db)
                 from .runtime_meter import install as install_runtime_meter
 
                 install_runtime_meter(self.db)
+                from .cohort_meter import align_empty
+
+                align_empty(self.db)
             if not self.bounded:
                 create_schema(self.db)
             if os.name != "nt":

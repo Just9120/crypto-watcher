@@ -308,6 +308,8 @@ def quality_rows(store: Store, state: dict[str, Any], batch: int, deadline: floa
 
 
 def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> dict[str, Any]:
+    from .cohort_meter import drain as drain_cohorts
+    from .cohort_meter import ready as cohort_ready
     from .expiry_index import drain
     from .key_registry import drain as drain_registry
     from .quality_meter import drain as drain_quality_meter
@@ -327,6 +329,8 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
         and state.get("reference_legacy_empty")
         and state.get("quality_meter_complete")
         and state.get("key_registry_complete")
+        and state.get("cohort_meter_complete")
+        and cohort_ready(store.db)
         and quality_totals(store.db) is not None
         and namespace_snapshot(store.db) is not None
     ):
@@ -347,11 +351,11 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
     with store.db:
         # One shared deadline, with a durable rotating first phase. A slow SQL
         # read/commit may overrun a slice, but cannot always starve the same tail.
-        for offset in range(8):
+        for offset in range(9):
             if time.monotonic() >= deadline:
                 break
-            phase = (first + offset) % 8
-            state["next_phase"] = (phase + 1) % 8
+            phase = (first + offset) % 9
+            state["next_phase"] = (phase + 1) % 9
             if phase == 0 and not state.get("records_complete"):
                 record_rows(store, state, batch, deadline)
             elif phase == 1 and not state.get("decisions_complete"):
@@ -369,6 +373,8 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
                 state["quality_meter_complete"] = drain_quality_meter(store.db, batch, deadline)
             elif phase == 7:
                 state["key_registry_complete"] = drain_registry(store.db, state, batch, deadline)
+            elif phase == 8:
+                state["cohort_meter_complete"] = drain_cohorts(store.db, batch, deadline)
         state.update(
             state="COMPLETE"
             if all(
@@ -383,6 +389,7 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
                     "reference_legacy_empty",
                     "quality_meter_complete",
                     "key_registry_complete",
+                    "cohort_meter_complete",
                 )
             )
             else "IN_PROGRESS",

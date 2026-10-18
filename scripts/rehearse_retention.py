@@ -233,6 +233,10 @@ def measure(path: Path, weeks: int = 62) -> dict[str, Any]:
             "market_source_windows",
             "market_references",
             "market_body_ids",
+            "market_cohorts",
+            "market_cohort_strengths",
+            "market_cohort_revisions",
+            "market_cohort_names",
             "market_body_links",
         )
         remaining = {

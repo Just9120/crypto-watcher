@@ -98,6 +98,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "context",
         "context_bodies",
         "source_windows",
+        "prospective_indexes",
     }
     for category, value in counts.items():
         previous = (base or {}).get("categories", {}).get(category, {"inserted_bytes": 0, "deleted_bytes": 0})
