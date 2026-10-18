@@ -235,12 +235,20 @@ class History:
             from .storage_lifecycle import track
 
             track(self.store, PREFIX + key, value)
+            if key.startswith(("outcome-job:", "comparison-job:")):
+                from .queue_health import sync_job
+
+                sync_job(self, key, value)
 
     def delete(self, key: str) -> None:
         if self.store.bounded:
             from .storage_lifecycle import forget
 
             forget(self.store, PREFIX + key)
+            if key.startswith(("outcome-job:", "comparison-job:")):
+                from .queue_health import sync_job
+
+                sync_job(self, key, None)
         self.store.db.execute("DELETE FROM runtime WHERE key=?", (PREFIX + key,))
 
     def items(self, prefix: str, limit: int | None = None, *, reverse: bool = False) -> list[tuple[str, Any]]:

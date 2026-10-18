@@ -99,6 +99,9 @@ def enable(db: sqlite3.Connection) -> None:
     from .quality_layout import install as install_quality
 
     install_quality(db)
+    from .source_windows import install as install_windows
+
+    install_windows(db)
 
 
 def active(db: sqlite3.Connection) -> bool:
@@ -159,24 +162,31 @@ def admit(
         c.end + settings.get("candle_retention_days", 35) * DAY,
         needed_until + settings.get("detail_retention_days", 30) * DAY,
     )
+    return admit_value(db, int(sid), c.start, needed_until, expiry, value)
+
+
+def admit_value(
+    db: sqlite3.Connection, sid: int, start: int, needed_until: int, expiry: int, value: bytes
+) -> tuple[int, int, int]:
+    """Insert one already validated value; source admission owns validation."""
     previous = db.execute(
         "SELECT revision,payload,needed_until FROM market_candles WHERE stream=? AND start=? ORDER BY revision DESC",
-        (sid, c.start),
+        (sid, start),
     ).fetchall()
     for row in previous:
         if bytes(row[1]) == value:
             if needed_until > row[2]:
                 db.execute(
                     "UPDATE market_candles SET needed_until=?,purge_after=max(purge_after,?) WHERE stream=? AND start=? AND revision=?",
-                    (needed_until, expiry, sid, c.start, row[0]),
+                    (needed_until, expiry, sid, start, row[0]),
                 )
-            return int(sid), c.start, row[0]
+            return sid, start, row[0]
     revision = previous[0][0] + 1 if previous else 0
     db.execute(
         "INSERT INTO market_candles VALUES (?,?,?,?,?,?)",
-        (sid, c.start, revision, value, needed_until, expiry),
+        (sid, start, revision, value, needed_until, expiry),
     )
-    return int(sid), c.start, revision
+    return sid, start, revision
 
 
 def public(payload: bytes) -> dict[str, Any]:
@@ -208,37 +218,110 @@ def read(
 def window(
     db: sqlite3.Connection, stream: str, candles: list[dict[str, Any]], expires: int
 ) -> dict[str, Any]:
-    points = [admit(db, stream, c, expires) for c in candles]
+    from .sources import Candle
+
+    points = []
+    settings = None
+    sid = None
+    for candle in candles:
+        c = Candle(**candle)
+        if c != Candle.parse(c.row(), stream.rsplit("/", 1)[1], c.source, c.received_ms, c.server_ms):
+            raise ValueError("Invalid normalized candle")
+        if settings is None:
+            # This synchronous loop is inside the caller's transaction. The
+            # stream/settings cannot change halfway through a frozen window.
+            settings = json.loads(
+                db.execute("SELECT settings_json FROM owner_settings LIMIT 1").fetchone()[0]
+            )
+            sid = stream_id(db, stream, create=True)
+        assert sid is not None and settings is not None
+        deadline = max(
+            c.end + settings.get("candle_retention_days", 35) * DAY,
+            expires + settings.get("detail_retention_days", 30) * DAY,
+        )
+        points.append(admit_value(db, sid, c.start, expires, deadline, encoded([candle[f] for f in FIELDS])))
+    if not points:
+        raise ValueError("Empty source window")
     raw = json.dumps(
         candles, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
     ).encode()
-    # Coordinates only; no OHLC arrays or overlapping window bodies are copied.
+    reference = compact_reference(
+        points[0][0], [[p[1], p[2]] for p in points], hashlib.sha256(raw).hexdigest()
+    )
+    from .source_windows import intern, lease_deadline
+
+    return intern(db, reference, lease_deadline(db, expires, max(c["start"] + c["step"] for c in candles)))
+
+
+def compact_reference(stream: int, points: list[list[int]], sha: str) -> dict[str, Any]:
+    """Exact arithmetic runs, including order, gaps and candle revisions."""
+    runs: list[list[int]] = []
+    for start, revision in points:
+        if runs and revision == runs[-1][3]:
+            previous = runs[-1]
+            delta = start - (previous[0] + previous[1] * (previous[2] - 1))
+            if previous[2] == 1 or delta == previous[1]:
+                if previous[2] == 1:
+                    previous[1] = delta
+                previous[2] += 1
+                continue
+        runs.append([start, 0, 1, revision])
+    return {"mode": "source-runs", "stream": stream, "runs": runs, "sha256": sha}
+
+
+def reference_points(reference: dict[str, Any]) -> list[Any]:
     import base64
 
-    return {
-        "mode": "source",
-        "stream": points[0][0],
-        "points": base64.b64encode(encoded([[p[1], p[2]] for p in points])).decode(),
-        "sha256": hashlib.sha256(raw).hexdigest(),
-    }
-
-
-def restore_window(db: sqlite3.Connection, reference: dict[str, Any]) -> bytes:
-    import base64
-
+    if reference.get("mode") == "source-runs":
+        if set(reference) != {"mode", "stream", "runs", "sha256"} or not isinstance(reference["runs"], list):
+            raise ValueError("Invalid source runs")
+        points: list[Any] = []
+        for run in reference["runs"]:
+            if (
+                not isinstance(run, list)
+                or len(run) != 4
+                or any(type(v) is not int for v in run)
+                or not 0 <= run[0] < 2**63
+                or not 0 <= run[3] < 2**63
+                or not -(2**63) < run[1] < 2**63
+                or run[2] < 1
+                or len(points) + run[2] > 65536
+            ):
+                raise ValueError("Invalid source run coordinate")
+            if not 0 <= run[0] + (run[2] - 1) * run[1] < 2**63:
+                raise ValueError("Invalid source run endpoint")
+            points.extend([[run[0] + i * run[1], run[3]] for i in range(run[2])])
+        return points
     if (
         set(reference) != {"mode", "stream", "points", "sha256"}
-        or type(reference["stream"]) is not int
+        or reference.get("mode") != "source"
         or not isinstance(reference["points"], str)
         or len(reference["points"]) > 4 * 1024 * 1024
     ):
         raise ValueError("Invalid source window reference")
-    points = decoded(base64.b64decode(reference["points"], validate=True), 2 * 1024 * 1024)
+    return decoded(base64.b64decode(reference["points"], validate=True), 2 * 1024 * 1024)
+
+
+def restore_window(db: sqlite3.Connection, reference: dict[str, Any]) -> bytes:
+    if isinstance(reference, dict) and reference.get("mode") == "source-ref":
+        from .source_windows import load
+
+        if set(reference) != {"mode", "id"}:
+            raise ValueError("Invalid shared source reference")
+        reference = load(db, reference["id"])
+
+    if type(reference.get("stream")) is not int:
+        raise ValueError("Invalid source window reference")
+    points = reference_points(reference)
     if not isinstance(points, list) or not 0 < len(points) <= 65536:
         raise ValueError("Invalid source window coordinates")
     candles = []
     for point in points:
-        if not isinstance(point, list) or len(point) != 2 or any(type(v) is not int or v < 0 for v in point):
+        if (
+            not isinstance(point, list)
+            or len(point) != 2
+            or any(type(v) is not int or not 0 <= v < 2**63 for v in point)
+        ):
             raise ValueError("Invalid candle coordinate")
         row = db.execute(
             "SELECT payload FROM market_candles WHERE stream=? AND start=? AND revision=?",

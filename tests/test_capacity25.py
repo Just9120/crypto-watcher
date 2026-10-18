@@ -1,3 +1,4 @@
+import json
 import math
 import struct
 from contextlib import closing
@@ -222,3 +223,163 @@ def test_sample_failures_are_durable_sanitized_and_never_overwritten(tmp_path):
     observer.recover_sample(tmp_path, state)
     assert json.loads(pending.read_text())["decision"] == "INTERRUPTED"
     assert state["interrupted_samples"] == 1
+
+
+def test_window_repack_preserves_public_values_and_head_projections_across_restart(store):
+    from contextlib import closing
+
+    from cryptowatcher.events import PREFIX
+    from cryptowatcher.market_storage import enable
+    from cryptowatcher.source_windows import load
+    from cryptowatcher.storage import Store, encode
+    from cryptowatcher.storage_repack import work
+    from tests.test_outcomes import NOW, OutcomeWorker, observe
+
+    enable(store.db)
+    store.bounded = True
+    store.clock_ms = lambda: NOW
+    observe(store, OutcomeWorker(store))
+    history = History(store)
+    before = {k: encode(v) for k, v in history.items("event-head:")}
+    with store.db:
+        # Retained production v3 contains inline references and full metadata heads.
+        for key, _ in list(history.items("event:")):
+            raw = store.get_runtime(PREFIX + key)
+            fields = raw["_history_storage"]["fields"]
+            from base64 import b64encode
+
+            from cryptowatcher.market_storage import encoded, reference_points
+
+            shared = load(store.db, fields["source_inputs"]["id"])
+            fields["source_inputs"] = {
+                "mode": "source",
+                "stream": shared["stream"],
+                "sha256": shared["sha256"],
+                "points": b64encode(encoded(reference_points(shared))).decode(),
+            }
+            store.put_runtime(PREFIX + key, raw)
+        for key, _ in list(history.items("event-head:")):
+            event = history.get(key)
+            head = History._head(
+                "event", event, f"event:{event['event_id']}:{event['revision']:010d}", bounded=True
+            )
+            store.put_runtime(PREFIX + key, head)
+        store.put_runtime(
+            "storage_repack", {"version": 3, "state": "COMPLETE", "records": 999, "saved_payload_bytes": 42}
+        )
+    for _ in range(100):
+        state = work(store, NOW, batch=3, seconds=1)
+        if state["state"] == "COMPLETE":
+            break
+    assert state["state"] == "COMPLETE" and state["version"] == 4
+    assert state["previous_run"]["records"] == 999 and state["saved_payload_bytes"] > 42
+    with closing(Store(store.path, store.owner_id, readonly=True)) as reader:
+        assert {k: encode(v) for k, v in History(reader).items("event-head:")} == before
+        for key in before:
+            assert reader.get_runtime(PREFIX + key)["schema"] == "cryptowatcher.history-head.v1"
+
+
+def test_shared_window_refs_are_transactional_and_gc_cannot_remove_retained_inputs(store):
+    import sqlite3
+
+    from cryptowatcher.market_storage import enable
+    from cryptowatcher.source_windows import collect, load
+    from cryptowatcher.storage import encode
+    from tests.test_outcomes import NOW, OutcomeWorker, observe
+
+    enable(store.db)
+    store.bounded = True
+    store.clock_ms = lambda: NOW
+    observe(store, OutcomeWorker(store))
+    key, _ = History(store).items("event:")[0]
+    raw = store.get_runtime("radar:v1:" + key)
+    window_id = raw["_history_storage"]["fields"]["source_inputs"]["id"]
+    original = load(store.db, window_id)
+    refs = store.db.execute("SELECT refs FROM market_source_windows WHERE id=?", (window_id,)).fetchone()[0]
+    with pytest.raises(sqlite3.IntegrityError), store.db:
+        store.db.execute("DELETE FROM market_source_windows WHERE id=?", (window_id,))
+    assert collect(store.db, NOW + 10**12, 1000) >= 0 and load(store.db, window_id) == original
+    raw["_history_storage"]["fields"]["source_inputs"]["id"] = 10**12
+    with pytest.raises(sqlite3.IntegrityError), store.db:
+        store.db.execute("UPDATE runtime SET payload_json=? WHERE key=?", (encode(raw), "radar:v1:" + key))
+    assert (
+        store.db.execute("SELECT refs FROM market_source_windows WHERE id=?", (window_id,)).fetchone()[0]
+        == refs
+    )
+    assert History(store).get(key)["source_inputs"]
+
+
+def test_rescheduled_incomplete_job_is_not_hidden_by_future_pending_work(store):
+    from cryptowatcher.queue_health import snapshot
+    from tests.test_capacity import bounded
+
+    bounded(store)
+    history = History(store)
+    with store.db:
+        history.put("outcome-pending:a", {"outcome_id": "a"})
+        history.put("outcome-job:a", {"state": "PENDING", "next_attempt_ms": 1000000})
+        history.put("outcome-pending:z", {"outcome_id": "z"})
+        history.put(
+            "outcome-job:z", {"state": "INCOMPLETE", "next_attempt_ms": 2000000, "reason": "missing source"}
+        )
+    assert snapshot(store, 1000)["outcome"]["state"] == "SOURCE_LIMITED_OR_UNKNOWN"
+    with pytest.raises(RuntimeError), store.db:
+        history.delete("outcome-job:z")
+        raise RuntimeError("rollback")
+    assert snapshot(store, 1000)["outcome"]["state"] == "SOURCE_LIMITED_OR_UNKNOWN"
+    with store.db:
+        history.delete("outcome-job:z")
+        history.delete("outcome-pending:z")
+    assert snapshot(store, 1000)["outcome"]["state"] == "FUTURE"
+
+
+def test_admission_and_completion_progress_never_commit_outer_transaction(store):
+    from cryptowatcher.queue_health import arrival, completed_batch
+
+    with pytest.raises(RuntimeError), store.db:
+        arrival(store, "outcome")
+        completed_batch(store, "outcome", 100, [50], 2, read_seconds=0.25)
+        raise RuntimeError("rollback")
+    assert store.get_runtime("analytics_progress:outcome") is None
+    with store.db:
+        arrival(store, "outcome")
+        completed_batch(store, "outcome", 100, [50], 2, read_seconds=0.25)
+    value = store.get_runtime("analytics_progress:outcome")
+    assert value["admitted_total"] == value["completed_total"] == 1
+    assert value["read_calculate_seconds"] == 0.25 and value["apply_seconds"] == 1.75
+
+
+def test_bounded_ndjson_filters_keep_selected_event_and_record_counts(store):
+    from cryptowatcher.export import Selection, ndjson
+    from cryptowatcher.market_storage import enable
+    from tests.test_outcomes import NOW, OutcomeWorker, observe
+
+    enable(store.db)
+    store.bounded = True
+    store.clock_ms = lambda: NOW
+    observe(store, OutcomeWorker(store))
+    expected = {e["event_id"] for e in History(store).events(20) if e["detector_id"] == "price"}
+    assert expected
+    with closing(Store(store.path, store.owner_id, readonly=True)) as reader:
+        rows = [json.loads(line) for line in ndjson(reader, Selection(detector="price", market="spot"))]
+    assert {r["record"]["event_id"] for r in rows if r["type"] == "event"} == expected
+    assert rows[-1]["selected_events"] == len(expected)
+    assert rows[-1]["counts"]["event"] == len(expected)
+
+
+def test_source_coordinate_runs_preserve_order_gaps_duplicates_and_revisions():
+    import random
+
+    from cryptowatcher.market_storage import compact_reference, reference_points
+
+    rng = random.Random(724)
+    cases = [[], [[12, 0]], [[60000 * i, 0] for i in range(256)], [[4, 0], [4, 0], [2, 3], [0, 4]]]
+    cases.extend(
+        [[[rng.randrange(10**12), rng.randrange(4)] for _ in range(rng.randrange(1, 200))] for _ in range(30)]
+    )
+    for points in cases:
+        reference = compact_reference(1, points, "a" * 64)
+        assert reference_points(reference) == points
+    for runs in ([[0, 1, 65537, 0]], [[0, -1, 2, 0]], [[2**63 - 1, 1, 2, 0]], [[0, 1, True, 0]]):
+        with pytest.raises(ValueError):
+            reference_points({"mode": "source-runs", "stream": 1, "runs": runs, "sha256": "a" * 64})

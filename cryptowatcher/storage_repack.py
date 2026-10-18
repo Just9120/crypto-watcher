@@ -8,6 +8,54 @@ from typing import Any
 from .storage import Store, encode, json_payload
 
 
+def normalized_record(store: Store, key: str, value: Any) -> Any:
+    """Rebind old inline coordinates without changing public values."""
+    from .events import PREFIX, History
+    from .history_codec import SCHEMA, SHARED_FIELDS, WINDOW_FIELDS
+    from .market_storage import restore_window
+    from .source_windows import intern
+
+    history = History(store)
+    if key.startswith((PREFIX + "outcome-job:", PREFIX + "comparison-job:")):
+        from .queue_health import sync_job
+
+        sync_job(history, key[len(PREFIX) :], value)
+    if not key.startswith(tuple(PREFIX + kind + ":" for kind in ("event", "outcome", "comparison"))):
+        return value
+    expiry = store.db.execute("SELECT expires FROM market_lifetimes WHERE key=?", (key,)).fetchone()
+
+    def visit(item: Any, depth: int = 0) -> Any:
+        if depth > 32:
+            raise ValueError("Source normalization nesting exceeds bound")
+        if isinstance(item, list):
+            return [visit(child, depth + 1) for child in item]
+        if not isinstance(item, dict):
+            return item
+        result = {k: visit(v, depth + 1) if k != "_history_storage" else v for k, v in item.items()}
+        storage = item.get("_history_storage")
+        if storage is not None:
+            if (
+                not isinstance(storage, dict)
+                or set(storage) != {"schema", "fields"}
+                or storage.get("schema") != SCHEMA
+                or not isinstance(storage.get("fields"), dict)
+            ):
+                raise ValueError("Invalid history storage fields")
+            fields = dict(storage["fields"])
+            for name, ref in fields.items():
+                if name not in SHARED_FIELDS | WINDOW_FIELDS or not isinstance(ref, dict):
+                    raise ValueError("Invalid history storage reference")
+                if isinstance(ref, dict) and ref.get("mode") in ("source", "source-runs"):
+                    if expiry is None:
+                        raise ValueError("Source normalization requires a retained parent deadline")
+                    restore_window(store.db, ref)  # Validate original SHA and every immutable coordinate.
+                    fields[name] = intern(store.db, ref, expiry[0])
+            result["_history_storage"] = {**storage, "fields": fields}
+        return result
+
+    return visit(value)
+
+
 def scan_bounds(store: Store, state: dict[str, Any], kind: str) -> tuple[int, int]:
     """A finite physical interval; a schema rebuild invalidates physical IDs.
 
@@ -147,15 +195,19 @@ def record_rows(store: Store, state: dict[str, Any], batch: int, deadline: float
             size = len(payload.encode() if isinstance(payload, str) else payload)
             if size <= 1024 * 1024:
                 raw = sql_payload(payload)
+                original = json_payload(payload)
+                normalized = normalized_record(store, key, original)
+                changed = encode(normalized) != encode(original)
+                target = encode(normalized) if changed else raw
                 # Validate the target envelope, but do not parse/compress it
                 # a second time. New writes already choose this codec.
                 packed = (
                     payload
-                    if isinstance(payload, bytes) and payload.startswith(TYPED_MAGIC)
-                    else pack_binary(raw)
+                    if not changed and isinstance(payload, bytes) and payload.startswith(TYPED_MAGIC)
+                    else pack_binary(target)
                 )
                 if len(packed) < size:
-                    if sql_payload(packed) != raw:
+                    if sql_payload(packed) != target:
                         raise ValueError("Repack changed public record bytes")
                     store.db.execute("UPDATE runtime SET payload_json=? WHERE key=?", (packed, key))
                     state["saved_payload_bytes"] += size - len(packed)
@@ -245,9 +297,18 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
     if not store.bounded:
         return {"state": "N/A_LEGACY"}
     state = store.get_runtime("storage_repack", {})
-    if state.get("version") == 3 and state.get("state") == "COMPLETE" and state.get("decisions_complete"):
+    if state.get("version") == 4 and state.get("state") == "COMPLETE" and state.get("decisions_complete"):
         return state
-    state = {"version": 3, "cursor": "", "records": 0, "saved_payload_bytes": 0, **state}
+    if state.get("version") == 3:
+        state = {
+            "previous_version": 3,
+            "previous_run": {
+                k: state[k] for k in ("state", "records", "cursor", "records_rowid_upper") if k in state
+            },
+            "saved_payload_bytes": state.get("saved_payload_bytes", 0),
+            "saved_categories": state.get("saved_categories", {}),
+        }
+    state = {"version": 4, "cursor": "", "records": 0, "saved_payload_bytes": 0, **state}
     state.setdefault("saved_categories", {})
     deadline = time.monotonic() + seconds
     first = state.get("next_phase", 0)

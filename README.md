@@ -17,7 +17,7 @@ Radar обрабатывает широкий metadata/liquidity universe обо
 - [Исторический tooling: compact snapshot](docs/runbooks/delivery.md#read-only-измерение-compact-current-dataset)
 - [Repository procedures](AGENTS.md) и [CI/CD configuration contract](ci-cd-rules.md)
 
-Хранение обновляется по [D22/E13](docs/product_scope.md#e13--компактное-хранение-сроки-и-новый-период-истории): подробности30d, свечи35d, quality summaries12mo, измеряемый storage target20GB. Разовый сброс прежней тестовой market history выполняется отдельно после проверок; полная конвертация этой истории исключена из текущей задачи. Статус реализации — в плане.
+Хранение обновляется по [D22/E13](docs/product_scope.md#e13--компактное-хранение-сроки-и-новый-период-истории): подробности30d, свечи35d, quality summaries12mo, измеряемый storage target25GB. Разовый сброс прежней тестовой market history выполняется отдельно после проверок; полная конвертация этой истории исключена из текущей задачи. Статус реализации — в плане.
 
 ## Stack и установка
 
@@ -56,7 +56,7 @@ source/candidate проверок описаны в [процедуре конв
 python -m venv .venv
 ```
 
-Активировать `.venv/bin/activate` на Linux либо `.venv\Scripts\Activate.ps1` в PowerShell. Установить runtime или dev lock:
+Активировать `.venv/bin/activate` на Linux либо `.venv\Scripts\Activate.ps1` в PowerShell. Container installer versions фиксируются отдельно в `requirements-bootstrap.in` / `requirements-bootstrap.txt`; hashes проверяются до установки runtime dependencies. Установить runtime или dev lock:
 
 ```bash
 python -m pip install --require-hashes -r requirements.txt
@@ -167,7 +167,7 @@ Native closed candles сохраняются в общей SQLite, memory window
 
 Новая generation использует нормализованные immutable candle revisions и отдельные context values; history windows содержат координаты, а не копии перекрывающихся OHLC arrays. Settings/context используют shared bodies, outcome heads не дублируют metrics; finished jobs удаляются после сохранения результатов, успешная доставка оставляет компактный receipt. Binary JSON records используют frozen dictionary/checksum/SHA256 без изменения public values. Schema1 читается для совместимости; обычный open/restart не конвертирует старую историю и не включает reset.
 
-`storage` возвращает actual working files/counts/encoded category bytes, durable repack progress и явно помеченный forecast. Retained inserts считаются отдельно от net queue occupancy; эффект repack не выдается за изменение потока событий. Quality baseline и сценарии density/comparators измеряют текущий codec/SQLite table+indexes на isolated synthetic данных; они не production measurement и не upper bound. Initial small-file index measurement ограничен; `storage-indexes` запрашивает отдельный bounded exact snapshot. Автоматический control не сканирует постоянно все страницы, samples ограничены26 записями;20GB fit не считается доказанным по fixture или короткому post-deploy окну. Windows без dbstat показывает UNAVAILABLE, required Linux verification остается обязательной.
+`storage` возвращает actual working files/counts/encoded category bytes, durable repack progress и явно помеченный forecast. Retained inserts считаются отдельно от net queue occupancy; эффект repack не выдается за изменение потока событий. Quality baseline и сценарии density/comparators измеряют текущий codec/SQLite table+indexes на isolated synthetic данных; они не production measurement и не upper bound. Initial small-file index measurement ограничен; `storage-indexes` запрашивает отдельный bounded exact snapshot. Автоматический control не сканирует постоянно все страницы, samples ограничены26 записями;25GB fit не считается доказанным по fixture или короткому post-deploy окну. Windows без dbstat показывает UNAVAILABLE, required Linux verification остается обязательной.
 
 Backfill и resumable repack обслуживаются отдельными jobs каждую секунду, независимо
 от долгих outcome/comparator calculations. Repack сохраняет конечные границы прохода

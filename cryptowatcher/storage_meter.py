@@ -91,7 +91,14 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
     repack = store.get_runtime("storage_repack", {})
     saved = repack.get("saved_categories", {})
     forecast = []
-    occupancy = {"services", "service_indexes", "pending_holds", "context", "context_bodies"}
+    occupancy = {
+        "services",
+        "service_indexes",
+        "pending_holds",
+        "context",
+        "context_bodies",
+        "source_windows",
+    }
     for category, value in counts.items():
         previous = (base or {}).get("categories", {}).get(category, {"inserted_bytes": 0, "deleted_bytes": 0})
         inserted = max(0, value["inserted_bytes"] - previous.get("inserted_bytes", 0))
@@ -186,7 +193,9 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
     if (
         indexes.get("state") == "PASS"
         and store.db.execute("SELECT 1 FROM sqlite_master WHERE name='market_expiry'").fetchone()
-        and not {"market_expiry", "market_quality_blocks"}.issubset(indexes.get("tables", {}))
+        and not {"market_expiry", "market_quality_blocks", "market_source_windows"}.issubset(
+            indexes.get("tables", {})
+        )
     ):
         indexes = {**indexes, "state": "STALE", "reason": "STORAGE_EXTENSION_AFTER_SNAPSHOT"}
     return {
@@ -236,7 +245,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
             "Aggregate service occupancy extrapolates positive net growth conservatively; terminal1d and stream-scoped state are not multiplied by gross turnover",
             "Additional retained methodology/comparator versions can increase cost beyond the single-method fixture",
             "Retained used inputs may exceed raw TTL; forecast is a baseline, not an upper bound",
-            "20GB target includes indexes and working journals; no silent scope/retention reduction",
+            "25GB target includes indexes and working journals; no silent scope/retention reduction",
         ],
         "options": [
             "Review largest category and repeated values",

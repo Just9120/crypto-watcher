@@ -312,6 +312,7 @@ class ControlDeck:
             )
         if not entries:
             lines.append("История пока пуста в этом доступном периоде.")
+            lines.append(self.c.history_notice())
         lines.append("Наблюдение не означает отправленное уведомление.")
         controls.append([("Период и доступные данные", "ui:historyinfo")])
         if len(rows) > PAGE_SIZE:

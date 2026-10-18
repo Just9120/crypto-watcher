@@ -335,6 +335,9 @@ class BoundedRetention:
                 collect_events(store.db, batch)
             if store.db.execute("SELECT 1 FROM sqlite_master WHERE name='market_quality_blocks'").fetchone():
                 collect_quality(store.db, batch)
+            from .source_windows import collect as collect_windows
+
+            removed_windows = collect_windows(store.db, now_ms, batch)
             garbage = store.db.execute(
                 "SELECT body FROM market_body_counts WHERE refs=0 LIMIT ?", (batch,)
             ).fetchall()
@@ -350,6 +353,7 @@ class BoundedRetention:
                 "removed_context": len(contexts),
                 "removed_summaries": len(quality),
                 "removed_bodies": len(garbage),
+                "removed_source_windows": removed_windows,
                 "batch": batch,
                 "state": "OK",
                 "terminal_status": "EXPIRED_RETENTION_INCOMPLETE",
@@ -363,6 +367,7 @@ class BoundedRetention:
                 "removed_context": len(contexts),
                 "removed_summary_blocks": len(quality),
                 "removed_bodies": len(garbage),
+                "removed_source_windows": removed_windows,
             }.items():
                 totals[key] = totals.get(key, 0) + count
             totals["at_ms"] = now_ms

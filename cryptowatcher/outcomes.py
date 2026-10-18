@@ -198,10 +198,14 @@ class OutcomeWorker:
                 "stream": stream,
                 "state": "PENDING",
                 "next_attempt_ms": due,
+                "due_ms": due,
                 "pending_key": pending,
                 "hold_key": hold,
             }
             self.history.put(key, job)
+            from .queue_health import arrival
+
+            arrival(self.store, "outcome")
             self.history.put(pending, {"outcome_id": outcome_id})
             self.history.put(hold, {"start": event["reference_time_ms"], "end": due})
         comparison = "comparison-job:" + event["event_id"]
@@ -225,9 +229,13 @@ class OutcomeWorker:
                     "methodology_version": COMPARATOR_VERSION,
                     "pending_key": comparison_pending,
                     "next_attempt_ms": event["available_at_ms"],
+                    "due_ms": event["available_at_ms"],
                 },
             )
             self.history.put(comparison_pending, {"event_id": event["event_id"]})
+            from .queue_health import arrival
+
+            arrival(self.store, "comparison")
             lookback = max(
                 16,
                 int(max(v for k, v in event["effective_parameters"].items() if k.endswith("lookback"))) + 2,
@@ -318,6 +326,7 @@ class OutcomeWorker:
                 self.calculate,
             ),
         )
+        read_seconds = time.monotonic() - started
         applied = 0
         completed_lags = []
         for job, event, binding, result in prepared:
@@ -326,11 +335,18 @@ class OutcomeWorker:
                 self.apply(job, event, binding, result, clock())
                 applied += 1
                 if result["state"] == "COMPLETE":
-                    completed_lags.append(max(0, clock() - job["next_attempt_ms"]))
+                    completed_lags.append(max(0, clock() - job.get("due_ms", job["next_attempt_ms"])))
             await asyncio.sleep(0)
         from .queue_health import completed_batch
 
-        completed_batch(self.store, "outcome", clock(), completed_lags, time.monotonic() - started)
+        completed_batch(
+            self.store,
+            "outcome",
+            clock(),
+            completed_lags,
+            time.monotonic() - started,
+            read_seconds=read_seconds,
+        )
         return applied
 
     def apply(

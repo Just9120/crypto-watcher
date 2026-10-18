@@ -236,6 +236,9 @@ class Store:
         from .record_codec import sql_payload
 
         self.db.create_function("cw_record_json", 1, sql_payload, deterministic=True)
+        from .source_windows import references
+
+        self.db.create_function("cw_window_refs", 2, references, deterministic=True)
         self.db.row_factory = sqlite3.Row
         self.bounded = self.db.execute("PRAGMA user_version").fetchone()[0] == 2
         if self.bounded:
@@ -253,6 +256,9 @@ class Store:
 
                 install_expiry(self.db)
                 install_quality(self.db)
+                from .source_windows import install as install_windows
+
+                install_windows(self.db)
             if not self.bounded:
                 create_schema(self.db)
             if os.name != "nt":
@@ -260,6 +266,7 @@ class Store:
 
     def close(self) -> None:
         self.db.close()
+        self.comparison_population = None
 
     def initialize(self, defaults: OwnerSettings, *, legacy: Path | None = None) -> None:
         if self.db.execute("SELECT 1 FROM owner_settings").fetchone():

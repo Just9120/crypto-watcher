@@ -15,8 +15,9 @@ LABEL org.opencontainers.image.revision=$SOURCE_REVISION \
       io.cryptowatcher.build-run=$BUILD_RUN
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 SOURCE_REVISION=$SOURCE_REVISION
 WORKDIR /app
-COPY requirements.txt ./
-RUN pip install --no-cache-dir --require-hashes -r requirements.txt && pip check \
+COPY requirements.txt requirements-bootstrap.txt ./
+RUN python -m pip install --no-cache-dir --upgrade --require-hashes --only-binary=:all: -r requirements-bootstrap.txt \
+    && python -m pip install --no-cache-dir --require-hashes -r requirements.txt && python -m pip check \
     && groupadd --gid 10001 watcher \
     && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin watcher \
     && mkdir /data && chown 10001:10001 /data

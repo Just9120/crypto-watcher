@@ -53,7 +53,7 @@ def event_selection(selection: Selection) -> tuple[str, list[Any]]:
         if value is not None:
             terms.append(f"json_extract(cw_record_json(payload_json),'$.{name}')=?")
             args.append(value)
-    return "WITH selected AS (SELECT payload_json FROM runtime WHERE " + " AND ".join(terms) + ") ", args
+    return "WITH selected AS (SELECT key,payload_json FROM runtime WHERE " + " AND ".join(terms) + ") ", args
 
 
 def paged(cursor: Any) -> Iterator[Any]:

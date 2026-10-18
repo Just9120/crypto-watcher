@@ -88,6 +88,20 @@ def main() -> None:
         version = json.loads(run(args.image, directory, "-m", "cryptowatcher", "--version"))
         assert version["source_revision"] == args.revision
         assert run(args.image, directory, "-c", "import os; print(os.getuid())").strip() == "10001"
+        expected_installers = {
+            line.split("==", 1)[0]: line.split("==", 1)[1].split()[0]
+            for line in Path("requirements-bootstrap.txt").read_text().splitlines()
+            if line and not line.startswith("#")
+        }
+        actual_installers = json.loads(
+            run(
+                args.image,
+                directory,
+                "-c",
+                "import json,importlib.metadata as m; print(json.dumps({k:m.version(k) for k in ('pip','setuptools')}))",
+            )
+        )
+        assert actual_installers == expected_installers
         migration = (
             "-m",
             "cryptowatcher",

@@ -191,6 +191,7 @@ def recover_boundary(folder: Path, state: dict[str, Any]) -> None:
                 atomic(path, attempt)
     if state["state"] == "READY_FOR_BASELINE":
         state.update(state="WAITING_STABLE", stable_samples=0)
+        state.pop("stable_since_ms", None)
     else:
         state.update(state="OBSERVING", interrupted_samples=state.get("interrupted_samples", 0) + 1)
     state.update(phase="RESUMED", last_error_phase="BOUNDARY_RESTART")
@@ -201,6 +202,7 @@ def baseline_boundary(folder: Path, state: dict[str, Any], expected: str) -> Non
     baseline = boundary_probe(folder, state, expected, "baseline")
     if baseline["stability_blockers"]:
         state.update(state="WAITING_STABLE", stable_samples=0)
+        state.pop("stable_since_ms", None)
     else:
         atomic(folder / "baseline.json", baseline)
         state.update(
@@ -352,6 +354,7 @@ def main() -> int:
             state["consecutive_probe_failures"] = state.get("consecutive_probe_failures", 0) + 1
             if state["state"] == "WAITING_STABLE":
                 state["stable_samples"] = 0
+                state.pop("stable_since_ms", None)
             elif state["state"] == "OBSERVING":
                 state["interrupted_samples"] = state.get("interrupted_samples", 0) + 1
             state["last_error_class"] = type(exc).__name__

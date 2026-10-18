@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 import time
 from collections import Counter, defaultdict
@@ -39,6 +40,29 @@ COHORT_FIELDS = (
     "horizon",
     "methodology",
 )
+
+
+def boundary_blockers(value: dict[str, Any]) -> list[str]:
+    """Missing/partial evidence is never a complete clean boundary."""
+    reasons = []
+    for name, expected in (
+        ("runtime_ledger", "MEASURED"),
+        ("prospective_cohorts", "MEASURED_PROSPECTIVE"),
+        ("quality_actual", "MEASURED"),
+        ("physical_snapshot", "PASS"),
+    ):
+        if value.get(name, {}).get("state") != expected:
+            reasons.append("BOUNDARY_" + name.upper() + "_INCOMPLETE")
+    if not re.fullmatch(r"[0-9a-f]{40}", value.get("source_revision", "")):
+        reasons.append("BOUNDARY_SOURCE_UNSET")
+    generation = value.get("history_generation") or {}
+    instance = value.get("runtime_instance") or {}
+    if not generation.get("id") or not instance.get("id"):
+        reasons.append("BOUNDARY_IDENTITY_UNSET")
+    revision = value.get("configuration_revision")
+    if type(revision) is not int or revision < 1:
+        reasons.append("BOUNDARY_CONFIGURATION_UNSET")
+    return reasons
 
 
 def namespace(key: str) -> str:
@@ -257,7 +281,7 @@ def stable_reason(store: Store) -> list[str]:
     if queues["analytics-gap"]["state"] not in ("EMPTY", "CURRENT"):
         reasons.append("ANALYTICS_RECOVERY_PENDING")
     for name in ("outcome", "comparison"):
-        if queues[name]["state"] in ("OVERDUE", "ORPHAN_OR_UNKNOWN"):
+        if queues[name]["state"] in ("OVERDUE", "ORPHAN_OR_UNKNOWN", "SOURCE_LIMITED_OR_UNKNOWN"):
             reasons.append(name.upper() + "_BACKLOG")
     if store.get_runtime("storage_repack", {}).get("state") != "COMPLETE":
         reasons.append("REPACK")
@@ -355,7 +379,7 @@ def snapshot(store: Store, *, deep: bool = False, cohorts: bool = False) -> dict
             "runtime_instance": store.get_runtime("runtime_instance"),
             "analytics_progress": {
                 name: store.get_runtime("analytics_progress:" + name, {})
-                for name in ("outcome", "comparison")
+                for name in ("outcome", "comparison", "analytics-gap")
             },
             "retention": store.get_runtime("market_retention"),
             "retention_totals": store.get_runtime("market_retention_totals", {}),
@@ -365,14 +389,47 @@ def snapshot(store: Store, *, deep: bool = False, cohorts: bool = False) -> dict
             "prospective_cohorts": prospective_cohorts(store) if cohorts else {"state": "NOT_REQUESTED"},
             "physical_snapshot": measure_indexes(store, seconds=10) if deep else {"state": "NOT_REQUESTED"},
             "backups_and_experiments": "EXCLUDED_FROM_WORKING_TOTAL; separate operator inventory",
-            "capacity_verdict": "UNPROVEN; tests/CD success does not establish20GB fit",
+            "capacity_verdict": "UNPROVEN; tests/CD success does not establish25GB fit",
         }
         value["forecast_explanation"] = explain_forecast(storage, value["runtime_ledger"])
+        if deep:
+            missing = boundary_blockers(value)
+            value["boundary_validation"] = {"state": "FAIL" if missing else "PASS", "reasons": missing}
+            value["stability_blockers"].extend(missing)
         value["elapsed_seconds"] = round(time.monotonic() - started, 3)
-        return value
     finally:
         store.db.set_progress_handler(None, 0)
         store.db.rollback()
+    if deep:
+        # The scan pins old values; reread current health after releasing it.
+        # Both snapshots are retained, including failures during the boundary.
+        store.db.execute("BEGIN")
+        try:
+            end = {
+                "at_ms": int(time.time() * 1000),
+                "stability_blockers": stable_reason(store),
+                "runtime_instance": store.get_runtime("runtime_instance"),
+                "history_generation": store.get_runtime("history_generation"),
+                "configuration_revision": store.snapshot().revision,
+                "analytics_progress": {
+                    name: store.get_runtime("analytics_progress:" + name, {})
+                    for name in ("outcome", "comparison", "analytics-gap")
+                },
+            }
+            if any(
+                p.get("last_slo_violation_ms", 0) > value["at_ms"] for p in end["analytics_progress"].values()
+            ):
+                end["stability_blockers"].append("BOUNDARY_ANALYTICS_SLO_VIOLATION")
+            for name in ("runtime_instance", "history_generation", "configuration_revision"):
+                if end[name] != value[name]:
+                    end["stability_blockers"].append("BOUNDARY_" + name.upper() + "_CHANGED")
+            value["boundary_end"] = end
+            value["stability_blockers"] = list(
+                dict.fromkeys(value["stability_blockers"] + end["stability_blockers"])
+            )
+        finally:
+            store.db.rollback()
+    return value
 
 
 def interval(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
@@ -384,7 +441,17 @@ def interval(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
     same_source = before.get("source_revision") == after.get("source_revision")
     same_instance = before.get("runtime_instance") == after.get("runtime_instance")
     stable = not before.get("stability_blockers") and not after.get("stability_blockers")
-    full_day = seconds >= 86400 and compatible and stable and same_config and same_source and same_instance
+    missing = {"baseline": boundary_blockers(before), "final": boundary_blockers(after)}
+    complete = not any(missing.values())
+    full_day = (
+        seconds >= 86400
+        and compatible
+        and stable
+        and same_config
+        and same_source
+        and same_instance
+        and complete
+    )
     b, a = before["storage"], after["storage"]
     result: dict[str, Any] = {
         "state": "OBSERVED_24H" if full_day else "PARTIAL_OR_UNSTABLE",
@@ -393,6 +460,7 @@ def interval(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
         "configuration_unchanged": same_config,
         "source_unchanged": same_source,
         "runtime_instance_unchanged": same_instance,
+        "boundary_completeness": {"state": "PASS" if complete else "FAIL", "reasons": missing},
         "working_net_bytes": a["working_bytes"] - b["working_bytes"],
         "file_deltas": {k: a["files"].get(k, 0) - b["files"].get(k, 0) for k in a["files"]},
         "daily_extrapolation_bytes": (a["working_bytes"] - b["working_bytes"]) / seconds * 86400

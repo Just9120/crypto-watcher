@@ -9,6 +9,7 @@ from typing import Any
 
 from .agent_delivery import AgentDelivery
 from .events import History
+from .queue_health import snapshot as queue_snapshot
 from .storage import Store
 
 
@@ -58,6 +59,7 @@ def snapshot(store: Store, seconds: float = 3) -> dict[str, Any]:
             "admission": history.get("outcome-admission", {}),
         },
         "analytics": store.get_runtime("analytics", {"state": "PENDING"}),
+        "analytics_queues": bounded(lambda: queue_snapshot(store, int(time.time() * 1000))),
         "analytics_recovery": {"pending": bounded(lambda: history.count("analytics-gap-pending:"))},
         "retired_pending": history.get("orphaned-pending-summary", {}),
         "enrichment": {

@@ -40,7 +40,14 @@ def test_normalized_overlapping_windows_replay_and_restart_keep_exact_analytics(
             expected = calculate(history.get("event-head:" + outcome["event_id"]), 5, future())
             assert outcome["metrics"] == expected["metrics"]
     stored = store.get_runtime("radar:v1:event:" + first["event_id"] + ":0000000001")
-    assert stored[MARKER]["fields"]["source_inputs"]["mode"] == "source"
+    reference = stored[MARKER]["fields"]["source_inputs"]
+    assert reference["mode"] == "source-ref" and type(reference["id"]) is int
+    assert (
+        store.db.execute("SELECT refs FROM market_source_windows WHERE id=?", (reference["id"],)).fetchone()[
+            0
+        ]
+        > 0
+    )
     assert all(
         "source_inputs" not in json_payload(r[0])
         for r in store.db.execute("SELECT payload_json FROM runtime WHERE key LIKE 'radar:v1:event:%'")

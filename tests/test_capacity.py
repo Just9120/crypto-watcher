@@ -96,7 +96,8 @@ def test_completed_repack_resumes_decision_pass_without_discarding_progress(stor
     assert store.get_runtime(PREFIX + key) == value
     state = work(store, NOW, batch=10, seconds=1)
     assert state["state"] == "COMPLETE" and state["decisions_complete"]
-    assert state["records"] == 1000 and state["cursor"] == previous["cursor"]
+    assert state["version"] == 4 and state["previous_run"]["records"] == 1000
+    assert state["previous_run"]["cursor"] == previous["cursor"] and state["records"] >= 2
     assert state["saved_payload_bytes"] > 123
     assert h.get(key) == value and store.get_runtime(PREFIX + key) == {DECISION_HEAD: 1}
     assert work(store, NOW + 1) == state
@@ -170,6 +171,17 @@ def test_quick_capacity_never_walks_runtime_or_quality_and_interval_does_not_inv
     result = interval(value, later)
     assert result["working_net_bytes"] == 100 and result["daily_extrapolation_bytes"] is None
     later["at_ms"] = value["at_ms"] + DAY
+    assert interval(value, later)["state"] == "PARTIAL_OR_UNSTABLE"
+    for boundary in (value, later):
+        boundary.update(
+            source_revision="f" * 40,
+            history_generation={"id": "one"},
+            runtime_instance={"id": "same"},
+            runtime_ledger={"state": "MEASURED", "namespaces": {}},
+            prospective_cohorts={"state": "MEASURED_PROSPECTIVE"},
+            quality_actual={"state": "MEASURED"},
+            physical_snapshot={"state": "PASS", "tables": {}, "total_index_bytes": 0},
+        )
     assert interval(value, later)["state"] == "OBSERVED_24H"
     later["configuration_revision"] += 1
     assert interval(value, later)["state"] == "PARTIAL_OR_UNSTABLE"

@@ -373,7 +373,7 @@ class Controller:
             if command == "unmute" and parts == ["all"]:
                 with self.store.db:
                     self.store.db.execute("DELETE FROM mutes")
-                await self.send(update, "Все mutes сняты.")
+                await self.send(update, "Все заглушения сняты.")
                 return
             symbol = instrument_key(parts[0], snapshot.settings.bybit_category)
             duration = number(parts[1], "mute minutes") * 60 if len(parts) == 2 else 3600

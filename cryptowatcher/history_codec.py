@@ -212,7 +212,7 @@ class Codec:
                 return restore_context(self.db, reference)
             except (ValueError, TypeError, KeyError, zlib.error) as exc:
                 raise StateError("Invalid normalized context reference") from exc
-        if isinstance(reference, dict) and reference.get("mode") == "source":
+        if isinstance(reference, dict) and reference.get("mode") in ("source", "source-runs", "source-ref"):
             from .market_storage import restore_window
 
             try:
