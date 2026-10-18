@@ -154,6 +154,7 @@ class Controller:
     def __init__(self, infrastructure: Infrastructure, store: Store, market: BybitREST) -> None:
         self.infrastructure = infrastructure
         self.store = store
+        store.put_runtime("runtime_instance", {"id": uuid.uuid4().hex, "started_ms": int(time.time() * 1000)})
         self.market = market
         self.history = History(store)
         self.ui = ControlDeck(self)

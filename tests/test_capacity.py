@@ -193,7 +193,10 @@ def test_stable_baseline_distinguishes_referenced_backfill_from_normal_pending_h
         store.put_runtime("radar:v1:outcome-admission", {"complete": True})
         store.put_runtime("storage_repack", {"state": "COMPLETE"})
         store.put_runtime("analytics", {"state": "OK", "at_ms": NOW})
-        History(store).put("outcome-pending:future-horizon", {"key": "normal-scheduled-work"})
+        History(store).put("outcome-pending:future-horizon", {"outcome_id": "normal-scheduled-work"})
+        History(store).put(
+            "outcome-job:normal-scheduled-work", {"state": "PENDING", "next_attempt_ms": NOW + 60000}
+        )
     with patch("cryptowatcher.capacity.time.time", return_value=NOW / 1000):
         assert stable_reason(store) == []
         with store.db:
@@ -229,7 +232,8 @@ def test_forecast_attribution_does_not_add_indexes_twice_and_sampling_is_finite(
     good = {"at_ms": 2000, "stability_blockers": []}
     state = advance(state, good, 2)
     assert state["state"] == "WAITING_STABLE"
-    assert advance(state, good, 302)["state"] == "READY_FOR_BASELINE"
+    assert advance(state, {**good, "at_ms": 302000}, 302)["state"] == "WAITING_STABLE"
+    assert advance(state, {**good, "at_ms": 1802000}, 1802)["state"] == "READY_FOR_BASELINE"
     assert advance(state, pending, 12 * 3600 + 1)["state"] == "WAIT_LIMIT_REACHED"
     observing = {"state": "OBSERVING", "created_at": 0, "baseline_ms": 2000}
     assert advance(observing, good, 86402)["state"] == "READY_FOR_FINAL"
@@ -284,7 +288,11 @@ def test_baseline_settles_current_queue_without_accepting_the_blocked_probe():
     assert "baseline_settling_attempts" not in cleared
     state = advance({"state": "WAITING_STABLE", "created_at": 0}, initial, 1)
     assert state["state"] == "WAITING_STABLE" and state["stable_samples"] == 1
-    assert advance(state, value, 311)["state"] == "READY_FOR_BASELINE"
+    settled = advance(state, value, 311)
+    assert settled["state"] == "WAITING_STABLE" and settled["stable_since_ms"] == 311000
+    assert (
+        advance(settled, {"at_ms": 2111000, "stability_blockers": []}, 2111)["state"] == "READY_FOR_BASELINE"
+    )
     # The original wait deadline still takes precedence over a cleared queue.
     assert advance(state, value, 12 * 3600 + 1)["state"] == "WAIT_LIMIT_REACHED"
 

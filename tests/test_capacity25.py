@@ -153,3 +153,72 @@ def test_archived_intraday_csv_ndjson_and_cohorts_share_explicit_bounds(store):
     assert manifest["archive_start_ms"] == selection.start_ms // DAY * DAY
     assert all(int(r["archive_start_ms"]) == manifest["archive_start_ms"] for r in after)
     assert manifest["requested_start_ms"] == selection.start_ms
+
+
+def test_queue_health_separates_future_current_overdue_and_unknown(store):
+    from cryptowatcher.queue_health import snapshot
+
+    now = 1800000000000
+    history = History(store)
+    with store.db:
+        history.put("outcome-pending:one", {"outcome_id": "one"})
+        history.put("outcome-job:one", {"state": "PENDING", "next_attempt_ms": now + 1000})
+        history.put("analytics-gap-pending:one", {"id": "one"})
+        history.put(
+            "analytics-gap:one",
+            {"state": "PENDING", "next_attempt_ms": now, "end": now - 5000, "attempts": 0},
+        )
+    assert snapshot(store, now)["outcome"]["state"] == "FUTURE"
+    assert snapshot(store, now)["analytics-gap"]["state"] == "CURRENT"
+    assert snapshot(store, now + 62000)["outcome"]["state"] == "OVERDUE"
+    assert snapshot(store, now + 62000)["analytics-gap"]["state"] == "REFERENCED_RECOVERY"
+    history.delete("outcome-job:one")
+    assert snapshot(store, now)["outcome"]["state"] == "ORPHAN_OR_UNKNOWN"
+
+
+def test_completed_lag_and_app_restart_cannot_hide_between_samples(store):
+    from cryptowatcher.queue_health import completed_batch
+    from scripts.observe_capacity import advance
+
+    completed_batch(store, "outcome", 100000, [61000], 1)
+    value = {
+        "at_ms": 100000,
+        "stability_blockers": [],
+        "runtime_instance": {"id": "one"},
+        "analytics_progress": {"outcome": store.get_runtime("analytics_progress:outcome")},
+    }
+    state = {"state": "OBSERVING", "baseline_ms": 1000, "baseline_instance": {"id": "one"}}
+    first = advance(state, value, 100)
+    assert first["interrupted_samples"] == 1 and "ANALYTICS_SLO_VIOLATION" in first["last_blockers"]
+    second = advance(first, value, 101)
+    assert second["interrupted_samples"] == 1
+    changed = advance(second, {**value, "runtime_instance": {"id": "two"}}, 102)
+    assert changed["interrupted_samples"] == 2 and "RUNTIME_INSTANCE_CHANGED" in changed["last_blockers"]
+
+
+def test_sample_failures_are_durable_sanitized_and_never_overwritten(tmp_path):
+    import json
+    import subprocess
+
+    from scripts import observe_capacity as observer
+
+    state = {"state": "OBSERVING"}
+    for _ in range(2):
+        with patch.object(
+            observer, "sample_for_state", side_effect=subprocess.TimeoutExpired("secret command", 15)
+        ):
+            with pytest.raises(subprocess.TimeoutExpired):
+                observer.sample_probe(tmp_path, state, "f" * 40)
+    attempts = sorted(tmp_path.glob("sample-attempt-*.json"))
+    assert len(attempts) == 2
+    for path in attempts:
+        value = json.loads(path.read_text())
+        assert value["decision"] == "ERROR" and value["phase"] == "SAMPLE"
+        assert value["error_class"] == "TimeoutExpired" and value["timeout_seconds"] == 15
+        assert "started_at" in value and "finished_at" in value and "secret" not in path.read_text()
+    pending = tmp_path / "sample-attempt-0003.json"
+    observer.atomic(pending, {"decision": "PENDING"})
+    state["active_sample_attempt"] = pending.name
+    observer.recover_sample(tmp_path, state)
+    assert json.loads(pending.read_text())["decision"] == "INTERRUPTED"
+    assert state["interrupted_samples"] == 1

@@ -10,6 +10,7 @@ from typing import Any
 
 from .events import PREFIX, History
 from .history_codec import Codec
+from .queue_health import snapshot as queue_snapshot
 from .storage import Store, json_payload
 from .storage_meter import measure_indexes, report
 
@@ -252,11 +253,12 @@ def stable_reason(store: Store) -> list[str]:
         reasons.append("OUTCOME_BOOTSTRAP")
     # Referenced analytics backfill has a different queue from live ingestion
     # recovery. A populated queue must not be mistaken for a settled baseline.
-    prefix = PREFIX + "analytics-gap-pending:"
-    if store.db.execute(
-        "SELECT 1 FROM runtime WHERE key>=? AND key<? LIMIT 1", (prefix, prefix + "~")
-    ).fetchone():
+    queues = queue_snapshot(store, int(time.time() * 1000))
+    if queues["analytics-gap"]["state"] not in ("EMPTY", "CURRENT"):
         reasons.append("ANALYTICS_RECOVERY_PENDING")
+    for name in ("outcome", "comparison"):
+        if queues[name]["state"] in ("OVERDUE", "ORPHAN_OR_UNKNOWN"):
+            reasons.append(name.upper() + "_BACKLOG")
     if store.get_runtime("storage_repack", {}).get("state") != "COMPLETE":
         reasons.append("REPACK")
     for key in ("repack_worker", "analytics_recovery_worker"):
@@ -349,6 +351,12 @@ def snapshot(store: Store, *, deep: bool = False, cohorts: bool = False) -> dict
             "ingestion": store.get_runtime("ingestion"),
             "repack": store.get_runtime("storage_repack"),
             "analytics": store.get_runtime("analytics"),
+            "queues": queue_snapshot(store, int(time.time() * 1000)),
+            "runtime_instance": store.get_runtime("runtime_instance"),
+            "analytics_progress": {
+                name: store.get_runtime("analytics_progress:" + name, {})
+                for name in ("outcome", "comparison")
+            },
             "retention": store.get_runtime("market_retention"),
             "retention_totals": store.get_runtime("market_retention_totals", {}),
             "quality_actual": quality,
@@ -374,8 +382,9 @@ def interval(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
     compatible = before.get("history_generation") == after.get("history_generation")
     same_config = before.get("configuration_revision") == after.get("configuration_revision")
     same_source = before.get("source_revision") == after.get("source_revision")
+    same_instance = before.get("runtime_instance") == after.get("runtime_instance")
     stable = not before.get("stability_blockers") and not after.get("stability_blockers")
-    full_day = seconds >= 86400 and compatible and stable and same_config and same_source
+    full_day = seconds >= 86400 and compatible and stable and same_config and same_source and same_instance
     b, a = before["storage"], after["storage"]
     result: dict[str, Any] = {
         "state": "OBSERVED_24H" if full_day else "PARTIAL_OR_UNSTABLE",
@@ -383,6 +392,7 @@ def interval(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
         "generation_unchanged": compatible,
         "configuration_unchanged": same_config,
         "source_unchanged": same_source,
+        "runtime_instance_unchanged": same_instance,
         "working_net_bytes": a["working_bytes"] - b["working_bytes"],
         "file_deltas": {k: a["files"].get(k, 0) - b["files"].get(k, 0) for k in a["files"]},
         "daily_extrapolation_bytes": (a["working_bytes"] - b["working_bytes"]) / seconds * 86400

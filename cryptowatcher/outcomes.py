@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import time
 from dataclasses import asdict
 from typing import Any, Callable
 
@@ -301,6 +302,7 @@ class OutcomeWorker:
 
         self.bootstrap(20)
         now_ms = clock()
+        started = time.monotonic()
         prepared = await asyncio.to_thread(
             read_snapshot,
             self.store.path,
@@ -317,12 +319,18 @@ class OutcomeWorker:
             ),
         )
         applied = 0
+        completed_lags = []
         for job, event, binding, result in prepared:
             # Owner operations or a restarted worker cannot be overwritten by an old read.
             if self.history.get("outcome-job:" + job["outcome_id"]) == job:
                 self.apply(job, event, binding, result, clock())
                 applied += 1
+                if result["state"] == "COMPLETE":
+                    completed_lags.append(max(0, clock() - job["next_attempt_ms"]))
             await asyncio.sleep(0)
+        from .queue_health import completed_batch
+
+        completed_batch(self.store, "outcome", clock(), completed_lags, time.monotonic() - started)
         return applied
 
     def apply(

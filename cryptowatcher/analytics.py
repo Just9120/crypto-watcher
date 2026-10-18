@@ -7,6 +7,7 @@ import bisect
 import hashlib
 import json
 import math
+import time
 from dataclasses import asdict
 from typing import Any, Callable
 
@@ -329,6 +330,7 @@ class ComparisonWorker:
         from .analytics_worker import prepare, read_snapshot
 
         now_ms = clock()
+        started = time.monotonic()
         prepared = await asyncio.to_thread(
             read_snapshot,
             self.store.path,
@@ -345,11 +347,17 @@ class ComparisonWorker:
             ),
         )
         applied = 0
+        completed_lags = []
         for job, event, binding, result in prepared:
             if self.history.get("comparison-job:" + event["event_id"]) == job:
                 self.apply(job, event, binding, result, clock())
                 applied += 1
+                if result["state"] in ("COMPLETE", "COMPLETE_LIMITED"):
+                    completed_lags.append(max(0, clock() - job["next_attempt_ms"]))
             await asyncio.sleep(0)
+        from .queue_health import completed_batch
+
+        completed_batch(self.store, "comparison", clock(), completed_lags, time.monotonic() - started)
         return applied
 
     def apply(

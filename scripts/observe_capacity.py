@@ -33,8 +33,9 @@ def atomic(path: Path, value: dict[str, Any]) -> None:
 
 
 def probe(expected: str, *, deep: bool = False) -> dict[str, Any]:
-    command = """import os,resource,sys
+    command = """import os,resource,signal,sys
 os.nice(15)
+signal.alarm(130 if sys.argv[1]=='deep' else 13)
 resource.setrlimit(resource.RLIMIT_AS,(256*1024**2,256*1024**2))
 resource.setrlimit(resource.RLIMIT_CPU,(90,90))
 from cryptowatcher.__main__ import main
@@ -72,6 +73,58 @@ def sample_for_state(expected: str, state: str) -> dict[str, Any]:
             time.sleep(10)
             value = probe(expected)
     return {**value, "baseline_settling_attempts": attempts} if attempts else value
+
+
+def sample_probe(folder: Path, state: dict[str, Any], expected: str) -> dict[str, Any]:
+    """Every failed quick probe has its own durable identity, time and phase."""
+    number = state.get("sample_attempts", 0) + 1
+    path = folder / f"sample-attempt-{number:04d}.json"
+    while path.exists() or path.is_symlink():
+        number += 1
+        path = folder / f"sample-attempt-{number:04d}.json"
+    state.update(sample_attempts=number, active_sample_attempt=path.name)
+    attempt = {
+        "schema": "cryptowatcher.capacity-sample-attempt.v1",
+        "phase": "SAMPLE",
+        "started_at": time.time(),
+        "decision": "PENDING",
+        "expected_source": expected,
+    }
+    atomic(path, attempt)
+    atomic(folder / "status.json", state)
+    try:
+        value = sample_for_state(expected, state["state"])
+    except PROBE_ERRORS as exc:
+        attempt.update(decision="ERROR", finished_at=time.time(), error_class=type(exc).__name__)
+        if isinstance(exc, subprocess.CalledProcessError):
+            attempt["returncode"] = exc.returncode
+        if isinstance(exc, subprocess.TimeoutExpired):
+            attempt["timeout_seconds"] = exc.timeout
+        atomic(path, attempt)
+        state["last_sample_error_attempt"] = path.name
+        raise
+    attempt.update(
+        decision="CAPTURED", finished_at=time.time(), snapshot=value, blockers=value["stability_blockers"]
+    )
+    atomic(path, attempt)
+    return value
+
+
+def recover_sample(folder: Path, state: dict[str, Any]) -> None:
+    name = state.get("active_sample_attempt")
+    if name and Path(name).name == name and name.startswith("sample-attempt-"):
+        path = folder / name
+        if path.is_file() and not path.is_symlink():
+            attempt = json.loads(path.read_text())
+            if attempt.get("decision") == "PENDING":
+                attempt.update(decision="INTERRUPTED", error_class="ObserverRestart", finished_at=time.time())
+                atomic(path, attempt)
+    if state["state"] == "OBSERVING":
+        state["interrupted_samples"] = state.get("interrupted_samples", 0) + 1
+        state["observer_restarts"] = state.get("observer_restarts", 0) + 1
+    elif state["state"] == "WAITING_STABLE":
+        state["stable_samples"] = 0
+        state.pop("stable_since_ms", None)
 
 
 def boundary_probe(folder: Path, state: dict[str, Any], expected: str, kind: str) -> dict[str, Any]:
@@ -150,7 +203,14 @@ def baseline_boundary(folder: Path, state: dict[str, Any], expected: str) -> Non
         state.update(state="WAITING_STABLE", stable_samples=0)
     else:
         atomic(folder / "baseline.json", baseline)
-        state.update(state="OBSERVING", baseline_ms=baseline["at_ms"], interrupted_samples=0)
+        state.update(
+            state="OBSERVING",
+            baseline_ms=baseline["at_ms"],
+            interrupted_samples=0,
+            baseline_instance=baseline.get("runtime_instance"),
+            baseline_generation=baseline.get("history_generation"),
+            baseline_configuration=baseline.get("configuration_revision"),
+        )
 
 
 def advance(state: dict[str, Any], value: dict[str, Any], now: float) -> dict[str, Any]:
@@ -162,12 +222,44 @@ def advance(state: dict[str, Any], value: dict[str, Any], now: float) -> dict[st
     if "REPACK" not in blockers:
         result.setdefault("repack_completion_observed_ms", value["at_ms"])
     if result["state"] == "WAITING_STABLE":
+        if value.get("baseline_settling_attempts"):
+            result["stable_samples"] = 0
+            result.pop("stable_since_ms", None)
         result["stable_samples"] = 0 if blockers else result.get("stable_samples", 0) + 1
+        if blockers:
+            result.pop("stable_since_ms", None)
+        else:
+            result.setdefault("stable_since_ms", value["at_ms"])
+            violation = max(
+                (p.get("last_slo_violation_ms", 0) for p in value.get("analytics_progress", {}).values()),
+                default=0,
+            )
+            if violation > result["stable_since_ms"]:
+                result["stable_samples"] = 1
+                result["stable_since_ms"] = value["at_ms"]
         if now - result["created_at"] > 12 * 3600:
             result["state"] = "WAIT_LIMIT_REACHED"
-        elif result["stable_samples"] >= 2:
+        elif (
+            result["stable_samples"] >= 2
+            and value["at_ms"] - result["stable_since_ms"] >= result.get("settling_seconds", 1800) * 1000
+        ):
             result["state"] = "READY_FOR_BASELINE"
     elif result["state"] == "OBSERVING":
+        for field, source in (
+            ("baseline_instance", "runtime_instance"),
+            ("baseline_generation", "history_generation"),
+            ("baseline_configuration", "configuration_revision"),
+        ):
+            if field in result and result[field] != value.get(source):
+                blockers = [*blockers, source.upper() + "_CHANGED"]
+        violation = max(
+            (p.get("last_slo_violation_ms", 0) for p in value.get("analytics_progress", {}).values()),
+            default=0,
+        )
+        if violation > max(result["baseline_ms"], result.get("last_seen_slo_violation_ms", 0)):
+            blockers = [*blockers, "ANALYTICS_SLO_VIOLATION"]
+            result["last_seen_slo_violation_ms"] = violation
+        result["last_blockers"] = blockers
         if blockers:
             result["interrupted_samples"] = result.get("interrupted_samples", 0) + 1
         if now >= result["baseline_ms"] / 1000 + 86400:
@@ -214,6 +306,7 @@ def main() -> int:
         state = json.loads(record.read_text(encoding="utf-8"))
         if state.get("schema") != SCHEMA or state.get("expected_source") != expected:
             raise ValueError("Conflicting existing observation")
+        recover_sample(folder, state)
     else:
         state = {
             "schema": SCHEMA,
@@ -228,8 +321,9 @@ def main() -> int:
         try:
             state.update(phase="SAMPLE", phase_started_at=time.time())
             atomic(record, state)
-            sample = sample_for_state(expected, state["state"])
+            sample = sample_probe(folder, state, expected)
             state = advance(state, sample, time.time())
+            sample["stability_blockers"] = state["last_blockers"]
             state["last_sample_blockers"] = sample["stability_blockers"]
             state["samples"] += 1
             # Each sample keeps counters/files and lifecycle evidence. No raw events or credentials.
