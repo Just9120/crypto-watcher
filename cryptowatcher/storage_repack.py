@@ -55,6 +55,10 @@ def normalized_record(store: Store, key: str, value: Any) -> Any:
                     fields[name] = intern(store.db, ref, expiry[0])
                 elif name == "metrics" and ref.get("mode") in ("numeric", "numeric2"):
                     fields[name] = encode_reference(store.db, resolve(store.db, ref))
+                elif name == "source_context" and ref.get("mode") == "contexts":
+                    from .context_integrity import convert
+
+                    fields[name] = convert(store.db, ref)
             result["_history_storage"] = {**storage, "fields": fields}
         if isinstance(result.get("metrics"), dict):
             reference = encode_reference(store.db, result["metrics"])
@@ -327,7 +331,7 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
         return {"state": "N/A_LEGACY"}
     state = store.get_runtime("storage_repack", {})
     if (
-        state.get("version") == 7
+        state.get("version") == 8
         and state.get("state") == "COMPLETE"
         and state.get("decisions_complete")
         and state.get("namespace_meter_complete")
@@ -340,7 +344,7 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
         and namespace_snapshot(store.db) is not None
     ):
         return state
-    if state.get("version") in (3, 4, 5, 6):
+    if state.get("version") in (3, 4, 5, 6, 7):
         state = {
             "previous_version": state["version"],
             "previous_run": {
@@ -349,7 +353,7 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
             "saved_payload_bytes": state.get("saved_payload_bytes", 0),
             "saved_categories": state.get("saved_categories", {}),
         }
-    state = {"version": 7, "cursor": "", "records": 0, "saved_payload_bytes": 0, **state}
+    state = {"version": 8, "cursor": "", "records": 0, "saved_payload_bytes": 0, **state}
     state.setdefault("saved_categories", {})
     deadline = time.monotonic() + seconds
     first = state.get("next_phase", 0)

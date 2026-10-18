@@ -295,6 +295,9 @@ class Store:
                 from .quality_packets import install as install_packets
 
                 install_packets(self.db)
+                from .context_integrity import install as install_context_integrity
+
+                install_context_integrity(self.db)
                 from .reference_layout import install as install_references
 
                 install_references(self.db)

@@ -52,3 +52,26 @@ def test_forecast_replaces_all_archive_categories_once_and_preserves_annual_comp
         rel=1e-14,
     )
     assert value["quality_replaced_categories"] == sorted(QUALITY_CATEGORIES)
+
+
+def test_completed_conversion_starts_new_byte_flow_without_discarding_event_frequency_or_old_samples(store):
+    bounded(store)
+    sample(store, NOW - DAY)
+    with store.db:
+        store.put_runtime("radar:v1:event-counter", 86400)
+        store.db.execute("INSERT INTO market_counts VALUES('numeric_details',1,1000000,1000000,0)")
+        store.put_runtime("storage_repack", {"version": 7, "state": "COMPLETE"})
+    value = report(store, NOW)
+    assert value["sample_seconds"] == 0
+    assert value["projected_working_bytes"] is None
+    assert value["observed_events_per_day_extrapolated"] == 86400
+    sample(store, NOW)
+    with store.db:
+        store.db.execute(
+            "UPDATE market_counts SET inserted_bytes=inserted_bytes+10,logical_bytes=logical_bytes+10 WHERE category='numeric_details'"
+        )
+    value = report(store, NOW + DAY)
+    row = next(r for r in value["forecast"] if r["category"] == "numeric_details")
+    assert row["projected_logical_bytes"] == 300
+    assert len(store.get_runtime("storage_samples")) == 2
+    assert store.get_runtime("storage_samples")[0]["completed_repack_version"] is None

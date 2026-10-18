@@ -60,7 +60,7 @@ retention work даже после удаления последнего event.
 `market_body_links` сохраняет owner/body через compatibility view; новые пары
 хранят integer coordinates существующего owner registry и shared body dictionary.
 Legacy rows остаются видны, пока bounded repack не перенесёт их атомарно.
-Repack7 имеет durable finite phases records/decisions/expiry/quality/namespaces/
+Repack8 имеет durable finite phases records/decisions/expiry/quality/namespaces/
 references/quality-tally/key-registry/prospective-cohorts. Secondary registry CK1 сохраняет исходные
 runtime keys и stable integer IDs; mixed legacy text/tokens видимы через expiry4/
 reference2 views. Point mutations используют индексы, не полный scan view.
@@ -76,6 +76,16 @@ Schema change требует повторной квалификации transie
 ни capacity probe не объявляет частичный scan полным. После новых writes
 восстановление требует compatible reader/forward-fix; старый binary и blind
 restore поверх новых данных запрещены.
+
+Contexts2 сохраняет полный SHA256 один раз у referenced `market_context` row,
+а ссылки содержат точные kind/stream/time coordinates. Старый combined hash
+проверяется до преобразования. При каждом чтении parts проверяется их frozen
+SHA256; body/timing/coordinates и установленный digest неизменяемы. Unreferenced
+rows не конвертируются; сроки/leases прежние, public context bytes неизменны.
+Digest counters и detail ref conversion атомарны с writer transaction.
+Byte-flow samples после завершения новой версии repack имеют отдельный epoch:
+backfill pools/digests не выдаётся за последующий ежедневный прирост. Старые
+samples и event-frequency observations сохраняются.
 
 #### Market layout v2: устройство
 

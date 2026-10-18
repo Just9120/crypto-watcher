@@ -215,11 +215,16 @@ class Codec:
             if set(reference) != {"mode", "id"}:
                 raise StateError("Invalid compact shared reference")
             return self.load_raw(reference["id"])[0]
-        if isinstance(reference, dict) and reference.get("mode") == "contexts":
+        if isinstance(reference, dict) and reference.get("mode") in ("contexts", "contexts2"):
+            from .context_integrity import restore
             from .market_storage import restore_context
 
             try:
-                return restore_context(self.db, reference)
+                return (
+                    restore(self.db, reference)
+                    if reference["mode"] == "contexts2"
+                    else restore_context(self.db, reference)
+                )
             except (ValueError, TypeError, KeyError, zlib.error) as exc:
                 raise StateError("Invalid normalized context reference") from exc
         if isinstance(reference, dict) and reference.get("mode") in ("source", "source-runs", "source-ref"):

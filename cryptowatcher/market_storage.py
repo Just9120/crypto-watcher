@@ -108,6 +108,9 @@ def enable(db: sqlite3.Connection) -> None:
     from .quality_packets import install as install_packets
 
     install_packets(db)
+    from .context_integrity import install as install_context_integrity
+
+    install_context_integrity(db)
     from .reference_layout import install as install_references
 
     install_references(db)
@@ -369,6 +372,8 @@ def context_public(db: sqlite3.Connection, row: Any) -> dict[str, Any]:
 def save_context(
     db: sqlite3.Connection, kind: str, instrument: str, value: dict[str, Any], anchor: int = 0
 ) -> tuple[int, str, int]:
+    from .storage import encode
+
     sid = stream_id(db, instrument, create=True)
     assert sid is not None
     when = value["available_at_ms"]
@@ -387,7 +392,7 @@ def save_context(
     previous = db.execute(
         "SELECT body,timing FROM market_context WHERE stream=? AND kind=? AND at=?", (sid, kind, when)
     ).fetchone()
-    if previous is not None and context_public(db, previous) != value:
+    if previous is not None and encode(context_public(db, previous)) != encode(value):
         raise ValueError("Conflicting public source snapshot")
     settings = json.loads(db.execute("SELECT settings_json FROM owner_settings LIMIT 1").fetchone()[0])
     expires = max(
@@ -395,7 +400,7 @@ def save_context(
         anchor + settings.get("detail_retention_days", 30) * DAY,
     )
     db.execute(
-        "INSERT INTO market_context VALUES (?,?,?,?,?,?,?) ON CONFLICT(stream,kind,at) DO UPDATE SET needed_anchor=max(needed_anchor,excluded.needed_anchor),purge_after=max(purge_after,excluded.purge_after)",
+        "INSERT INTO market_context(stream,kind,at,body,timing,needed_anchor,purge_after) VALUES (?,?,?,?,?,?,?) ON CONFLICT(stream,kind,at) DO UPDATE SET needed_anchor=max(needed_anchor,excluded.needed_anchor),purge_after=max(purge_after,excluded.purge_after)",
         (sid, kind, when, body[0], encoded(timing), anchor, expires),
     )
     return sid, kind, when
@@ -418,7 +423,9 @@ def context_window(db: sqlite3.Connection, stream: str, value: dict[str, Any], a
     raw = json.dumps(
         value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
     ).encode()
-    return {"mode": "contexts", "points": points, "sha256": hashlib.sha256(raw).hexdigest()}
+    from .context_integrity import freeze
+
+    return freeze(db, {k: [p[0], p[2]] if p is not None else None for k, p in points.items()}, raw)
 
 
 def restore_context(db: sqlite3.Connection, ref: dict[str, Any]) -> bytes:
