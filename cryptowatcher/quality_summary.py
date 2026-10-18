@@ -7,7 +7,7 @@ import hashlib
 from datetime import datetime, timezone
 from typing import Any
 
-from .market_storage import decoded, encoded
+from .market_storage import encoded
 from .storage import Store, encode
 
 DAY = 86400000
@@ -45,9 +45,9 @@ def month_boundary(day: int, months: int) -> int:
 
 
 def install(db: Any) -> None:
-    db.create_function(
-        "cw_quality_json", 1, lambda b: encode(decoded(bytes(b), 1024 * 1024)), deterministic=True
-    )
+    from .quality_packets import install_functions
+
+    install_functions(db)
 
 
 def create(db: Any) -> None:
@@ -198,7 +198,10 @@ def archive_event(store: Store, event: dict[str, Any]) -> None:
         ).fetchone()
         chunk = old[0] if old else 0
         append = old and old[2] < 128 and old[3] == encode(packed)
-        facts = decoded(bytes(old[1]), 1024 * 1024) if append else []
+        from .quality_packets import pack as pack_quality
+        from .quality_packets import unpack as unpack_quality
+
+        facts = unpack_quality(store.db, bytes(old[1])) if append else []
         if old and not append:
             chunk += 1
         facts.append(fact)
@@ -214,13 +217,25 @@ def archive_event(store: Store, event: dict[str, Any]) -> None:
                 month_boundary(day, 12),
                 encode(group),
                 encode(packed),
-                encode_facts(facts),
+                pack_quality(store.db, facts, cohort),
                 len(facts),
             ),
         )
-        from .storage_lifecycle import body_links
+        provenance_links(store, day, cohort, chunk, packed)
 
-        body_links(store, f"quality:{day}:{cohort}:{chunk}", packed)
+
+def provenance_links(store: Store, day: int, cohort: str, chunk: int, packed: Any) -> None:
+    from .storage_lifecycle import body_links
+
+    identity = store.db.execute(
+        "SELECT id FROM market_quality_provenance WHERE payload=?", (encode(packed),)
+    ).fetchone()
+    if identity is None:
+        raise ValueError("Missing retained quality provenance")
+    body_links(store, f"quality-provenance:{identity[0]}", packed)
+    # The same frozen provenance now owns one body reference across its blocks.
+    # Bind it first, then retire any older per-block reference in this transaction.
+    store.db.execute("DELETE FROM market_body_links WHERE owner=?", (f"quality:{day}:{cohort}:{chunk}",))
 
 
 def union_sql(

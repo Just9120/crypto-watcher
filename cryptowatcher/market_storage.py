@@ -105,6 +105,15 @@ def enable(db: sqlite3.Connection) -> None:
     from .numeric_pool import install as install_numeric
 
     install_numeric(db)
+    from .quality_packets import install as install_packets
+
+    install_packets(db)
+    from .reference_layout import install as install_references
+
+    install_references(db)
+    from .quality_meter import install as install_quality_meter
+
+    install_quality_meter(db)
     from .runtime_meter import install as install_runtime_meter
 
     install_runtime_meter(db)

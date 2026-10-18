@@ -514,8 +514,8 @@ def test_retention_preserves_all_method_versions_and_frozen_strength_grouping(st
     from cryptowatcher import outcomes as outcome_module
     from cryptowatcher.analytics import cohort_rows
     from cryptowatcher.events import identity
-    from cryptowatcher.market_storage import decoded
     from cryptowatcher.outcomes import DAY, Retention
+    from cryptowatcher.quality_packets import unpack as unpack_quality
 
     bounded(store)
     worker = OutcomeWorker(store)
@@ -556,7 +556,7 @@ def test_retention_preserves_all_method_versions_and_frozen_strength_grouping(st
     rows = store.db.execute("SELECT dimensions,provenance,facts FROM market_quality").fetchall()
     assert {json_payload(r[0])["methodology_version"] for r in rows} == {"1", "2"}
     assert all(json_payload(r[0])["methodology_version"] != "new-default" for r in rows)
-    facts = [v for r in rows for v in decoded(bytes(r[2]), 1024 * 1024)]
+    facts = [v for r in rows for v in unpack_quality(store.db, bytes(r[2]))]
     assert source["strength"] + 100 not in [v["strength"] for v in facts]
     assert any(
         h.codec.unpack(json_payload(r[1]))["quality_provenance"]["outcome_definition"]
@@ -568,8 +568,8 @@ def test_retention_preserves_all_method_versions_and_frozen_strength_grouping(st
 def test_retention_keeps_all_comparator_versions_and_original_pending_method(store):
     from cryptowatcher.analytics import cohort_rows
     from cryptowatcher.events import identity
-    from cryptowatcher.market_storage import decoded
     from cryptowatcher.outcomes import DAY, Retention
+    from cryptowatcher.quality_packets import unpack as unpack_quality
 
     bounded(store)
     worker = OutcomeWorker(store)
@@ -627,7 +627,7 @@ def test_retention_keeps_all_comparator_versions_and_original_pending_method(sto
     assert relevant
     provenance = h.codec.unpack(json_payload(relevant[0][1]))["quality_provenance"]
     assert provenance["comparison_definitions"] == {"1": {"version": "1"}, "2": {"version": "2"}}
-    facts = [v for r in relevant for v in decoded(bytes(r[2]), 1024 * 1024)]
+    facts = [v for r in relevant for v in unpack_quality(store.db, bytes(r[2]))]
     assert any(
         len(v["comparator_metrics"]) == 2 and v["limitations"] == ["fixture-1", "fixture-2"] for v in facts
     )

@@ -252,9 +252,9 @@ def record_rows(store: Store, state: dict[str, Any], batch: int, deadline: float
 
 
 def quality_rows(store: Store, state: dict[str, Any], batch: int, deadline: float) -> None:
-    from .market_storage import decoded
     from .quality_layout import drain as drain_quality
-    from .quality_summary import encode_facts
+    from .quality_packets import MAGIC, pack, unpack
+    from .quality_summary import provenance_links
 
     quality_moved = drain_quality(store.db, batch=1) if time.monotonic() < deadline else 1
     if (
@@ -267,8 +267,9 @@ def quality_rows(store: Store, state: dict[str, Any], batch: int, deadline: floa
         next_rowid, upper = scan_bounds(store, state, "quality")
         rows = (
             store.db.execute(
-                "SELECT rowid,day,cohort,chunk,CASE WHEN (day,cohort,chunk)>(?,?,?) THEN facts END "
-                "FROM market_quality_blocks NOT INDEXED WHERE rowid>=? AND rowid<=? ORDER BY rowid LIMIT ?",
+                "SELECT b.rowid,b.day,b.cohort,b.chunk,CASE WHEN (b.day,b.cohort,b.chunk)>(?,?,?) THEN b.facts END,c.external,p.payload "
+                "FROM market_quality_blocks b NOT INDEXED JOIN market_quality_cohorts c ON c.id=b.cohort "
+                "JOIN market_quality_provenance p ON p.id=b.provenance WHERE b.rowid>=? AND b.rowid<=? ORDER BY b.rowid LIMIT ?",
                 (*state["quality_key_floor"], next_rowid, upper, batch),
             )
             if next_rowid <= upper
@@ -276,7 +277,7 @@ def quality_rows(store: Store, state: dict[str, Any], batch: int, deadline: floa
         )
         processed = 0
         exhausted = True
-        for rid, day, cohort, chunk, payload in rows:
+        for rid, day, cohort, chunk, payload, external, provenance in rows:
             if processed and time.monotonic() >= deadline:
                 exhausted = False
                 break
@@ -285,10 +286,11 @@ def quality_rows(store: Store, state: dict[str, Any], batch: int, deadline: floa
             processed += 1
             if payload is None:
                 continue
-            facts = decoded(bytes(payload), 1024 * 1024)
-            packed = encode_facts(facts)
-            if len(packed) < len(payload):
-                if encode(decoded(packed, 1024 * 1024)) != encode(facts):
+            provenance_links(store, day, external, chunk, json_payload(provenance))
+            if not bytes(payload).startswith(MAGIC):
+                facts = unpack(store.db, bytes(payload))
+                packed = pack(store.db, facts, str(cohort))
+                if encode(unpack(store.db, packed)) != encode(facts):
                     raise ValueError("Repack changed quality facts")
                 store.db.execute(
                     "UPDATE market_quality_blocks SET facts=? WHERE day=? AND cohort=? AND chunk=?",
@@ -305,6 +307,9 @@ def quality_rows(store: Store, state: dict[str, Any], batch: int, deadline: floa
 
 def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> dict[str, Any]:
     from .expiry_index import drain
+    from .quality_meter import drain as drain_quality_meter
+    from .quality_meter import read as quality_totals
+    from .reference_layout import drain as drain_references
     from .runtime_meter import drain as drain_namespaces
     from .runtime_meter import read as namespace_snapshot
 
@@ -312,14 +317,17 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
         return {"state": "N/A_LEGACY"}
     state = store.get_runtime("storage_repack", {})
     if (
-        state.get("version") == 5
+        state.get("version") == 6
         and state.get("state") == "COMPLETE"
         and state.get("decisions_complete")
         and state.get("namespace_meter_complete")
+        and state.get("reference_legacy_empty")
+        and state.get("quality_meter_complete")
+        and quality_totals(store.db) is not None
         and namespace_snapshot(store.db) is not None
     ):
         return state
-    if state.get("version") in (3, 4):
+    if state.get("version") in (3, 4, 5):
         state = {
             "previous_version": state["version"],
             "previous_run": {
@@ -328,18 +336,18 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
             "saved_payload_bytes": state.get("saved_payload_bytes", 0),
             "saved_categories": state.get("saved_categories", {}),
         }
-    state = {"version": 5, "cursor": "", "records": 0, "saved_payload_bytes": 0, **state}
+    state = {"version": 6, "cursor": "", "records": 0, "saved_payload_bytes": 0, **state}
     state.setdefault("saved_categories", {})
     deadline = time.monotonic() + seconds
     first = state.get("next_phase", 0)
     with store.db:
         # One shared deadline, with a durable rotating first phase. A slow SQL
         # read/commit may overrun a slice, but cannot always starve the same tail.
-        for offset in range(5):
+        for offset in range(7):
             if time.monotonic() >= deadline:
                 break
-            phase = (first + offset) % 5
-            state["next_phase"] = (phase + 1) % 5
+            phase = (first + offset) % 7
+            state["next_phase"] = (phase + 1) % 7
             if phase == 0 and not state.get("records_complete"):
                 record_rows(store, state, batch, deadline)
             elif phase == 1 and not state.get("decisions_complete"):
@@ -351,6 +359,10 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
                 quality_rows(store, state, batch, deadline)
             elif phase == 4:
                 state["namespace_meter_complete"] = drain_namespaces(store.db, batch=batch, deadline=deadline)
+            elif phase == 5:
+                state["reference_legacy_empty"] = drain_references(store.db, batch, deadline)
+            elif phase == 6:
+                state["quality_meter_complete"] = drain_quality_meter(store.db, batch, deadline)
         state.update(
             state="COMPLETE"
             if all(
@@ -362,6 +374,8 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
                     "quality_complete",
                     "quality_legacy_empty",
                     "namespace_meter_complete",
+                    "reference_legacy_empty",
+                    "quality_meter_complete",
                 )
             )
             else "IN_PROGRESS",

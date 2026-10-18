@@ -153,7 +153,7 @@ def ndjson(store: Store, selection: Selection) -> Iterator[str]:
                 counts["methodology"] = counts.get("methodology", 0) + 1
                 yield encode({"schema": SCHEMA, "type": "methodology", "record": json_payload(row[0])}) + "\n"
         if store.bounded:
-            from .market_storage import decoded
+            from .quality_packets import unpack as unpack_quality
 
             clauses = ["day>=?", "day<?"]
             values: list[Any] = [
@@ -184,7 +184,7 @@ def ndjson(store: Store, selection: Selection) -> Iterator[str]:
                                 "event_day_utc": row[0],
                                 "dimensions": json_payload(row[1]),
                                 "provenance": history.codec.unpack(json.loads(row[2]))["quality_provenance"],
-                                "facts": decoded(bytes(row[3]), 1024 * 1024),
+                                "facts": unpack_quality(store.db, bytes(row[3])),
                                 "detail_available": False,
                             },
                         }

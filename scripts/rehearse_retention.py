@@ -16,8 +16,9 @@ from typing import Any
 from cryptowatcher.analytics import ComparisonWorker
 from cryptowatcher.config import TIMEFRAMES, OwnerSettings
 from cryptowatcher.events import EventEngine, History, identity
-from cryptowatcher.market_storage import decoded, enable
+from cryptowatcher.market_storage import enable
 from cryptowatcher.outcomes import DAY, MINUTE, OutcomeWorker, Retention
+from cryptowatcher.quality_packets import unpack as unpack_quality
 from cryptowatcher.quality_summary import month_boundary
 from cryptowatcher.reset_history import private_state, signature
 from cryptowatcher.source_context import save
@@ -78,7 +79,7 @@ def retained_facts(store: Store) -> Counter[str]:
         result.update(detail_facts(h, event))
     for row in store.db.execute("SELECT dimensions,facts FROM market_quality"):
         group = json.loads(row[0])
-        for fact in decoded(bytes(row[1]), 1024 * 1024):
+        for fact in unpack_quality(store.db, bytes(row[1])):
             result[
                 fingerprint(
                     group, fact["strength"], fact["metrics"], fact["comparator_metrics"], fact["state"]
@@ -226,6 +227,12 @@ def measure(path: Path, weeks: int = 62) -> dict[str, Any]:
             "market_quality",
             "market_quality_cohorts",
             "market_quality_provenance",
+            "market_quality_dictionary",
+            "market_quality_hints",
+            "market_numeric",
+            "market_source_windows",
+            "market_references",
+            "market_body_ids",
             "market_body_links",
         )
         remaining = {

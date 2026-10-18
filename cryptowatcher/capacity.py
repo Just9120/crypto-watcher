@@ -365,7 +365,13 @@ def snapshot(store: Store, *, deep: bool = False, cohorts: bool = False) -> dict
             deadline = time.monotonic() + 5
             store.db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
             try:
-                row = store.db.execute("SELECT COUNT(*),COALESCE(SUM(n),0) FROM market_quality").fetchone()
+                from .quality_meter import read as quality_totals
+
+                row = quality_totals(store.db)
+                if row is None:
+                    row = store.db.execute(
+                        "SELECT COUNT(*),COALESCE(SUM(n),0) FROM market_quality"
+                    ).fetchone()
                 quality.update(blocks=row[0], facts=row[1], state="MEASURED")
             except sqlite3.OperationalError as exc:
                 if getattr(exc, "sqlite_errorcode", None) != sqlite3.SQLITE_INTERRUPT:

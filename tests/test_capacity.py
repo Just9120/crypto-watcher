@@ -96,7 +96,7 @@ def test_completed_repack_resumes_decision_pass_without_discarding_progress(stor
     assert store.get_runtime(PREFIX + key) == value
     state = work(store, NOW, batch=10, seconds=1)
     assert state["state"] == "COMPLETE" and state["decisions_complete"]
-    assert state["version"] == 5 and state["previous_run"]["records"] == 1000
+    assert state["version"] == 6 and state["previous_run"]["records"] == 1000
     assert state["previous_run"]["cursor"] == previous["cursor"] and state["records"] >= 2
     assert state["saved_payload_bytes"] > 123
     assert h.get(key) == value and store.get_runtime(PREFIX + key) == {DECISION_HEAD: 1}
@@ -395,8 +395,8 @@ def test_controlled_62week_population_plateaus_and_all_numeric_results_survive(t
 
 def test_twenty_comparators_frozen_versions_retention_boundaries_and_source_leases(store):
     from cryptowatcher.analytics import ComparisonWorker, cohorts
-    from cryptowatcher.market_storage import decoded
     from cryptowatcher.outcomes import DEFINITION, MINUTE
+    from cryptowatcher.quality_packets import unpack as unpack_quality
 
     from .test_analytics import series
     from .test_outcomes import Candle
@@ -451,7 +451,7 @@ def test_twenty_comparators_frozen_versions_retention_boundaries_and_source_leas
     metric_sets = [
         f["comparator_metrics"]
         for r in store.db.execute("SELECT facts FROM market_quality")
-        for f in decoded(bytes(r[0]), 1024 * 1024)
+        for f in unpack_quality(store.db, bytes(r[0]))
     ]
     assert max(map(len, metric_sets)) == 20
     # A retry of detail cleanup must not duplicate numeric admissions.

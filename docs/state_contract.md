@@ -38,6 +38,35 @@ frozen. Canonical JSON bytes, SHA256, signed outbox body и source revision link
 
 ### Market layout v2: новый период
 
+#### CAPACITY25: совместимые readers и конечное уплотнение
+
+Source windows разделяют immutable coordinate bodies с exact runs/order/revisions/SHA.
+Числовые outcome metrics используют26/34byte frames без изменения float bits и
+int types; неподдерживаемые формы остаются inline. Numeric IDs никогда не
+переиспользуются после удаления. Runtime refs и expiry leases обновляются в той
+же transaction, что immutable revision; отсутствующая зависимость отклоняется.
+
+Архивный CQ2 packet сохраняет прежний public fact JSON. Общие templates,
+strength/noise columns и точные ordered comparator lists не меняют методику,
+N, ограничения и population_size. Delta имеет не более8ancestor links; numeric
+bodies удерживаются фактическими leaf blocks, а не удалёнными элементами ancestor.
+Старые J/Z/CW2/CW3/CQ1 inputs читаются. Provenance body живёт до последнего
+зависимого block. GC всех зависимостей конечен и учитывается как выполненная
+retention work даже после удаления последнего event.
+
+`market_body_links` сохраняет owner/body через compatibility view; новые пары
+хранят integer coordinates существующего owner registry и shared body dictionary.
+Legacy rows остаются видны, пока bounded repack не перенесёт их атомарно.
+Repack6 имеет durable finite phases records/decisions/expiry/quality/namespaces/
+references/quality-tally. Namespace и archived fact counters квалифицируются
+конечным сканированием; concurrent writes и rollback учитываются triggers.
+Schema change требует повторной квалификации transient cursors. Ни startup,
+ни capacity probe не объявляет частичный scan полным. После новых writes
+восстановление требует compatible reader/forward-fix; старый binary и blind
+restore поверх новых данных запрещены.
+
+#### Market layout v2: устройство
+
 Format2 включается только для нового reset candidate; schema1 не переписывается обычным open. Private tables сохраняются побайтно по значениям SQL rows; `reset_history.prepare` читает только private state, сохраняет private JSON recovery, проверяет restore на отдельном файле и integrity нового candidate. Он не удаляет и не переключает production. Host cutover/CI/artifact/unit/locks остаются отдельной обязательной процедурой.
 
 `market_candles` хранит один closed value/revision с compact numeric payload и source/provenance. Source correction создает новую revision, не меняет used inputs. Coordinate windows с checksum ссылаются на точные revisions. `needed_until` в этом layout — anchor observation time последнего использующего detail; effective expiry вычисляется по актуальной detail policy. `purge_after` — indexed scheduling hint, перепроверяемый перед удалением. Pending holds имеют конечную owner dependency. `market_context` отделяет availability timestamps от shared stable bodies; used context также имеет anchor lease. Старые permanent protected markers в v2 не пишутся.
@@ -46,7 +75,7 @@ Format2 включается только для нового reset candidate; s
 
 Completed outcome/comparison jobs не дублируют результаты. Bootstrap проверяет immutable heads, explicit recompare восстанавливает job из исходной event revision. Job сохраняет frozen method; недоступная старая формула дает явный INVALID_SOURCE, а не расчет новой формулой под прежним номером. Retention читает metadata без материализации уже истекших raw windows; обычные public readers по-прежнему проверяют полные references. Retry/IN_FLIGHT payload остается immutable; terminal delivery receipt сокращается, успешные attempts/receipts диагностируются1day, event/episode/transport sequence сохраняют dedup в подробном сроке. Pending recovery проверяет существование активного owner hold; отсутствие владельца дает EXPIRED_RETENTION_INCOMPLETE, а не бесконечный backfill.
 
-Category counters обновляются triggers и rollback вместе с данными. Initial small DB index walk bounded; дальше runtime использует cheap counters/files/pages/samples и явно помеченную модель до появления годовых summaries. Exact later index snapshot — отдельная bounded read-only команда. Physical target20GB/forecast не доказан fixture, backups/experiments отдельно. После expiry incremental vacuum освобождает pages небольшими порциями; полный VACUUM живой истории не запускается.
+Category counters обновляются triggers и rollback вместе с данными. Initial small DB index walk bounded; дальше runtime использует cheap counters/files/pages/samples и явно помеченную модель до появления годовых summaries. Exact later index snapshot — отдельная bounded read-only команда. Physical target25GB включает free pages и sidecars; его соблюдение не следует из успешного codec/CI test, backups/experiments отдельно. После expiry incremental vacuum освобождает pages небольшими порциями; полный VACUUM живой истории не запускается.
 
 
 ## Compact history representation

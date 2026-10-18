@@ -50,6 +50,11 @@ def body_links(store: Store, owner: str, value: Any) -> None:
                     visit(v)
 
     visit(value)
+    existing = {
+        row[0] for row in store.db.execute("SELECT body FROM market_body_links WHERE owner=?", (owner,))
+    }
+    if existing == keys:
+        return
     store.db.execute("DELETE FROM market_body_links WHERE owner=?", (owner,))
     store.db.executemany("INSERT INTO market_body_links VALUES (?,?)", ((owner, k) for k in keys))
 
@@ -339,7 +344,9 @@ class BoundedRetention:
 
             removed_windows = collect_windows(store.db, now_ms, batch)
             from .numeric_pool import collect as collect_numeric
+            from .quality_packets import collect as collect_packets
 
+            removed_packets = collect_packets(store.db, batch)
             removed_numeric = collect_numeric(store.db, batch)
             garbage = store.db.execute(
                 "SELECT body FROM market_body_counts WHERE refs=0 LIMIT ?", (batch,)
@@ -358,6 +365,7 @@ class BoundedRetention:
                 "removed_bodies": len(garbage),
                 "removed_source_windows": removed_windows,
                 "removed_numeric": removed_numeric,
+                "removed_quality_components": removed_packets,
                 "batch": batch,
                 "state": "OK",
                 "terminal_status": "EXPIRED_RETENTION_INCOMPLETE",
@@ -373,6 +381,7 @@ class BoundedRetention:
                 "removed_bodies": len(garbage),
                 "removed_source_windows": removed_windows,
                 "removed_numeric": removed_numeric,
+                "removed_quality_components": removed_packets,
             }.items():
                 totals[key] = totals.get(key, 0) + count
             totals["at_ms"] = now_ms
@@ -383,7 +392,16 @@ class BoundedRetention:
             )
         if removed and store.db.execute("PRAGMA freelist_count").fetchone()[0] > 256:
             store.db.execute("PRAGMA incremental_vacuum(32)").fetchall()
-        return removed + len(candles) + len(contexts) + len(quality) + len(garbage)
+        return (
+            removed
+            + len(candles)
+            + len(contexts)
+            + len(quality)
+            + len(garbage)
+            + removed_windows
+            + removed_numeric
+            + removed_packets
+        )
 
     def _terminal(self, category: str, state: str) -> None:
         row = self.store.db.execute("SELECT value FROM market_meta WHERE key='expired_work'").fetchone()

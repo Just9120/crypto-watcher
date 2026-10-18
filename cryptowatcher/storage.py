@@ -286,6 +286,15 @@ class Store:
                 from .numeric_pool import install as install_numeric
 
                 install_numeric(self.db)
+                from .quality_packets import install as install_packets
+
+                install_packets(self.db)
+                from .reference_layout import install as install_references
+
+                install_references(self.db)
+                from .quality_meter import install as install_quality_meter
+
+                install_quality_meter(self.db)
                 from .runtime_meter import install as install_runtime_meter
 
                 install_runtime_meter(self.db)
