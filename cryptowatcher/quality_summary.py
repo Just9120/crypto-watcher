@@ -13,6 +13,18 @@ from .storage import Store, encode
 DAY = 86400000
 
 
+def period_metadata(start_ms: int, end_ms: int) -> dict[str, Any]:
+    """Requested details stay exact; archived selection has UTC-day resolution."""
+    return {
+        "requested_start_ms": start_ms,
+        "requested_end_ms": end_ms,
+        "archive_start_ms": start_ms // DAY * DAY,
+        "archive_end_ms": (end_ms + DAY - 1) // DAY * DAY,
+        "archive_resolution": "UTC_DAY",
+        "archive_boundary_policy": "EXPAND_ARCHIVED_PART_TO_UTC_DAYS",
+    }
+
+
 def encode_facts(facts: list[Any]) -> bytes:
     """Lossless numeric columns; keep the smaller of typed v3 and legacy zlib."""
     from .record_codec import pack_binary
@@ -238,7 +250,8 @@ def union_sql(
         )
     )
     clauses = ["q.day>=?", "q.day<?", "json_extract(s.value,'$.state')='COMPLETE'"]
-    args: list[Any] = [(start_ms + DAY - 1) // DAY, (end_ms + DAY - 1) // DAY]
+    period = period_metadata(start_ms, end_ms)
+    args: list[Any] = [period["archive_start_ms"] // DAY, period["archive_end_ms"] // DAY]
     for key, value in (("detector", detector), ("version", version), ("market", market)):
         if value is not None:
             clauses.append(f"json_extract(q.dimensions,'$.{key}')=?")

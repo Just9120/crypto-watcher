@@ -133,6 +133,15 @@ def main() -> int:
                         args.start_ms, args.end_ms, args.detector, args.detector_version, args.market
                     )
                     selection.validate()
+                    if args.format == "csv" and store.bounded:
+                        from .quality_summary import period_metadata
+
+                        # Also visible for an empty CSV, without adding a fake
+                        # observation or a non-CSV preamble to the data stream.
+                        print(
+                            encode({"selection_period": period_metadata(args.start_ms, args.end_ms)}),
+                            file=sys.stderr,
+                        )
                     stream = (
                         ndjson(store, selection) if args.format == "ndjson" else csv_summary(store, selection)
                     )

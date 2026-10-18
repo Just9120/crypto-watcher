@@ -212,7 +212,10 @@ async def test_history_keyset_pages_keep_distinct_events_and_show_observation_ti
     assert "МСК" in reply.args[0] and "не означает отправленное" in reply.args[0]
     markup = reply.kwargs["reply_markup"]
     first = {
-        b.callback_data for row in markup.inline_keyboard for b in row if b.callback_data.startswith("event:")
+        b.callback_data.split(":")[2]
+        for row in markup.inline_keyboard
+        for b in row
+        if b.callback_data.startswith("ui:open:")
     }
     cursor = next(
         b.callback_data
@@ -225,9 +228,38 @@ async def test_history_keyset_pages_keep_distinct_events_and_show_observation_ti
     await deck.handle(request, None)
     markup = request.callback_query.edit_message_text.call_args.kwargs["reply_markup"]
     second = {
-        b.callback_data for row in markup.inline_keyboard for b in row if b.callback_data.startswith("event:")
+        b.callback_data.split(":")[2]
+        for row in markup.inline_keyboard
+        for b in row
+        if b.callback_data.startswith("ui:open:")
     }
     assert first and second and first.isdisjoint(second)
+    opened = next(
+        b.callback_data
+        for row in markup.inline_keyboard
+        for b in row
+        if b.callback_data.startswith("ui:open:")
+    )
+    for action in ("open", "result"):
+        request = update(callback=opened.replace("ui:open:", "ui:" + action + ":"))
+        await deck.handle(request, None)
+        markup = request.callback_query.edit_message_text.call_args.kwargs["reply_markup"]
+        returned = next(
+            b.callback_data
+            for row in markup.inline_keyboard
+            for b in row
+            if (b.callback_data or "").startswith("ui:returnhistory:")
+        )
+        request = update(callback=returned)
+        await deck.handle(request, None)
+        markup = request.callback_query.edit_message_text.call_args.kwargs["reply_markup"]
+        actual = {
+            b.callback_data.split(":")[2]
+            for row in markup.inline_keyboard
+            for b in row
+            if b.callback_data.startswith("ui:open:")
+        }
+        assert actual == second
 
 
 async def test_event_details_distinguish_muted_observation_and_preserve_original_json(deck):

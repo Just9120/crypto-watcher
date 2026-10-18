@@ -7,7 +7,7 @@ from typing import Any
 
 from .storage import Store
 
-BUDGET = 20_000_000_000
+BUDGET = 25_000_000_000
 
 
 def create(db: Any) -> None:

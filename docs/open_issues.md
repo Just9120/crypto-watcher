@@ -16,12 +16,12 @@ Q07 для этой Goal: явно нормализовать недоступн
 
 | Пакет | Результат / DoD | Статус |
 | --- | --- | --- |
-| W01 scope/evidence | Fresh Git/GitHub/VPS baseline, защищённый inventory/data identities, approved policy/25GB и Validation Plan | IN_PROGRESS |
-| W02 F22/F46 backlog | Profile read/calculate/apply/maintenance, lossless optimizations; overdue queue drains и service rate превосходит arrival при полном охвате | BACKLOG |
+| W01 scope/evidence | Fresh Git/GitHub/VPS baseline, защищённый inventory/data identities, approved policy/25GB и Validation Plan | PASS local/read-only;21:09MSK source541c41e/config5/generation unchanged/healthy/free22.267GB |
+| W02 F22/F46 backlog | Profile read/calculate/apply/maintenance, lossless optimizations; overdue queue drains и service rate превосходит arrival при полном охвате | IN_PROGRESS: validated reader transferred; metadata-only job inputs, exact ATR TR reuse, one fixed-snapshot population/grouped due batch; isolated profile identifies ATR/source reads; production effect UNSET |
 | W03 F42 observer | Durable each sample/error/phase/reasons; due-age/throughput checks; complete finite boundaries; no hidden retries/partial PASS | BACKLOG |
 | W04 F34 storage | Measured lossless layout/codec candidates; representative mature population и physical peaks<=25GB; no double indexes | BACKLOG |
 | W05 preservation | Compatible finite repack/restart/CAS/rollback/retention62weeks; exact public/numeric/group/method/comparator multiset equality | BACKLOG |
-| W06 previous functional/UX | Все11 замечаний audit закрыты: settings validation, export policy, digest activity, navigation/action order/status/history/language/time | BACKLOG |
+| W06 previous functional/UX | Functional/UX findings audit: settings validation, export policy, digest activity, navigation/action order/status/history/language/time; F34/F42 отдельно W04/W10 | READY local:146PASS/1Linux SKIP batch, quality PASS; live UI/CI/CD ещё не проверены |
 | W07 deferred findings | F24/F26/F31/F32 fresh evidence и justified actions; confirmed defects fixed, неподтверждённое не удалено | BACKLOG |
 | W08 validation/PR | Targeted local/quality + full required Linux/native/image CI, self-review, all PR gates/merge | BACKLOG |
 | W09 delivery/stability | Ordinary exact-source CD<=900s, backup/recovery/private+retained preservation, actual health/sources/queues/repack | BACKLOG |
@@ -31,7 +31,7 @@ Validation Plan (root cwd): REQUIRED local `.venv-g1/Scripts/python.exe -m pytes
 
 Чистота: прежние ingestion<=30s/analytics<=60s/ACK/source/config/generation gates не ослаблять. Предлагаемый job SLO<=60s после due при доступных inputs проверить профилем; явные source limitations не превращать в COMPLETE. Baseline после не менее30min устойчивого состояния без overdue backlog, historical recovery/repack; нормальные future horizons отдельно. Краткая текущая работа допустима только с сохранёнными reason/age/completion, неизвестное/просрочка — blocker. Каждый failed probe/error сохраняется; наблюдение не скрывает пропуски. Финальный24h PASS требует полных границ и отдельной mature capacity qualification; один день сам по себе не доказывает годовую ёмкость. При недостижимом25GB Goal остаётся незавершённой без скрытого scope reduction.
 
-Checkpoint18Oct: Goal активирована; W01 и локальная реализация далее. Старый замер capacity-20261017T133014Z-31453831 COMPLETE/OBSERVED_24H_WITH_INTERRUPTION,281samples/15problem points,delta2,950,547,624bytes; model162.10GB (не upper bound), final ledger/cohorts PARTIAL/index UNAVAILABLE. Read18:26MSK: oldest due outcomes~3h38/comparisons~10h33; этот срез после measurement, не исторический per-point age. Все исходные artifacts сохранены. Новый observer/production restart ещё не выполнялись.
+Checkpoint18Oct: branch `codex/capacity-25gb-unified-20261018`, base541c41e, plan commit8a151ad. W01 PASS/W06 READY local; W02 частично, W03/04/05/07–10 остаются.146tests PASS/1native SKIP, quality/mypy PASS. Перенесён только проверенный diff PR57 code/tests, его старые docs/ветка не merged. Изолированный28d profile: comparison read2jobs/2.266s под cProfile, ATR1.172s и source read0.872s; apply64outcomes0.187s, из них commits0.102s. Это synthetic Windows profile, не production throughput. Далее durable observer/queue telemetry и measured lossless storage candidates; затем preservation/mature qualification/deferred findings/CI/ordinary CD/clean24h. Старый замер capacity-20261017T133014Z-31453831 COMPLETE/WITH_INTERRUPTION,281samples/15problem points и все archives сохранены. Production не менялась; новый observer/restart/scheduled tasks не выполнялись.
 
 ## Историческая работа OBSERVER (17Oct2026)
 

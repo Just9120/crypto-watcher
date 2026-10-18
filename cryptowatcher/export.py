@@ -70,6 +70,9 @@ def ndjson(store: Store, selection: Selection) -> Iterator[str]:
     try:
         # First read pins the WAL snapshot before any output; later writes cannot enter this export.
         total = store.db.execute(cte + "SELECT COUNT(*) FROM selected", args).fetchone()[0]
+        from .quality_summary import period_metadata
+
+        period = period_metadata(selection.start_ms, selection.end_ms) if store.bounded else {}
         yield (
             encode(
                 {
@@ -84,6 +87,7 @@ def ndjson(store: Store, selection: Selection) -> Iterator[str]:
                     "detail_retention_days": store.snapshot().settings.detail_retention_days,
                     "summary_retention_months": 12,
                     "summary_period_resolution": "UTC_DAY" if store.bounded else None,
+                    "selection_period": period,
                     "expired_detail": "Unavailable; summaries are not individual event results"
                     if store.bounded
                     else None,
@@ -153,8 +157,8 @@ def ndjson(store: Store, selection: Selection) -> Iterator[str]:
 
             clauses = ["day>=?", "day<?"]
             values: list[Any] = [
-                selection.start_ms // 86400000,
-                (selection.end_ms + 86400000 - 1) // 86400000,
+                period["archive_start_ms"] // 86400000,
+                period["archive_end_ms"] // 86400000,
             ]
             for name, filter_value in (
                 ("detector", selection.detector),
@@ -200,6 +204,9 @@ def csv_summary(store: Store, selection: Selection = Selection()) -> Iterator[st
     store.db.execute("BEGIN")
     try:
         selection.validate()
+        from .quality_summary import period_metadata
+
+        period = period_metadata(selection.start_ms, selection.end_ms) if store.bounded else {}
         records = cohort_rows(
             store,
             start_ms=selection.start_ms,
@@ -225,6 +232,7 @@ def csv_summary(store: Store, selection: Selection = Selection()) -> Iterator[st
             "noise_min_pct",
             "noise_max_pct",
             "noise_sample_size",
+            *period,
         ]
         writer = csv.DictWriter(output, fieldnames=columns)
         writer.writeheader()
@@ -237,6 +245,7 @@ def csv_summary(store: Store, selection: Selection = Selection()) -> Iterator[st
                     **record,
                     "group": encode(record["group"]),
                     "classifications": encode(record["classifications"]),
+                    **period,
                 }
             )
             yield output.getvalue()

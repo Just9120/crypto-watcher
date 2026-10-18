@@ -104,9 +104,9 @@ class RevisionConflict(StateError):
 
 
 def json_payload(payload: Any) -> Any:
-    from .record_codec import sql_payload
+    from .record_codec import json_value
 
-    return json.loads(sql_payload(payload))
+    return json_value(payload)
 
 
 def encode(value: Any) -> str:
@@ -207,6 +207,9 @@ class Store:
         self.path = path
         self.owner_id = owner_id
         self.readonly = readonly
+        # One population, scoped to a single fixed read transaction. Never used
+        # by the writer or carried across snapshots.
+        self.comparison_population: tuple[Any, Any] | None = None
         self.clock_ms = lambda: int(time.time() * 1000)
         if path.exists():
             probe = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
@@ -291,6 +294,12 @@ class Store:
             raise RevisionConflict("Owner settings changed; reread before updating")
         if current.settings == settings:
             return current
+        from .detector_config import validate_effective_configuration
+
+        try:
+            validate_effective_configuration(settings)
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
         with self.db:
             cursor = self.db.execute(
                 "UPDATE owner_settings SET revision=revision+1,settings_json=? WHERE owner_id=? AND revision=?",
@@ -327,9 +336,7 @@ class Store:
 
     def get_runtime(self, key: str, default: Any = None) -> Any:
         row = self.db.execute("SELECT payload_json FROM runtime WHERE key=?", (key,)).fetchone()
-        from .record_codec import sql_payload
-
-        return json.loads(sql_payload(row[0])) if row else default
+        return json_payload(row[0]) if row else default
 
     def put_runtime(self, key: str, payload: Any) -> None:
         with self.db:

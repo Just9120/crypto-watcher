@@ -377,7 +377,7 @@ class Controller:
             symbol = instrument_key(parts[0], snapshot.settings.bybit_category)
             duration = number(parts[1], "mute minutes") * 60 if len(parts) == 2 else 3600
             self.store.mute(symbol, 0 if command == "unmute" else time.time() + duration)
-            await self.send(update, "Mute сохранён." if command == "mute" else "Mute снят.")
+            await self.send(update, "Заглушение сохранено." if command == "mute" else "Заглушение снято.")
         elif command == "alerts":
             if raw and raw.lower() not in ("on", "off"):
                 raise ConfigError("Invalid alerts preference")
@@ -592,7 +592,7 @@ class Controller:
             if parts[1] == "mute" and len(parts) == duration_index + 1:
                 duration = number(parts[duration_index], "mute seconds")
                 self.store.mute(identity, time.time() + duration)
-                await self.send(update, "Mute сохранён.")
+                await self.send(update, "Заглушение сохранено.")
             elif parts[1] == "coin":
                 card_settings = (
                     snapshot.settings.changed(bybit_category=category)

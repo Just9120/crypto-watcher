@@ -461,7 +461,10 @@ async def test_compact_notification_full_confirmation_set_and_controls(state):
     assert event["event_id"] not in text and "Episode ID" not in text
     markup = event_keyboard(event)
     assert markup.inline_keyboard[0][0].url.endswith("/BTC/USDT")
-    assert markup.inline_keyboard[-1][0].callback_data == "event:" + event["event_id"]
+    assert markup.inline_keyboard[1][0].callback_data == "event:" + event["event_id"]
+    assert markup.inline_keyboard[1][1].callback_data == "outcomes:" + event["event_id"]
+    assert markup.inline_keyboard[2][0].callback_data == "ui:eventmute:" + event["event_id"]
+    assert markup.inline_keyboard[2][1].callback_data == "ui:eventmore:" + event["event_id"]
     assert all(
         len(button.callback_data.encode()) <= 64
         for row in markup.inline_keyboard

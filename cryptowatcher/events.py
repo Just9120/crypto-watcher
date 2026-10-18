@@ -278,7 +278,7 @@ class History:
         existing = self.get(version_key)
         if existing is not None and encode(existing) != encode(value):
             raise StateError("Conflicting immutable history revision")
-        head = self.get(f"{kind}-head:{key}")
+        head = self.metadata(f"{kind}-head:{key}")
         if (
             kind == "event"
             and head
@@ -292,7 +292,7 @@ class History:
                 event = (
                     value
                     if kind == "event"
-                    else self.get(f"event:{value['event_id']}:{value['event_revision']:010d}")
+                    else self.metadata(f"event:{value['event_id']}:{value['event_revision']:010d}")
                 )
                 self.codec.source_stream = f"{event['market_type']}/{event['symbol']}/" + (
                     "1m" if kind == "outcome" else event["timeframe"]

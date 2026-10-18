@@ -65,6 +65,33 @@ def decision_context(history: History, event_id: str, cutoff_ms: int) -> dict[st
     }
 
 
+def prior_population(
+    store: Store, native: str, start: int, reference: int, needed: int, step: int
+) -> tuple[Any, Any, Any]:
+    from .detectors import true_range
+
+    frozen = store.readonly and store.db.in_transaction
+    warmup = max(256, needed) if frozen else needed
+    key = (native, start, reference, warmup, store.db.execute("PRAGMA data_version").fetchone()[0])
+    if frozen and store.comparison_population is not None and store.comparison_population[0] == key:
+        return store.comparison_population[1]
+    candles = read_candles(store, native, max(0, start - warmup * step), reference)
+    ranges = [0.0] + [true_range(b, a) for a, b in zip(candles, candles[1:])]
+    points = []
+    contiguous = 0
+    for i, current in enumerate(candles):
+        contiguous = contiguous + 1 if i == 0 or current.start - candles[i - 1].start == current.step else 1
+        if contiguous >= 16 and start <= current.end < reference:
+            # Same fourteen additions, order and division as atr14; no subtraction.
+            value = 100 * (sum(ranges[i - 14 : i]) / 14) / current.close
+            if math.isfinite(value):
+                points.append((current, i, value))
+    frozen_value = (candles, points, sorted(point[2] for point in points))
+    if frozen:
+        store.comparison_population = (key, frozen_value)
+    return frozen_value
+
+
 def comparison_dataset(store: Store, event: dict[str, Any]) -> dict[str, Any]:
     reference = event["reference_time_ms"]
     start = max(0, reference - 28 * DAY)
@@ -106,19 +133,7 @@ def comparison_dataset(store: Store, event: dict[str, Any]) -> dict[str, Any]:
     if reference_atr is None or not math.isfinite(reference_atr):
         result["limitations"] = ["REFERENCE_ATR_UNAVAILABLE"]
         return result
-    candles = read_candles(store, native, max(0, start - needed * step), reference)
-    points = []
-    for i, current in enumerate(candles):
-        if not start <= current.end < reference:
-            continue
-        window = candles[max(0, i - needed + 1) : i + 1]
-        try:
-            value = 100 * atr14(window) / current.close
-        except DetectorUnavailable:
-            continue
-        if math.isfinite(value):
-            points.append((current, window, value))
-    population = sorted(point[2] for point in points)
+    candles, points, population = prior_population(store, native, start, reference, needed, step)
     result["population_size"] = len(population)
     if not population:
         result["limitations"] = ["INSUFFICIENT_PRIOR_HISTORY"]
@@ -129,7 +144,7 @@ def comparison_dataset(store: Store, event: dict[str, Any]) -> dict[str, Any]:
     occupied: list[tuple[int, int]] = []
     source_errors = 0
     missing_liquidity = 0
-    for current, window, value in reversed(points):
+    for current, index, value in reversed(points):
         if (
             current.end + max_horizon >= reference
             or current.end // 3_600_000 % 24 != reference // 3_600_000 % 24
@@ -137,6 +152,7 @@ def comparison_dataset(store: Store, event: dict[str, Any]) -> dict[str, Any]:
             or any(current.end < end and current.end + max_horizon > begin for begin, end in occupied)
         ):
             continue
+        window = candles[max(0, index - needed + 1) : index + 1]
         try:
             historical = context(store, native.rsplit("/", 1)[0], current.end)
             ticker = historical["ticker"]
@@ -551,6 +567,8 @@ def cohorts(
 ) -> dict[str, Any]:
     if limit < 1:
         raise ValueError("Invalid cohort limit")
+    from .quality_summary import period_metadata
+
     records: list[dict[str, Any]] = []
     truncated = False
     for row in cohort_rows(store, groups, cutoff_ms=cutoff_ms):
@@ -583,6 +601,7 @@ def cohorts(
         ).fetchone()[0]
     return {
         "schema": "cryptowatcher.analytics.v1",
+        "selection_period": period_metadata(0, 9_999_999_999_999_999) if store.bounded else {},
         "groups": list(groups),
         "cohorts": records,
         "incomplete_outcomes": incomplete,

@@ -274,7 +274,8 @@ def source_summary(snapshot: Snapshot, ingestion: dict[str, Any], now: float) ->
         result.append(
             f"Пробелы: {amount(ingestion.get('historical_gaps_pending'))}; "
             f"заблокировано: {amount(ingestion.get('blocked_streams'))}; "
-            f"восстановление: {amount(ingestion.get('recovery_pending'))}."
+            f"восстановление — ожидают: {amount(ingestion.get('recovery_pending'))}, "
+            f"в работе: {amount(ingestion.get('recovery_working'))}."
         )
     if ingestion.get("configuration_revision") != snapshot.revision:
         result.append("Применение текущего охвата к источнику еще не подтверждено этой сводкой.")
