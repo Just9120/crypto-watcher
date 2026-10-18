@@ -237,7 +237,10 @@ class Store:
             uri=readonly,
             timeout=5,
         )
+        from .key_registry import install_functions as registry_functions
         from .record_codec import sql_payload
+
+        registry_functions(self.db)
 
         self.db.create_function("cw_record_json", 1, sql_payload, deterministic=True)
         from .source_windows import references

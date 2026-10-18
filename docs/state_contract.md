@@ -58,7 +58,11 @@ retention work даже после удаления последнего event.
 хранят integer coordinates существующего owner registry и shared body dictionary.
 Legacy rows остаются видны, пока bounded repack не перенесёт их атомарно.
 Repack6 имеет durable finite phases records/decisions/expiry/quality/namespaces/
-references/quality-tally. Namespace и archived fact counters квалифицируются
+references/quality-tally/key-registry. Secondary registry CK1 сохраняет исходные
+runtime keys и stable integer IDs; mixed legacy text/tokens видимы через expiry4/
+reference2 views. Point mutations используют индексы, не полный scan view.
+Словарь prefixes/UUID/hex/padded integers frozen; malformed token отклоняется.
+Namespace и archived fact counters квалифицируются
 конечным сканированием; concurrent writes и rollback учитываются triggers.
 Schema change требует повторной квалификации transient cursors. Ни startup,
 ни capacity probe не объявляет частичный scan полным. После новых writes

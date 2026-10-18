@@ -235,7 +235,9 @@ def provenance_links(store: Store, day: int, cohort: str, chunk: int, packed: An
     body_links(store, f"quality-provenance:{identity[0]}", packed)
     # The same frozen provenance now owns one body reference across its blocks.
     # Bind it first, then retire any older per-block reference in this transaction.
-    store.db.execute("DELETE FROM market_body_links WHERE owner=?", (f"quality:{day}:{cohort}:{chunk}",))
+    from .reference_layout import remove_owner
+
+    remove_owner(store.db, f"quality:{day}:{cohort}:{chunk}")
 
 
 def union_sql(

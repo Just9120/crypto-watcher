@@ -23,7 +23,9 @@ def normalized_record(store: Store, key: str, value: Any) -> Any:
         sync_job(history, key[len(PREFIX) :], value)
     if not key.startswith(tuple(PREFIX + kind + ":" for kind in ("event", "outcome", "comparison"))):
         return value
-    expiry = store.db.execute("SELECT expires FROM market_lifetimes WHERE key=?", (key,)).fetchone()
+    from .expiry_index import expires
+
+    expiry = expires(store.db, key)
 
     def visit(item: Any, depth: int = 0) -> Any:
         if depth > 32:
@@ -307,6 +309,7 @@ def quality_rows(store: Store, state: dict[str, Any], batch: int, deadline: floa
 
 def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> dict[str, Any]:
     from .expiry_index import drain
+    from .key_registry import drain as drain_registry
     from .quality_meter import drain as drain_quality_meter
     from .quality_meter import read as quality_totals
     from .reference_layout import drain as drain_references
@@ -323,6 +326,7 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
         and state.get("namespace_meter_complete")
         and state.get("reference_legacy_empty")
         and state.get("quality_meter_complete")
+        and state.get("key_registry_complete")
         and quality_totals(store.db) is not None
         and namespace_snapshot(store.db) is not None
     ):
@@ -343,11 +347,11 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
     with store.db:
         # One shared deadline, with a durable rotating first phase. A slow SQL
         # read/commit may overrun a slice, but cannot always starve the same tail.
-        for offset in range(7):
+        for offset in range(8):
             if time.monotonic() >= deadline:
                 break
-            phase = (first + offset) % 7
-            state["next_phase"] = (phase + 1) % 7
+            phase = (first + offset) % 8
+            state["next_phase"] = (phase + 1) % 8
             if phase == 0 and not state.get("records_complete"):
                 record_rows(store, state, batch, deadline)
             elif phase == 1 and not state.get("decisions_complete"):
@@ -363,6 +367,8 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
                 state["reference_legacy_empty"] = drain_references(store.db, batch, deadline)
             elif phase == 6:
                 state["quality_meter_complete"] = drain_quality_meter(store.db, batch, deadline)
+            elif phase == 7:
+                state["key_registry_complete"] = drain_registry(store.db, state, batch, deadline)
         state.update(
             state="COMPLETE"
             if all(
@@ -376,6 +382,7 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
                     "namespace_meter_complete",
                     "reference_legacy_empty",
                     "quality_meter_complete",
+                    "key_registry_complete",
                 )
             )
             else "IN_PROGRESS",

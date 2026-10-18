@@ -6,6 +6,11 @@ import re
 import time
 from typing import Any
 
+from .expiry_index import expires as saved_expiry
+from .expiry_index import member_deadline
+from .expiry_index import remove as remove_expiry
+from .expiry_index import renew as renew_expiry
+from .reference_layout import owner_refs, remove_owner
 from .storage import RUNTIME_UPSERT, Store, encode, json_payload
 
 DAY = 86400000
@@ -50,12 +55,10 @@ def body_links(store: Store, owner: str, value: Any) -> None:
                     visit(v)
 
     visit(value)
-    existing = {
-        row[0] for row in store.db.execute("SELECT body FROM market_body_links WHERE owner=?", (owner,))
-    }
+    existing = owner_refs(store.db, owner)
     if existing == keys:
         return
-    store.db.execute("DELETE FROM market_body_links WHERE owner=?", (owner,))
+    remove_owner(store.db, owner)
     store.db.executemany("INSERT INTO market_body_links VALUES (?,?)", ((owner, k) for k in keys))
 
 
@@ -118,7 +121,7 @@ def track(store: Store, key: str, value: Any) -> None:
     now = store.clock_ms()
     event_id = parent_event(store, value, name)
     days = store.snapshot().settings.detail_retention_days
-    previous = store.db.execute("SELECT expires FROM market_lifetimes WHERE key=?", (key,)).fetchone()
+    previous = saved_expiry(store.db, key)
     expiry = previous[0] if previous else now + days * DAY
     if isinstance(value, dict):
         anchor = value.get(
@@ -128,9 +131,7 @@ def track(store: Store, key: str, value: Any) -> None:
         if type(anchor) is int:
             expiry = anchor + days * DAY
     if event_id:
-        parent = store.db.execute(
-            "SELECT expires FROM market_lifetimes WHERE key=?", (PREFIX + "event-head:" + event_id,)
-        ).fetchone()
+        parent = saved_expiry(store.db, PREFIX + "event-head:" + event_id)
         if parent:
             expiry = parent[0]
     if isinstance(value, dict) and type(value.get("expires_ms")) is int:
@@ -143,7 +144,7 @@ def track(store: Store, key: str, value: Any) -> None:
         expiry = now + store.snapshot().settings.candle_retention_days * DAY
     # Delete/insert also supports the normalized compatibility view. Both remain
     # in the caller's transaction, including counter/ref updates and rollback.
-    store.db.execute("DELETE FROM market_lifetimes WHERE key=?", (key,))
+    remove_expiry(store.db, key)
     store.db.execute("INSERT INTO market_lifetimes VALUES (?,?,?,?)", (key, expiry, category, event_id))
     if (
         isinstance(value, dict)
@@ -155,9 +156,7 @@ def track(store: Store, key: str, value: Any) -> None:
         finished = value.get("completed_ms", value.get("at_ms", now))
         if type(finished) is not int:
             finished = now
-        store.db.execute(
-            "UPDATE market_lifetimes SET expires=min(expires,?) WHERE key=?", (finished + DAY, key)
-        )
+        renew_expiry(store.db, key, finished + DAY, shorten=True)
     body_links(store, key, value)
     if name.startswith("hold:"):
         from .market_storage import stream_id
@@ -171,8 +170,8 @@ def track(store: Store, key: str, value: Any) -> None:
 
 
 def forget(store: Store, key: str) -> None:
-    store.db.execute("DELETE FROM market_body_links WHERE owner=?", (key,))
-    store.db.execute("DELETE FROM market_lifetimes WHERE key=?", (key,))
+    remove_owner(store.db, key)
+    remove_expiry(store.db, key)
     store.db.execute("DELETE FROM market_holds WHERE key=?", (key,))
 
 
@@ -207,10 +206,8 @@ class BoundedRetention:
         with store.db:
             # Repair only these two singleton scheduling indexes from initial v2.
             # A permanent target failure is retained until an owner re-enables it.
-            store.db.execute(
-                "DELETE FROM market_lifetimes WHERE key IN (?,?)",
-                (PREFIX + "target:telegram", PREFIX + "agent:target"),
-            )
+            for singleton in (PREFIX + "target:telegram", PREFIX + "agent:target"):
+                remove_expiry(store.db, singleton)
             for row in due:
                 if time.monotonic() >= deadline:
                     break
@@ -239,12 +236,9 @@ class BoundedRetention:
                 if row[1] in ("episode", "episode-head"):
                     episode_id = row[0].split(":")[3]
                     prefix = PREFIX + "episode-event:" + episode_id + ":"
-                    keep = store.db.execute(
-                        "SELECT MIN(l.expires) FROM market_lifetimes l WHERE l.key>=? AND l.key<?",
-                        (prefix, prefix + "~"),
-                    ).fetchone()[0]
+                    keep = member_deadline(store.db, prefix)
                     if keep is not None and keep > now_ms:
-                        store.db.execute("UPDATE market_lifetimes SET expires=? WHERE key=?", (keep, row[0]))
+                        renew_expiry(store.db, row[0], keep)
                         continue
                 # Store a bounded terminal-status counter, instead of retaining whole jobs.
                 raw = store.get_runtime(row[0], {})
@@ -327,9 +321,7 @@ class BoundedRetention:
                 (now_ms // DAY, batch),
             ).fetchall()
             for day, cohort, chunk in quality:
-                store.db.execute(
-                    "DELETE FROM market_body_links WHERE owner=?", (f"quality:{day}:{cohort}:{chunk}",)
-                )
+                remove_owner(store.db, f"quality:{day}:{cohort}:{chunk}")
                 store.db.execute(
                     "DELETE FROM market_quality WHERE day=? AND cohort=? AND chunk=?", (day, cohort, chunk)
                 )
