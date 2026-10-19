@@ -179,6 +179,13 @@ DB2 использует IF1: неизменяемый typed dictionary, byte of
 frame, с полным SHA256 actual header/offsets/compressed bytes и bounded content
 size/window до decompression. Чтение materialize только выбранный typed slice;
 чистая binary decompression разделяет общий1MiB cache с text/reference transforms.
+Writer сравнивает level3 и level19 для expanded payload>=4KiB и сохраняет меньший
+frame; wire format и reader bounds прежние. Transfer/steady collector группирует
+до64records одного expiry UTC-day в пределах существующего DB2 expanded1MiB.
+Individual admission448KiB, compressed packet512KiB и input buffer2MiB сохранены.
+FrameSizeError делит группу на две в той же outer transaction; singleton или
+иная ошибка прерывает публикацию с rollback. Увеличения cache/RAM config нет;
+resource/SLO и full mature physical capacity требуют отдельных измерений.
 По IDs/existence данные не кэшируются. DB1 остаётся читаемым; формат IF1 не
 меняет canonical JSON, float bits или numeric types. Linux/resource gates для
 runtime activation остаются обязательными.

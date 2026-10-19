@@ -254,7 +254,7 @@ def _advance(store: Store, state: dict[str, Any], batch: int, deadline: float) -
                 cost = len(encode(entry.body).encode()) + len(encode(entry.projection).encode()) + 128
                 if entries and (
                     len(entries) == 64
-                    or buffered + cost > catalogue_transfer.MAX_RECORD
+                    or buffered + cost > catalogue_transfer.MAX_GROUP
                     or entries[0].expires // 86400000 != entry.expires // 86400000
                 ):
                     catalogue_transfer._flush(store, entries, state)

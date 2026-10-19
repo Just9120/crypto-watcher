@@ -25,11 +25,15 @@ from . import (
 )
 from .events import DECISION_HEAD, HEAD_SCHEMA, PREFIX, History
 from .expiry_index import hot_binding
+from .indexed_frame import FrameSizeError
 from .storage import StateError, Store, encode, json_payload
 
 VERSION = 1
 MAX_BUFFER = 2 * 1024 * 1024
 MAX_RECORD = packet_store.MAXIMUM - 65536
+# Individual records retain their conservative admission bound. A group may
+# use the existing DB2 expanded bound; compressed overflow is split atomically.
+MAX_GROUP = record_blocks.MAX_EXPANDED
 PHASES = ("bodies", "heads", "aliases")
 
 
@@ -252,16 +256,24 @@ def _flush(store: Store, entries: list[Prepared], state: dict[str, Any]) -> None
         else None
         for entry in entries
     }
-    record_catalog.append(
-        store.db,
-        [(entry.coordinate, entry.body, entry.projection) for entry in entries],
-        bucket=entries[0].expires // 86400000,
-        owners=owners,
-        deadlines={
-            entry.coordinate: None if entry.parent is not None else entry.expires for entry in entries
-        },
-        current=[entry.coordinate for entry in entries if entry.head is not None],
-    )
+    try:
+        record_catalog.append(
+            store.db,
+            [(entry.coordinate, entry.body, entry.projection) for entry in entries],
+            bucket=entries[0].expires // 86400000,
+            owners=owners,
+            deadlines={
+                entry.coordinate: None if entry.parent is not None else entry.expires for entry in entries
+            },
+            current=[entry.coordinate for entry in entries if entry.head is not None],
+        )
+    except FrameSizeError:
+        if len(entries) == 1:
+            raise
+        middle = len(entries) // 2
+        _flush(store, entries[:middle], state)
+        _flush(store, entries[middle:], state)
+        return
     for entry in entries:
         actual = record_catalog.read(store.db, entry.coordinate, store.cached_bytes)
         if encode(actual) != encode(entry.body):
@@ -352,7 +364,7 @@ def _advance(store: Store, state: dict[str, Any], batch: int, deadline: float) -
                     cost = len(encode(entry.body).encode()) + len(encode(entry.projection).encode()) + 128
                     if entries and (
                         len(entries) == record_blocks.MAX_RECORDS
-                        or buffered + cost > MAX_RECORD
+                        or buffered + cost > MAX_GROUP
                         or entries[0].expires // 86400000 != entry.expires // 86400000
                     ):
                         _flush(store, entries, state)

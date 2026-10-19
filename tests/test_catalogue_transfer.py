@@ -1,4 +1,6 @@
 import copy
+import random
+import string
 import time
 from contextlib import closing
 
@@ -12,6 +14,90 @@ from cryptowatcher.sources import Sources
 from cryptowatcher.storage import RUNTIME_UPSERT, StateError, Store, encode
 from tests.test_bounded_storage import bounded
 from tests.test_outcomes import MINUTE, NOW, future, observe
+
+
+@pytest.mark.parametrize("fail_second", [False, True])
+def test_dense_legal_group_splits_at_compressed_bound_and_rolls_back_all_children(
+    store, monkeypatch, fail_second
+):
+    from cryptowatcher import record_blocks
+    from cryptowatcher.events import identity
+    from cryptowatcher.indexed_frame import FrameSizeError
+    from tests.test_quality_packets import metric
+
+    populated(store)
+    history = History(store)
+    event = history.events(1)[0]
+    rng = random.Random(318)
+    prepared = []
+    expected = []
+    with store.db:
+        for index in range(2):
+            uid = identity("compressed-frame-split/" + str(index))
+            value = {
+                "schema": "cryptowatcher.outcome.v1",
+                "outcome_id": uid,
+                "revision": 1,
+                "event_id": event["event_id"],
+                "event_revision": 1,
+                "methodology_version": "1",
+                "horizon_min": 5,
+                "state": "COMPLETE",
+                "classification": "CONTINUATION",
+                "metrics": metric(index + 7),
+                "noise_threshold_pct": 0.1,
+                "expected_candles": 5,
+                "observed_candles": 5,
+                "opaque_future_field": "".join(rng.choices(string.ascii_letters + string.digits, k=400000)),
+            }
+            coordinate = record_blocks.Coordinate("outcome", uid, 1)
+            history.put(coordinate.key, value)
+            raw = store.db.execute(
+                "SELECT payload_json FROM runtime WHERE key=?", (PREFIX + coordinate.key,)
+            ).fetchone()[0]
+            entry = catalogue_transfer.prepare(store, PREFIX + coordinate.key, raw, {})
+            assert entry is not None
+            assert (
+                len(encode(entry.body).encode()) + len(encode(entry.projection).encode()) + 128
+                < catalogue_transfer.MAX_RECORD
+            )
+            prepared.append(entry)
+            expected.append(value)
+    group = [(e.coordinate, e.body, e.projection) for e in prepared]
+    with pytest.raises(FrameSizeError):
+        record_blocks.pack(group)
+    before = list(store.db.iterdump())
+    original = record_catalog.append
+    calls = []
+
+    def fault(db, entries, **kwargs):
+        calls.append(len(entries))
+        if fail_second and calls == [2, 1, 1]:
+            raise StateError("injected second split publication failure")
+        return original(db, entries, **kwargs)
+
+    monkeypatch.setattr(record_catalog, "append", fault)
+    state = {}
+    if fail_second:
+        with pytest.raises(StateError, match="second split"), store.db:
+            store.db.execute("BEGIN IMMEDIATE")
+            catalogue_transfer._flush(store, prepared, state)
+        assert list(store.db.iterdump()) == before
+    else:
+        with store.db:
+            store.db.execute("BEGIN IMMEDIATE")
+            catalogue_transfer._flush(store, prepared, state)
+        assert state["bodies_moved"] == 2
+        for entry, value in zip(prepared, expected, strict=True):
+            assert encode(history.get(entry.coordinate.key)) == encode(value)
+            assert (
+                store.db.execute(
+                    "SELECT 1 FROM runtime WHERE key=?", (PREFIX + entry.coordinate.key,)
+                ).fetchone()
+                is None
+            )
+        assert len({record_catalog.row(store.db, e.coordinate)[0] for e in prepared}) == 2
+    assert calls == [2, 1, 1]
 
 
 def populated(store):

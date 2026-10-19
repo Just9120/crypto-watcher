@@ -146,7 +146,7 @@ def pack(
         )
     texts = encode(projections), encode(bodies)
     if sum(len(t.encode()) for t in texts) > MAX_EXPANDED:
-        raise ValueError("Expanded domain block bound")
+        raise indexed_frame.FrameSizeError("Expanded domain block bound")
     if legacy:
         projection, body = (pack_binary(t) for t in texts)
     else:
@@ -154,7 +154,7 @@ def pack(
     frames = struct.pack(">I", len(projection)) + projection + body
     raw = (LEGACY_MAGIC if legacy else MAGIC) + hashlib.sha256(frames).digest() + frames
     if len(raw) > MAX_PACKET:
-        raise ValueError("Compressed domain block bound")
+        raise indexed_frame.FrameSizeError("Compressed domain block bound")
     decoded = parse(body) if legacy else indexed_frame.all_values(body)
     if encode([expanded(c, v) for (c, _, _), v in zip(entries, decoded, strict=True)]) != encode(
         [v for _, v, _ in entries]
