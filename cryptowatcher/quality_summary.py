@@ -197,13 +197,16 @@ def archive_event(store: Store, event: dict[str, Any]) -> None:
         ).fetchone()
         chunk = old[0] if old else 0
         append = old and old[2] < 128 and old[3] == encode(packed)
+        from .quality_packets import append as append_quality
         from .quality_packets import pack as pack_quality
-        from .quality_packets import unpack as unpack_quality
 
-        facts = unpack_quality(store.db, bytes(old[1])) if append else []
         if old and not append:
             chunk += 1
-        facts.append(fact)
+        packet = (
+            append_quality(store.db, bytes(old[1]), fact, cohort, expected_count=old[2])
+            if append
+            else pack_quality(store.db, [fact], cohort)
+        )
         # Shared settings/definitions outlive detail via the same ref-counted body pool.
         from .quality_layout import put
 
@@ -216,8 +219,8 @@ def archive_event(store: Store, event: dict[str, Any]) -> None:
                 month_boundary(day, 12),
                 encode(group),
                 encode(packed),
-                pack_quality(store.db, facts, cohort),
-                len(facts),
+                packet,
+                old[2] + 1 if append else 1,
             ),
         )
         provenance_links(store, day, cohort, chunk, packed)

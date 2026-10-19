@@ -55,6 +55,63 @@ def save_v4(store, values, day=20000, cohort="cohort"):
     return raw
 
 
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("count", [7, 8, 127])
+def test_append_keeps_prefix_coordinates_and_only_interns_new_comparators(store, monkeypatch, legacy, count):
+    enable(store.db)
+    values = [fact(i, [metric(1000 + i * 20 + j) for j in range(20)]) for i in range(count)]
+    added = fact(9999, [metric(100000 + i) for i in range(20)])
+    with store.db:
+        raw = (save_v4 if legacy else save)(store, values)
+    before = quality_packets.ownership(store.db, raw)["numeric"]
+    original = numeric_pool.encode_reference
+    calls = []
+
+    def record(db, value, **kwargs):
+        calls.append(encode(value))
+        return original(db, value, **kwargs)
+
+    monkeypatch.setattr(numeric_pool, "encode_reference", record)
+    with store.db:
+        result = quality_packets.append(store.db, raw, added, "cohort", expected_count=count)
+        put(store.db, (20000, "cohort", 0, 20366, encode({"detector": "price"}), "{}", result, count + 1))
+    assert calls == [encode(value) for value in added["comparator_metrics"]]
+    assert encode(quality_packets.unpack(store.db, result)) == encode([*values, added])
+    assert set(before) <= set(quality_packets.ownership(store.db, result)["numeric"])
+    if count == 127:
+        with pytest.raises(ValueError, match="incomplete packet"):
+            quality_packets.append(store.db, result, added)
+
+
+def test_append_count_failure_and_writer_rollback_preserve_existing_rows_and_owners(store):
+    enable(store.db)
+    values = [fact(7)]
+    with store.db:
+        raw = save(store, values)
+    before = list(store.db.iterdump())
+    with pytest.raises(ValueError, match="count disagrees"), store.db:
+        quality_packets.append(store.db, raw, fact(9), expected_count=2)
+    assert list(store.db.iterdump()) == before
+    with pytest.raises(RuntimeError), store.db:
+        value = quality_packets.append(store.db, raw, fact(9), expected_count=1)
+        put(store.db, (20000, "cohort", 0, 20366, encode({"detector": "price"}), "{}", value, 2))
+        raise RuntimeError("rollback appended archive and numeric/dictionary writes")
+    assert list(store.db.iterdump()) == before
+
+
+def test_append_n0_and_legacy_self_contained_packets_keep_public_facts(store):
+    enable(store.db)
+    values = [fact(i, []) for i in range(10)]
+    with store.db:
+        raw = save(store, values[:1])
+        for value in values[1:]:
+            raw = quality_packets.append(store.db, raw, value)
+        assert encode(quality_packets.unpack(store.db, raw)) == encode(values)
+        legacy = encode_facts(values[:8])
+        result = quality_packets.append(store.db, legacy, values[8])
+        assert encode(quality_packets.unpack(store.db, result)) == encode(values[:9])
+
+
 def test_archive_packets_preserve_exact_facts_mixed_formats_reopen_refs_and_rollback(store):
     enable(store.db)
     values = [fact(i) for i in range(24)]

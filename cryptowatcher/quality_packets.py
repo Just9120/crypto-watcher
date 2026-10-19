@@ -453,6 +453,67 @@ def pack(db: sqlite3.Connection, facts: list[Any], cohort: str | None = None) ->
         db.execute("RELEASE cw_empty_quality")
 
 
+def append(
+    db: sqlite3.Connection,
+    raw: bytes,
+    fact: Any,
+    cohort: str | None = None,
+    *,
+    expected_count: int | None = None,
+) -> bytes:
+    """Append one fact without re-interning retained prefix numeric coordinates."""
+    from .quality_summary import encode_facts
+    from .storage import encode
+
+    previous = unpack(db, raw)
+    if expected_count is not None and (type(expected_count) is not int or expected_count != len(previous)):
+        raise ValueError("Quality append count disagrees with retained packet")
+    if not 0 < len(previous) < 128:
+        raise ValueError("Quality append requires a nonempty incomplete packet")
+    expected = [*previous, fact]
+    if raw.startswith((LEGACY_MAGIC, PARAMETER_MAGIC, VIEW_MAGIC)):
+        raw = repack(db, raw, cohort)
+    if not raw.startswith(MAGIC):
+        return pack(db, expected, cohort)
+    single = _pack(db, [fact], cohort)
+    if not single.startswith(MAGIC):
+        return pack(db, expected, cohort)
+    rows, columns = packet(raw)
+    added, _ = packet(single)
+    pairs = row(db, columns, "columns")[0] if columns is not None else [value[4:] for value in rows]
+    pairs = [*pairs, added[0][4:]]
+    columns = intern(db, "columns", pairs) if len(expected) >= 8 else None
+    rows = [
+        [*value[:4], *([] if columns is not None else pair)]
+        for value, pair in zip([*rows, added[0]], pairs, strict=True)
+    ]
+    result = envelope(rows, columns)
+    if encode(unpack(db, result)) != encode(expected):
+        raise ValueError("Quality append changed public facts")
+    # Self-contained N0 may remain smaller, but it must not replace any retained
+    # numeric coordinate. Comparator packets keep their established ownership.
+    if not any(value["comparator_metrics"] for value in expected) and not ownership(db, result)["numeric"]:
+        alternative = encode_facts(expected)
+        if len(alternative) < len(result):
+            return alternative
+    return result
+
+
+def envelope(rows: list[Any], columns: Any) -> bytes:
+    """Choose the smaller compressed vector representation without metric writes."""
+    from .storage import encode
+
+    literal = []
+    deltas = []
+    for value in rows:
+        references = quality_vector.unpack(value[2])
+        literal.append([*value[:2], quality_vector.pack(references, delta=False), *value[3:]])
+        deltas.append([*value[:2], quality_vector.pack(references, delta=True), *value[3:]])
+    return MAGIC + min(
+        (pack_binary(encode([literal, columns])), pack_binary(encode([deltas, columns]))), key=len
+    )
+
+
 def _pack(db: sqlite3.Connection, facts: list[Any], cohort: str | None = None) -> bytes:
     from .numeric_blocks import installed, writing
     from .numeric_pool import encode_reference, existing_reference
@@ -472,7 +533,6 @@ def _pack(db: sqlite3.Connection, facts: list[Any], cohort: str | None = None) -
     columns = intern(db, "columns", [[f["strength"], f["noise"]] for f in facts]) if len(facts) >= 8 else None
     shared_minimum = 2 if installed(db) and writing(db) else 4
     rows = []
-    delta_rows = []
     for fact in facts:
         # A unique own result stays inline. Reuse an already retained quality
         # body, or a body shared by multiple immutable records. Block storage
@@ -497,13 +557,9 @@ def _pack(db: sqlite3.Connection, facts: list[Any], cohort: str | None = None) -
         if columns is None:
             value.extend((fact["strength"], fact["noise"]))
         rows.append(value)
-        delta_rows.append([*value[:2], quality_vector.pack(values, delta=True), *value[3:]])
     # Compare complete compressed packets; a shorter integer vector need not
     # produce the shorter compressed record. Both choices own identical IDs.
-    result = MAGIC + min(
-        (pack_binary(encode([rows, columns])), pack_binary(encode([delta_rows, columns]))),
-        key=len,
-    )
+    result = envelope(rows, columns)
     if encode(unpack(db, result)) != encode(facts):
         raise ValueError("Quality packet changed public facts")
     return result
@@ -523,7 +579,6 @@ def repack(db: sqlite3.Connection, raw: bytes, cohort: str | None = None) -> byt
     views = raw.startswith(VIEW_MAGIC)
     cache: dict[Any, Any] = {}
     rows = []
-    delta_rows = []
 
     def coordinate(value: Any) -> Any:
         return value * 4 if type(value) is int and not views else value
@@ -544,11 +599,7 @@ def repack(db: sqlite3.Connection, raw: bytes, cohort: str | None = None) -> byt
         if columns is None:
             value.extend(original[4 if modern else 3 :])
         rows.append(value)
-        delta_rows.append([*value[:2], quality_vector.pack(values, delta=True), *value[3:]])
-    result = MAGIC + min(
-        (pack_binary(encode([rows, columns])), pack_binary(encode([delta_rows, columns]))),
-        key=len,
-    )
+    result = envelope(rows, columns)
     if encode(unpack(db, result)) != encode(before):
         raise ValueError("Quality upgrade changed public facts")
     if ownership(db, result)["numeric"] != ownership(db, raw)["numeric"]:

@@ -97,6 +97,10 @@ packet. Порядок, повторы, numeric IDs/views и unknown inline metr
 dictionary rows. Старые J/Z/CW2/CW3/CQ1/CQ2/CQ4 inputs и numeric refs читаются.
 Legacy set delta имеет не более8ancestor links; numeric bodies удерживаются
 фактическими leaf blocks, а не удалёнными элементами ancestor.
+При добавлении факта CQ5 сохраняет numeric coordinates прежнего prefix и
+кодирует только новый факт. Stored n проверяется против decoded prefix;
+переход к общим strength/noise columns и граница128 остаются точными.
+CQ1/CQ2/CQ4 prefix сначала преобразуется с прежними numeric IDs/leases.
 Provenance body живёт до последнего
 зависимого block. GC всех зависимостей конечен и учитывается как выполненная
 retention work даже после удаления последнего event.
