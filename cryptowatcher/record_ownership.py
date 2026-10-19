@@ -37,6 +37,27 @@ def block_references(raw: bytes) -> list[Any]:
 def install_functions(db: sqlite3.Connection, cache: Any = None) -> None:
     packet_store.install_functions(db)
 
+    def key(kind: int, identity: bytes, revision: int) -> str:
+        if type(kind) is not int or not 0 <= kind < len(record_blocks.KINDS):
+            raise ValueError("Invalid catalogue key kind")
+        coordinate = record_blocks.Coordinate(
+            record_blocks.KINDS[kind], str(uuid.UUID(bytes=identity)), revision
+        )
+        coordinate.validate()
+        return "radar:v1:" + coordinate.key
+
+    def record(kind: int, identity: bytes, revision: int, packet: int, slot: int) -> str:
+        full_key = key(kind, identity, revision)
+        coordinate = record_blocks.Coordinate(
+            record_blocks.KINDS[kind], str(uuid.UUID(bytes=identity)), revision
+        )
+        raw = packet_store.read(db, packet)
+
+        def read() -> str:
+            return encode(record_blocks.read(raw, slot, coordinate))
+
+        return read() if cache is None else str(cache("catalogue-record", f"{full_key}/{slot}", raw, read))
+
     def references(kind: int, identity: bytes, revision: int, packet: int, slot: int, which: str) -> str:
         if (
             type(kind) is not int
@@ -57,6 +78,8 @@ def install_functions(db: sqlite3.Connection, cache: Any = None) -> None:
         return json.dumps(values[slot][3 if which == "numeric" else 4])
 
     db.create_function("cw_catalogue_refs", 6, references)
+    db.create_function("cw_catalogue_key", 3, key, deterministic=True)
+    db.create_function("cw_catalogue_record", 5, record)
 
 
 def install(db: sqlite3.Connection, cache: Any = None) -> None:

@@ -98,6 +98,18 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
     )
     saved = repack.get("saved_categories", {})
     forecast = []
+    from .analytics import COMPARATOR_LOOKBACK_DAYS
+    from .config import TIMEFRAMES
+    from .sources import WINDOW_SIZE
+
+    # A used comparator input can precede its event by28days plus the frozen
+    # native detector window. Its existing lease then lasts detail_retention.
+    # This estimates current admitted bounds; it does not change any expiry.
+    native_days = (WINDOW_SIZE * max(int(tf[:-1]) for tf in TIMEFRAMES) + 1439) // 1440
+    candle_dependency_days = max(
+        settings.candle_retention_days,
+        settings.detail_retention_days + COMPARATOR_LOOKBACK_DAYS + native_days,
+    )
     occupancy = {
         "services",
         "service_indexes",
@@ -116,8 +128,10 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         rate = inserted / elapsed if elapsed > 0 else None
         net = (inserted - deleted + repack_savings) / elapsed if elapsed > 0 else None
         days = (
-            settings.candle_retention_days
-            if category in ("candles", "context", "context_bodies", "context_integrity")
+            candle_dependency_days
+            if category == "candles"
+            else settings.candle_retention_days
+            if category in ("context", "context_bodies", "context_integrity")
             else 366
             if category in QUALITY_CATEGORIES
             else settings.detail_retention_days
@@ -233,6 +247,17 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "at_ms": now_ms,
         "history_generation": store.get_runtime("history_generation", {}),
         "budget_bytes": BUDGET,
+        "candle_dependency_retention_estimate": {
+            "configured_minimum_days": settings.candle_retention_days,
+            "detail_days": settings.detail_retention_days,
+            "comparator_prior_days": COMPARATOR_LOOKBACK_DAYS,
+            "native_input_window": WINDOW_SIZE,
+            "days_for_estimate": candle_dependency_days,
+            "basis": "CURRENT_ADMITTED_INPUT_BOUND_AND_EXISTING_DETAIL_LEASES; NOT_A_POLICY_CHANGE",
+            "limitations": [
+                "Historical configurations outside current input bounds require observed lease qualification"
+            ],
+        },
         "working_bytes": actual,
         "files": files,
         "allocated_database_bytes": pages * page,

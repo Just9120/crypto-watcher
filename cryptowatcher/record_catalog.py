@@ -17,6 +17,7 @@ from .storage import encode
 
 
 def install(db: sqlite3.Connection, cache: Any = None) -> None:
+    from .catalogue_cohorts import install as install_counters
     from .record_ownership import install as install_ownership
 
     packet_store.install(db)
@@ -31,6 +32,7 @@ def install(db: sqlite3.Connection, cache: Any = None) -> None:
         if marker[0] != "2" or len(found) != 3:
             raise ValueError("Unknown domain catalogue; database preserved")
         install_ownership(db, cache)
+        install_counters(db)
         return
     if db.in_transaction:
         raise ValueError("Catalogue installation requires an outer boundary")
@@ -99,6 +101,7 @@ def install(db: sqlite3.Connection, cache: Any = None) -> None:
         db.rollback()
         raise
     install_ownership(db, cache)
+    install_counters(db)
 
 
 def binary(identity: str) -> bytes:

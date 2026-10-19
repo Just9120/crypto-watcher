@@ -6,6 +6,7 @@ import asyncio
 import json
 import random
 import time
+from collections import Counter
 from collections.abc import Callable
 from typing import Any
 
@@ -530,6 +531,13 @@ class BybitRadar(BybitREST):
                     ):
                         self._recovered_buckets.add(self.recovery_bucket(stream))
                 except (MarketError, KeyError, TypeError, ValueError):
+                    if stream not in self.streams:
+                        # An HTTP failure can arrive after scope reconciliation
+                        # removed this stream. Preserve persisted history, but do
+                        # not resurrect a retired in-memory blocker or retry.
+                        self.sources.remove_window(stream)
+                        self._history_errors.pop(stream, None)
+                        continue
                     if priority == 20:
                         self._history_errors[stream] = "historical_recovery_failed"
                     else:
@@ -540,7 +548,7 @@ class BybitRadar(BybitREST):
                     self.request_recovery(stream, priority)
             finally:
                 self._working.discard(stream)
-                if stream in self._history:
+                if stream in self.streams and stream in self._history:
                     self.request_recovery(stream, 20)
                 # Local restores have no network await. Give subscription ACKs,
                 # heartbeat and Telegram a turn after each bounded window.
@@ -764,6 +772,8 @@ class BybitRadar(BybitREST):
                     str(exc) if isinstance(exc, MarketError) else type(exc).__name__
                 )
                 for stream in streams:
+                    if stream not in self.streams:
+                        continue
                     self.sources.blocked.setdefault(stream, "stream_disconnected")
                     self.sources.live.pop(stream, None)
                 self.persist_diagnostics()
@@ -899,6 +909,16 @@ class BybitRadar(BybitREST):
                 "recovery_pending": len(self._pending),
                 "recovery_working": len(self._working),
                 "blocked_streams": len(self.sources.blocked),
+                "blocked_reasons": dict(Counter(self.sources.blocked.values())),
+                "blocked_stream_samples": [
+                    {
+                        "stream": stream,
+                        "reason": self.sources.blocked[stream],
+                        "active": stream in self.streams,
+                    }
+                    for stream in sorted(self.sources.blocked)[:20]
+                ],
+                "blocked_stream_samples_truncated": len(self.sources.blocked) > 20,
                 "historical_gaps_pending": len(self._history),
                 "historical_gap_errors": self._history_errors,
                 "buffered_candles": sum(map(len, self.sources.windows.values())),

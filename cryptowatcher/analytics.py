@@ -19,6 +19,7 @@ from .source_context import context
 from .storage import StateError, Store, encode, json_payload
 
 COMPARATOR_VERSION = "1"
+COMPARATOR_LOOKBACK_DAYS = 28
 COMPARATOR_DEFINITION = {
     "version": COMPARATOR_VERSION,
     "period": "previous28days; same instrument/market/TF/UTC observation hour",
@@ -95,7 +96,7 @@ def prior_population(
 
 def comparison_dataset(store: Store, event: dict[str, Any]) -> dict[str, Any]:
     reference = event["reference_time_ms"]
-    start = max(0, reference - 28 * DAY)
+    start = max(0, reference - COMPARATOR_LOOKBACK_DAYS * DAY)
     settings = OwnerSettings.from_payload(event["settings_snapshot"])
     horizons = settings.outcome_horizons
     max_horizon = max(horizons) * MINUTE
@@ -285,7 +286,7 @@ class ComparisonWorker:
                         "start": max(
                             0,
                             event["reference_time_ms"]
-                            - 28 * DAY
+                            - COMPARATOR_LOOKBACK_DAYS * DAY
                             - lookback * int(event["timeframe"][:-1]) * MINUTE,
                         ),
                         "end": event["reference_time_ms"],

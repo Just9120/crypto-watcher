@@ -401,6 +401,12 @@ def report(db: sqlite3.Connection, seconds: float = 60) -> dict[str, Any] | None
         return {"state": "PENDING_FINITE_COHORT_BACKFILL", "method": "TRANSACTIONAL_COHORT_COUNTERS"}
     if state[3]:
         return {"state": "UNSET_EVENT_METADATA", "unclassified_event_records": state[3]}
+    from . import catalogue_cohorts
+
+    if catalogue_cohorts.active(db):
+        catalogue_state = catalogue_cohorts.status(db)
+        if catalogue_state["state"] != "COMPLETE":
+            return catalogue_state
     methods = [
         row[0]
         for row in db.execute(
@@ -432,10 +438,8 @@ def report(db: sqlite3.Connection, seconds: float = 60) -> dict[str, Any] | None
 
     db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
     try:
-        for row in db.execute(
-            f"SELECT {','.join(FIELDS)},n FROM market_cohorts WHERE generation=? ORDER BY {','.join(FIELDS)}",
-            (state[0],),
-        ):
+        source, parameters = catalogue_cohorts.query(db, "market_cohorts", state[0])
+        for row in db.execute(source + f" ORDER BY {','.join(FIELDS)}", parameters):
             if time.monotonic() >= deadline:
                 break
             if day is not None and row[0] != day:
@@ -454,15 +458,13 @@ def report(db: sqlite3.Connection, seconds: float = 60) -> dict[str, Any] | None
         finish_day()
         without["day"] = len(no_day)
         if time.monotonic() < deadline:
-            revisions = dict(
-                db.execute(
-                    "SELECT revision,n FROM market_cohort_revisions WHERE generation=? AND n>0", (state[0],)
-                )
-            )
+            source, parameters = catalogue_cohorts.query(db, "market_cohort_revisions", state[0])
+            revisions = dict(db.execute("SELECT revision,n FROM (" + source + ") WHERE n>0", parameters))
         if time.monotonic() < deadline:
-            strengths = db.execute(
-                "SELECT COUNT(*) FROM market_cohort_strengths WHERE generation=? AND n>0", (state[0],)
-            ).fetchone()[0]
+            source, parameters = catalogue_cohorts.query(db, "market_cohort_strengths", state[0])
+            strengths = db.execute("SELECT COUNT(*) FROM (" + source + ") WHERE n>0", parameters).fetchone()[
+                0
+            ]
     except sqlite3.OperationalError as exc:
         if getattr(exc, "sqlite_errorcode", None) != sqlite3.SQLITE_INTERRUPT:
             raise
@@ -501,7 +503,11 @@ def report(db: sqlite3.Connection, seconds: float = 60) -> dict[str, Any] | None
 
 def ready(db: sqlite3.Connection) -> bool:
     row = db.execute("SELECT schema_version,complete FROM market_cohort_scan WHERE id=1").fetchone()
-    return bool(row and row[1] and row[0] == db.execute("PRAGMA schema_version").fetchone()[0])
+    if not (row and row[1] and row[0] == db.execute("PRAGMA schema_version").fetchone()[0]):
+        return False
+    from . import catalogue_cohorts
+
+    return not catalogue_cohorts.active(db) or catalogue_cohorts.status(db)["state"] == "COMPLETE"
 
 
 def collect_current(db: sqlite3.Connection, batch: int) -> int:

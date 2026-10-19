@@ -75,3 +75,26 @@ def test_completed_conversion_starts_new_byte_flow_without_discarding_event_freq
     assert row["projected_logical_bytes"] == 300
     assert len(store.get_runtime("storage_samples")) == 2
     assert store.get_runtime("storage_samples")[0]["completed_repack_version"] is None
+
+
+def test_candle_forecast_includes_comparator_dependency_lease_without_changing_retention(store):
+    from dataclasses import asdict
+
+    from cryptowatcher.market_storage import admit
+    from cryptowatcher.sources import Candle
+
+    bounded(store)
+    settings = store.snapshot()
+    sample(store, NOW)
+    earliest = NOW - 28 * DAY - 256 * 15 * 60000
+    candle = Candle.parse([earliest, 100, 101, 99, 100, 1, 100], "15m", "fixture", NOW, NOW)
+    with store.db:
+        admit(store.db, "spot/BTCUSDT/15m", asdict(candle), needed_until=NOW)
+    value = report(store, NOW + DAY)
+    projection = next(row for row in value["forecast"] if row["category"] == "candles")
+    assert projection["retention_days_for_estimate"] == 61
+    actual_deadline = store.db.execute("SELECT purge_after FROM market_candles").fetchone()[0]
+    assert actual_deadline - earliest > settings.settings.candle_retention_days * DAY
+    assert actual_deadline - earliest <= projection["retention_days_for_estimate"] * DAY
+    assert store.snapshot() == settings
+    assert value["candle_dependency_retention_estimate"]["configured_minimum_days"] == 35

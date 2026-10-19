@@ -124,6 +124,12 @@ def test_pure_ownership_cache_shares_store_budget_and_never_hides_actual_packet_
     assert 0 < store.reference_cache_bytes <= 1024 * 1024
     coordinate = values[0][0]
     packet = catalog.row(store.db, coordinate)[0]
+    args = (1, catalog.binary(coordinate.identity), coordinate.revision, packet)
+    assert store.db.execute("SELECT cw_catalogue_record(?,?,?,?,0)", args).fetchone()[0] == encode(
+        values[0][1]
+    )
+    with pytest.raises(sqlite3.OperationalError):
+        store.db.execute("SELECT cw_catalogue_record(?,?,?,?,1)", args).fetchone()
     arena, offset = store.db.execute(
         "SELECT arena,offset FROM market_packets WHERE id=?", (packet,)
     ).fetchone()

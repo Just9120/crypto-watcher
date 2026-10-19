@@ -77,6 +77,26 @@ def radar(store):
     yield instance
 
 
+def test_persisted_block_diagnostics_are_exact_bounded_and_distinguish_inactive_streams(radar):
+    active = sorted(radar.streams)[0]
+    radar.sources.blocked = {active: "conflicting_closed_candle"}
+    radar.sources.blocked.update({f"spot/SYNTHETIC{i:02d}USDT/1m": "candle_gap" for i in range(27)})
+    radar.persist_diagnostics()
+    value = radar.store.get_runtime("ingestion")
+    assert value["blocked_streams"] == 28
+    assert value["blocked_reasons"] == {"candle_gap": 27, "conflicting_closed_candle": 1}
+    assert len(value["blocked_stream_samples"]) == 20
+    assert value["blocked_stream_samples_truncated"]
+    assert any(row["stream"] == active and row["active"] for row in value["blocked_stream_samples"])
+    assert any(not row["active"] for row in value["blocked_stream_samples"])
+    radar.sources.blocked.clear()
+    radar.persist_diagnostics()
+    value = radar.store.get_runtime("ingestion")
+    assert value["blocked_streams"] == 0
+    assert value["blocked_reasons"] == {} and value["blocked_stream_samples"] == []
+    assert not value["blocked_stream_samples_truncated"]
+
+
 async def test_owner_scope_applies_while_rest_manager_is_waiting(radar, monkeypatch):
     entered = asyncio.Event()
     release = asyncio.Event()
@@ -768,6 +788,58 @@ async def test_inflight_recovery_cannot_resurrect_removed_stream(radar):
     await radar.backfill(stream)
     assert stream not in radar.sources.windows
     assert radar.store.db.total_changes == changes
+
+
+@pytest.mark.parametrize("priority", [0, 20])
+async def test_failed_inflight_recovery_does_not_resurrect_retired_block_or_history_error(radar, priority):
+    stream = "spot/BTCUSDT/1m"
+    failed = asyncio.Event()
+    radar.sources.blocked[stream] = "candle_gap"
+    if priority == 20:
+        radar._history[stream] = {"start": NOW - 60000, "end": NOW - 1, "state": "PENDING"}
+
+    async def response(*args):
+        radar.streams.remove(stream)
+        radar.sources.remove_window(stream)
+        radar._history.pop(stream, None)
+        failed.set()
+        raise MarketError("fixture_removed_during_http")
+
+    radar._get = response
+    radar.request_recovery(stream, priority)
+    worker = asyncio.create_task(radar._worker())
+    try:
+        await asyncio.wait_for(failed.wait(), 1)
+        assert stream not in radar.sources.blocked
+        assert stream not in radar._history_errors
+        assert stream not in radar._working and stream not in radar._pending
+        assert not worker.done()
+    finally:
+        worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+        await radar.close()
+
+
+async def test_socket_failure_after_scope_change_blocks_only_remaining_active_streams(radar):
+    retired = "spot/BTCUSDT/1m"
+    retained = "spot/BTCUSDT/3m"
+
+    class RemovedSocket(Socket):
+        async def __aenter__(self):
+            radar.streams.remove(retired)
+            radar.sources.remove_window(retired)
+            raise MarketError("fixture_removed_during_connect")
+
+    radar.connector = lambda *args, **kwargs: RemovedSocket()
+    task = asyncio.create_task(radar._session("spot:0", "spot", [retired, retained]))
+    try:
+        await wait_condition(lambda: radar.connections.get("spot:0", {}).get("state") == "RECONNECTING")
+        assert retired not in radar.sources.blocked
+        assert radar.sources.blocked[retained] == "stream_disconnected"
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await radar.close()
 
 
 async def test_no_gap_reconnect_preserves_current_window_without_rest_fanout(radar):
