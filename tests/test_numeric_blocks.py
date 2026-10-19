@@ -401,3 +401,68 @@ def test_reader_opened_before_explicit_upgrade_can_read_new_transactions_without
         assert numeric_pool.load(reader.db, identity_value) == metric(17)
         assert not blocks.writing(reader.db)
         assert store.db.execute("SELECT COUNT(*) FROM market_numeric").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("operation", ["transfer", "promote", "collect", "release_quality"])
+def test_missing_legacy_byte_counter_prevents_fabricated_cold_totals_or_deletion(store, operation):
+    enable(store.db)
+    store.bounded = True
+    with store.db:
+        identity_value = numeric_pool.intern(store.db, metric(4))
+        if operation == "release_quality":
+            numeric_pool.adjust(store.db, {identity_value}, "quality_refs", 1)
+    blocks.install(store.db, store.cached_bytes)
+    with store.db:
+        category = "quality_numeric" if operation == "release_quality" else "numeric_details"
+        store.db.execute("DELETE FROM market_counts WHERE category=?", (category,))
+    before = list(store.db.iterdump())
+    with pytest.raises(ValueError, match="counter"), store.db:
+        if operation == "transfer":
+            store.db.execute("BEGIN")
+            blocks.transfer(store.db, {}, 1, time.monotonic() + 10)
+        elif operation == "collect":
+            numeric_pool.collect(store.db)
+        else:
+            numeric_pool.adjust(
+                store.db, {identity_value}, "quality_refs", -1 if operation == "release_quality" else 1
+            )
+    assert list(store.db.iterdump()) == before
+
+
+def test_cold_bytes_cannot_cover_missing_legacy_counts_during_mixed_transfer(store):
+    enable(store.db)
+    store.bounded = True
+    with store.db:
+        for i in range(130):
+            numeric_pool.intern(store.db, metric(i))
+    blocks.install(store.db, store.cached_bytes)
+    state = {}
+    with store.db:
+        store.db.execute("BEGIN")
+        blocks.transfer(store.db, state, 1, time.monotonic() + 10)
+    cold = blocks.summary(store.db)
+    assert cold["live"] == 64
+    with store.db:
+        store.db.execute(
+            "UPDATE market_counts SET records=?,logical_bytes=? WHERE category='numeric_details'",
+            (cold["details"], cold["detail_bytes"]),
+        )
+    before = list(store.db.iterdump())
+    with pytest.raises(ValueError, match="counter"), store.db:
+        store.db.execute("BEGIN")
+        blocks.transfer(store.db, state, 1, time.monotonic() + 10)
+    assert list(store.db.iterdump()) == before
+
+
+@pytest.mark.parametrize(
+    "column,expression", [("records", "records+1"), ("records", "'unknown'"), ("logical_bytes", "'unknown'")]
+)
+def test_phantom_counter_after_complete_transfer_blocks_new_admission_atomically(store, column, expression):
+    setup(store)
+    with store.db:
+        numeric_pool.intern(store.db, metric(4))
+        store.db.execute(f"UPDATE market_counts SET {column}={expression} WHERE category='numeric_details'")
+    before = list(store.db.iterdump())
+    with pytest.raises(ValueError, match="counter"), store.db:
+        numeric_pool.intern(store.db, metric(5))
+    assert list(store.db.iterdump()) == before

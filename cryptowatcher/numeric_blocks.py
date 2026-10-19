@@ -169,6 +169,7 @@ def put(
 ) -> None:
     if not db.in_transaction:
         raise ValueError("Numeric block mutation requires an outer transaction")
+    summary(db)
     old = read(db, block)
     before = allocation(block, *old[:3], len(old[3])) if old else (0, 0, 0, 0, 0)
     predicted = any(f and f[0] in (17, 18, 19) for f in frames)
@@ -432,6 +433,9 @@ def transfer(db: sqlite3.Connection, state_value: dict[str, Any], batch: int, de
             (low, upper),
         ).fetchall()
         with atomic(db):
+            from .numeric_pool import legacy_meter
+
+            legacy_meter(db, [(bytes(r[2]), r[3], r[4]) for r in rows])
             current = state(db)
             if rows[-1][0] > current[0]:
                 raise ValueError("Legacy numeric ID exceeds issued ceiling")
@@ -471,6 +475,7 @@ def transfer(db: sqlite3.Connection, state_value: dict[str, Any], batch: int, de
 def summary(db: sqlite3.Connection) -> dict[str, Any]:
     issued, live, details, quality, dbytes, qbytes = state(db)
     price_writing(db)
+    legacy = db.execute("SELECT 1 FROM market_numeric LIMIT 1").fetchone() is not None
     if (
         db.execute("SELECT 1 FROM market_numeric_transfer LIMIT 1").fetchone()
         or db.execute("SELECT 1 FROM market_numeric_gc LIMIT 1").fetchone()
@@ -480,8 +485,13 @@ def summary(db: sqlite3.Connection) -> dict[str, Any]:
         row = db.execute(
             "SELECT records,logical_bytes FROM market_counts WHERE category=?", (category,)
         ).fetchone()
-        if (row is None and (count or size)) or (row is not None and (row[0] < count or row[1] < size)):
+        if (row is None and (count or size)) or (
+            row is not None
+            and (any(type(v) is not int or v < 0 for v in row) or row[0] < count or row[1] < size)
+        ):
             raise ValueError("Missing numeric encoded-byte counter")
+        if not legacy and row is not None and (row[0] != count or row[1] != size):
+            raise ValueError("Numeric encoded-byte counter differs from complete blocks")
     return dict(
         issued=issued, live=live, details=details, quality=quality, detail_bytes=dbytes, quality_bytes=qbytes
     )

@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import sqlite3
+from collections.abc import Callable
 from typing import Any
 
 from .metric_codec import canonical, pack, restore_view, unpack
@@ -64,6 +65,31 @@ def ownership_triggers(db: sqlite3.Connection, *, replace: bool = False) -> None
         )
 
 
+def legacy_meter(db: sqlite3.Connection, rows: list[tuple[bytes, int, int]]) -> None:
+    from .numeric_blocks import installed, state
+
+    cold = state(db) if rows and installed(db) else (0, 0, 0, 0, 0, 0)
+    totals: dict[str, tuple[int, int]] = {}
+    for raw, details, quality in rows:
+        if any(type(n) is not int or not 0 <= n < 2**63 for n in (details, quality)):
+            raise ValueError("Invalid legacy numeric lease")
+        category = "quality_numeric" if quality else "numeric_details"
+        n, size = totals.get(category, (0, 0))
+        totals[category] = n + 1, size + len(raw)
+    for category, (n, size) in totals.items():
+        row = db.execute(
+            "SELECT records,logical_bytes FROM market_counts WHERE category=?", (category,)
+        ).fetchone()
+        index = 3 if category == "quality_numeric" else 2
+        if (
+            row is None
+            or any(type(v) is not int or v < 0 for v in row)
+            or row[0] - cold[index] < n
+            or row[1] - cold[index + 2] < size
+        ):
+            raise ValueError("Missing legacy numeric byte counter")
+
+
 def adjust(
     db: sqlite3.Connection, ids: set[int], column: str, delta: int, *, statement_atomic: bool = False
 ) -> None:
@@ -89,6 +115,7 @@ def adjust(
             if not cold:
                 legacy.add(identity)
         if legacy:
+            legacy_meter(db, [(v[0], v[1], v[2]) for i, v in values.items() if i in legacy])
             db.executemany(
                 f"UPDATE market_numeric SET {column}={column}+? WHERE id=?", [(delta, i) for i in legacy]
             )
@@ -270,14 +297,32 @@ def reference_value(reference: dict[str, Any], body: dict[str, Any]) -> dict[str
     return restore_view(body, reference["id"] % 4) if reference["mode"] == "numeric2" else dict(body)
 
 
-def encode_reference(db: sqlite3.Connection, value: Any) -> dict[str, Any] | None:
+def encode_reference(
+    db: sqlite3.Connection, value: Any, *, price: Callable[[bytes], bytes | None] | None = None
+) -> dict[str, Any] | None:
     candidate = canonical(value)
     if candidate is None:
         return None
     body, view = candidate
+    canonical_raw = pack(body)
+    if canonical_raw is None:
+        raise ValueError("Canonical metric has no exact frame")
+    proposed = price(canonical_raw) if price is not None else None
+    if proposed is not None:
+        from .metric_price_codec import frame
+
+        if frame(proposed) != canonical_raw:
+            raise ValueError("Proposed price frame changed canonical metric")
     identity = intern(db, body)
     if identity is None:
         raise ValueError("Canonical metric has no exact frame")
+    if (
+        proposed is not None
+        and not db.execute("SELECT 1 FROM market_numeric WHERE id=?", (identity,)).fetchone()
+    ):
+        from .numeric_blocks import offer_price
+
+        offer_price(db, identity, proposed)
     return {"mode": "numeric2", "id": identity * 4 + view}
 
 
@@ -318,10 +363,20 @@ def collect(db: sqlite3.Connection, batch: int = 128) -> int:
     if type(batch) is not int or not 0 < batch <= 256:
         raise ValueError("Invalid numeric collection batch")
     with atomic(db):
-        count = db.execute(
-            "DELETE FROM market_numeric WHERE id IN(SELECT id FROM market_numeric WHERE detail_refs=0 AND quality_refs=0 ORDER BY id LIMIT ?)",
+        unused = db.execute(
+            "SELECT id,payload FROM market_numeric WHERE detail_refs=0 AND quality_refs=0 ORDER BY id LIMIT ?",
             (batch,),
-        ).rowcount
+        ).fetchall()
+        legacy_meter(db, [(bytes(row[1]), 0, 0) for row in unused])
+        count = 0
+        if unused:
+            placeholders = ",".join("?" for _ in unused)
+            count = db.execute(
+                f"DELETE FROM market_numeric WHERE id IN({placeholders}) AND detail_refs=0 AND quality_refs=0",
+                [r[0] for r in unused],
+            ).rowcount
+            if count != len(unused):
+                raise ValueError("Legacy numeric GC changed during deletion")
         if count < batch and installed(db):
             count += cold_collect(db, batch - count)
         return count

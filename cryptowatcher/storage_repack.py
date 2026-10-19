@@ -26,15 +26,36 @@ def normalized_record(store: Store, key: str, value: Any) -> Any:
     from .expiry_index import expires
 
     expiry = expires(store.db, key)
+    from . import metric_price_context as price_context
+    from .numeric_blocks import price_writing
 
-    def visit(item: Any, depth: int = 0) -> Any:
+    root_context: Any = price_context.Context() if price_writing(store.db) else False
+
+    def visit(item: Any, depth: int = 0, inherited: Any = root_context) -> Any:
         if depth > 32:
             raise ValueError("Source normalization nesting exceeds bound")
         if isinstance(item, list):
-            return [visit(child, depth + 1) for child in item]
+            return [visit(child, depth + 1, inherited) for child in item]
         if not isinstance(item, dict):
             return item
-        result = {k: visit(v, depth + 1) if k != "_history_storage" else v for k, v in item.items()}
+        price_state = (
+            price_context.context(
+                store.db, item, inherited, history.codec.field_raw, cache=store.cached_bytes
+            )
+            if inherited is not False
+            else False
+        )
+
+        def price(frame: bytes) -> bytes | None:
+            if not isinstance(price_state, price_context.Context):
+                return None
+            return price_context.candidate(
+                store.db, item, frame, price_state, history.codec.field_raw, cache=store.cached_bytes
+            )
+
+        result = {
+            k: visit(v, depth + 1, price_state) if k != "_history_storage" else v for k, v in item.items()
+        }
         storage = item.get("_history_storage")
         if storage is not None:
             if (
@@ -64,14 +85,18 @@ def normalized_record(store: Store, key: str, value: Any) -> Any:
                         restore_window(store.db, ref, cache=store.cached_bytes)
                         fields[name] = intern(store.db, ref, expiry[0])
                 elif name == "metrics" and ref.get("mode") in ("numeric", "numeric2"):
-                    fields[name] = encode_reference(store.db, resolve(store.db, ref))
+                    fields[name] = encode_reference(
+                        store.db, resolve(store.db, ref), price=price if price_state is not False else None
+                    )
                 elif name == "source_context" and ref.get("mode") == "contexts":
                     from .context_integrity import convert
 
                     fields[name] = convert(store.db, ref)
             result["_history_storage"] = {**storage, "fields": fields}
         if isinstance(result.get("metrics"), dict):
-            reference = encode_reference(store.db, result["metrics"])
+            reference = encode_reference(
+                store.db, result["metrics"], price=price if price_state is not False else None
+            )
             if reference is not None:
                 current = result.get("_history_storage", {"schema": SCHEMA, "fields": {}})
                 if "metrics" in current["fields"]:
@@ -228,7 +253,38 @@ def record_rows(store: Store, state: dict[str, Any], batch: int, deadline: float
             if size <= 1024 * 1024:
                 raw = sql_payload(payload)
                 original = json_payload(payload)
+                numeric_categories = ("numeric_details", "quality_numeric")
+                has_numeric = key.startswith(
+                    tuple("radar:v1:" + kind + ":" for kind in ("event", "outcome", "comparison"))
+                )
+                numeric_before = (
+                    dict(
+                        store.db.execute(
+                            "SELECT category,logical_bytes FROM market_counts WHERE category IN (?,?)",
+                            numeric_categories,
+                        )
+                    )
+                    if has_numeric
+                    else {}
+                )
                 normalized = normalized_record(store, key, original)
+                if has_numeric:
+                    numeric_after = dict(
+                        store.db.execute(
+                            "SELECT category,logical_bytes FROM market_counts WHERE category IN (?,?)",
+                            numeric_categories,
+                        )
+                    )
+                    for numeric_category in numeric_categories:
+                        saved = numeric_before.get(numeric_category, 0) - numeric_after.get(
+                            numeric_category, 0
+                        )
+                        if saved:
+                            state["saved_payload_bytes"] = state.get("saved_payload_bytes", 0) + saved
+                            saved_categories = state.setdefault("saved_categories", {})
+                            saved_categories[numeric_category] = (
+                                saved_categories.get(numeric_category, 0) + saved
+                            )
                 changed = encode(normalized) != encode(original)
                 target = encode(normalized) if changed else raw
                 # Validate the target envelope, but do not parse/compress it
@@ -411,7 +467,12 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
                 break
             phase = (first + offset) % 11
             state["next_phase"] = (phase + 1) % 11
-            if phase == 0 and state.get("source_transfer_complete") and not state.get("records_complete"):
+            if (
+                phase == 0
+                and state.get("source_transfer_complete")
+                and state.get("numeric_transfer_complete")
+                and not state.get("records_complete")
+            ):
                 record_rows(store, state, batch, deadline)
             elif phase == 1 and not state.get("decisions_complete"):
                 decision_heads(store, state, batch, deadline)

@@ -88,7 +88,7 @@ def test_unknown_method_incomplete_and_unsupported_reference_keep_original_metri
     assert encode(value) == original
 
 
-@pytest.mark.parametrize("damage", ["gap", "duplicate", "reverse", "step", "price"])
+@pytest.mark.parametrize("damage", ["gap", "duplicate", "reverse", "step", "price", "extra"])
 def test_frozen_window_geometry_must_be_complete_before_offering_a_recipe(store, damage):
     enable(store.db)
     value = frozen()
@@ -101,6 +101,8 @@ def test_frozen_window_geometry_must_be_complete_before_offering_a_recipe(store,
         rows.reverse()
     elif damage == "step":
         rows[0]["step"] = True
+    elif damage == "extra":
+        rows.append({**rows[-1], "start": rows[-1]["start"] + 60000})
     else:
         rows[0]["high"] = float("nan")
     assert proposal(store, value)[0] is None
@@ -190,6 +192,10 @@ def test_bounds_reject_before_blob_inflation_or_unbounded_coordinate_expansion(s
     assert proposal(store, value, read=no_read)[0] is None
     value = with_reference(
         frozen(), {"mode": "source-cells", "stream": 1, "runs": [[NOW, 60000, 2**63 - 1, 0]]}
+    )
+    assert proposal(store, value, read=no_read)[0] is None
+    value = with_reference(
+        frozen(), {"mode": "source-cells", "stream": 999, "runs": [[NOW, 120000, context.MAX_CANDLES, 0]]}
     )
     assert proposal(store, value, read=no_read)[0] is None
 

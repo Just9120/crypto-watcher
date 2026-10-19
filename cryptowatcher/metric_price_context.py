@@ -38,7 +38,7 @@ class Source:
         self.loaded = False
         self.rows: list[Any] | None = None
 
-    def normalized(self, reference: dict[str, Any]) -> list[Any]:
+    def normalized(self, reference: dict[str, Any]) -> list[Any] | None:
         from .candle_access import Lookup
         from .market_storage import reference_points
         from .storage import encode
@@ -48,17 +48,22 @@ class Source:
         points = reference_points(reference)
         if not isinstance(points, list) or not 0 < len(points) <= MAX_CANDLES:
             raise ValueError("Invalid retained price source count")
-        cells = reference["mode"] == "source-cells"
-        reader = Lookup(self.db, reference["stream"], self.cache, require_tiles=cells)
-        checksum = hashlib.sha256(b"[")
-        rows = []
-        for index, point in enumerate(points):
+        previous = None
+        for point in points:
             if (
                 not isinstance(point, list)
                 or len(point) != 2
                 or any(type(n) is not int or not 0 <= n < 2**63 for n in point)
             ):
                 raise ValueError("Invalid retained price source coordinate")
+            if previous is not None and point[0] != previous + MINUTE:
+                return None
+            previous = point[0]
+        cells = reference["mode"] == "source-cells"
+        reader = Lookup(self.db, reference["stream"], self.cache, require_tiles=cells)
+        checksum = hashlib.sha256(b"[")
+        rows = []
+        for index, point in enumerate(points):
             candle = reader.point(*point)
             if not cells:
                 if index:
@@ -235,6 +240,8 @@ def candidate(
         if start <= row["start"] and row["start"] + MINUTE <= end:
             chosen.append(row)
     if len(chosen) != (end - start) // MINUTE:
+        return None
+    if own is not None and len(chosen) != len(rows):
         return None
     for index, row in enumerate(chosen):
         if row["start"] != start + index * MINUTE:
