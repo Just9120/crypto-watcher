@@ -238,14 +238,13 @@ class Store:
             timeout=5,
         )
         from .key_registry import install_functions as registry_functions
-        from .record_codec import sql_payload
 
         registry_functions(self.db)
         from .cohort_meter import install_functions as cohort_functions
 
         cohort_functions(self.db)
 
-        self.db.create_function("cw_record_json", 1, sql_payload, deterministic=True)
+        self.db.create_function("cw_record_json", 1, self.cached_record_json, deterministic=True)
         from .source_windows import references
 
         self.db.create_function(
@@ -333,17 +332,28 @@ class Store:
             ("radar:v1:event:", "radar:v1:outcome:", "radar:v1:comparison:")
         ):
             return str(read(key, raw))
+        return self.cached_text(kind, key, raw, lambda: str(read(key, raw)))
+
+    def cached_record_json(self, raw: Any) -> Any:
+        from .record_codec import sql_payload
+
+        if not isinstance(raw, bytes):
+            return sql_payload(raw)
+        return self.cached_text("record-json", "", raw, lambda: str(sql_payload(raw)))
+
+    def cached_text(self, kind: str, key: str, raw: str | bytes, read: Any) -> str:
+        # One existing1MiB budget shared by pure byte-to-text transforms. No
+        # referenced body lookup, DB row or object is cached by this method.
         token = (kind, key, raw)
         cached = self.reference_cache.get(token)
         if cached is not None:
             return cached[0]
-        result = str(read(key, raw))
-        size = (
-            len(key.encode())
-            + (len(raw.encode()) if isinstance(raw, str) else len(raw))
-            + len(result.encode())
-            + 256
-        )
+        result = str(read())
+        import sys
+
+        # Unicode can use four bytes per character even when almost all of a
+        # JSON string is ASCII. Charge Python objects, not UTF8 lengths.
+        size = sys.getsizeof(key) + sys.getsizeof(raw) + sys.getsizeof(result) + 384
         if size <= 1024 * 1024:
             while self.reference_cache and self.reference_cache_bytes + size > 1024 * 1024:
                 removed = self.reference_cache.pop(next(iter(self.reference_cache)))

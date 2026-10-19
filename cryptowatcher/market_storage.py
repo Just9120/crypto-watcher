@@ -141,7 +141,7 @@ def encoded(value: Any) -> bytes:
 
 
 def decoded(payload: bytes, maximum: int = 8192) -> Any:
-    if payload.startswith((b"CW2\x00", b"CW3\x00")):
+    if payload.startswith((b"CW2\x00", b"CW3\x00", b"CH1\x00")):
         from .record_codec import binary_payload
 
         raw = binary_payload(payload).encode()

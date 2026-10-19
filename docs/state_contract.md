@@ -60,7 +60,7 @@ retention work даже после удаления последнего event.
 `market_body_links` сохраняет owner/body через compatibility view; новые пары
 хранят integer coordinates существующего owner registry и shared body dictionary.
 Legacy rows остаются видны, пока bounded repack не перенесёт их атомарно.
-Repack8 имеет durable finite phases records/decisions/expiry/quality/namespaces/
+Repack9 имеет durable finite phases records/decisions/expiry/quality/namespaces/
 references/quality-tally/key-registry/prospective-cohorts. Secondary registry CK1 сохраняет исходные
 runtime keys и stable integer IDs; mixed legacy text/tokens видимы через expiry4/
 reference2 views. Point mutations используют индексы, не полный scan view.
@@ -86,6 +86,14 @@ Digest counters и detail ref conversion атомарны с writer transaction.
 Byte-flow samples после завершения новой версии repack имеют отдельный epoch:
 backfill pools/digests не выдаётся за последующий ежедневный прирост. Старые
 samples и event-frequency observations сохраняются.
+
+CH1 — frozen template для inline projected heads с полным SHA256. Field positions
+и typed defaults неизменны; `schema`/`revision_key` восстанавливаются ровно из
+сохранённых ID/revision. Все query fields остаются в head; новой ссылки на detail
+для SQL нет. Unknown fields/неподходящие shapes остаются в общем codec. CW3 reader
+не меняет семантику. Чистый byte-to-JSON cache разделяет прежний1MiB budget с
+reference extraction; Python Unicode sizes учитываются через фактический размер
+objects, cache не заменяет проверку наличия внешних bodies.
 
 #### Market layout v2: устройство
 

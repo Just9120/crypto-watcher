@@ -96,7 +96,7 @@ def test_completed_repack_resumes_decision_pass_without_discarding_progress(stor
     assert store.get_runtime(PREFIX + key) == value
     state = work(store, NOW, batch=10, seconds=1)
     assert state["state"] == "COMPLETE" and state["decisions_complete"]
-    assert state["version"] == 8 and state["previous_run"]["records"] == 1000
+    assert state["version"] == 9 and state["previous_run"]["records"] == 1000
     assert state["previous_run"]["cursor"] == previous["cursor"] and state["records"] >= 2
     assert state["saved_payload_bytes"] > 123
     assert h.get(key) == value and store.get_runtime(PREFIX + key) == {DECISION_HEAD: 1}

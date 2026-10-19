@@ -178,6 +178,8 @@ def decision_heads(store: Store, state: dict[str, Any], batch: int, deadline: fl
 
 
 def record_rows(store: Store, state: dict[str, Any], batch: int, deadline: float) -> None:
+    from .head_codec import MAGIC as HEAD_MAGIC
+    from .head_codec import SCHEMA as HEAD_SCHEMA
     from .record_codec import TYPED_MAGIC, pack_binary, sql_payload
 
     if not state.get("records_complete"):
@@ -223,7 +225,13 @@ def record_rows(store: Store, state: dict[str, Any], batch: int, deadline: float
                 # a second time. New writes already choose this codec.
                 packed = (
                     payload
-                    if not changed and isinstance(payload, bytes) and payload.startswith(TYPED_MAGIC)
+                    if not changed
+                    and isinstance(payload, bytes)
+                    and (
+                        payload.startswith(HEAD_MAGIC)
+                        or payload.startswith(TYPED_MAGIC)
+                        and not (isinstance(original, dict) and original.get("schema") == HEAD_SCHEMA)
+                    )
                     else pack_binary(target)
                 )
                 # A shared-view reference can grow by a byte while removing a
@@ -331,7 +339,7 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
         return {"state": "N/A_LEGACY"}
     state = store.get_runtime("storage_repack", {})
     if (
-        state.get("version") == 8
+        state.get("version") == 9
         and state.get("state") == "COMPLETE"
         and state.get("decisions_complete")
         and state.get("namespace_meter_complete")
@@ -344,7 +352,7 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
         and namespace_snapshot(store.db) is not None
     ):
         return state
-    if state.get("version") in (3, 4, 5, 6, 7):
+    if state.get("version") in (3, 4, 5, 6, 7, 8):
         state = {
             "previous_version": state["version"],
             "previous_run": {
@@ -353,7 +361,7 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
             "saved_payload_bytes": state.get("saved_payload_bytes", 0),
             "saved_categories": state.get("saved_categories", {}),
         }
-    state = {"version": 8, "cursor": "", "records": 0, "saved_payload_bytes": 0, **state}
+    state = {"version": 9, "cursor": "", "records": 0, "saved_payload_bytes": 0, **state}
     state.setdefault("saved_categories", {})
     deadline = time.monotonic() + seconds
     first = state.get("next_phase", 0)

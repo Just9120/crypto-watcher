@@ -163,7 +163,11 @@ def pack_binary(payload: str) -> bytes:
     if len(typed) >= len(raw):
         return pack_binary_v2(payload)
     frame = zstandard.ZstdCompressor(level=3, write_checksum=True, threads=0).compress(typed)
-    return TYPED_MAGIC + len(raw).to_bytes(4, "big") + hashlib.sha256(raw).digest() + frame
+    ordinary = TYPED_MAGIC + len(raw).to_bytes(4, "big") + hashlib.sha256(raw).digest() + frame
+    from .head_codec import pack as head
+
+    projected = head(value)
+    return projected if projected is not None and len(projected) < len(ordinary) else ordinary
 
 
 def _typed_value(payload: bytes) -> tuple[Any, bytes]:
@@ -195,16 +199,33 @@ def _typed_value(payload: bytes) -> tuple[Any, bytes]:
         raise StateError("Invalid typed record encoding") from exc
 
 
+def _head_value(payload: bytes) -> tuple[Any, bytes]:
+    from .head_codec import unpack_raw
+
+    try:
+        return unpack_raw(payload)
+    except (ValueError, TypeError, UnicodeError) as exc:
+        raise StateError("Invalid projected head encoding") from exc
+
+
 def json_value(payload: Any) -> Any:
     """Avoid a second JSON parse after fully validating and decoding typed data."""
     if isinstance(payload, bytes) and payload.startswith(TYPED_MAGIC):
         return _typed_value(payload)[0]
+    from .head_codec import MAGIC
+
+    if isinstance(payload, bytes) and payload.startswith(MAGIC):
+        return _head_value(payload)[0]
     return json.loads(sql_payload(payload))
 
 
 def binary_payload(payload: bytes) -> str:
     if payload.startswith(TYPED_MAGIC):
         return _typed_value(payload)[1].decode("utf-8")
+    from .head_codec import MAGIC
+
+    if payload.startswith(MAGIC):
+        return _head_value(payload)[1].decode()
     if not payload.startswith(BINARY_MAGIC) or len(payload) < 42:
         raise StateError("Invalid binary record envelope")
     fingerprint = payload[4:36]
