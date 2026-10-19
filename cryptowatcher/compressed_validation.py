@@ -468,6 +468,9 @@ def full_check(db: apsw.Connection, deadline: float) -> None:
         from .owner_slots import sql_signature
 
         db.create_scalar_function("cw_owner_digest", sql_signature, 3, deterministic=True)
+        from .catalogue_overlap import sql_signature as overlap_signature
+
+        db.create_scalar_function("cw_catalogue_shadow_digest", overlap_signature, 2, deterministic=True)
         db.execute("PRAGMA mmap_size=0")
         db.execute("PRAGMA ignore_check_constraints=OFF")
         if list(db.execute("PRAGMA integrity_check")) != [("ok",)]:

@@ -88,6 +88,8 @@ def test_store_and_history_resolve_cold_only_versions_heads_aliases_and_mixed_du
         else:
             assert encode(history.get(coordinate.kind + "-head:" + coordinate.identity)) == encode(body)
     ordered = sorted(expected.items())
+    assert store.count_runtime(PREFIX) == len(expected)
+    assert history.count("") == len(expected)
     assert [(key, encode(value)) for key, value in store.scan_runtime(PREFIX)] == [
         (key, encode(value)) for key, value in ordered
     ]

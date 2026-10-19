@@ -235,6 +235,7 @@ def test_unknown_catalogue_refuses_before_any_new_tables_or_counters(store):
 
 
 def test_catalogue_meter_keeps_parent_alias_and_owner_bytes_and_invalidates_old_dbstat(store):
+    from cryptowatcher.catalogue_overlap import NAMES
     from cryptowatcher.storage_meter import report
 
     prepare(store)
@@ -261,6 +262,7 @@ def test_catalogue_meter_keeps_parent_alias_and_owner_bytes_and_invalidates_old_
     assert value["catalogue_layout"] == {
         "state": "INACTIVE_DOMAIN_CATALOGUE",
         "version": 3,
+        "overlaps": dict.fromkeys(NAMES, 0),
         "counts": {
             "parents": 1,
             "owners": 1,

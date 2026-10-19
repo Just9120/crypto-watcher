@@ -18,6 +18,7 @@ from .storage import encode
 
 def install(db: sqlite3.Connection, cache: Any = None, binary_cache: Any = None) -> None:
     from .catalogue_cohorts import install as install_counters
+    from .catalogue_overlap import install as install_overlap
     from .record_ownership import install as install_ownership
 
     marker = db.execute("SELECT value FROM market_meta WHERE key='record_catalog'").fetchone()
@@ -40,6 +41,8 @@ def install(db: sqlite3.Connection, cache: Any = None, binary_cache: Any = None)
             record_masks.tallies(db, "record_aliases")
         install_ownership(db, cache, binary_cache)
         install_counters(db)
+        if marker[0] == "3":
+            install_overlap(db)
         return
     if db.in_transaction:
         raise ValueError("Catalogue installation requires an outer boundary")
@@ -112,6 +115,7 @@ def install(db: sqlite3.Connection, cache: Any = None, binary_cache: Any = None)
         raise
     install_ownership(db, cache, binary_cache)
     install_counters(db)
+    install_overlap(db)
 
 
 def binary(identity: str) -> bytes:

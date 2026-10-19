@@ -90,3 +90,26 @@ def scan(
     finally:
         hot.close()
         cold.close()
+
+
+def count(db: sqlite3.Connection, prefix: str, *, bounded: bool) -> int:
+    if not isinstance(prefix, str):
+        raise ValueError("Invalid mixed runtime count prefix")
+    sql = "SELECT COUNT(*) FROM runtime WHERE key>=?"
+    parameters: tuple[Any, ...] = (prefix,)
+    endpoint = upper(prefix)
+    if endpoint is not None:
+        sql += " AND key<?"
+        parameters += (endpoint,)
+    hot = db.execute(sql, parameters).fetchone()[0]
+    if not bounded:
+        return hot
+    cold = catalogue_reader.count(db, prefix)
+    if not cold:
+        return hot
+    from .catalogue_overlap import count as overlap_count
+
+    overlap = overlap_count(db, prefix)
+    if not 0 <= overlap <= min(hot, cold):
+        raise ValueError("Inconsistent mixed runtime overlap count")
+    return hot + cold - overlap

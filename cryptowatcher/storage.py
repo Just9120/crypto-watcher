@@ -65,6 +65,9 @@ def check_integrity(database: sqlite3.Connection, *, deadline: float) -> None:
         from .owner_slots import install_functions as owner_functions
 
         owner_functions(database)
+        from .catalogue_overlap import install_check as overlap_check
+
+        overlap_check(database)
         previous_cache = int(database.execute("PRAGMA cache_size").fetchone()[0])
         mmap_row = database.execute("PRAGMA mmap_size").fetchone()
         previous_mmap = int(mmap_row[0]) if mmap_row is not None else None
@@ -276,6 +279,9 @@ class Store:
         from .numeric_blocks import install_functions as numeric_block_functions
 
         numeric_block_functions(self.db, self.cached_bytes)
+        from .record_ownership import install_functions as catalogue_functions
+
+        catalogue_functions(self.db, self.cached_text, self.cached_bytes)
 
         self.db.create_function(
             "cw_numeric_refs",
@@ -305,9 +311,16 @@ class Store:
             if catalogue is not None:
                 if catalogue[0] not in ("2", "3"):
                     raise StateError("Unknown record catalogue; database preserved")
-                from .record_ownership import install_functions as catalogue_functions
+                overlap = self.db.execute(
+                    "SELECT value FROM market_meta WHERE key='catalogue_overlap'"
+                ).fetchone()
+                if overlap is not None:
+                    from .catalogue_overlap import header as overlap_header
 
-                catalogue_functions(self.db, self.cached_text, self.cached_bytes)
+                    try:
+                        overlap_header(self.db)
+                    except ValueError as exc:
+                        raise StateError("Invalid catalogue overlap counters; database preserved") from exc
             source_tiles = self.db.execute(
                 "SELECT value FROM market_meta WHERE key='candle_blocks'"
             ).fetchone()
@@ -526,6 +539,11 @@ class Store:
     def put_runtime(self, key: str, payload: Any) -> None:
         with self.db:
             self.db.execute(RUNTIME_UPSERT, (key, encode(payload)))
+
+    def count_runtime(self, prefix: str) -> int:
+        from .catalogue_store import count
+
+        return count(self.db, prefix, bounded=self.bounded)
 
     def backup(
         self,

@@ -121,6 +121,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "prospective_indexes",
         "source_blocks",
         "source_block_indexes",
+        "catalogue_overlap",
     }
     for category, value in counts.items():
         previous = (base or {}).get("categories", {}).get(category, {"inserted_bytes": 0, "deleted_bytes": 0})
@@ -282,10 +283,17 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
             "market_cold_cohort_strengths",
         }
         if version == 3:
+            from .catalogue_overlap import header as overlap_header
+
+            catalogue_layout["overlaps"] = overlap_header(store.db)
             catalogue_layout["counts"] = record_masks.tallies(store.db, "record_parents")
             record_masks.tallies(store.db, "record_owners")
             record_masks.tallies(store.db, "record_aliases")
-            source_tables |= {"market_record_owners", "market_catalogue_index_counts"}
+            source_tables |= {
+                "market_record_owners",
+                "market_catalogue_index_counts",
+                "market_catalogue_overlap",
+            }
     indexes = store.get_runtime(
         "storage_index_measurement", {"state": "PENDING", "reason": "No bounded exact measurement yet"}
     )

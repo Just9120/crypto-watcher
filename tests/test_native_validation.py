@@ -14,7 +14,7 @@ from .test_history_rebuild import closed_backup
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Native Linux validation helper")
 
 
-@pytest.mark.parametrize("damage", [None, "checksum", "heads"])
+@pytest.mark.parametrize("damage", [None, "checksum", "heads", "overlap_checksum", "overlap_count"])
 def test_native_full_catalogue_checks_owner_masks_and_head_uniqueness(store, tmp_path, damage):
     from .test_record_catalog import prepare, put
 
@@ -30,6 +30,12 @@ def test_native_full_catalogue_checks_owner_masks_and_head_uniqueness(store, tmp
         elif damage == "heads":
             store.db.execute("DROP TRIGGER market_record_head_changed")
             store.db.execute("UPDATE market_records SET current=1")
+        elif damage in ("overlap_checksum", "overlap_count"):
+            store.db.execute("PRAGMA ignore_check_constraints=ON")
+            store.db.execute(
+                "UPDATE market_catalogue_overlap SET "
+                + ("checksum=zeroblob(32)" if damage == "overlap_checksum" else "n=n+1")
+            )
     assert store.db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0
     original = store.path.read_bytes()
     image = cv.Image(store.path, limit=cv.MAX_COMPRESSED_BYTES, deadline=time.monotonic() + 30)

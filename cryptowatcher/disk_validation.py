@@ -48,6 +48,11 @@ def validated_disk(path: Path, *, deadline: float) -> Iterator[apsw.Connection]:
         from .owner_slots import sql_signature
 
         database.create_scalar_function("cw_owner_digest", sql_signature, 3, deterministic=True)
+        from .catalogue_overlap import sql_signature as overlap_signature
+
+        database.create_scalar_function(
+            "cw_catalogue_shadow_digest", overlap_signature, 2, deterministic=True
+        )
         if list(database.execute("PRAGMA integrity_check")) != [("ok",)]:
             raise IntegrityError("DATABASE_CORRUPT", "Database integrity check failed")
         from .record_catalog import valid_heads

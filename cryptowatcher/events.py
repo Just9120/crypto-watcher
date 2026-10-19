@@ -266,12 +266,7 @@ class History:
             yield key[len(PREFIX) :], self.resolve(key[len(PREFIX) :], value)
 
     def count(self, prefix: str) -> int:
-        start = PREFIX + prefix
-        return int(
-            self.store.db.execute(
-                "SELECT COUNT(*) FROM runtime WHERE key>=? AND key<?", (start, start + "~")
-            ).fetchone()[0]
-        )
+        return self.store.count_runtime(PREFIX + prefix)
 
     def version(self, kind: str, value: dict[str, Any]) -> None:
         key = value[f"{kind}_id"]

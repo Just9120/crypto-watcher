@@ -52,6 +52,7 @@ def block_entry(db: sqlite3.Connection, packet: int, slot: int, cache: Any = Non
 
 
 def install_functions(db: sqlite3.Connection, cache: Any = None, binary_cache: Any = None) -> None:
+    from .catalogue_overlap import install_functions as install_overlap
     from .record_masks import install_functions as install_masks
 
     packet_store.install_functions(db)
@@ -94,6 +95,7 @@ def install_functions(db: sqlite3.Connection, cache: Any = None, binary_cache: A
     db.create_function("cw_catalogue_refs", 6, references)
     db.create_function("cw_catalogue_key", 3, key, deterministic=True)
     db.create_function("cw_catalogue_record", 5, record)
+    install_overlap(db)
 
 
 def install(db: sqlite3.Connection, cache: Any = None, binary_cache: Any = None) -> None:
