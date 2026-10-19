@@ -381,7 +381,7 @@ def test_complete_repack_includes_numeric_phase_and_marks_old_physical_snapshot_
         state = work(store, NOW + tick, seconds=1)
         if state["state"] == "COMPLETE":
             break
-    assert state["state"] == "COMPLETE" and state["version"] == 12
+    assert state["state"] == "COMPLETE" and state["version"] == 13
     assert state["numeric_transfer_complete"] and state["numeric_rows_moved"] == 1
     value = report(store, NOW + 100)
     assert value["numeric_layout"]["live"] == 1

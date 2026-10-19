@@ -302,9 +302,9 @@ def test_repack_finishes_captured_range_despite_new_writes_and_keeps_progress(st
                 History(reopened).put(f"zzz-new:{i:04}", {"new": i})
             state = work(reopened, NOW + i, batch=1, seconds=1)
             assert state["records_upper"] == upper and state["records"] >= first["records"]
-            if state["state"] == "COMPLETE":
+            if state.get("records_complete"):
                 break
-        assert state["state"] == "COMPLETE" and state["records"] == 8
+        assert state["records_complete"] and state["records"] == 8
         assert [encode(reopened.get_runtime(f"radar:v1:fixture:{i}")) for i in range(8)] == [original] * 8
         assert History(reopened).get(f"zzz-new:{i:04}") == {"new": i}
 
@@ -318,7 +318,7 @@ def test_repack_validates_typed_envelopes_without_recompressing_them(store):
     with store.db:
         store.db.execute("INSERT INTO runtime VALUES (?,?)", ("radar:v1:fixture", packed))
     with patch("cryptowatcher.record_codec.pack_binary", side_effect=AssertionError("Recompressed target")):
-        assert work(store, NOW, seconds=1)["state"] == "COMPLETE"
+        assert work(store, NOW, seconds=1)["records_complete"]
     assert (
         store.db.execute("SELECT payload_json FROM runtime WHERE key='radar:v1:fixture'").fetchone()[0]
         == packed
@@ -673,4 +673,17 @@ async def test_steady_repack_stops_burst_on_deadline_completion_or_lost_readines
     ):
         await controller.repack_job(None)
         assert repack.call_count == 1
+    await radar.close()
+
+
+@pytest.mark.asyncio
+async def test_completed_initial_repack_continues_pending_live_work_in_the_existing_worker(
+    store, infrastructure, monkeypatch
+):
+    controller, radar, _ = steady_repack(store, infrastructure, monkeypatch)
+    pending = {"state": "COMPLETE", "catalogue_maintenance": {"pending_work": True}}
+    idle = {"state": "COMPLETE", "catalogue_maintenance": {"pending_work": False}}
+    with patch("cryptowatcher.storage_repack.work", side_effect=[pending, idle]) as repack:
+        await controller.repack_job(None)
+        assert repack.call_count == 2
     await radar.close()

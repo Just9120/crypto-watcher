@@ -94,9 +94,12 @@ def test_completed_repack_resumes_decision_pass_without_discarding_progress(stor
         work(store, NOW, batch=10, seconds=1)
     assert store.get_runtime("storage_repack") == previous
     assert store.get_runtime(PREFIX + key) == value
-    state = work(store, NOW, batch=10, seconds=1)
+    for _ in range(100):
+        state = work(store, NOW, batch=10, seconds=1)
+        if state["state"] == "COMPLETE":
+            break
     assert state["state"] == "COMPLETE" and state["decisions_complete"]
-    assert state["version"] == 12 and state["previous_run"]["records"] == 1000
+    assert state["version"] == 13 and state["previous_run"]["records"] == 1000
     assert state["previous_run"]["cursor"] == previous["cursor"] and state["records"] >= 2
     assert state["saved_payload_bytes"] > 123
     assert h.get(key) == value and store.get_runtime(PREFIX + key) == {DECISION_HEAD: 1}
@@ -206,12 +209,16 @@ def test_stable_baseline_distinguishes_referenced_backfill_from_normal_pending_h
             },
         )
         store.put_runtime("radar:v1:outcome-admission", {"complete": True})
-        store.put_runtime("storage_repack", {"state": "COMPLETE", "version": 12})
         store.put_runtime("analytics", {"state": "OK", "at_ms": NOW})
         History(store).put("outcome-pending:future-horizon", {"outcome_id": "normal-scheduled-work"})
         History(store).put(
             "outcome-job:normal-scheduled-work", {"state": "PENDING", "next_attempt_ms": NOW + 60000}
         )
+    for _ in range(100):
+        complete = work(store, NOW, seconds=1)
+        if complete["state"] == "COMPLETE":
+            break
+    assert complete["state"] == "COMPLETE"
     with patch("cryptowatcher.capacity.time.time", return_value=NOW / 1000):
         assert stable_reason(store) == []
         with store.db:
@@ -226,10 +233,10 @@ def test_stable_baseline_distinguishes_referenced_backfill_from_normal_pending_h
         with store.db:
             store.put_runtime("analytics_recovery_worker", {"state": "OK"})
         assert stable_reason(store) == []
-        for version in (3, 11, None, "12", 12.0):
+        for version in (3, 11, 12, None, "13", 13.0):
             store.put_runtime("storage_repack", {"state": "COMPLETE", "version": version})
             assert stable_reason(store) == ["REPACK"]
-        store.put_runtime("storage_repack", {"state": "COMPLETE", "version": 12})
+        store.put_runtime("storage_repack", complete)
         assert stable_reason(store) == []
 
 
@@ -389,8 +396,8 @@ def test_controlled_62week_population_plateaus_and_all_numeric_results_survive(t
     assert value["numeric_and_comparator_multiset_equality"] == value["private_equality"] == "PASS"
     assert value["restarts"] == 1 and not any(value["final_remaining"].values())
     if compact:
-        assert value["storage_layout"] == "MIXED_BLOCKS_REPACK12"
-        assert value["compaction"]["state"] == "COMPLETE" and value["compaction"]["version"] == 12
+        assert value["storage_layout"] == "MIXED_BLOCKS_REPACK13"
+        assert value["compaction"]["state"] == "COMPLETE" and value["compaction"]["version"] == 13
         assert value["issued_numeric_ids_after_final_gc"] > 0
     stable = value["steady_detail_population"][-8:]
     assert {s["events"] for s in stable} == {50}

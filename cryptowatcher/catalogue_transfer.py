@@ -145,6 +145,13 @@ def prepare(store: Store, key: str, raw: str | bytes, state: dict[str, Any]) -> 
     body = json_payload(raw)
     if not isinstance(body, dict):
         raise StateError("Invalid immutable domain body; data preserved")
+    if (
+        body.get(coordinate.field) != coordinate.identity
+        or type(body.get("revision")) is not int
+        or body["revision"] != coordinate.revision
+    ):
+        _fallback(state, "unrecognized_domain_identity")
+        return None
     record_blocks.compact(coordinate, body)
     if len(encode(body).encode()) + 128 > MAX_RECORD:
         _fallback(state, "oversized_record")
@@ -292,6 +299,11 @@ def advance(store: Store, state: dict[str, Any], batch: int, deadline: float) ->
     working.setdefault("version", VERSION)
     working.setdefault("phase", "bodies")
     with packet_store.atomic(store.db):
+        # Later phases keep the same finite admission boundary. Only a schema
+        # rebuild recaptures unfinished intervals after physical row relocation.
+        for phase in PHASES:
+            if not working.get(phase + "_complete"):
+                _bounds(store, working, phase)
         _advance(store, working, batch, deadline)
     state.clear()
     state.update(working)

@@ -191,18 +191,29 @@ def test_expiry_extension_and_repack_preserve_history_with_rollback_and_restart(
         store.db.execute("SELECT value FROM market_meta WHERE key='candle_block_runtime'").fetchone() is None
     )
     assert h.events(50) == before
+    from cryptowatcher.catalogue_repack import busy
+
     for _ in range(500):
         state = work(store, NOW, batch=3, seconds=1)
-        if state["state"] == "COMPLETE":
+        if state["state"] == "COMPLETE" and not busy(state):
             break
-    assert state["state"] == "COMPLETE"
+    assert state["state"] == "COMPLETE" and state["initial_reclaim_complete"] and not busy(state)
     assert not store.db.execute("SELECT 1 FROM market_expiry_legacy LIMIT 1").fetchone()
     store.db.execute("VACUUM")
     assert store.db.execute("PRAGMA foreign_key_check").fetchall() == []
     assert h.events(50) == before and list(cohort_rows(store)) == cohorts
     assert tuple(store.db.execute("SELECT * FROM owner_settings").fetchone()) == private
     with closing(Store(store.path, store.owner_id, readonly=True)) as fresh:
-        assert work(store, NOW) == state
+        refreshed = work(store, NOW, seconds=1)
+        assert {key: value for key, value in refreshed.items() if key != "catalogue_maintenance"} == {
+            key: value for key, value in state.items() if key != "catalogue_maintenance"
+        }
+        assert (
+            refreshed["catalogue_maintenance"]["free_pages"]
+            == store.db.execute("PRAGMA freelist_count").fetchone()[0]
+        )
+        assert refreshed["catalogue_maintenance"]["pending_work"] is False
+        assert work(store, NOW) == refreshed
         assert History(fresh).events(50) == before
     # Aggregate after migration, preserving frozen source/method/strength and N.
     for _ in range(100):

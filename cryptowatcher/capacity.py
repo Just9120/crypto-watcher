@@ -53,6 +53,11 @@ def boundary_blockers(value: dict[str, Any]) -> list[str]:
     ):
         if value.get(name, {}).get("state") != expected:
             reasons.append("BOUNDARY_" + name.upper() + "_INCOMPLETE")
+    if (
+        value.get("storage", {}).get("catalogue_layout", {}).get("state") == "MIXED_DOMAIN_CATALOGUE"
+        and value.get("runtime_ledger", {}).get("catalogue", {}).get("state") != "MEASURED"
+    ):
+        reasons.append("BOUNDARY_CATALOGUE_LEDGER_INCOMPLETE")
     if not re.fullmatch(r"[0-9a-f]{40}", value.get("source_revision", "")):
         reasons.append("BOUNDARY_SOURCE_UNSET")
     generation = value.get("history_generation") or {}
@@ -92,6 +97,7 @@ def runtime_ledger(store: Store, seconds: float = 50) -> dict[str, Any]:
     counts: dict[str, dict[str, int]] = measured or {}
     cursor: int | None = None
     complete = measured is not None
+    catalogue: dict[str, Any] = {"state": "NOT_MEASURED"}
     store.db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
     try:
         while not complete and time.monotonic() < deadline:
@@ -111,12 +117,20 @@ def runtime_ledger(store: Store, seconds: float = 50) -> dict[str, Any]:
             if len(rows) < 4096:
                 complete = True
                 break
+        if complete:
+            from .catalogue_accounting import measure as catalogue_ledger
+
+            catalogue = catalogue_ledger(store, counts)
     except sqlite3.OperationalError as exc:
         if getattr(exc, "sqlite_errorcode", None) != sqlite3.SQLITE_INTERRUPT:
             raise
+        complete = False
     finally:
         store.db.set_progress_handler(None, 0)
     settings = store.snapshot().settings
+    public_counts = catalogue.get(
+        "public_namespace_records", {key: value["records"] for key, value in counts.items()}
+    )
     return {
         "state": "MEASURED" if complete else "PARTIAL_BUDGET",
         "method": "TRANSACTIONAL_NAMESPACE_COUNTERS_AFTER_COMPLETE_FINITE_SCAN"
@@ -128,15 +142,15 @@ def runtime_ledger(store: Store, seconds: float = 50) -> dict[str, Any]:
         },
         "records_scanned": 0 if measured is not None else sum(v["records"] for v in counts.values()),
         "records_accounted": sum(v["records"] for v in counts.values()),
+        "catalogue": catalogue,
         "scope": "runtime snapshot; encoded values and UTF8 keys only; NOT physical pages/indexes",
         "partial_cursor": None if complete else cursor,
         "revision_multiplicity": {
             kind: {
-                "revisions": counts.get(kind, {}).get("records", 0),
-                "heads": counts.get(kind + "-head", {}).get("records", 0),
-                "revisions_per_head": counts.get(kind, {}).get("records", 0)
-                / counts[kind + "-head"]["records"]
-                if counts.get(kind + "-head", {}).get("records")
+                "revisions": public_counts.get(kind, 0),
+                "heads": public_counts.get(kind + "-head", 0),
+                "revisions_per_head": public_counts.get(kind, 0) / public_counts[kind + "-head"]
+                if public_counts.get(kind + "-head")
                 else None,
             }
             for kind in ("event", "episode", "outcome", "comparison")
@@ -146,14 +160,12 @@ def runtime_ledger(store: Store, seconds: float = 50) -> dict[str, Any]:
 
 def comparator_sample(store: Store, limit: int = 128) -> dict[str, Any]:
     history = History(store)
-    prefix = PREFIX + "comparison:"
-    keys = store.db.execute(
-        "SELECT key FROM runtime WHERE key>=? AND key<? ORDER BY key LIMIT ?",
-        (prefix, prefix + "~", limit),
-    ).fetchall()
+    from itertools import islice
+
+    keys = list(islice(store.scan_runtime(PREFIX + "comparison:"), limit))
     sizes: Counter[int] = Counter()
     nonempty: Counter[str] = Counter()
-    for (key,) in keys:
+    for key, _ in keys:
         value = history.metadata(key[len(PREFIX) :])
         samples = value.get("samples", [])
         sizes[len(samples)] += 1
@@ -307,6 +319,23 @@ def stable_reason(store: Store) -> list[str]:
         or repack.get("version") != VERSION
     ):
         reasons.append("REPACK")
+    elif repack.get("catalogue_complete") is not True:
+        reasons.append("CATALOGUE_INITIAL_INCOMPLETE")
+    elif repack.get("initial_reclaim_complete") is not True:
+        reasons.append("CATALOGUE_INITIAL_RECLAIM_PENDING")
+    else:
+        from . import catalogue_repack
+        from .storage import StateError
+
+        try:
+            catalogue_repack.validate(store, repack, VERSION)
+            pending = catalogue_repack.status(store, int(time.time() * 1000))
+            if pending["oldest_ms"] is not None and pending["oldest_ms"] > time.time() * 1000 + 30000:
+                reasons.append("CATALOGUE_CLOCK_UNKNOWN")
+            elif pending["oldest_age_ms"] is not None and pending["oldest_age_ms"] > 60000:
+                reasons.append("CATALOGUE_BACKLOG")
+        except (ValueError, StateError, sqlite3.Error):
+            reasons.append("CATALOGUE_CHECKPOINT_UNKNOWN")
     for key in ("repack_worker", "analytics_recovery_worker"):
         if store.get_runtime(key, {}).get("state") == "FAILED":
             reasons.append(key.upper() + "_FAILED")

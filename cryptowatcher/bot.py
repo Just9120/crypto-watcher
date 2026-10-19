@@ -774,6 +774,7 @@ class Controller:
             return
         if not self.maintenance_ready():
             return
+        from .catalogue_repack import busy
         from .storage_repack import async_work
 
         async with self.repack_lock:
@@ -788,7 +789,7 @@ class Controller:
                     ):
                         break
                     state = await async_work(self.store, self.market.server_now(), slices=1)
-                    if state.get("state") in ("COMPLETE", "N/A_LEGACY"):
+                    if not busy(state):
                         break
                 self.store.put_runtime("repack_worker", {"state": "OK", "at_ms": self.market.server_now()})
             except Exception as exc:

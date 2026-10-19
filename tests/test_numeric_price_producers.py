@@ -113,7 +113,7 @@ def test_finite_repack12_activates_feature_and_recodes_retained_data_without_new
         state = repack(store, 1800000000000 + tick, seconds=0.1)
         if state["state"] == "COMPLETE":
             break
-    assert state["state"] == "COMPLETE" and state["version"] == 12
+    assert state["state"] == "COMPLETE" and state["version"] == 13
     assert numeric_blocks.price_writing(store.db)
     assert numeric_blocks.read(store.db, 0)[3][:4] == b"NB2\x00"
     assert state["saved_categories"]["numeric_details"] > 0

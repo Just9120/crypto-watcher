@@ -134,7 +134,7 @@ CH1 — frozen template для inline projected heads с полным SHA256. Fi
 reference extraction; Python Unicode sizes учитываются через фактический размер
 objects, cache не заменяет проверку наличия внешних bodies.
 
-DB1/DB2 catalogue primitives пока не включены в runtime/repack. Это frozen blocks
+Candidate repack13 явно подключает DB1/DB2 catalogue adapters. Это frozen blocks
 с отдельно сжатыми projection/detail frames, полным SHA256 actual frames,
 проверкой UUID/revision/slot и allocation bounds до decompression. Каталог
 хранит immutable coordinates/parent deadlines и не дублирует integer rowid
@@ -142,10 +142,10 @@ DB1/DB2 catalogue primitives пока не включены в runtime/repack. �
 Append-only SQLite arenas публикуют packets атомарно; refs/verified relocation
 и GC не меняют logical packet identity. Numeric/source-window leases считаются
 по logical revision, shared JSON bodies — по packet до последнего владельца.
-Missing dependency/counter отклоняет удаление. Install/partial primitives
-не являются разрешением migration: полные mixed readers, analytics/export,
-retention/accounting adapters, finite restart и resource qualification нужны
-до выбора этого layout приложением. Existing Store open регистрирует UDF для
+Missing dependency/counter отклоняет удаление. Полные mixed readers, analytics/export,
+retention/accounting adapters и finite restart входят в candidate; required native,
+resource/mature25GB и ordinary delivery gates остаются до production применения.
+Existing Store open регистрирует UDF для
 уже установленного известного catalogue; DDL/migration при open не добавлены.
 DB2 использует IF1: неизменяемый typed dictionary, byte offsets и общий Zstd
 frame, с полным SHA256 actual header/offsets/compressed bytes и bounded content
@@ -166,7 +166,7 @@ lease adapter остаются hot и учитываются в budget. Mixed ex
 hot/cold revisions, membership и parent; refs освобождаются до bounded GC.
 Frozen future leases не теряются из-за нового age cutoff; bounded history cursor
 позволяет дойти до остальных due records и сохраняется только вместе с обработкой.
-Это candidate adapter, не runtime activation или подтверждение mature25GB.
+Explicit repack включает adapter локально; это не подтверждение production или mature25GB.
 
 Candidate SQL consumers event/outcome/episode/comparison читают known native kind
 ranges и checked mixed point payload. Equality/identity/checksum guards не
@@ -179,7 +179,7 @@ caller transaction сохраняется. Outcome bootstrap читает cursor
 и не подключает market layout. Runtime activation/native/mature gates прежние.
 
 Candidate finite transfer использует explicit caller writer/checkpoint и schema
-generation: signed64 rowid ceiling фиксируется отдельно для bodies/heads/aliases,
+generation: signed64 rowid intervals для bodies/heads/aliases фиксируются вместе до переноса,
 DDL/VACUUM сбрасывают незавершённую физическую границу. UUID cursor не служит
 хронологическим watermark. Metadata scan ограничен256rows, payload budget2MiB,
 один packet — прежними64records/encoded bounds и одним expiry UTC day.
@@ -189,8 +189,20 @@ cumulative diagnostics, не число оставшихся записей. Pub
 exact persisted private readback, hot CAS removal и checkpoint атомарны.
 Head удаляется только вместе с matching body/lease; остальные hot heads остаются
 совместимыми ссылками. Initial COMPLETE означает конец фиксированной границы;
-новые admissions обрабатывает следующий конечный цикл. Это ещё не подключение
-repack13, steady worker/accounting или доказательство mature25GB.
+новые admissions обрабатывает прежний repack worker через pending-only inbox.
+Repack13 включает queue writer после завершения предыдущих normalization phases;
+queue хранит registry RID, монотонный sequence и frozen first-enqueue time. Нет
+дополнительного индекса всех retained keys или нового scheduled job. Fixed queue
+ceiling закрывает initial COMPLETE; последующие admissions не открывают его заново.
+Прежние40ms slices/health boost gates действуют также после COMPLETE. Unknown
+checkpoint/ownership/counter не считается пустой очередью; baseline блокируется
+при возрасте pending более60s или неизвестном состоянии.
+Storage report включает queue occupancy/age и новые physical tables/indexes;
+explicit boundary ledger отдельно сверяет actual hot/cold coordinates, aliases,
+checked overlaps и pending count. Logical coordinates не добавляются повторно к
+physical pages. Hot details после activation прогнозируются как staging occupancy,
+а не второй retained gross flow уже перенесённых packets. Sample format6 отделяет
+новую модель; прежние samples сохраняются. Эти adapters не доказывают mature25GB.
 
 SB1 source tiles введены явным finite repack10 и сохраняются в repack11; обычный Store open не
 создает их и не включает writer. Замороженный блок

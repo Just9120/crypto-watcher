@@ -9,7 +9,7 @@ from .storage import Store
 
 BUDGET = 25_000_000_000
 QUALITY_CATEGORIES = frozenset({"quality", "quality_numeric", "quality_components"})
-SAMPLE_FORMAT = 5
+SAMPLE_FORMAT = 6
 
 
 def create(db: Any) -> None:
@@ -124,6 +124,13 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "catalogue_overlap",
         "record_pending",
     }
+    if store.db.execute(
+        "SELECT 1 FROM market_meta WHERE key='record_catalogue_runtime' AND value='1'"
+    ).fetchone():
+        # Hot details become transient staging. Their admissions are represented
+        # again by retained catalogue packets/coordinates after transfer; annual
+        # gross hot insertion flow would count those same records twice.
+        occupancy.add("details")
     for category, value in counts.items():
         previous = (base or {}).get("categories", {}).get(category, {"inserted_bytes": 0, "deleted_bytes": 0})
         inserted = max(0, value["inserted_bytes"] - previous.get("inserted_bytes", 0))

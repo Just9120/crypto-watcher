@@ -7,7 +7,7 @@ from typing import Any
 
 from .storage import Store, encode, json_payload
 
-VERSION = 12
+VERSION = 13
 
 
 def normalized_record(store: Store, key: str, value: Any) -> Any:
@@ -145,7 +145,9 @@ async def async_work(store: Store, now_ms: int, slices: int = 8) -> dict[str, An
     state = store.get_runtime("storage_repack", {})
     for _ in range(slices):
         state = work(store, now_ms)
-        if state.get("state") in ("COMPLETE", "N/A_LEGACY"):
+        from .catalogue_repack import busy
+
+        if not busy(state):
             break
         await asyncio.sleep(0)
     return state
@@ -393,6 +395,7 @@ def quality_rows(store: Store, state: dict[str, Any], batch: int, deadline: floa
 
 
 def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> dict[str, Any]:
+    from . import catalogue_repack
     from .candle_access import installed as source_installed
     from .candle_access import writing as source_writing
     from .candle_blocks import install as install_source_tiles
@@ -419,27 +422,29 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
     if (
         not isinstance(state, dict)
         or ("version" in state and type(state["version"]) is not int)
-        or state.get("version") not in (None, 3, 4, 5, 6, 7, 8, 9, 10, 11, VERSION)
+        or state.get("version") not in (None, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, VERSION)
     ):
         raise ValueError("Unknown storage repack checkpoint; database preserved")
-    if not source_installed(store.db):
-        install_source_tiles(store.db, store.cached_text)
-    source_summary(store.db)
-    install_numeric_blocks(store.db, store.cached_bytes)
-    numeric_summary(store.db)
+    catalogue_repack.validate(store, state, VERSION)
     source_active, numeric_active, price_active = (
         source_writing(store.db),
         numeric_writing(store.db),
         price_writing(store.db),
     )
-    if state.get("version") in (10, 11, VERSION) and not source_active:
+    if state.get("version") in (10, 11, 12, VERSION) and not source_active:
         raise ValueError("Missing source writer checkpoint; database preserved")
-    if state.get("version") in (11, VERSION) and not numeric_active:
+    if state.get("version") in (11, 12, VERSION) and not numeric_active:
         raise ValueError("Missing numeric writer checkpoint; database preserved")
-    if state.get("version") == VERSION and not price_active:
+    if state.get("version") in (12, VERSION) and not price_active:
         raise ValueError("Missing numeric price writer checkpoint; database preserved")
+    if not source_installed(store.db):
+        install_source_tiles(store.db, store.cached_text)
+    source_summary(store.db)
+    install_numeric_blocks(store.db, store.cached_bytes)
+    numeric_summary(store.db)
     if not price_layout(store.db):
         upgrade_price(store.db)
+    catalogue_repack.install(store)
     if (
         state.get("version") == VERSION
         and state.get("state") == "COMPLETE"
@@ -451,12 +456,15 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
         and state.get("cohort_meter_complete")
         and state.get("source_transfer_complete")
         and state.get("numeric_transfer_complete")
+        and state.get("catalogue_complete")
+        and state.get("initial_reclaim_complete")
+        and not catalogue_repack.status(store, now_ms)["pending_work"]
         and cohort_ready(store.db)
         and quality_totals(store.db) is not None
         and namespace_snapshot(store.db) is not None
     ):
         return state
-    if state.get("version") in (3, 4, 5, 6, 7, 8, 9, 10, 11):
+    if state.get("version") in (3, 4, 5, 6, 7, 8, 9, 10, 11, 12):
         state = {
             "previous_version": state["version"],
             "previous_run": {
@@ -481,13 +489,14 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
         store.db.execute(
             "INSERT INTO market_meta VALUES('numeric_price_runtime','1') ON CONFLICT(key) DO NOTHING"
         )
+        catalogue_repack.activate(store)
         # One shared deadline, with a durable rotating first phase. A slow SQL
         # read/commit may overrun a slice, but cannot always starve the same tail.
-        for offset in range(11):
+        for offset in range(13):
             if time.monotonic() >= deadline:
                 break
-            phase = (first + offset) % 11
-            state["next_phase"] = (phase + 1) % 11
+            phase = (first + offset) % 13
+            state["next_phase"] = (phase + 1) % 13
             if (
                 phase == 0
                 and state.get("source_transfer_complete")
@@ -555,29 +564,25 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
                         state["saved_categories"][category] = (
                             state["saved_categories"].get(category, 0) + saved
                         )
+            elif phase == 11:
+                catalogue_repack.initial(store, state, batch, deadline)
+            elif phase == 12:
+                catalogue_repack.maintenance(store, state, now_ms, batch, deadline)
         state.update(
             state="COMPLETE"
-            if all(
-                state.get(k)
-                for k in (
-                    "records_complete",
-                    "decisions_complete",
-                    "expiry_legacy_empty",
-                    "quality_complete",
-                    "quality_legacy_empty",
-                    "namespace_meter_complete",
-                    "reference_legacy_empty",
-                    "quality_meter_complete",
-                    "key_registry_complete",
-                    "cohort_meter_complete",
-                    "source_transfer_complete",
-                    "numeric_transfer_complete",
-                )
-            )
+            if all(state.get(k) for k in (*catalogue_repack.PREREQUISITES, "catalogue_complete"))
             else "IN_PROGRESS",
             at_ms=now_ms,
         )
+        if store.db.execute("PRAGMA freelist_count").fetchone()[0] > 256:
+            store.db.execute("PRAGMA incremental_vacuum(32)").fetchall()
+        if "catalogue_transfer" in state:
+            maintenance = catalogue_repack.status(store, now_ms)
+            previous = state.get("catalogue_maintenance", {}).get("last_progress_ms")
+            if previous is not None:
+                maintenance["last_progress_ms"] = previous
+            state["catalogue_maintenance"] = maintenance
+            if state["state"] == "COMPLETE" and not maintenance["vacuum_pending"]:
+                state["initial_reclaim_complete"] = True
         store.put_runtime("storage_repack", state)
-    if store.db.execute("PRAGMA freelist_count").fetchone()[0] > 256:
-        store.db.execute("PRAGMA incremental_vacuum(32)").fetchall()
     return state

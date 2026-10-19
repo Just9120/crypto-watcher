@@ -267,11 +267,11 @@ def test_window_repack_preserves_public_values_and_head_projections_across_resta
         store.put_runtime(
             "storage_repack", {"version": 3, "state": "COMPLETE", "records": 999, "saved_payload_bytes": 42}
         )
-    for _ in range(100):
+    for _ in range(500):
         state = work(store, NOW, batch=3, seconds=1)
         if state["state"] == "COMPLETE":
             break
-    assert state["state"] == "COMPLETE" and state["version"] == 12
+    assert state["state"] == "COMPLETE" and state["version"] == 13
     assert state["previous_run"]["records"] == 999 and state["saved_payload_bytes"] > 42
     with closing(Store(store.path, store.owner_id, readonly=True)) as reader:
         assert {k: encode(v) for k, v in History(reader).items("event-head:")} == before
@@ -669,7 +669,9 @@ def test_meter_preserves_first_new_epoch_sample_and_does_not_mix_legacy_flow(sto
     assert store.get_runtime("storage_samples") == legacy
     for offset in (0, 60000, 120000):
         sample(store, start + offset)
-    current = [s for s in store.get_runtime("storage_samples") if s["format_version"] == 5]
+    from cryptowatcher.storage_meter import SAMPLE_FORMAT
+
+    current = [s for s in store.get_runtime("storage_samples") if s["format_version"] == SAMPLE_FORMAT]
     assert [s["at_ms"] for s in current] == [start, start + 120000]
     assert report(store, start + 120000)["sample_seconds"] == 120
 

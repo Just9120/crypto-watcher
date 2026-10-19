@@ -173,14 +173,15 @@ def measure(path: Path, weeks: int = 62, *, compact: bool = False) -> dict[str, 
                 comparator_nonempty += int(comp.get("sample_size", 0) > 0)
             manifests.append((now // DAY, epoch_facts))
             private = signature(private_state(store))
-            if compact and week == 8:
+            if compact and week >= 8:
+                from cryptowatcher.catalogue_repack import busy
                 from cryptowatcher.storage_repack import work as repack
 
                 # Upgrade an already populated mixture of details and archived
                 # quality, then keep writing/expiring through the new adapters.
                 for tick in range(1000):
                     compaction = repack(store, now + 61 * MINUTE + tick, seconds=0.04)
-                    if compaction["state"] == "COMPLETE":
+                    if compaction["state"] == "COMPLETE" and not busy(compaction):
                         break
                 else:
                     raise ValueError("Finite block repack did not finish")
@@ -270,6 +271,17 @@ def measure(path: Path, weeks: int = 62, *, compact: bool = False) -> dict[str, 
                 "market_numeric_block_lookup",
                 "market_numeric_transfer",
                 "market_numeric_gc",
+                "market_record_pending",
+                "market_records",
+                "market_record_parents",
+                "market_record_owners",
+                "market_record_members",
+                "market_record_bodies",
+                "market_packets",
+                "market_packet_arenas",
+                "market_cold_cohorts",
+                "market_cold_cohort_revisions",
+                "market_cold_cohort_strengths",
             )
             numeric = numeric_summary(store.db)
             numeric_issued = numeric["issued"]
@@ -291,7 +303,7 @@ def measure(path: Path, weeks: int = 62, *, compact: bool = False) -> dict[str, 
             "schema": "cryptowatcher.retention-rehearsal.v1",
             "kind": "CONTROLLED_CLOCK_SYNTHETIC",
             "simulated_weeks": weeks,
-            "storage_layout": "MIXED_BLOCKS_REPACK12" if compact else "LEGACY_NORMALIZED",
+            "storage_layout": "MIXED_BLOCKS_REPACK13" if compact else "LEGACY_NORMALIZED",
             "compaction": compaction,
             "issued_numeric_ids_after_final_gc": numeric_issued,
             "families": sorted(families),
