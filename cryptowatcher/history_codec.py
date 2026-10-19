@@ -230,7 +230,12 @@ class Codec:
                 )
             except (ValueError, TypeError, KeyError, zlib.error) as exc:
                 raise StateError("Invalid normalized context reference") from exc
-        if isinstance(reference, dict) and reference.get("mode") in ("source", "source-runs", "source-ref"):
+        if isinstance(reference, dict) and reference.get("mode") in (
+            "source",
+            "source-runs",
+            "source-ref",
+            "source-cells",
+        ):
             from .market_storage import restore_window
 
             try:
@@ -441,7 +446,9 @@ class Codec:
                     if name == "source_inputs"
                     else self.source_stream.rsplit("/", 1)[0] + "/1m"
                 )
-                references[name] = source_window(self.db, stream, item, self.source_expiry)
+                references[name] = source_window(
+                    self.db, stream, item, self.source_expiry, cache=self.binary_cache
+                )
             elif name in WINDOW_FIELDS and isinstance(item, list) and item:
                 parts: list[list[Any]] = []
                 bucket: Any = None

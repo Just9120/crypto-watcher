@@ -129,13 +129,32 @@ def _legacy_admit(
 class Lookup:
     """One synchronous window keeps at most one authenticated source tile."""
 
-    def __init__(self, db: sqlite3.Connection, stream: int, cache: Any = None):
+    def __init__(
+        self, db: sqlite3.Connection, stream: int, cache: Any = None, *, require_tiles: bool = False
+    ):
         self.db = db
         self.stream = stream
         self.cache = cache
         self.step = blocks.stream_step(db, stream) if installed(db) else None
+        if require_tiles and self.step is None:
+            raise ValueError("Source cells require authenticated tiles")
+        self.require_tiles = require_tiles
         self.at: int | None = None
         self.raw: bytes | None = None
+
+    def frozen(self, start: int, revision: int) -> dict[str, Any] | None:
+        codec.number(start)
+        codec.number(revision)
+        if self.step is None:
+            return None
+        at = start // (codec.SLOTS * self.step) * (codec.SLOTS * self.step)
+        if self.at != at:
+            self.raw = blocks.tile(self.db, self.stream, start, self.step)
+            self.at = at
+        value = (
+            codec.point(self.raw, self.stream, start, revision, self.cache) if self.raw is not None else None
+        )
+        return value[0] if value is not None else None
 
     def point(self, start: int, revision: int) -> dict[str, Any]:
         codec.number(start)
@@ -145,20 +164,13 @@ class Lookup:
             (self.stream, start, revision),
         ).fetchone()
         value = public(bytes(legacy[0])) if legacy is not None else None
-        if self.step is not None:
-            at = start // (codec.SLOTS * self.step) * (codec.SLOTS * self.step)
-            if self.at != at:
-                self.raw = blocks.tile(self.db, self.stream, start, self.step)
-                self.at = at
-            frozen = (
-                codec.point(self.raw, self.stream, start, revision, self.cache)
-                if self.raw is not None
-                else None
-            )
-            if frozen is not None:
-                if value is not None and encode(value) != encode(frozen[0]):
-                    raise ValueError("Conflicting immutable source revision")
-                value = frozen[0]
+        frozen = self.frozen(start, revision)
+        if frozen is None and self.require_tiles:
+            raise ValueError("Missing authenticated source cell")
+        if frozen is not None:
+            if value is not None and encode(value) != encode(frozen):
+                raise ValueError("Conflicting immutable source revision")
+            value = frozen
         if value is None:
             raise ValueError("Missing retained candle revision")
         if value["start"] != start or self.step is not None and value["step"] != self.step:

@@ -287,7 +287,7 @@ def read(
 
 
 def window(
-    db: sqlite3.Connection, stream: str, candles: list[dict[str, Any]], expires: int
+    db: sqlite3.Connection, stream: str, candles: list[dict[str, Any]], expires: int, *, cache: Any = None
 ) -> dict[str, Any]:
     points = admit_many(db, stream, candles, expires)
     if not points:
@@ -298,6 +298,14 @@ def window(
     reference = compact_reference(
         points[0][0], [[p[1], p[2]] for p in points], hashlib.sha256(raw).hexdigest()
     )
+    from .candle_access import writing
+
+    if writing(db):
+        from .source_cells import convert
+
+        cells = convert(db, reference, cache=cache)
+        if cells is not None:
+            return cells
     from .source_windows import intern, lease_deadline
 
     return intern(db, reference, lease_deadline(db, expires, max(c["start"] + c["step"] for c in candles)))
@@ -322,8 +330,9 @@ def compact_reference(stream: int, points: list[list[int]], sha: str) -> dict[st
 def reference_points(reference: dict[str, Any]) -> list[Any]:
     import base64
 
-    if reference.get("mode") == "source-runs":
-        if set(reference) != {"mode", "stream", "runs", "sha256"} or not isinstance(reference["runs"], list):
+    if reference.get("mode") in ("source-runs", "source-cells"):
+        fields = {"mode", "stream", "runs"} | ({"sha256"} if reference["mode"] == "source-runs" else set())
+        if set(reference) != fields or not isinstance(reference["runs"], list):
             raise ValueError("Invalid source runs")
         points: list[Any] = []
         for run in reference["runs"]:
@@ -367,7 +376,8 @@ def restore_window(db: sqlite3.Connection, reference: dict[str, Any], *, cache: 
         raise ValueError("Invalid source window coordinates")
     from .candle_access import Lookup
 
-    reader = Lookup(db, reference["stream"], cache)
+    cells = reference.get("mode") == "source-cells"
+    reader = Lookup(db, reference["stream"], cache, require_tiles=cells)
     candles = []
     for point in points:
         if (
@@ -380,7 +390,7 @@ def restore_window(db: sqlite3.Connection, reference: dict[str, Any], *, cache: 
     raw = json.dumps(
         candles, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
     ).encode()
-    if hashlib.sha256(raw).hexdigest() != reference["sha256"]:
+    if not cells and hashlib.sha256(raw).hexdigest() != reference["sha256"]:
         raise ValueError("Source window hash mismatch")
     return raw
 

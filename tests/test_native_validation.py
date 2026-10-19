@@ -14,6 +14,53 @@ from .test_history_rebuild import closed_backup
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Native Linux validation helper")
 
 
+def test_native_full_validation_includes_source_tiles_cells_and_their_counters(store, tmp_path):
+    from cryptowatcher.market_storage import enable
+    from cryptowatcher.outcomes import OutcomeWorker
+    from cryptowatcher.sources import Sources
+    from cryptowatcher.storage_repack import work
+    from tests.test_outcomes import MINUTE, NOW, future, observe
+
+    assert available(), "Build canonical native helper before Linux tests"
+    enable(store.db)
+    store.bounded = True
+    worker = OutcomeWorker(store)
+    observe(store, worker)
+    Sources(store).put("spot/BTCUSDT/1m", future())
+    worker.work(NOW + 6 * MINUTE)
+    for tick in range(100):
+        state = work(store, NOW + tick, seconds=1)
+        if state["state"] == "COMPLETE":
+            break
+    assert state["state"] == "COMPLETE" and state["version"] == 10
+    assert store.db.execute("SELECT COUNT(*) FROM market_candle_blocks").fetchone()[0] > 0
+    store.db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
+    original = store.path.read_bytes()
+    image = cv.Image(store.path, limit=cv.MAX_COMPRESSED_BYTES, deadline=time.monotonic() + 30)
+    sentinel = tmp_path / "source-tiles-native.sqlite3"
+    sentinel.touch(mode=0o600)
+    vfs = cv.frozen_vfs(image, sentinel)
+    try:
+        with closing(apsw.Connection(str(sentinel), flags=apsw.SQLITE_OPEN_READWRITE, vfs=vfs.name)) as db:
+            cv.configure_cache(db, image)
+            cv.full_check(db, image.deadline)
+            for table in (
+                "market_candle_blocks",
+                "market_candle_block_totals",
+                "market_candle_fallbacks",
+                "market_candle_gc",
+                "market_counts",
+                "runtime",
+            ):
+                actual = list(db.execute(f"SELECT * FROM {table} ORDER BY 1,2"))
+                expected = [tuple(row) for row in store.db.execute(f"SELECT * FROM {table} ORDER BY 1,2")]
+                assert actual == expected
+    finally:
+        vfs.unregister()
+    assert image.reconstructed_hash() == image.sha256
+    assert store.path.read_bytes() == original
+
+
 def test_native_full_validation_preserves_all_types_and_rejects_writes_and_early_release(tmp_path):
     assert available(), "Build canonical native helper before Linux tests"
     source, _ = closed_backup(tmp_path)

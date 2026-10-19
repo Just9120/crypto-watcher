@@ -48,11 +48,21 @@ def normalized_record(store: Store, key: str, value: Any) -> Any:
             for name, ref in fields.items():
                 if name not in SHARED_FIELDS | WINDOW_FIELDS or not isinstance(ref, dict):
                     raise ValueError("Invalid history storage reference")
-                if isinstance(ref, dict) and ref.get("mode") in ("source", "source-runs"):
+                if ref.get("mode") in ("source", "source-runs", "source-ref"):
+                    from .candle_access import writing
+                    from .source_cells import convert as convert_cells
+
+                    tiled_writer = writing(store.db)
+                    if ref["mode"] == "source-ref" and not tiled_writer:
+                        continue
                     if expiry is None:
                         raise ValueError("Source normalization requires a retained parent deadline")
-                    restore_window(store.db, ref)  # Validate original SHA and every immutable coordinate.
-                    fields[name] = intern(store.db, ref, expiry[0])
+                    cells = convert_cells(store.db, ref, cache=store.cached_bytes) if tiled_writer else None
+                    if cells is not None:
+                        fields[name] = cells
+                    elif ref["mode"] != "source-ref":
+                        restore_window(store.db, ref, cache=store.cached_bytes)
+                        fields[name] = intern(store.db, ref, expiry[0])
                 elif name == "metrics" and ref.get("mode") in ("numeric", "numeric2"):
                     fields[name] = encode_reference(store.db, resolve(store.db, ref))
                 elif name == "source_context" and ref.get("mode") == "contexts":
@@ -325,6 +335,10 @@ def quality_rows(store: Store, state: dict[str, Any], batch: int, deadline: floa
 
 
 def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> dict[str, Any]:
+    from .candle_access import installed as source_installed
+    from .candle_access import writing as source_writing
+    from .candle_blocks import install as install_source_tiles
+    from .candle_blocks import summary as source_summary
     from .cohort_meter import drain as drain_cohorts
     from .cohort_meter import ready as cohort_ready
     from .expiry_index import drain
@@ -334,12 +348,18 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
     from .reference_layout import drain as drain_references
     from .runtime_meter import drain as drain_namespaces
     from .runtime_meter import read as namespace_snapshot
+    from .source_transfer import advance as transfer_sources
 
     if not store.bounded:
         return {"state": "N/A_LEGACY"}
     state = store.get_runtime("storage_repack", {})
+    if not source_installed(store.db):
+        install_source_tiles(store.db, store.cached_text)
+    source_summary(store.db)
+    if state.get("version") == 10 and not source_writing(store.db):
+        raise ValueError("Missing source writer checkpoint; database preserved")
     if (
-        state.get("version") == 9
+        state.get("version") == 10
         and state.get("state") == "COMPLETE"
         and state.get("decisions_complete")
         and state.get("namespace_meter_complete")
@@ -347,12 +367,13 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
         and state.get("quality_meter_complete")
         and state.get("key_registry_complete")
         and state.get("cohort_meter_complete")
+        and state.get("source_transfer_complete")
         and cohort_ready(store.db)
         and quality_totals(store.db) is not None
         and namespace_snapshot(store.db) is not None
     ):
         return state
-    if state.get("version") in (3, 4, 5, 6, 7, 8):
+    if state.get("version") in (3, 4, 5, 6, 7, 8, 9):
         state = {
             "previous_version": state["version"],
             "previous_run": {
@@ -361,19 +382,24 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
             "saved_payload_bytes": state.get("saved_payload_bytes", 0),
             "saved_categories": state.get("saved_categories", {}),
         }
-    state = {"version": 9, "cursor": "", "records": 0, "saved_payload_bytes": 0, **state}
+    state = {"version": 10, "cursor": "", "records": 0, "saved_payload_bytes": 0, **state}
     state.setdefault("saved_categories", {})
     deadline = time.monotonic() + seconds
-    first = state.get("next_phase", 0)
+    first = state.get("next_phase", 9)
     with store.db:
+        if not store.db.in_transaction:
+            store.db.execute("BEGIN")
+        store.db.execute(
+            "INSERT INTO market_meta VALUES('candle_block_runtime','1') ON CONFLICT(key) DO NOTHING"
+        )
         # One shared deadline, with a durable rotating first phase. A slow SQL
         # read/commit may overrun a slice, but cannot always starve the same tail.
-        for offset in range(9):
+        for offset in range(10):
             if time.monotonic() >= deadline:
                 break
-            phase = (first + offset) % 9
-            state["next_phase"] = (phase + 1) % 9
-            if phase == 0 and not state.get("records_complete"):
+            phase = (first + offset) % 10
+            state["next_phase"] = (phase + 1) % 10
+            if phase == 0 and state.get("source_transfer_complete") and not state.get("records_complete"):
                 record_rows(store, state, batch, deadline)
             elif phase == 1 and not state.get("decisions_complete"):
                 decision_heads(store, state, batch, deadline)
@@ -392,6 +418,27 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
                 state["key_registry_complete"] = drain_registry(store.db, state, batch, deadline)
             elif phase == 8:
                 state["cohort_meter_complete"] = drain_cohorts(store.db, batch, deadline)
+            elif phase == 9 and not state.get("source_transfer_complete"):
+                categories = ("candles", "source_blocks", "source_block_indexes")
+
+                def source_bytes() -> dict[str, int]:
+                    return dict(
+                        store.db.execute(
+                            "SELECT category,logical_bytes FROM market_counts WHERE category IN (?,?,?)",
+                            categories,
+                        )
+                    )
+
+                before = source_bytes()
+                transfer_sources(store.db, state, min(batch, 256), deadline)
+                after = source_bytes()
+                for category in categories:
+                    saved = before.get(category, 0) - after.get(category, 0)
+                    if saved:
+                        state["saved_payload_bytes"] += saved
+                        state["saved_categories"][category] = (
+                            state["saved_categories"].get(category, 0) + saved
+                        )
         state.update(
             state="COMPLETE"
             if all(
@@ -407,6 +454,7 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
                     "quality_meter_complete",
                     "key_registry_complete",
                     "cohort_meter_complete",
+                    "source_transfer_complete",
                 )
             )
             else "IN_PROGRESS",

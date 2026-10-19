@@ -232,7 +232,7 @@ class History:
             from .record_codec import pack_binary
 
             compact = pack_binary(plain)
-            if len(compact) < len(plain.encode()):
+            if len(compact) < len(plain.encode()) or '"source-cells"' in plain:
                 payload = compact
         self.store.db.execute(RUNTIME_UPSERT, (PREFIX + key, payload))
         if self.store.bounded:

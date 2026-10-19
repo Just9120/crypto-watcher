@@ -116,7 +116,8 @@ size/window до decompression. Чтение materialize только выбра
 меняет canonical JSON, float bits или numeric types. Linux/resource gates для
 runtime activation остаются обязательными.
 
-SB1 source tiles пока не выбираются обычным startup/repack. Замороженный блок
+SB1 source tiles выбираются явным finite repack10; обычный Store open не
+создает их и не включает writer. Замороженный блок
 содержит32 native временных слота, до256 immutable revisions суммарно,
 точные typed values/needed_until/purge_after и SHA256 actual header/IF1 frame.
 Mixed point/range adapters сохраняют общий revision space, порядок, пропуски
@@ -127,9 +128,17 @@ leases. GC перепроверяет каждую revision по исходно�
 общая first_due блока — только индекс кандидатов, не срок удаления всех свечей.
 Чистые binary transforms используют прежний общий1MiB cache, actual bytes
 проверяются при чтении. DDL выполняется только explicit install; Store open
-регистрирует UDF существующего известного layout, не включает writer marker.
-Finite migration/source-cells и native mature/resource qualification остаются
-условиями подключения к runtime.
+регистрирует UDF существующего известного layout. Source transfer/checkpoint
+и writer marker фиксируются в одной транзакции; исходная logical верхняя
+граница не растет от новых поступлений и не зависит от rowid/VACUUM.
+Только после переноса sources выполняется record pass: source-cells заменяет
+descriptor после проверки полного исходного window SHA и точного равенства
+всех свечей; fallback сохраняет прежний descriptor/hash. Cell coordinates
+защищены full-checksum owner record, который сохраняется даже без выигрыша
+длины; каждый source block проверяется по actual bytes. Descriptor leases
+снимаются атомарно с заменой owner, source leases/policy не сокращаются.
+Новый формат требует compatible reader/forward-fix. Native mature/resource
+qualification и общий backlog SLO остаются обязательными release gates.
 
 #### Market layout v2: устройство
 

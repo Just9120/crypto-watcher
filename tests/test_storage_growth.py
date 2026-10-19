@@ -177,11 +177,19 @@ def test_expiry_extension_and_repack_preserve_history_with_rollback_and_restart(
     ] == expiry_before
     from cryptowatcher import record_codec
 
+    source_rows_before = store.db.execute("SELECT COUNT(*) FROM market_candles").fetchone()[0]
     with monkeypatch.context() as m:
         m.setattr(record_codec, "pack_binary", lambda value: (_ for _ in ()).throw(RuntimeError("interrupt")))
         with pytest.raises(RuntimeError):
-            work(store, NOW, batch=2, seconds=1)
+            # Reach record packing after this small fixture's finite source
+            # phase, so the fault also tests rollback of the preceding transfer.
+            work(store, NOW, batch=256, seconds=1)
     assert store.get_runtime("storage_repack") is None
+    assert store.db.execute("SELECT COUNT(*) FROM market_candles").fetchone()[0] == source_rows_before
+    assert store.db.execute("SELECT COUNT(*) FROM market_candle_blocks").fetchone()[0] == 0
+    assert (
+        store.db.execute("SELECT value FROM market_meta WHERE key='candle_block_runtime'").fetchone() is None
+    )
     assert h.events(50) == before
     for _ in range(500):
         state = work(store, NOW, batch=3, seconds=1)
