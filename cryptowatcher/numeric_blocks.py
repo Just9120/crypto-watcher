@@ -392,6 +392,8 @@ def offer_price(db: sqlite3.Connection, identity: int, candidate: bytes) -> bool
         if canonical(frames[slot]) != original:
             raise ValueError("Price recipe changed retained metric bits/types")
         lookup(db, identity, frames[slot])
+        if frames[slot] == candidate:
+            return False
         frames[slot] = candidate
         alternative = codec.pack(block, frames, recipes=True)
         if len(alternative) >= len(payload):
