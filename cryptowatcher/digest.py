@@ -7,13 +7,23 @@ from typing import Any
 
 from telegram.error import BadRequest, Forbidden, RetryAfter, TelegramError
 
+from .catalogue_sql import read_snapshot, source
 from .events import PREFIX, History, identity
 from .outcomes import MINUTE
 from .storage import Store, json_payload
 
 
 def aggregate(store: Store, start: int, end: int, now: int) -> dict[str, Any]:
-    base = " FROM runtime WHERE key>=? AND key<? AND json_extract(cw_record_json(payload_json),'$.market_observation_ms')>=? AND json_extract(cw_record_json(payload_json),'$.market_observation_ms')<?"
+    with read_snapshot(store):
+        return _aggregate(store, start, end, now)
+
+
+def _aggregate(store: Store, start: int, end: int, now: int) -> dict[str, Any]:
+    base = (
+        " FROM "
+        + source(store, "event", head=True)
+        + " WHERE key>=? AND key<? AND json_extract(cw_record_json(payload_json),'$.market_observation_ms')>=? AND json_extract(cw_record_json(payload_json),'$.market_observation_ms')<?"
+    )
     args = (PREFIX + "event-head:", PREFIX + "event-head:~", start, end)
     groups = [
         dict(row)
@@ -53,7 +63,9 @@ def aggregate(store: Store, start: int, end: int, now: int) -> dict[str, Any]:
     ongoing = [
         History(store).resolve(row[0][len(PREFIX) :], json_payload(row[1]))
         for row in store.db.execute(
-            "SELECT key,payload_json FROM runtime WHERE key>=? AND key<? AND json_extract(cw_record_json(payload_json),'$.state')='ACTIVE' AND json_extract(cw_record_json(payload_json),'$.available_at_ms')<=? ORDER BY json_extract(cw_record_json(payload_json),'$.strength') DESC,key LIMIT 5",
+            "SELECT key,payload_json FROM "
+            + source(store, "episode", head=True)
+            + " WHERE key>=? AND key<? AND json_extract(cw_record_json(payload_json),'$.state')='ACTIVE' AND json_extract(cw_record_json(payload_json),'$.available_at_ms')<=? ORDER BY json_extract(cw_record_json(payload_json),'$.strength') DESC,key LIMIT 5",
             (PREFIX + "episode-head:", PREFIX + "episode-head:~", now),
         )
     ]

@@ -32,7 +32,11 @@ def owned_records(
     db: sqlite3.Connection, event_id: str, cache: Any = None
 ) -> Generator[tuple[record_blocks.Coordinate, bool], None, None]:
     """Read one native parent range and authenticate at most one packet at a time."""
-    if not active(db):
+    if (
+        not isinstance(event_id, str)
+        or re.fullmatch(catalogue_reader.UUID, event_id) is None
+        or not active(db)
+    ):
         return
     from . import owner_slots, record_masks
     from .record_ownership import block_entries

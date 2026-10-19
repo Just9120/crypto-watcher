@@ -85,7 +85,12 @@ def remove_event(store: Store, event_id: str, terminal: Callable[[str, str], Non
                 ),
             )
             removed += 1 + int(current)
-    identity = record_catalog.binary(event_id)
+    try:
+        identity = record_catalog.binary(event_id)
+    except (ValueError, TypeError, AttributeError):
+        # Unsupported legacy IDs never have a compact parent. Their hot
+        # results were still archived and removed through native owner keys.
+        return removed
     store.db.execute("DELETE FROM market_record_members WHERE event_uuid=?", (identity,))
     store.db.execute("DELETE FROM market_record_parents WHERE public_uuid=?", (identity,))
     return removed

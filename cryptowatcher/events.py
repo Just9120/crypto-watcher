@@ -269,8 +269,8 @@ class History:
             for key, value in self.store.scan_runtime(PREFIX + prefix, limit, reverse=reverse)
         ]
 
-    def scan(self, prefix: str) -> Iterator[tuple[str, Any]]:
-        for key, value in self.store.scan_runtime(PREFIX + prefix):
+    def scan(self, prefix: str, *, reverse: bool = False) -> Iterator[tuple[str, Any]]:
+        for key, value in self.store.scan_runtime(PREFIX + prefix, reverse=reverse):
             yield key[len(PREFIX) :], self.resolve(key[len(PREFIX) :], value)
 
     def count(self, prefix: str) -> int:

@@ -206,6 +206,29 @@ async def test_history_keyset_pages_keep_distinct_events_and_show_observation_ti
     engine = EventEngine(deck.store)
     for step in range(3):
         observe(engine, NOW + step * 60_000)
+    await history_pages(deck)
+
+
+async def test_cold_history_keeps_the_same_keyset_navigation_open_result_and_return(infrastructure, store):
+    from cryptowatcher.events import EventEngine
+    from tests.catalogue_fixture import move_events
+    from tests.test_bounded_storage import bounded
+    from tests.test_events import NOW, observe
+
+    bounded(store)
+    controller = Controller(
+        infrastructure, store, SimpleNamespace(snapshot=AsyncMock(return_value=RadarResult({}, {}, 0)))
+    )
+    engine = EventEngine(store)
+    for step in range(3):
+        observe(engine, NOW + step * 60_000)
+    expected = engine.history.events(100)
+    move_events(store)
+    assert engine.history.events(100) == expected
+    await history_pages(controller)
+
+
+async def history_pages(deck):
     request = update("История")
     await deck.handle(request, None)
     reply = request.effective_message.reply_text.call_args

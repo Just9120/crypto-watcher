@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Iterator
 
 from .analytics import cohort_rows
+from .catalogue_sql import source
 from .events import PREFIX, History
 from .history_codec import MARKER
 from .storage import Store, encode, json_payload
@@ -36,7 +37,7 @@ class Selection:
             raise ValueError("Invalid export market")
 
 
-def event_selection(selection: Selection) -> tuple[str, list[Any]]:
+def event_selection(selection: Selection, store: Store | None = None) -> tuple[str, list[Any]]:
     selection.validate()
     terms = [
         "key>=?",
@@ -53,7 +54,10 @@ def event_selection(selection: Selection) -> tuple[str, list[Any]]:
         if value is not None:
             terms.append(f"json_extract(cw_record_json(payload_json),'$.{name}')=?")
             args.append(value)
-    return "WITH selected AS (SELECT key,payload_json FROM runtime WHERE " + " AND ".join(terms) + ") ", args
+    table = source(store, "event", head=True) if store is not None else "runtime"
+    return "WITH selected AS (SELECT key,payload_json FROM " + table + " WHERE " + " AND ".join(
+        terms
+    ) + ") ", args
 
 
 def paged(cursor: Any) -> Iterator[Any]:
@@ -64,10 +68,11 @@ def paged(cursor: Any) -> Iterator[Any]:
 def ndjson(store: Store, selection: Selection) -> Iterator[str]:
     if not store.readonly or store.db.in_transaction:
         raise ValueError("Export requires a separate read-only connection")
-    cte, args = event_selection(selection)
+    selection.validate()
     history = History(store)
     store.db.execute("BEGIN")
     try:
+        cte, args = event_selection(selection, store)
         # First read pins the WAL snapshot before any output; later writes cannot enter this export.
         total = store.db.execute(cte + "SELECT COUNT(*) FROM selected", args).fetchone()[0]
         from .quality_summary import period_metadata
@@ -106,7 +111,9 @@ def ndjson(store: Store, selection: Selection) -> Iterator[str]:
             start = PREFIX + kind + ":"
             rows = store.db.execute(
                 cte
-                + "SELECT r.key,r.payload_json FROM runtime r WHERE r.key>=? AND r.key<? AND "
+                + "SELECT r.key,r.payload_json FROM "
+                + source(store, kind)
+                + " r WHERE r.key>=? AND r.key<? AND "
                 + relation
                 + " ORDER BY r.key",
                 [*args, start, start + "~"],
@@ -120,7 +127,9 @@ def ndjson(store: Store, selection: Selection) -> Iterator[str]:
             cte
             + "SELECT DISTINCT json_extract(cw_record_json(r.payload_json),'$.settings_revision'), json_extract(cw_record_json(r.payload_json),'$.settings_snapshot'), "
             + f"json_extract(cw_record_json(r.payload_json),'$.{MARKER}.fields.settings_snapshot') "
-            + "FROM runtime r WHERE r.key>=? AND r.key<? AND "
+            + "FROM "
+            + source(store, "event")
+            + " r WHERE r.key>=? AND r.key<? AND "
             + relations["event"]
             + " ORDER BY 1,2,3",
             [*args, PREFIX + "event:", PREFIX + "event:~"],

@@ -289,18 +289,35 @@ class OutcomeWorker:
         admission = self.history.get("outcome-admission", {"cursor": "", "complete": False})
         if admission["complete"]:
             return
+        from .packet_store import atomic
+
+        if self.store.db.in_transaction:
+            with atomic(self.store.db):
+                self._bootstrap(batch)
+        else:
+            with self.store.db:
+                self.store.db.execute("BEGIN IMMEDIATE")
+                with atomic(self.store.db):
+                    self._bootstrap(batch)
+
+    def _bootstrap(self, batch: int) -> None:
+        # Read cursor, frozen revisions and admit jobs in the same writer scope.
+        # A caller's transaction is neither committed nor rolled back here.
+        admission = self.history.get("outcome-admission", {"cursor": "", "complete": False})
+        if admission["complete"]:
+            return
         prefix = PREFIX + "history:"
-        rows = self.store.db.execute(
-            "SELECT key,payload_json FROM runtime WHERE key>? AND key<? ORDER BY key LIMIT ?",
-            (admission["cursor"] or prefix, prefix + "~", batch),
-        ).fetchall()
-        with self.store.db:
-            for row in rows:
-                event_id = json_payload(row[1])["event_id"]
-                self.admit(self.history.get("event:" + event_id + ":0000000001"))
-                admission["cursor"] = row[0]
-            admission["complete"] = len(rows) < batch
-            self.history.put("outcome-admission", admission)
+        rows = list(
+            self.store.scan_runtime(
+                prefix, after=admission["cursor"] or prefix, before=prefix + "~", limit=batch
+            )
+        )
+        for row in rows:
+            event_id = row[1]["event_id"]
+            self.admit(self.history.get("event:" + event_id + ":0000000001"))
+            admission["cursor"] = row[0]
+        admission["complete"] = len(rows) < batch
+        self.history.put("outcome-admission", admission)
 
     def work(self, now_ms: int, batch: int = 20) -> None:
         self.bootstrap(batch)

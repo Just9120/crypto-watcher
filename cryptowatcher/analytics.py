@@ -11,12 +11,13 @@ import time
 from dataclasses import asdict
 from typing import Any, Callable
 
+from .catalogue_sql import read_snapshot, source
 from .config import OwnerSettings
 from .detectors import VERSIONS, DetectorUnavailable, atr14, evaluate
 from .events import PREFIX, History, identity
 from .outcomes import DAY, MINUTE, calculate, pending_key, protect, read_candles
 from .source_context import context
-from .storage import StateError, Store, encode, json_payload
+from .storage import StateError, Store, encode
 
 COMPARATOR_VERSION = "1"
 COMPARATOR_LOOKBACK_DAYS = 28
@@ -42,15 +43,10 @@ GROUPS = (
 
 
 def as_of(history: History, kind: str, key: str, cutoff_ms: int) -> dict[str, Any] | None:
-    prefix = PREFIX + f"{kind}:{key}:"
-    rows = history.store.db.execute(
-        "SELECT key,payload_json FROM runtime WHERE key>=? AND key<? ORDER BY key DESC",
-        (prefix, prefix + "~"),
-    )
-    for row in rows:
-        record = history.resolve(row[0][len(PREFIX) :], json_payload(row[1]))
-        if record["available_at_ms"] <= cutoff_ms:
-            return record
+    with read_snapshot(history.store):
+        for _, record in history.scan(f"{kind}:{key}:", reverse=True):
+            if record["available_at_ms"] <= cutoff_ms:
+                return record
     return None
 
 
@@ -455,15 +451,45 @@ def cohort_rows(
     version: str | None = None,
     market: str | None = None,
 ) -> Any:
+    with read_snapshot(store):
+        yield from _cohort_rows(
+            store,
+            groups,
+            cutoff_ms=cutoff_ms,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            detector=detector,
+            version=version,
+            market=market,
+        )
+
+
+def _cohort_rows(
+    store: Store,
+    groups: tuple[str, ...],
+    *,
+    cutoff_ms: int | None,
+    start_ms: int,
+    end_ms: int,
+    detector: str | None,
+    version: str | None,
+    market: str | None,
+) -> Any:
     """SQLite sorts/aggregates on disk; the exporter never collects raw returns in memory."""
     if not groups or len(set(groups)) != len(groups) or any(g not in GROUPS for g in groups):
         raise ValueError("Invalid analytics grouping")
     args: list[Any] = []
     definitions = []
+    mixed = source(store, "event") != "runtime"
     for kind, name in (("outcome", "o"), ("comparison", "c")):
         if cutoff_ms is None:
             prefix = PREFIX + kind + "-head:"
-            if kind in ("comparison", "outcome"):
+            table = source(store, kind, head=True)
+            if mixed:
+                definitions.append(
+                    f"{name} AS (SELECT COALESCE(cw_runtime_payload('{PREFIX}' || json_extract(cw_record_json(h.payload_json),'$.revision_key')),h.payload_json) AS payload_json FROM {table} h WHERE h.key>=? AND h.key<?)"
+                )
+            else:
                 definitions.append(
                     f"{name} AS (SELECT COALESCE(v.payload_json,h.payload_json) AS payload_json "
                     "FROM runtime h LEFT JOIN runtime v ON v.key='"
@@ -471,13 +497,11 @@ def cohort_rows(
                     + "' || json_extract(cw_record_json(h.payload_json),'$.revision_key') "
                     "WHERE h.key>=? AND h.key<?)"
                 )
-            else:
-                definitions.append(f"{name} AS (SELECT payload_json FROM runtime WHERE key>=? AND key<?)")
             args += [prefix, prefix + "~"]
         else:
             prefix = PREFIX + kind + ":"
             definitions += [
-                f"{name}v AS (SELECT payload_json, ROW_NUMBER() OVER (PARTITION BY json_extract(cw_record_json(payload_json),'$.{kind}_id') ORDER BY json_extract(cw_record_json(payload_json),'$.revision') DESC) AS pos FROM runtime WHERE key>=? AND key<? AND json_extract(cw_record_json(payload_json),'$.available_at_ms')<=?)",
+                f"{name}v AS (SELECT payload_json, ROW_NUMBER() OVER (PARTITION BY json_extract(cw_record_json(payload_json),'$.{kind}_id') ORDER BY json_extract(cw_record_json(payload_json),'$.revision') DESC) AS pos FROM {source(store, kind)} WHERE key>=? AND key<? AND json_extract(cw_record_json(payload_json),'$.available_at_ms')<=?)",
                 f"{name} AS (SELECT payload_json FROM {name}v WHERE pos=1)",
             ]
             args += [prefix, prefix + "~", cutoff_ms]
@@ -493,11 +517,12 @@ def cohort_rows(
         "profile": "settings_snapshot.profile",
     }
     fields = []
+    event_payload = "e.value" if mixed else "e.payload_json"
     for group in groups:
         expression = (
-            "json_extract(cw_record_json(e.payload_json),'$.settings_revision')"
+            f"json_extract(cw_record_json({event_payload}),'$.settings_revision')"
             if group == "settings"
-            else f"json_extract(cw_record_json(e.payload_json),'$.{paths[group]}')"
+            else f"json_extract(cw_record_json({event_payload}),'$.{paths[group]}')"
         )
         # Settings revision uniquely identifies the immutable owner snapshot in this database.
         fields += [f"'{group}'", expression]
@@ -509,25 +534,33 @@ def cohort_rows(
     ]
     terms = [
         "json_extract(cw_record_json(o.payload_json),'$.state')='COMPLETE'",
-        "json_extract(cw_record_json(e.payload_json),'$.market_observation_ms')>=?",
-        "json_extract(cw_record_json(e.payload_json),'$.market_observation_ms')<?",
+        f"json_extract(cw_record_json({event_payload}),'$.market_observation_ms')>=?",
+        f"json_extract(cw_record_json({event_payload}),'$.market_observation_ms')<?",
     ]
     args += [start_ms, end_ms]
     if cutoff_ms is not None:
-        terms.append("json_extract(cw_record_json(e.payload_json),'$.available_at_ms')<=?")
+        terms.append(f"json_extract(cw_record_json({event_payload}),'$.available_at_ms')<=?")
         args.append(cutoff_ms)
     for field, value in (("detector_id", detector), ("detector_version", version), ("market_type", market)):
         if value is not None:
-            terms.append(f"json_extract(cw_record_json(e.payload_json),'$.{field}')=?")
+            terms.append(f"json_extract(cw_record_json({event_payload}),'$.{field}')=?")
             args.append(value)
+    event_key = (
+        "'"
+        + PREFIX
+        + "event:' || json_extract(cw_record_json(o.payload_json),'$.event_id') || ':' || printf('%010d',json_extract(cw_record_json(o.payload_json),'$.event_revision'))"
+    )
+    event_join = (
+        "FROM o JOIN json_each(json_array(cw_runtime_payload(" + event_key + "))) e WHERE "
+        if mixed
+        else "FROM o JOIN runtime e ON e.key=" + event_key + " WHERE "
+    )
     definitions += [
         "base AS (SELECT json_object(" + ",".join(fields) + ") AS group_key, "
         "COALESCE(json_extract(cw_numeric_json(o.payload_json),'$.metrics.directed_return_pct'),json_extract(cw_numeric_json(o.payload_json),'$.metrics.price_return_pct')) AS value, "
         "json_extract(cw_record_json(o.payload_json),'$.classification') AS class, json_extract(cw_record_json(o.payload_json),'$.noise_threshold_pct') AS noise, "
         "json_extract(cw_record_json(o.payload_json),'$.event_id') AS event_id, json_extract(cw_record_json(o.payload_json),'$.horizon_min') AS horizon "
-        "FROM o JOIN runtime e ON e.key='"
-        + PREFIX
-        + "event:' || json_extract(cw_record_json(o.payload_json),'$.event_id') || ':' || printf('%010d',json_extract(cw_record_json(o.payload_json),'$.event_revision')) WHERE "
+        + event_join
         + " AND ".join(terms)
         + ")",
         "ordered AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY group_key ORDER BY value) AS rn, COUNT(*) OVER (PARTITION BY group_key) AS n FROM base)",
@@ -594,6 +627,11 @@ def cohorts(
     cutoff_ms: int | None = None,
     limit: int = 50,
 ) -> dict[str, Any]:
+    with read_snapshot(store):
+        return _cohorts(store, groups, cutoff_ms=cutoff_ms, limit=limit)
+
+
+def _cohorts(store: Store, groups: tuple[str, ...], *, cutoff_ms: int | None, limit: int) -> dict[str, Any]:
     if limit < 1:
         raise ValueError("Invalid cohort limit")
     from .quality_summary import period_metadata
@@ -608,21 +646,30 @@ def cohorts(
     # Summary counts need only projected state; never expand every candle window.
     if cutoff_ms is None:
         incomplete = store.db.execute(
-            "SELECT COUNT(*) FROM runtime WHERE key>=? AND key<? AND json_extract(cw_record_json(payload_json),'$.state')!='COMPLETE'",
+            "SELECT COUNT(*) FROM "
+            + source(store, "outcome", head=True)
+            + " WHERE key>=? AND key<? AND json_extract(cw_record_json(payload_json),'$.state')!='COMPLETE'",
             (PREFIX + "outcome-head:", PREFIX + "outcome-head:~"),
         ).fetchone()[0]
     else:
         incomplete = store.db.execute(
             "WITH revisions AS (SELECT json_extract(cw_record_json(payload_json),'$.state') AS state, "
             "ROW_NUMBER() OVER (PARTITION BY json_extract(cw_record_json(payload_json),'$.outcome_id') "
-            "ORDER BY json_extract(cw_record_json(payload_json),'$.revision') DESC) AS pos FROM runtime "
+            "ORDER BY json_extract(cw_record_json(payload_json),'$.revision') DESC) AS pos FROM "
+            + source(store, "outcome")
+            + " "
             "WHERE key>=? AND key<? AND json_extract(cw_record_json(payload_json),'$.available_at_ms')<=?) "
             "SELECT COUNT(*) FROM revisions WHERE pos=1 AND state!='COMPLETE'",
             (PREFIX + "outcome:", PREFIX + "outcome:~", cutoff_ms),
         ).fetchone()[0]
     if store.bounded and cutoff_ms is None:
+        absent = (
+            "cw_runtime_payload(?||json_extract(cw_record_json(j.payload_json),'$.outcome_id')) IS NULL"
+            if source(store, "outcome", head=True) != "runtime"
+            else "NOT EXISTS (SELECT 1 FROM runtime h WHERE h.key=?||json_extract(cw_record_json(j.payload_json),'$.outcome_id'))"
+        )
         incomplete += store.db.execute(
-            "SELECT COUNT(*) FROM runtime j WHERE j.key>=? AND j.key<? AND NOT EXISTS (SELECT 1 FROM runtime h WHERE h.key=?||json_extract(cw_record_json(j.payload_json),'$.outcome_id'))",
+            "SELECT COUNT(*) FROM runtime j WHERE j.key>=? AND j.key<? AND " + absent,
             (PREFIX + "outcome-job:", PREFIX + "outcome-job:~", PREFIX + "outcome-head:"),
         ).fetchone()[0]
         incomplete += store.db.execute(

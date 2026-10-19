@@ -18,7 +18,7 @@ from .config import TIMEFRAMES, ConfigError, instrument_key
 from .detector_config import PARAMETERS, effective_parameters
 from .diagnostics import snapshot as diagnostic_snapshot
 from .ingestion import BybitRadar
-from .storage import RevisionConflict, json_payload
+from .storage import RevisionConflict
 from .telegram_views import (
     DIRECTION,
     FAMILY,
@@ -263,16 +263,16 @@ class ControlDeck:
             raise ConfigError("Некорректная страница истории")
         start = PREFIX + "history:"
         upper = start + (cursor or "~")
-        rows = self.c.store.db.execute(
-            "SELECT key,payload_json FROM runtime WHERE key>=? AND key<? ORDER BY key DESC LIMIT ?",
-            (start, upper, PAGE_SIZE + 1),
-        ).fetchall()
-        entries = []
-        for row in rows[:PAGE_SIZE]:
-            binding = json_payload(row[1])
-            event = self.c.history.get("event-head:" + binding["event_id"])
-            if event:
-                entries.append(event)
+        from .catalogue_sql import read_snapshot
+
+        with read_snapshot(self.c.store):
+            rows = list(self.c.store.scan_runtime(start, before=upper, reverse=True, limit=PAGE_SIZE + 1))
+            entries = []
+            for row in rows[:PAGE_SIZE]:
+                binding = row[1]
+                event = self.c.history.get("event-head:" + binding["event_id"])
+                if event:
+                    entries.append(event)
         lines = [
             "История · последние наблюдения" if not cursor else "История · более ранние наблюдения",
         ]

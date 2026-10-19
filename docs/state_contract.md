@@ -167,6 +167,16 @@ Frozen future leases не теряются из-за нового age cutoff; bo
 позволяет дойти до остальных due records и сохраняется только вместе с обработкой.
 Это candidate adapter, не runtime activation или подтверждение mature25GB.
 
+Candidate SQL consumers event/outcome/episode/comparison читают known native kind
+ranges и checked mixed point payload. Equality/identity/checksum guards не
+заменяются полным Python materialization. Current/cohort/causal/export выборки
+сохраняют прежние filters, revisions и numeric facts; read snapshot охватывает
+выбор layout и данные. Read helper закрывает только открытую им transaction,
+caller transaction сохраняется. Outcome bootstrap читает cursor/immutable inputs
+и создаёт jobs в одном writer SAVEPOINT; failed batch не оставляет partial jobs
+и не фиксирует внешние изменения. Schema1 frozen converter явно unbounded/read-only
+и не подключает market layout. Runtime activation/native/mature gates прежние.
+
 SB1 source tiles введены явным finite repack10 и сохраняются в repack11; обычный Store open не
 создает их и не включает writer. Замороженный блок
 содержит32 native временных слота, до256 immutable revisions суммарно,

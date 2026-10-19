@@ -14,6 +14,7 @@ from cryptowatcher.record_blocks import Coordinate
 from cryptowatcher.sources import Sources
 from cryptowatcher.storage import encode
 from cryptowatcher.storage_lifecycle import BoundedRetention, forget
+from tests.test_analytics import event as legacy_event
 from tests.test_analytics import series
 from tests.test_bounded_storage import bounded
 from tests.test_outcomes import MINUTE, NOW, future, observe
@@ -34,6 +35,37 @@ def public_archive(store):
             "SELECT day,dimensions,provenance,facts FROM market_quality"
         )
     )
+
+
+def test_noncanonical_legacy_event_keeps_its_hot_numeric_results_through_mixed_expiry(store):
+    bounded(store)
+    record_catalog.install(store.db, store.cached_text, store.cached_bytes)
+    worker = OutcomeWorker(store)
+    history = History(store)
+    value = {
+        **legacy_event(store),
+        "schema": "cryptowatcher.event.v1",
+        "settings_revision": store.snapshot().revision,
+        "market_observation_ms": NOW,
+    }
+    with store.db:
+        history.version("event", value)
+        history.put(f"history:{NOW:016d}:fixture", {"event_id": "fixture"})
+        worker.admit(value)
+        store.db.execute("INSERT INTO market_meta VALUES('record_catalogue_runtime','1')")
+    Sources(store).put("spot/BTCUSDT/1m", future())
+    worker.work(NOW + 6 * MINUTE)
+    assert any(result.get("state") == "COMPLETE" for _, result in history.items("outcome-head:"))
+    with store.db:
+        store.db.execute("SAVEPOINT legacy_archive")
+        archive_event(store, value)
+        expected = public_archive(store)
+        store.db.execute("ROLLBACK TO legacy_archive")
+        store.db.execute("RELEASE legacy_archive")
+    BoundedRetention(store).work(NOW + 31 * DAY)
+    assert history.get("event-head:fixture") is None
+    assert history.count("outcome-head:") == 0
+    assert public_archive(store) == expected
 
 
 @pytest.mark.parametrize("full_expiry", [False, True])
