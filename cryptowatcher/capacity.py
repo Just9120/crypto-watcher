@@ -297,7 +297,15 @@ def stable_reason(store: Store) -> list[str]:
     for name in ("outcome", "comparison"):
         if queues[name]["state"] in ("OVERDUE", "ORPHAN_OR_UNKNOWN", "SOURCE_LIMITED_OR_UNKNOWN"):
             reasons.append(name.upper() + "_BACKLOG")
-    if store.get_runtime("storage_repack", {}).get("state") != "COMPLETE":
+    from .storage_repack import VERSION
+
+    repack = store.get_runtime("storage_repack", {})
+    if (
+        not isinstance(repack, dict)
+        or repack.get("state") != "COMPLETE"
+        or type(repack.get("version")) is not int
+        or repack.get("version") != VERSION
+    ):
         reasons.append("REPACK")
     for key in ("repack_worker", "analytics_recovery_worker"):
         if store.get_runtime(key, {}).get("state") == "FAILED":

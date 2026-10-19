@@ -96,7 +96,7 @@ def test_completed_repack_resumes_decision_pass_without_discarding_progress(stor
     assert store.get_runtime(PREFIX + key) == value
     state = work(store, NOW, batch=10, seconds=1)
     assert state["state"] == "COMPLETE" and state["decisions_complete"]
-    assert state["version"] == 11 and state["previous_run"]["records"] == 1000
+    assert state["version"] == 12 and state["previous_run"]["records"] == 1000
     assert state["previous_run"]["cursor"] == previous["cursor"] and state["records"] >= 2
     assert state["saved_payload_bytes"] > 123
     assert h.get(key) == value and store.get_runtime(PREFIX + key) == {DECISION_HEAD: 1}
@@ -206,7 +206,7 @@ def test_stable_baseline_distinguishes_referenced_backfill_from_normal_pending_h
             },
         )
         store.put_runtime("radar:v1:outcome-admission", {"complete": True})
-        store.put_runtime("storage_repack", {"state": "COMPLETE"})
+        store.put_runtime("storage_repack", {"state": "COMPLETE", "version": 12})
         store.put_runtime("analytics", {"state": "OK", "at_ms": NOW})
         History(store).put("outcome-pending:future-horizon", {"outcome_id": "normal-scheduled-work"})
         History(store).put(
@@ -225,6 +225,11 @@ def test_stable_baseline_distinguishes_referenced_backfill_from_normal_pending_h
         assert stable_reason(store) == ["ANALYTICS_RECOVERY_WORKER_FAILED"]
         with store.db:
             store.put_runtime("analytics_recovery_worker", {"state": "OK"})
+        assert stable_reason(store) == []
+        for version in (3, 11, None, "12", 12.0):
+            store.put_runtime("storage_repack", {"state": "COMPLETE", "version": version})
+            assert stable_reason(store) == ["REPACK"]
+        store.put_runtime("storage_repack", {"state": "COMPLETE", "version": 12})
         assert stable_reason(store) == []
 
 
@@ -384,8 +389,8 @@ def test_controlled_62week_population_plateaus_and_all_numeric_results_survive(t
     assert value["numeric_and_comparator_multiset_equality"] == value["private_equality"] == "PASS"
     assert value["restarts"] == 1 and not any(value["final_remaining"].values())
     if compact:
-        assert value["storage_layout"] == "MIXED_BLOCKS_REPACK11"
-        assert value["compaction"]["state"] == "COMPLETE" and value["compaction"]["version"] == 11
+        assert value["storage_layout"] == "MIXED_BLOCKS_REPACK12"
+        assert value["compaction"]["state"] == "COMPLETE" and value["compaction"]["version"] == 12
         assert value["issued_numeric_ids_after_final_gc"] > 0
     stable = value["steady_detail_population"][-8:]
     assert {s["events"] for s in stable} == {50}

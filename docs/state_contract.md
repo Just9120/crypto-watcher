@@ -71,10 +71,10 @@ SQLite tables/indexes/free pages/WAL/SHM/journal измеряются отдел
 Старые numeric rows остаются читаемыми до finite transfer. После новых writes
 требуется compatible reader/forward-fix; native и mature capacity gates прежние.
 
-NB2/PR1 candidate backend допускает exact self-contained price operands только
-после explicit numeric layout1→2 и отдельного writer marker. Обычный repack11
-его не включает; producers/retained normalizer используют candidate только при
-этом marker и проверенном frozen method/window context. NB1 bytes/длины frozen; NB2 имеет тот же
+Repack12 допускает NB2/PR1 exact self-contained price operands после explicit
+numeric layout1→2 и отдельного writer marker, атомарного с новым checkpoint.
+Producers/retained normalizer используют candidate только при этом marker и
+проверенном frozen method/window context. NB1 bytes/длины frozen; NB2 имеет тот же
 64-slot bound/full SHA256 и хранит raw frames совместно с operands. ID/FP и
 owner leases относятся к восстановленному прежнему26/34byte canonical frame.
 Private offer допускает только byte equality всех metric values/types и
@@ -84,8 +84,9 @@ cache hit. Обычный open не повышает marker, не запуска
 writer. Record pass ждёт finite source+numeric transfer; signed numeric savings
 учитываются и без изменения owner reference. Legacy byte counters проверяются
 без cold доли; неизвестные/потерянные counters не исправляются обнулением.
-Finite feature repack и native/mature qualification остаются обязательными до
-product activation.
+Неизвестный checkpoint отклоняется до DDL; committed12 без writer marker
+отклоняется без его восстановления. Clean baseline требует COMPLETE именно
+текущей версии repack. Native/mature qualification обязательны до поставки.
 
 Архивный CQ4 packet сохраняет прежний public fact JSON. Общие templates,
 strength/noise columns и точные ordered comparator lists не меняют методику,
@@ -98,7 +99,7 @@ retention work даже после удаления последнего event.
 `market_body_links` сохраняет owner/body через compatibility view; новые пары
 хранят integer coordinates существующего owner registry и shared body dictionary.
 Legacy rows остаются видны, пока bounded repack не перенесёт их атомарно.
-Repack11 сохраняет durable finite phases records/decisions/expiry/quality/namespaces/
+Repack12 сохраняет durable finite phases records/decisions/expiry/quality/namespaces/
 references/quality-tally/key-registry/prospective-cohorts/source-tiles/numeric-blocks. Secondary registry CK1 сохраняет исходные
 runtime keys и stable integer IDs; mixed legacy text/tokens видимы через expiry4/
 reference2 views. Point mutations используют индексы, не полный scan view.

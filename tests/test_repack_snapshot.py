@@ -274,3 +274,35 @@ def test_quality_interval_finishes_with_new_facts_and_keeps_every_numeric_result
         i = date - day
         expected = [{"metrics": {"price_return_pct": i / 17, "mae_pct": -0.0}, "strength": 1.25}]
         assert encode(decoded(bytes(payload), 1024 * 1024)) == encode(expected)
+
+
+@pytest.mark.parametrize(
+    "checkpoint",
+    [
+        {"version": 13},
+        {"version": "12"},
+        {"version": 12.0},
+        {"version": None},
+        {"version": True},
+        ["unknown"],
+    ],
+)
+def test_unknown_repack_checkpoint_is_rejected_before_schema_or_data_changes(store, checkpoint):
+    bounded(store)
+    store.put_runtime("storage_repack", checkpoint)
+    before = list(store.db.iterdump())
+    with pytest.raises(ValueError, match="Unknown storage repack"):
+        work(store, NOW)
+    assert list(store.db.iterdump()) == before
+
+
+def test_missing_price_writer_checkpoint_is_not_recreated_after_a_version12_commit(store):
+    bounded(store)
+    initial = work(store, NOW, seconds=0)
+    assert initial["version"] == 12
+    with store.db:
+        store.db.execute("DELETE FROM market_meta WHERE key='numeric_price_runtime'")
+    before = list(store.db.iterdump())
+    with pytest.raises(ValueError, match="price writer checkpoint"):
+        work(store, NOW + 1)
+    assert list(store.db.iterdump()) == before

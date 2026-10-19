@@ -33,12 +33,13 @@ def test_native_full_validation_includes_source_tiles_cells_and_their_counters(s
         state = work(store, NOW + tick, seconds=1)
         if state["state"] == "COMPLETE":
             break
-    assert state["state"] == "COMPLETE" and state["version"] == 11
+    assert state["state"] == "COMPLETE" and state["version"] == 12
     assert store.db.execute("SELECT COUNT(*) FROM market_candle_blocks").fetchone()[0] > 0
     from cryptowatcher import metric_codec, metric_price_codec, numeric_block_codec, numeric_blocks
 
     metric_ids, metric_values, candidates = population(store)
-    activate(store)
+    if not numeric_blocks.price_writing(store.db):
+        activate(store)
     with store.db:
         accepted = sum(
             numeric_blocks.offer_price(store.db, i, c) for i, c in zip(metric_ids, candidates, strict=True)

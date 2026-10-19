@@ -7,6 +7,8 @@ from typing import Any
 
 from .storage import Store, encode, json_payload
 
+VERSION = 12
+
 
 def normalized_record(store: Store, key: str, value: Any) -> Any:
     """Rebind old inline coordinates without changing public values."""
@@ -400,6 +402,7 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
     from .expiry_index import drain
     from .key_registry import drain as drain_registry
     from .numeric_blocks import install as install_numeric_blocks
+    from .numeric_blocks import price_layout, price_writing, upgrade_price
     from .numeric_blocks import summary as numeric_summary
     from .numeric_blocks import transfer as transfer_numeric
     from .numeric_blocks import writing as numeric_writing
@@ -413,17 +416,32 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
     if not store.bounded:
         return {"state": "N/A_LEGACY"}
     state = store.get_runtime("storage_repack", {})
+    if (
+        not isinstance(state, dict)
+        or ("version" in state and type(state["version"]) is not int)
+        or state.get("version") not in (None, 3, 4, 5, 6, 7, 8, 9, 10, 11, VERSION)
+    ):
+        raise ValueError("Unknown storage repack checkpoint; database preserved")
     if not source_installed(store.db):
         install_source_tiles(store.db, store.cached_text)
     source_summary(store.db)
     install_numeric_blocks(store.db, store.cached_bytes)
     numeric_summary(store.db)
-    if state.get("version") in (10, 11) and not source_writing(store.db):
+    source_active, numeric_active, price_active = (
+        source_writing(store.db),
+        numeric_writing(store.db),
+        price_writing(store.db),
+    )
+    if state.get("version") in (10, 11, VERSION) and not source_active:
         raise ValueError("Missing source writer checkpoint; database preserved")
-    if state.get("version") == 11 and not numeric_writing(store.db):
+    if state.get("version") in (11, VERSION) and not numeric_active:
         raise ValueError("Missing numeric writer checkpoint; database preserved")
+    if state.get("version") == VERSION and not price_active:
+        raise ValueError("Missing numeric price writer checkpoint; database preserved")
+    if not price_layout(store.db):
+        upgrade_price(store.db)
     if (
-        state.get("version") == 11
+        state.get("version") == VERSION
         and state.get("state") == "COMPLETE"
         and state.get("decisions_complete")
         and state.get("namespace_meter_complete")
@@ -438,7 +456,7 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
         and namespace_snapshot(store.db) is not None
     ):
         return state
-    if state.get("version") in (3, 4, 5, 6, 7, 8, 9, 10):
+    if state.get("version") in (3, 4, 5, 6, 7, 8, 9, 10, 11):
         state = {
             "previous_version": state["version"],
             "previous_run": {
@@ -447,7 +465,7 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
             "saved_payload_bytes": state.get("saved_payload_bytes", 0),
             "saved_categories": state.get("saved_categories", {}),
         }
-    state = {"version": 11, "cursor": "", "records": 0, "saved_payload_bytes": 0, **state}
+    state = {"cursor": "", "records": 0, "saved_payload_bytes": 0, **state, "version": VERSION}
     state.setdefault("saved_categories", {})
     deadline = time.monotonic() + seconds
     first = state.get("next_phase", 9)
@@ -459,6 +477,9 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
         )
         store.db.execute(
             "INSERT INTO market_meta VALUES('numeric_block_runtime','1') ON CONFLICT(key) DO NOTHING"
+        )
+        store.db.execute(
+            "INSERT INTO market_meta VALUES('numeric_price_runtime','1') ON CONFLICT(key) DO NOTHING"
         )
         # One shared deadline, with a durable rotating first phase. A slow SQL
         # read/commit may overrun a slice, but cannot always starve the same tail.
