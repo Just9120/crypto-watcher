@@ -8,7 +8,7 @@ from collections.abc import Generator
 from typing import Any
 
 from . import catalogue_aliases, catalogue_reader, packet_store, record_blocks, record_catalog
-from .storage import StateError
+from .storage import StateError, json_payload
 
 
 def active(db: sqlite3.Connection) -> bool:
@@ -153,6 +153,26 @@ def renewable(value: object, depth: int = 0) -> bool:
     return True
 
 
+def episode_deadline(db: sqlite3.Connection, identity: str, revision: int) -> int | None:
+    """A separately retained hot head is also an owner of its exact revision."""
+    from .expiry_index import hot_binding
+    from .expiry_index import member_deadline as all_members
+
+    deadline = all_members(db, catalogue_reader.PREFIX + "episode-event:" + identity + ":")
+    key = catalogue_reader.PREFIX + "episode-head:" + identity
+    row = db.execute("SELECT payload_json FROM runtime WHERE key=?", (key,)).fetchone()
+    if (
+        row is not None
+        and catalogue_reader.revision(json_payload(row[0]), catalogue_reader.Point("episode", identity, None))
+        == revision
+    ):
+        hot = hot_binding(db, key)
+        if hot is None:
+            raise StateError("Missing retained episode head lease")
+        deadline = max(deadline, hot[0]) if deadline is not None else hot[0]
+    return deadline
+
+
 def renew(db: sqlite3.Connection, key: str, deadline: int, *, shorten: bool = False) -> None:
     """Extend a service episode only to its actual latest retained dependency.
 
@@ -185,12 +205,11 @@ def renew(db: sqlite3.Connection, key: str, deadline: int, *, shorten: bool = Fa
     ):
         raise StateError("Cannot change a frozen record lease")
     from .expiry_index import hot_binding
-    from .expiry_index import member_deadline as all_members
 
     hot = hot_binding(db, key)
     if hot is not None and hot[0] != previous:
         raise StateError("Conflicting mixed episode lease")
-    if all_members(db, catalogue_reader.PREFIX + "episode-event:" + point.identity + ":") != deadline:
+    if episode_deadline(db, point.identity, coordinate.revision) != deadline:
         raise StateError("Episode lease must match retained members")
     value = record_blocks.read(packet_store.read(db, saved[0]), saved[1], coordinate)
     if not renewable(value):

@@ -365,7 +365,7 @@ class BoundedRetention:
             from .packet_store import collect as collect_record_packets
 
             removed_record_packets = (
-                collect_record_packets(store.db, batch)
+                collect_record_packets(store.db, min(256, batch))
                 if store.db.execute("SELECT 1 FROM market_meta WHERE key='packet_layout'").fetchone()
                 else 0
             )

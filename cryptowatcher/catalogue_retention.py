@@ -7,9 +7,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from itertools import islice
 
-from . import catalogue_lifecycle, record_blocks, record_catalog
-from .events import PREFIX, History
-from .storage import StateError, Store
+from . import catalogue_lifecycle, catalogue_reader, record_blocks, record_catalog
+from .events import PREFIX
+from .storage import StateError, Store, json_payload
 
 
 @dataclass(frozen=True)
@@ -115,25 +115,51 @@ def due_services(store: Store, now: int, batch: int) -> list[tuple[record_blocks
 
 def service(store: Store, coordinate: record_blocks.Coordinate, now: int) -> int:
     """A retained member renews episodes; deleting a current body removes its head."""
-    from .expiry_index import member_deadline, renew
-    from .storage_lifecycle import remove
+    from .expiry_index import hot_binding, renew
+    from .storage_lifecycle import forget, remove
 
     saved = record_catalog.row(store.db, coordinate)
     if saved is None or saved[2] is not None or saved[3] > now:
         return 0
     key = PREFIX + coordinate.key
     if coordinate.kind == "episode":
-        keep = member_deadline(store.db, PREFIX + "episode-event:" + coordinate.identity + ":")
+        keep = catalogue_lifecycle.episode_deadline(store.db, coordinate.identity, coordinate.revision)
         if keep is not None and keep > now:
             renew(store.db, key, keep)
             return 0
     # Authenticate bytes before deleting, even when there are no private refs.
     record_catalog.read(store.db, coordinate, store.cached_bytes)
+    head = (
+        PREFIX
+        + ("decision:telegram:" if coordinate.kind == "decision" else coordinate.kind + "-head:")
+        + coordinate.identity
+    )
+    hot = store.db.execute("SELECT payload_json FROM runtime WHERE key=?", (head,)).fetchone()
+    same_hot = (
+        hot is not None
+        and catalogue_reader.revision(
+            json_payload(hot[0]), catalogue_reader.Point(coordinate.kind, coordinate.identity, None)
+        )
+        == coordinate.revision
+    )
+    if same_hot:
+        lease = hot_binding(store.db, head)
+        if lease is None:
+            raise StateError("Missing retained service head lease")
+        if lease[0] > now:
+            return 0
     if saved[4]:
-        head = (
-            "decision:telegram:" if coordinate.kind == "decision" else coordinate.kind + "-head:"
-        ) + coordinate.identity
-        History(store).delete(head)
+        store.db.execute(
+            "UPDATE market_records SET current=0 WHERE kind=? AND public_uuid=? AND revision=?",
+            (
+                record_blocks.KINDS.index(coordinate.kind),
+                record_catalog.binary(coordinate.identity),
+                coordinate.revision,
+            ),
+        )
+    if same_hot:
+        forget(store, head)
+        store.db.execute("DELETE FROM runtime WHERE key=?", (head,))
     remove(store, key)
     store.db.execute(
         "DELETE FROM market_records WHERE kind=? AND public_uuid=? AND revision=?",
@@ -143,4 +169,4 @@ def service(store: Store, coordinate: record_blocks.Coordinate, now: int) -> int
             coordinate.revision,
         ),
     )
-    return 1 + int(saved[4])
+    return 1 + int(saved[4] or same_hot)

@@ -249,6 +249,63 @@ def test_only_self_contained_episode_extensions_are_eligible_for_cold_renewal():
     assert not catalogue_lifecycle.renewable({"_history_storage": None})
 
 
+@pytest.mark.parametrize("newer", [False, True])
+def test_cold_service_expiry_preserves_a_separately_published_retained_head(store, newer):
+    from cryptowatcher.catalogue_retention import service
+    from cryptowatcher.storage_lifecycle import track
+
+    prepare(store)
+    store.bounded = True
+    store.clock_ms = lambda: 100 * DAY
+    coordinate = Coordinate("episode", str(uuid.UUID(int=700)), 1)
+    value = {
+        "schema": "cryptowatcher.episode.v1",
+        "episode_id": coordinate.identity,
+        "revision": 1,
+        "started_ms": 100 * DAY,
+    }
+    projection = History._head("episode", value, coordinate.key, bounded=True)
+    head_key = PREFIX + "episode-head:" + coordinate.identity
+    retained_value = {**value, "revision": 2} if newer else value
+    retained_key = f"episode:{coordinate.identity}:{retained_value['revision']:010d}"
+    with store.db:
+        store.db.execute("BEGIN IMMEDIATE")
+        catalog.append(
+            store.db,
+            [(coordinate, value, projection if newer else None)],
+            bucket=130,
+            owners={coordinate: None},
+            deadlines={coordinate: 130 * DAY},
+            current=[coordinate] if newer else [],
+        )
+        # A supported legacy mixed fixture can have a newer hot head before
+        # atomic current-flag writes are activated. It must remain readable.
+        if newer:
+            store.db.execute(RUNTIME_UPSERT, (PREFIX + retained_key, encode(retained_value)))
+            track(store, PREFIX + retained_key, retained_value)
+            renew(store.db, PREFIX + retained_key, 131 * DAY)
+        hot_head = History._head("episode", retained_value, retained_key, bounded=True)
+        store.db.execute(RUNTIME_UPSERT, (head_key, encode(hot_head)))
+        track(store, head_key, hot_head)
+        renew(store.db, head_key, 131 * DAY)
+        store.db.execute("INSERT INTO market_meta VALUES('record_catalogue_runtime','1')")
+    history = History(store)
+    with store.db:
+        if newer:
+            assert service(store, coordinate, 130 * DAY) == 2
+            assert history.get(coordinate.key) is None
+        else:
+            assert service(store, coordinate, 130 * DAY) == 0
+            assert expires(store.db, PREFIX + coordinate.key)[0] == 131 * DAY
+        assert history.get("episode-head:" + coordinate.identity) == retained_value
+        assert history.get(retained_key) == retained_value
+    if not newer:
+        with store.db:
+            assert service(store, coordinate, 131 * DAY) == 2
+        assert history.get("episode-head:" + coordinate.identity) is None
+        assert history.get(retained_key) is None
+
+
 def test_future_frozen_leases_do_not_starve_later_due_events_in_small_retention_batches(store, monkeypatch):
     from cryptowatcher.expiry_index import owned_hot
 

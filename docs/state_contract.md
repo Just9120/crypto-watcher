@@ -157,7 +157,8 @@ runtime activation остаются обязательными.
 
 Candidate catalogue service expiry отделён от immutable body. Event parent
 deadline неизменяем; episode service row может только продлить lease до MAX
-действительно retained members. Hot duplicate и cold lease обновляются одним
+действительно retained members и отдельно сохраняемой head-ссылки на эту ревизию.
+Hot duplicate и cold lease обновляются одним
 SAVEPOINT; missing/conflicting member/owner/checksum не даёт продлить или удалить
 запись. Episode extensions с внешними source/context dependencies до отдельного
 lease adapter остаются hot и учитываются в budget. Mixed expiry сначала сохраняет
@@ -176,6 +177,20 @@ caller transaction сохраняется. Outcome bootstrap читает cursor
 и создаёт jobs в одном writer SAVEPOINT; failed batch не оставляет partial jobs
 и не фиксирует внешние изменения. Schema1 frozen converter явно unbounded/read-only
 и не подключает market layout. Runtime activation/native/mature gates прежние.
+
+Candidate finite transfer использует explicit caller writer/checkpoint и schema
+generation: signed64 rowid ceiling фиксируется отдельно для bodies/heads/aliases,
+DDL/VACUUM сбрасывают незавершённую физическую границу. UUID cursor не служит
+хронологическим watermark. Metadata scan ограничен256rows, payload budget2MiB,
+один packet — прежними64records/encoded bounds и одним expiry UTC day.
+Declared expansion проверяется до typed decompression; oversized/unsupported
+records сохраняются hot целиком и входят в общий budget. Fallback visits —
+cumulative diagnostics, не число оставшихся записей. Publication/ref adoption,
+exact persisted private readback, hot CAS removal и checkpoint атомарны.
+Head удаляется только вместе с matching body/lease; остальные hot heads остаются
+совместимыми ссылками. Initial COMPLETE означает конец фиксированной границы;
+новые admissions обрабатывает следующий конечный цикл. Это ещё не подключение
+repack13, steady worker/accounting или доказательство mature25GB.
 
 SB1 source tiles введены явным finite repack10 и сохраняются в repack11; обычный Store open не
 создает их и не включает writer. Замороженный блок
