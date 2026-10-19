@@ -451,6 +451,7 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
         upgrade_price(store.db)
     numeric_search.install(store.db)
     catalogue_repack.install(store)
+    maintenance = catalogue_repack.status(store, now_ms)
     if (
         state.get("version") == VERSION
         and state.get("state") == "COMPLETE"
@@ -465,12 +466,21 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
         and state.get("numeric_search_complete")
         and state.get("catalogue_complete")
         and state.get("initial_reclaim_complete")
-        and not catalogue_repack.status(store, now_ms)["pending_work"]
+        and not maintenance["pending_work"]
         and cohort_ready(store.db)
         and quality_totals(store.db) is not None
         and namespace_snapshot(store.db) is not None
         and not numeric_search.pending(store.db)
     ):
+        # Persisting the previous checkpoint can itself consume free pages.
+        # Clear a stale busy result without another checkpoint write, which
+        # would again change the allocation being measured. Other idle returns
+        # retain their existing checkpoint identity/timestamp.
+        if state.get("catalogue_maintenance", {}).get("pending_work"):
+            previous = state["catalogue_maintenance"].get("last_progress_ms")
+            if previous is not None:
+                maintenance["last_progress_ms"] = previous
+            state = {**state, "catalogue_maintenance": maintenance}
         return state
     if state.get("version") == 13:
         # CQ5 needs one fresh finite quality pass. Preserve the original domain

@@ -226,6 +226,32 @@ def test_completed_repack_still_reclaims_free_pages_without_reopening_initial_sc
     assert settled["catalogue_maintenance"]["free_pages"] <= 256
 
 
+def test_idle_return_refreshes_a_pre_checkpoint_reclaim_gauge_without_writing_another_checkpoint(store):
+    from cryptowatcher.catalogue_repack import busy, status
+
+    bounded(store)
+    settled = complete(store)
+    assert not status(store, NOW)["pending_work"]
+    # A real 38-day causal fixture reached free_pages278 before saving its
+    # checkpoint; the save consumed22 pages. The persisted gauge must not keep
+    # the ordinary worker busy forever once actual reclaim is complete.
+    stale = {
+        **settled["catalogue_maintenance"],
+        "free_pages": 278,
+        "vacuum_pending": True,
+        "pending_work": True,
+    }
+    store.put_runtime("storage_repack", {**settled, "catalogue_maintenance": stale})
+    actual = status(store, NOW)
+    assert not actual["pending_work"]
+    before = store.db.total_changes
+    result = work(store, NOW)
+    assert not busy(result)
+    assert result["catalogue_maintenance"]["free_pages"] == actual["free_pages"]
+    assert result["catalogue_transfer"] == settled["catalogue_transfer"]
+    assert store.db.total_changes == before
+
+
 def test_completed_initial_migration_survives_partial_meter_rebuild_after_vacuum_and_new_admissions(store):
     bounded(store)
     observe(store, OutcomeWorker(store))
