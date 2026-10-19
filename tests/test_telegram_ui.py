@@ -301,6 +301,8 @@ def test_diagnostics_distinguish_actual_forecast_optional_and_unknown(deck):
     }
     text = diagnostic_summary(data)
     assert "2.9 ГБ / 20 ГБ" in text and "163.28 ГБ" in text and "не подключена" in text
+    missing_budget = {**data, "storage": {k: v for k, v in data["storage"].items() if k != "budget_bytes"}}
+    assert "2.9 ГБ / 25 ГБ" in diagnostic_summary(missing_budget)
     assert "устарел" in text and "не текущий размер" in text
     queues = diagnostic_section(data, "queues")
     assert (

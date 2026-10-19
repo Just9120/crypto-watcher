@@ -14,6 +14,7 @@ from .config import TIMEFRAMES
 from .detector_config import effective_parameters, preset
 from .detectors import freshness
 from .storage import Snapshot
+from .storage_meter import BUDGET
 
 FAMILY = {
     "price": "Движение цены",
@@ -304,7 +305,7 @@ def diagnostic_summary(data: dict[str, Any]) -> str:
     if storage.get("working_bytes") is not None:
         lines.append(
             f"База + журналы сейчас: {amount(round(storage['working_bytes'] / 1e9, 2))} ГБ / "
-            f"{amount(storage.get('budget_bytes', 20e9) / 1e9)} ГБ"
+            f"{amount(storage.get('budget_bytes', BUDGET) / 1e9)} ГБ"
         )
     if storage.get("projected_working_bytes") is not None:
         lines.append(
