@@ -1,4 +1,4 @@
-"""Indexed mixed point reads; activation belongs to the complete runtime adapter.
+"""Indexed domain point/range reads; complete runtime activation is separate.
 
 This layer does not install a layout, migrate rows or enable catalogue writes.
 Store/History routing remains unchanged until the remaining adapter is qualified.
@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import uuid
+from collections.abc import Generator
 from dataclasses import dataclass
+from heapq import merge
 from typing import Any
 
-from . import record_catalog
-from .record_blocks import HEAD_SCHEMA, Coordinate
+from . import packet_store, record_blocks, record_catalog
+from .record_blocks import HEAD_SCHEMA, KINDS, Coordinate
 from .storage import StateError, encode
 
 MISSING = object()
@@ -138,3 +141,196 @@ def lookup(db: sqlite3.Connection, key: str, hot: Any = MISSING, cache: Any = No
         if body is not None and equal_public(db, hot, body, cache):
             return hot
     raise StateError("Conflicting mixed history heads at the same revision")
+
+
+@dataclass(frozen=True)
+class Namespace:
+    kind: str
+    head: bool
+
+    @property
+    def root(self) -> str:
+        return PREFIX + (
+            "decision:telegram:" if self.kind == "decision" else self.kind + ("-head:" if self.head else ":")
+        )
+
+
+NAMESPACES = tuple(Namespace(kind, head) for kind in KINDS for head in (False, True))
+
+
+def uuid_range(prefix: str) -> tuple[bytes, bytes | None] | None:
+    if len(prefix) > 36 or any(
+        (character != "-" if index in (8, 13, 18, 23) else character not in "0123456789abcdef")
+        for index, character in enumerate(prefix)
+    ):
+        return None
+    digits = prefix.replace("-", "")
+    shift = (32 - len(digits)) * 4
+    lower = int(digits or "0", 16) << shift
+    upper = lower + (1 << shift)
+    return lower.to_bytes(16, "big"), upper.to_bytes(16, "big") if upper < 2**128 else None
+
+
+def selected_range(namespace: Namespace, prefix: str) -> tuple[str, tuple[Any, ...], bool] | None:
+    if namespace.root.startswith(prefix):
+        suffix = ""
+    elif prefix.startswith(namespace.root):
+        suffix = prefix[len(namespace.root) :]
+    else:
+        return None
+    identity, separator, revision_prefix = suffix.partition(":")
+    if separator and (namespace.head or re.fullmatch(UUID, identity) is None):
+        return None
+    bounds = uuid_range(identity)
+    if bounds is None:
+        return None
+    where = "kind=?" + (" AND current=1" if namespace.head else "")
+    parameters: list[Any] = [KINDS.index(namespace.kind)]
+    if len(identity) == 36:
+        where += " AND public_uuid=?"
+        parameters.append(bounds[0])
+    elif identity:
+        where += " AND public_uuid>=?"
+        parameters.append(bounds[0])
+        if bounds[1] is not None:
+            where += " AND public_uuid<?"
+            parameters.append(bounds[1])
+    if separator:
+        if len(revision_prefix) > 10 or any(c not in "0123456789" for c in revision_prefix):
+            return None
+        width = 10 ** (10 - len(revision_prefix))
+        lower = max(1, int(revision_prefix or "0") * width)
+        upper = min(10**10, (int(revision_prefix or "0") + 1) * width)
+        if lower >= upper:
+            return None
+        where += " AND revision>=? AND revision<?"
+        parameters.extend((lower, upper))
+    return where, tuple(parameters), not suffix
+
+
+def namespace_rows(
+    db: sqlite3.Connection,
+    namespace: Namespace,
+    selected: tuple[str, tuple[Any, ...], bool],
+    reverse: bool,
+    limit: int | None,
+    cache: Any,
+) -> Generator[tuple[str, Any], None, None]:
+    order = " DESC" if reverse else " ASC"
+    sql = (
+        "SELECT public_uuid,revision,packet,slot FROM market_records WHERE "
+        + selected[0]
+        + " ORDER BY public_uuid"
+        + order
+        + ("" if namespace.head else ",revision" + order)
+    )
+    parameters = selected[1]
+    if limit is not None:
+        sql += " LIMIT ?"
+        parameters += (limit,)
+    cursor = db.execute(sql, parameters)
+    try:
+        for identity, revision_number, packet, slot in cursor:
+            coordinate = Coordinate(namespace.kind, str(uuid.UUID(bytes=bytes(identity))), revision_number)
+            raw = packet_store.read(db, packet)
+            if namespace.head:
+                value = record_blocks.projected(raw, slot, coordinate, cache)
+                if namespace.kind == "decision":
+                    from .events import DECISION_HEAD
+
+                    if value is not None:
+                        raise StateError("Invalid catalogue decision projection")
+                    value = {DECISION_HEAD: coordinate.revision}
+                elif value is None:
+                    raise StateError("Missing catalogue current projection")
+                key = namespace.root + coordinate.identity
+            else:
+                value = record_blocks.read(raw, slot, coordinate, cache)
+                key = PREFIX + coordinate.key
+            yield key, value
+    finally:
+        cursor.close()
+
+
+def scan(
+    db: sqlite3.Connection,
+    prefix: str,
+    *,
+    reverse: bool = False,
+    limit: int | None = None,
+    cache: Any = None,
+) -> Generator[tuple[str, Any], None, None]:
+    """Stream domain revisions/heads in public-key order; caller owns snapshot.
+
+    History and membership indexes are separate adapters, not part of this scan.
+    Every namespace uses its native kind/UUID/revision index, without sorting
+    computed public TEXT keys or loading the whole catalogue in Python.
+    """
+    if not isinstance(prefix, str) or (
+        limit is not None and (type(limit) is not int or not 0 <= limit < 2**63)
+    ):
+        raise ValueError("Invalid catalogue scan bounds")
+    if limit == 0:
+        return
+    selectors = [(namespace, selected_range(namespace, prefix)) for namespace in NAMESPACES]
+    if not any(selected is not None for _, selected in selectors) or not reading(db):
+        return
+    streams = [
+        namespace_rows(db, namespace, selected, reverse, limit, cache)
+        for namespace, selected in selectors
+        if selected is not None
+    ]
+    try:
+        for index, item in enumerate(merge(*streams, key=lambda row: row[0], reverse=reverse)):
+            yield item
+            if limit is not None and index + 1 == limit:
+                break
+    finally:
+        for stream in streams:
+            stream.close()
+
+
+def count(db: sqlite3.Connection, prefix: str) -> int:
+    if not isinstance(prefix, str):
+        raise ValueError("Invalid catalogue count prefix")
+    selectors = [(namespace, selected_range(namespace, prefix)) for namespace in NAMESPACES]
+    if not any(selected is not None for _, selected in selectors) or not reading(db):
+        return 0
+    total = 0
+    for namespace, selected in selectors:
+        if selected is None:
+            continue
+        if selected[2]:
+            row = db.execute(
+                "SELECT n,heads FROM market_catalogue_counts WHERE kind=?", (KINDS.index(namespace.kind),)
+            ).fetchone()
+            if row is None or any(type(n) is not int or n < 0 for n in row) or row[1] > row[0]:
+                raise ValueError("Missing or invalid catalogue namespace count")
+            total += row[1] if namespace.head else row[0]
+        else:
+            total += db.execute(
+                "SELECT COUNT(*) FROM market_records WHERE " + selected[0], selected[1]
+            ).fetchone()[0]
+    return total
+
+
+def as_of(db: sqlite3.Connection, kind: str, identity: str, cutoff_ms: int, cache: Any = None) -> Any:
+    if (
+        kind not in KINDS[:4]
+        or type(cutoff_ms) is not int
+        or not 0 <= cutoff_ms < 2**63
+        or not isinstance(identity, str)
+        or re.fullmatch(UUID, identity) is None
+    ):
+        raise ValueError("Invalid catalogue as-of bounds")
+    values = scan(db, PREFIX + kind + ":" + identity + ":", reverse=True, cache=cache)
+    try:
+        for _, value in values:
+            available = value.get("available_at_ms")
+            if type(available) is not int or not 0 <= available < 2**63:
+                raise StateError("Missing or invalid frozen availability time")
+            if available <= cutoff_ms:
+                return value
+    finally:
+        values.close()
+    return MISSING
