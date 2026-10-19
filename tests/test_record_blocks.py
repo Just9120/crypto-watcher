@@ -128,3 +128,39 @@ def test_batch_builder_bounds_expanded_records_before_compression_and_keeps_orde
     coordinate, value, _ = source[0]
     with pytest.raises(ValueError, match="legacy"):
         list(blocks.batches([(coordinate, {**value, "text": "q" * blocks.MAX_PACKET}, None)]))
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_selected_projection_checks_slot_identity_and_actual_frames_without_body_decode(monkeypatch, legacy):
+    values = entries()
+    raw = blocks.pack(values, legacy=legacy)
+    p, b = blocks.frames(raw)
+    original = blocks.parse
+    select = blocks.indexed_frame.select
+    calls = []
+
+    def parse(frame):
+        assert frame != b
+        return original(frame)
+
+    def selected(frame, slot, cache=None):
+        assert frame == p
+        calls.append(slot)
+        return select(frame, slot, cache)
+
+    monkeypatch.setattr(blocks, "parse", parse)
+    monkeypatch.setattr(blocks.indexed_frame, "select", selected)
+    if not legacy:
+        monkeypatch.setattr(blocks.indexed_frame, "all_values", lambda _: pytest.fail("unselected records"))
+    for slot, (coordinate, _, head) in enumerate(values):
+        assert encode(blocks.projected(raw, slot, coordinate)) == encode(head)
+    if not legacy:
+        assert calls == list(range(len(values)))
+    for slot in (-1, len(values), True):
+        with pytest.raises(ValueError):
+            blocks.projected(raw, slot, values[0][0])
+    with pytest.raises(ValueError, match="identity"):
+        blocks.projected(raw, 1, values[0][0])
+    tampered = raw[:-1] + bytes((raw[-1] ^ 1,))
+    with pytest.raises(ValueError, match="checksum"):
+        blocks.projected(tampered, 0, values[0][0])

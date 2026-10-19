@@ -126,7 +126,9 @@ def read(db: sqlite3.Connection, coordinate: Coordinate, cache: Any = None) -> d
     return record_blocks.read(packet_store.read(db, saved[0]), saved[1], coordinate, cache)
 
 
-def head(db: sqlite3.Connection, kind: str, identity: str) -> tuple[Coordinate, dict[str, Any] | None] | None:
+def head(
+    db: sqlite3.Connection, kind: str, identity: str, cache: Any = None
+) -> tuple[Coordinate, dict[str, Any] | None] | None:
     if kind not in record_blocks.KINDS:
         raise ValueError("Unknown record kind")
     saved = db.execute(
@@ -135,11 +137,9 @@ def head(db: sqlite3.Connection, kind: str, identity: str) -> tuple[Coordinate, 
     ).fetchone()
     if saved is None:
         return None
-    values = record_blocks.projections(packet_store.read(db, saved[0]))
     coordinate = Coordinate(kind, identity, saved[2])
-    if not 0 <= saved[1] < len(values) or values[saved[1]][0] != coordinate:
-        raise ValueError("Projected catalogue coordinate mismatch")
-    return values[saved[1]]
+    projected = record_blocks.projected(packet_store.read(db, saved[0]), saved[1], coordinate, cache)
+    return coordinate, projected
 
 
 def parent(db: sqlite3.Connection, identity: str, observed: int, expires: int) -> int:

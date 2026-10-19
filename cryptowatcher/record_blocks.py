@@ -238,6 +238,24 @@ def bodies(raw: bytes) -> list[Any]:
     return values
 
 
+def projected(raw: bytes, slot: int, expected: Coordinate, cache: Any = None) -> dict[str, Any] | None:
+    p, b = frames(raw)
+    if raw.startswith(MAGIC):
+        p_offsets, _ = indexed_frame.layout(p)
+        b_offsets, _ = indexed_frame.layout(b)
+        if len(p_offsets) != len(b_offsets):
+            raise ValueError("Domain body cardinality mismatch")
+        actual, head = projection(indexed_frame.select(p, slot, cache))
+    else:
+        values = projections(raw)
+        if type(slot) is not int or not 0 <= slot < len(values):
+            raise ValueError("Domain slot identity mismatch")
+        actual, head = values[slot]
+    if actual != expected:
+        raise ValueError("Domain slot identity mismatch")
+    return head
+
+
 def read(raw: bytes, slot: int, expected: Coordinate, cache: Any = None) -> dict[str, Any]:
     p, b = frames(raw)
     if raw.startswith(MAGIC):
