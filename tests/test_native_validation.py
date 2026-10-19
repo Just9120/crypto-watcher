@@ -23,6 +23,8 @@ def test_native_full_catalogue_checks_owner_masks_and_head_uniqueness(store, tmp
     with store.db:
         put(store)
         put(store, 2)
+        store.db.execute("UPDATE market_record_parents SET history_published=1")
+        store.db.execute("UPDATE market_record_parents SET history_published=2")
         if damage == "checksum":
             store.db.execute("DROP TRIGGER market_record_owner_frozen")
             store.db.execute("PRAGMA ignore_check_constraints=ON")

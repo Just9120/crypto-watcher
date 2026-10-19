@@ -107,6 +107,8 @@ def publish(db: sqlite3.Connection, key: str, value: Any, cache: Any = None) -> 
     ).fetchone()
     if root is None or first is None:
         return False
+    if root[1] == 2 and selected.episode is None:
+        return False
     body = record_catalog.read(db, Coordinate("event", selected.event, first[0]), cache)
     saved = record_catalog.row(db, Coordinate("event", selected.event, first[0]))
     if (

@@ -28,7 +28,7 @@ def admitted(store, value, observed=100 * DAY):
     return event, observed
 
 
-def populated(store, offset=0, *, initialized=False):
+def populated(store, offset=0, *, initialized=False, activate=True):
     if not initialized:
         prepare(store)
     public = {}
@@ -43,7 +43,8 @@ def populated(store, offset=0, *, initialized=False):
                 public[binding.key] = value
         # A prepared parent is deliberately not a published history entry.
         catalog.parent(store.db, str(uuid.UUID(int=999999)), 100 * DAY, 130 * DAY)
-        store.db.execute("INSERT INTO market_meta VALUES('record_catalogue_runtime','1')")
+        if activate:
+            store.db.execute("INSERT INTO market_meta VALUES('record_catalogue_runtime','1')")
     return public
 
 

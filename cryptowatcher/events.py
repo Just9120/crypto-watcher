@@ -234,26 +234,34 @@ class History:
             compact = pack_binary(plain)
             if len(compact) < len(plain.encode()) or '"source-cells"' in plain:
                 payload = compact
-        self.store.db.execute(RUNTIME_UPSERT, (PREFIX + key, payload))
-        if self.store.bounded:
-            from .storage_lifecycle import track
+        from .catalogue_write import mutation
 
-            track(self.store, PREFIX + key, value)
-            if key.startswith(("outcome-job:", "comparison-job:")):
-                from .queue_health import sync_job
+        with mutation(self.store, PREFIX + key, value) as write:
+            if not write:
+                return
+            self.store.db.execute(RUNTIME_UPSERT, (PREFIX + key, payload))
+            if self.store.bounded:
+                from .storage_lifecycle import track
 
-                sync_job(self, key, value)
+                track(self.store, PREFIX + key, value)
+                if key.startswith(("outcome-job:", "comparison-job:")):
+                    from .queue_health import sync_job
+
+                    sync_job(self, key, value)
 
     def delete(self, key: str) -> None:
-        if self.store.bounded:
-            from .storage_lifecycle import forget
+        from .catalogue_write import deletion
 
-            forget(self.store, PREFIX + key)
-            if key.startswith(("outcome-job:", "comparison-job:")):
-                from .queue_health import sync_job
+        with deletion(self.store, PREFIX + key):
+            if self.store.bounded:
+                from .storage_lifecycle import forget
 
-                sync_job(self, key, None)
-        self.store.db.execute("DELETE FROM runtime WHERE key=?", (PREFIX + key,))
+                forget(self.store, PREFIX + key)
+                if key.startswith(("outcome-job:", "comparison-job:")):
+                    from .queue_health import sync_job
+
+                    sync_job(self, key, None)
+            self.store.db.execute("DELETE FROM runtime WHERE key=?", (PREFIX + key,))
 
     def items(self, prefix: str, limit: int | None = None, *, reverse: bool = False) -> list[tuple[str, Any]]:
         return [
@@ -269,6 +277,12 @@ class History:
         return self.store.count_runtime(PREFIX + prefix)
 
     def version(self, kind: str, value: dict[str, Any]) -> None:
+        from .catalogue_write import scope
+
+        with scope(self.store):
+            self._version(kind, value)
+
+    def _version(self, kind: str, value: dict[str, Any]) -> None:
         key = value[f"{kind}_id"]
         version_key = f"{kind}:{key}:{value['revision']:010d}"
         existing = self.get(version_key)

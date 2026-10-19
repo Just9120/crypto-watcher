@@ -90,9 +90,14 @@ def parent_event(store: Store, value: Any, key: str) -> str | None:
             if result:
                 return result
     for candidate in re.findall(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", key):
-        if store.db.execute(
-            "SELECT 1 FROM runtime WHERE key=?", (PREFIX + "event-head:" + candidate,)
-        ).fetchone():
+        from .catalogue_lifecycle import parent_expiry
+
+        if (
+            store.db.execute(
+                "SELECT 1 FROM runtime WHERE key=?", (PREFIX + "event-head:" + candidate,)
+            ).fetchone()
+            or parent_expiry(store.db, candidate) is not None
+        ):
             return candidate
         for prefix in ("outcome-job:", "outbox:telegram:", "agent:outbox:"):
             parent = store.get_runtime(PREFIX + prefix + candidate)
@@ -132,6 +137,13 @@ def track(store: Store, key: str, value: Any) -> None:
             expiry = anchor + days * DAY
     if event_id:
         parent = saved_expiry(store.db, PREFIX + "event-head:" + event_id)
+        from .catalogue_lifecycle import parent_expiry
+
+        cold_parent = parent_expiry(store.db, event_id)
+        if cold_parent is not None:
+            if parent is not None and parent[0] != cold_parent:
+                raise ValueError("Conflicting frozen parent expiry")
+            parent = (cold_parent,)
         if parent:
             expiry = parent[0]
     if isinstance(value, dict) and type(value.get("expires_ms")) is int:

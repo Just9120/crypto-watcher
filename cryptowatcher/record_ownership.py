@@ -15,23 +15,15 @@ from .storage import encode
 
 def block_references(raw: bytes) -> list[Any]:
     projections = record_blocks.projections(raw)
-    bodies = (
-        record_blocks.bodies(raw)
-        if any(c.kind in ("event", "outcome", "comparison") for c, _ in projections)
-        else [None] * len(projections)
-    )
+    bodies = record_blocks.bodies(raw)
     if not isinstance(bodies, list) or len(bodies) != len(projections):
         raise ValueError("Invalid owned block cardinality")
     result = []
     for (coordinate, _), body in zip(projections, bodies, strict=True):
-        numeric: list[int] = []
-        windows: list[int] = []
-        event = coordinate.identity if coordinate.kind in ("event", "decision") else None
-        if coordinate.kind in ("event", "outcome", "comparison"):
-            value = record_blocks.expanded(coordinate, body)
-            numeric = sorted(numeric_pool.metric_ids(value))
-            windows = source_windows.reference_ids(value)
-            event = value.get("event_id")
+        value = record_blocks.expanded(coordinate, body)
+        numeric = sorted(numeric_pool.metric_ids(value))
+        windows = source_windows.reference_ids(value)
+        event = value.get("event_id")
         result.append([coordinate.kind, coordinate.identity, coordinate.revision, numeric, windows, event])
     return result
 

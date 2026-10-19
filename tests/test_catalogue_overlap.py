@@ -15,7 +15,7 @@ from cryptowatcher.disk_validation import validated_disk
 from cryptowatcher.events import PREFIX, History
 from cryptowatcher.market_storage import enable
 from cryptowatcher.record_blocks import Coordinate
-from cryptowatcher.storage import IntegrityError, Store, check_integrity, encode
+from cryptowatcher.storage import RUNTIME_UPSERT, IntegrityError, Store, check_integrity, encode
 from tests.test_catalogue_store import mixed
 from tests.test_record_catalog import DAY
 
@@ -142,7 +142,9 @@ def test_overlap_birth_and_both_publication_orders_keep_counts_and_outer_rollbac
         assert store.count_runtime(PREFIX) == len(public)
     assert sum(overlap.header(store.db).values()) == 0
     for key, value in public.items():
-        store.put_runtime(key, value)
+        # Reproduce a legacy duplicate; the active writer now skips exact cold retries.
+        with store.db:
+            store.db.execute(RUNTIME_UPSERT, (key, encode(value)))
     assert sum(overlap.header(store.db).values()) == 4
     with store.db:
         store.db.execute("DELETE FROM market_records")
@@ -223,7 +225,8 @@ def test_reader_opened_before_additive_catalogue_can_count_and_renamed_hot_key_i
             store.db.execute("INSERT INTO market_meta VALUES('record_catalogue_runtime','1')")
         assert earlier.count_runtime(PREFIX + "event:") == 1
         assert earlier.count_runtime(PREFIX + "event:" + event[:8]) == 1
-        store.put_runtime(PREFIX + coordinate.key, body)
+        with store.db:
+            store.db.execute(RUNTIME_UPSERT, (PREFIX + coordinate.key, encode(body)))
         assert earlier.count_runtime(PREFIX + "event:" + event[:8]) == 1
         with store.db:
             store.db.execute(

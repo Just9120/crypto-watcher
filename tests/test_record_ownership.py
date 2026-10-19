@@ -16,6 +16,43 @@ from tests.test_outcomes import NOW, future
 DAY = 86400000
 
 
+@pytest.mark.parametrize("kind", ["episode", "decision"])
+def test_cold_catalogue_retains_legacy_numeric_extensions_on_every_kind(store, kind):
+    bounded(store)
+    catalog.install(store.db, store.cached_text, store.cached_bytes)
+    codec = Codec(store.db)
+    coordinate = Coordinate(kind, str(uuid.UUID(int=77)), 1)
+    original = {
+        "schema": "cryptowatcher." + kind + ".v1",
+        coordinate.field: coordinate.identity,
+        "revision": 1,
+        "metrics": {"price_return_pct": 1.0, "directed_return_pct": 1.0, "mfe_pct": 2.0, "mae_pct": -0.0},
+    }
+    with store.db:
+        # Recreate the old private representation, whose hot namespace did not hold a lease.
+        packed = codec.pack({**original, "schema": "cryptowatcher.outcome.v1"})
+        packed["schema"] = original["schema"]
+        history = History(store)
+        history.put(coordinate.key, packed)
+        assert store.db.execute("SELECT SUM(detail_refs) FROM market_numeric").fetchone()[0] == 0
+        catalog.append(
+            store.db,
+            [(coordinate, packed, None)],
+            bucket=(NOW + 30 * DAY) // DAY,
+            owners={coordinate: None},
+            deadlines={coordinate: NOW + 30 * DAY},
+        )
+        history.delete(coordinate.key)
+        numeric_pool.collect(store.db)
+    assert store.db.execute("SELECT SUM(detail_refs) FROM market_numeric").fetchone()[0] == 1
+    assert encode(codec.unpack(catalog.read(store.db, coordinate))) == encode(original)
+    with store.db:
+        store.db.execute("DELETE FROM market_records")
+        packet_store.collect(store.db)
+        numeric_pool.collect(store.db)
+    assert store.db.execute("SELECT COUNT(*) FROM market_numeric").fetchone()[0] == 0
+
+
 def publish(store):
     bounded(store)
     catalog.install(store.db, store.cached_text)

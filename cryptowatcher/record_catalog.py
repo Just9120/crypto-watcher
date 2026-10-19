@@ -55,7 +55,7 @@ def install(db: sqlite3.Connection, cache: Any = None, binary_cache: Any = None)
                 public_uuid BLOB NOT NULL UNIQUE CHECK(typeof(public_uuid)='blob' AND length(public_uuid)=16),
                 observed INTEGER NOT NULL CHECK(typeof(observed)='integer'),
                 expires INTEGER NOT NULL CHECK(typeof(expires)='integer' AND expires>=observed),
-                history_published INTEGER NOT NULL DEFAULT 0 CHECK(typeof(history_published)='integer' AND history_published IN(0,1)));
+                history_published INTEGER NOT NULL DEFAULT 0 CHECK(typeof(history_published)='integer' AND history_published IN(0,1,2)));
             CREATE INDEX market_record_history ON market_record_parents(observed,public_uuid) WHERE history_published=1;
             CREATE INDEX market_record_parent_due ON market_record_parents(expires,id);
             CREATE TABLE market_records(

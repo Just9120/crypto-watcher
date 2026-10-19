@@ -288,10 +288,11 @@ SCHEMA = """
             WHERE category='record_aliases';
     END;
     CREATE TRIGGER market_record_history_new BEFORE UPDATE OF history_published ON market_record_parents BEGIN
-        SELECT CASE WHEN OLD.history_published<>0 OR NEW.history_published<>1
-            OR NEW.observed<0 OR NEW.observed>=10000000000000000
-            OR cw_catalogue_alias_valid('history',1)<>1
-            OR NOT EXISTS(SELECT 1 FROM market_records WHERE kind=0 AND public_uuid=NEW.public_uuid)
+        SELECT CASE WHEN NOT ((OLD.history_published=0 AND NEW.history_published=1
+            AND NEW.observed>=0 AND NEW.observed<10000000000000000
+            AND cw_catalogue_alias_valid('history',1)=1
+            AND EXISTS(SELECT 1 FROM market_records WHERE kind=0 AND public_uuid=NEW.public_uuid))
+            OR (OLD.history_published=1 AND NEW.history_published=2 AND cw_catalogue_alias_valid('history',-1)=1))
             THEN RAISE(ABORT,'Invalid retained history publication') END;
     END;
     CREATE TRIGGER market_record_history_initial BEFORE INSERT ON market_record_parents BEGIN
@@ -313,9 +314,12 @@ SCHEMA = """
             WHERE category='record_parents';
     END;
     CREATE TRIGGER market_record_history_added AFTER UPDATE OF history_published ON market_record_parents BEGIN
-        UPDATE market_catalogue_index_counts SET n=n+1 WHERE name='history';
-        INSERT INTO market_counts VALUES('record_aliases',1,24,24,0)
-            ON CONFLICT(category) DO UPDATE SET records=records+1,logical_bytes=logical_bytes+24,inserted_bytes=inserted_bytes+24;
+        UPDATE market_catalogue_index_counts SET n=n+(NEW.history_published=1)-(OLD.history_published=1) WHERE name='history';
+        INSERT INTO market_counts VALUES('record_aliases',(NEW.history_published=1)-(OLD.history_published=1),
+            24*((NEW.history_published=1)-(OLD.history_published=1)),24*(NEW.history_published=1),24*(OLD.history_published=1))
+            ON CONFLICT(category) DO UPDATE SET records=records+excluded.records,
+                logical_bytes=logical_bytes+excluded.logical_bytes,inserted_bytes=inserted_bytes+excluded.inserted_bytes,
+                deleted_bytes=deleted_bytes+excluded.deleted_bytes;
     END;
     CREATE TRIGGER market_record_history_keep BEFORE DELETE ON market_record_parents WHEN OLD.history_published=1 BEGIN
         SELECT CASE WHEN cw_catalogue_alias_valid('history',-1)<>1

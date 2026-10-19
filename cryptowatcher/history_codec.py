@@ -393,7 +393,7 @@ class Codec:
         fragments.append(encoded[previous:])
         return b"".join(fragments)
 
-    def pack(self, value: Any, *, _price_context: Any = None) -> Any:
+    def pack(self, value: Any, *, _price_context: Any = None, _numeric_owner: bool | None = None) -> Any:
         from . import metric_price_context as price_context
 
         if _price_context is None:
@@ -401,11 +401,22 @@ class Codec:
 
             _price_context = price_context.Context() if self.bounded and price_writing(self.db) else False
         if isinstance(value, list):
-            return [self.pack(item, _price_context=_price_context) for item in value]
+            return [
+                self.pack(item, _price_context=_price_context, _numeric_owner=_numeric_owner)
+                for item in value
+            ]
         if not isinstance(value, dict):
             return value
         if MARKER in value:
             raise StateError("Reserved history storage marker")
+        if _numeric_owner is None:
+            schema = value.get("schema")
+            # These namespaces do not own numeric/window leases in the hot
+            # layout. Preserve extra metrics as ordinary exact JSON instead.
+            _numeric_owner = not (
+                isinstance(schema, str)
+                and schema.startswith(("cryptowatcher.episode.", "cryptowatcher.decision."))
+            )
         price_state = (
             price_context.context(self.db, value, _price_context, self.field_raw, cache=self.binary_cache)
             if _price_context is not False
@@ -422,7 +433,7 @@ class Codec:
         result: dict[str, Any] = {}
         references = {}
         for name, item in value.items():
-            if self.bounded and name == "metrics" and isinstance(item, dict):
+            if self.bounded and _numeric_owner and name == "metrics" and isinstance(item, dict):
                 from .numeric_pool import encode_reference
 
                 reference = encode_reference(self.db, item, price=price if price_state is not False else None)
@@ -494,7 +505,9 @@ class Codec:
                 }
             else:
                 result[name] = (
-                    self.pack(item, _price_context=price_state) if isinstance(item, (dict, list)) else item
+                    self.pack(item, _price_context=price_state, _numeric_owner=_numeric_owner)
+                    if isinstance(item, (dict, list))
+                    else item
                 )
         if references:
             result[MARKER] = {"schema": SCHEMA, "fields": references}

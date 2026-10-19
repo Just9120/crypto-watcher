@@ -122,11 +122,20 @@ def byte_counter(db: sqlite3.Connection) -> None:
 
 def expires(db: sqlite3.Connection, key: str) -> Any:
     if db.execute("SELECT type FROM sqlite_master WHERE name='market_lifetimes'").fetchone()[0] != "view":
-        return db.execute("SELECT expires FROM market_lifetimes WHERE key=?", (key,)).fetchone()
-    return db.execute(
-        "SELECT expires FROM market_expiry_legacy WHERE key=? UNION ALL SELECT expires FROM market_expiry WHERE rid IN(SELECT id FROM market_runtime_keys WHERE external IN(?,cw_key_pack(?)))",
-        (key, key, key),
-    ).fetchone()
+        hot = db.execute("SELECT expires FROM market_lifetimes WHERE key=?", (key,)).fetchone()
+    else:
+        hot = db.execute(
+            "SELECT expires FROM market_expiry_legacy WHERE key=? UNION ALL SELECT expires FROM market_expiry WHERE rid IN(SELECT id FROM market_runtime_keys WHERE external IN(?,cw_key_pack(?)))",
+            (key, key, key),
+        ).fetchone()
+    from .catalogue_lifecycle import expires as cold_expiry
+
+    cold = cold_expiry(db, key)
+    if cold is None:
+        return hot
+    if hot is not None and hot[0] != cold:
+        raise ValueError("Conflicting mixed immutable expiry")
+    return (cold,)
 
 
 def remove(db: sqlite3.Connection, key: str) -> None:
@@ -154,13 +163,22 @@ def renew(db: sqlite3.Connection, key: str, value: int, *, shorten: bool = False
 
 def member_deadline(db: sqlite3.Connection, prefix: str) -> int | None:
     if db.execute("SELECT type FROM sqlite_master WHERE name='market_lifetimes'").fetchone()[0] != "view":
-        return db.execute(
-            "SELECT MIN(expires) FROM market_lifetimes WHERE key>=? AND key<?", (prefix, prefix + "~")
+        hot = db.execute(
+            "SELECT MAX(expires) FROM market_lifetimes WHERE key>=? AND key<?", (prefix, prefix + "~")
         ).fetchone()[0]
-    return db.execute(
-        "SELECT MIN(expires) FROM (SELECT expires FROM market_expiry_legacy WHERE key>=? AND key<? UNION ALL SELECT e.expires FROM runtime r JOIN market_runtime_keys k ON k.external IN(r.key,cw_key_pack(r.key)) JOIN market_expiry e ON e.rid=k.id WHERE r.key>=? AND r.key<?)",
-        (prefix, prefix + "~", prefix, prefix + "~"),
-    ).fetchone()[0]
+    else:
+        hot = db.execute(
+            "SELECT MAX(expires) FROM (SELECT expires FROM market_expiry_legacy WHERE key>=? AND key<? UNION ALL SELECT e.expires FROM runtime r JOIN market_runtime_keys k ON k.external IN(r.key,cw_key_pack(r.key)) JOIN market_expiry e ON e.rid=k.id WHERE r.key>=? AND r.key<?)",
+            (prefix, prefix + "~", prefix, prefix + "~"),
+        ).fetchone()[0]
+    from .catalogue_lifecycle import member_deadline as cold_deadline
+
+    cold = cold_deadline(db, prefix)
+    return (
+        max(value for value in (hot, cold) if value is not None)
+        if hot is not None or cold is not None
+        else None
+    )
 
 
 def drain(db: sqlite3.Connection, batch: int = 128, seconds: float = 0.025) -> dict[str, Any]:

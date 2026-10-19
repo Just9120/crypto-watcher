@@ -7,7 +7,7 @@ from cryptowatcher import record_catalog as catalog
 from cryptowatcher.events import DECISION_HEAD, PREFIX, History
 from cryptowatcher.market_storage import enable
 from cryptowatcher.record_blocks import Coordinate
-from cryptowatcher.storage import StateError, Store, encode
+from cryptowatcher.storage import RUNTIME_UPSERT, StateError, Store, encode
 from tests.test_catalogue_aliases import populated
 from tests.test_record_blocks import entries
 from tests.test_record_catalog import DAY
@@ -31,7 +31,7 @@ def mixed(store):
             deadlines={c: 130 * DAY for c, _, _ in values},
             current=[c for c, _, _ in values],
         )
-    expected = populated(store, offset=10**6, initialized=True)
+    expected = populated(store, offset=10**6, initialized=True, activate=False)
     for key in list(expected):
         if key.startswith(PREFIX + "history:"):
             event = expected[key]["event_id"]
@@ -69,6 +69,8 @@ def mixed(store):
     # One exact duplicate binding must appear once in the mixed stream.
     alias = next(key for key in expected if key.startswith(PREFIX + "history:"))
     store.put_runtime(alias, expected[alias])
+    with store.db:
+        store.db.execute("INSERT INTO market_meta VALUES('record_catalogue_runtime','1')")
     return expected, values
 
 
@@ -142,7 +144,8 @@ def test_mixed_store_keyset_limits_readonly_snapshot_and_conflicts(store):
         reopened.db.rollback()
         assert reopened.get_runtime(key) == {"new": True}
     coordinate, body, _ = values[1]
-    store.put_runtime(PREFIX + coordinate.key, {**body, "tampered": 1})
+    with store.db:
+        store.db.execute(RUNTIME_UPSERT, (PREFIX + coordinate.key, encode({**body, "tampered": 1})))
     with pytest.raises(StateError, match="Conflicting"):
         store.get_runtime(PREFIX + coordinate.key)
     with pytest.raises(StateError, match="Conflicting"):

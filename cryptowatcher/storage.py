@@ -537,8 +537,12 @@ class Store:
         )
 
     def put_runtime(self, key: str, payload: Any) -> None:
+        from .catalogue_write import mutation
+
         with self.db:
-            self.db.execute(RUNTIME_UPSERT, (key, encode(payload)))
+            with mutation(self, key, payload) as write:
+                if write:
+                    self.db.execute(RUNTIME_UPSERT, (key, encode(payload)))
 
     def count_runtime(self, prefix: str) -> int:
         from .catalogue_store import count

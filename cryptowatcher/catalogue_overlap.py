@@ -211,12 +211,16 @@ def install(db: sqlite3.Connection) -> None:
             f"CREATE TRIGGER market_catalogue_overlap_head AFTER UPDATE OF current ON market_records BEGIN {changes} END"
         )
         for operation, alias, sign in (("UPDATE OF history_published", "NEW", 1), ("DELETE", "OLD", -1)):
+            delta = "((NEW.history_published=1)-(OLD.history_published=1))" if sign == 1 else "-1"
             changes = adjustment(
                 "'history'",
-                f"{sign}*EXISTS(SELECT 1 FROM runtime WHERE key=cw_catalogue_binding_key(NULL,{alias}.observed,{alias}.public_uuid))",
+                f"{delta}*EXISTS(SELECT 1 FROM runtime WHERE key=cw_catalogue_binding_key(NULL,{alias}.observed,{alias}.public_uuid))",
+            )
+            condition = (
+                "OLD.history_published<>NEW.history_published" if sign == 1 else "OLD.history_published=1"
             )
             db.execute(
-                f"CREATE TRIGGER market_catalogue_overlap_history_{sign + 1} AFTER {operation} ON market_record_parents WHEN {alias}.history_published=1 BEGIN {changes} END"
+                f"CREATE TRIGGER market_catalogue_overlap_history_{sign + 1} AFTER {operation} ON market_record_parents WHEN {condition} BEGIN {changes} END"
             )
         db.execute(f"""CREATE TRIGGER market_catalogue_overlap_hot_key AFTER UPDATE OF key ON runtime BEGIN
             UPDATE market_catalogue_overlap SET n=n-1,checksum=cw_catalogue_shadow_digest(name,n-1) WHERE name={matched("OLD")};
