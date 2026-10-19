@@ -38,7 +38,12 @@ def assert_accounted(store):
     for (block,) in store.db.execute("SELECT id FROM market_numeric_blocks"):
         frames, details, quality, raw = blocks.read(store.db, block)
         size = search.index_bytes(sum(bool(f) for f in frames), search.fields(store.db, block))
-        current = blocks.allocation(block, frames, details, quality, len(raw), index_bytes=size)
+        count_size = store.db.execute(
+            "SELECT length(counts) FROM market_numeric_block_refs WHERE id=?", (block,)
+        ).fetchone()[0]
+        current = blocks.allocation(
+            block, frames, details, quality, len(raw), index_bytes=size, counts_bytes=count_size
+        )
         allocation = [a + b for a, b in zip(allocation, current, strict=True)]
     status = blocks.summary(store.db)
     assert tuple(allocation) == tuple(

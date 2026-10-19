@@ -182,6 +182,49 @@ def test_initial_ceiling_is_finite_with_new_arrivals_and_vacuum_restart(store):
         assert record_relocation.capture(reopened, first).value == expected.value
 
 
+def test_bounded_four_packet_lookahead_merges_intact_small_parents_without_touching_the_rest(store):
+    from cryptowatcher import record_catalog
+    from cryptowatcher.record_blocks import Coordinate
+    from tests.test_record_catalog import DAY, prepare, put
+
+    prepare(store)
+    with store.db:
+        first, value, head, _, _ = put(store)
+        coordinates = [first]
+        for _ in range(9):
+            coordinate = Coordinate("event", str(uuid.uuid4()), 1)
+            owner = record_catalog.parent(store.db, coordinate.identity, 100 * DAY, 130 * DAY)
+            record_catalog.append(
+                store.db,
+                [
+                    (
+                        coordinate,
+                        {**value, "event_id": coordinate.identity},
+                        {**head, "event_id": coordinate.identity, "revision_key": coordinate.key},
+                    )
+                ],
+                bucket=130,
+                owners={coordinate: owner},
+                deadlines={coordinate: None},
+                current=[coordinate],
+            )
+            coordinates.append(coordinate)
+    expected = [record_relocation.capture(store, coordinate) for coordinate in coordinates]
+    packet_bundles.install(store.db)
+    with store.db:
+        store.db.execute("BEGIN IMMEDIATE")
+        packet_bundles.tag(store.db, 2**63 - 1, 256)
+        moved, fallbacks = catalogue_compaction.compact(store, expected[0].binding[0])
+    assert (moved, fallbacks) == (5, 0)
+    actual = [record_relocation.capture(store, coordinate) for coordinate in coordinates]
+    assert len({r.binding[0] for r in actual[:5]}) == 1
+    assert actual[5:] == expected[5:]
+    assert [(r.value, r.projection, r.expires, r.binding[2:]) for r in actual] == [
+        (r.value, r.projection, r.expires, r.binding[2:]) for r in expected
+    ]
+    assert packet_bundles.verify(store.db)["count"] == 5
+
+
 def test_oversized_parent_stays_readable_and_reports_fallback_without_endless_retry(store):
     from tests.test_record_catalog import prepare, put
 

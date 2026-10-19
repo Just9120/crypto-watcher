@@ -324,9 +324,16 @@ def stable_reason(store: Store) -> list[str]:
     elif repack.get("initial_reclaim_complete") is not True:
         reasons.append("CATALOGUE_INITIAL_RECLAIM_PENDING")
     else:
-        from . import catalogue_repack
+        from . import catalogue_repack, numeric_refs
         from .storage import StateError
 
+        try:
+            leases = repack.get("numeric_refs", {})
+            numeric_refs.validate(leases)
+            if leases.get("complete") is not True or not numeric_refs.installed(store.db):
+                reasons.append("NUMERIC_LEASE_INITIAL_INCOMPLETE")
+        except (ValueError, StateError, sqlite3.Error):
+            reasons.append("NUMERIC_LEASE_CHECKPOINT_UNKNOWN")
         try:
             catalogue_repack.validate(store, repack, VERSION)
             pending = catalogue_repack.status(store, int(time.time() * 1000))

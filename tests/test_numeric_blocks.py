@@ -205,7 +205,11 @@ def test_corruption_is_detected_on_actual_read_and_prevents_owner_publication(st
     identity_value = numeric_pool.reference_id(ref)
     with store.db:
         if damage == "counts":
-            store.db.execute("UPDATE market_numeric_block_refs SET counts=zeroblob(length(counts))")
+            old_counts = bytes(store.db.execute("SELECT counts FROM market_numeric_block_refs").fetchone()[0])
+            store.db.execute(
+                "UPDATE market_numeric_block_refs SET counts=?",
+                (old_counts[:4] + bytes(len(old_counts) - 4),),
+            )
         elif damage == "lookup":
             store.db.execute("DELETE FROM market_numeric_block_lookup")
         elif damage == "totals":
@@ -297,7 +301,13 @@ def test_numeric_pure_cache_shares_budget_and_cannot_hide_writes_or_actual_corru
         numeric_pool.adjust(store.db, {ids[0]}, "quality_refs", 1)
     assert numeric_pool.raw_many(store.db, {ids[0]})[ids[0]][2] == 1
     with store.db:
-        store.db.execute("UPDATE market_numeric_block_refs SET counts=zeroblob(length(counts)) WHERE id=0")
+        old_counts = bytes(
+            store.db.execute("SELECT counts FROM market_numeric_block_refs WHERE id=0").fetchone()[0]
+        )
+        store.db.execute(
+            "UPDATE market_numeric_block_refs SET counts=? WHERE id=0",
+            (old_counts[:4] + bytes(len(old_counts) - 4),),
+        )
     with pytest.raises(ValueError):
         numeric_pool.load(store.db, ids[0])
     assert store.reference_cache_bytes <= 1024 * 1024

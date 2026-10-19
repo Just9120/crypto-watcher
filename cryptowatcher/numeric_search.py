@@ -148,7 +148,13 @@ def qualify(db: sqlite3.Connection, block: int) -> None:
         counts = db.execute("SELECT counts FROM market_numeric_block_refs WHERE id=?", (block,)).fetchone()[0]
         n = sum(bool(f) for f in frames)
         before = blocks.allocation(
-            block, frames, details, quality, len(payload), index_bytes=index_bytes(n, old)
+            block,
+            frames,
+            details,
+            quality,
+            len(payload),
+            index_bytes=index_bytes(n, old),
+            counts_bytes=len(counts),
         )
         detail_slots = sum(bool(v) for v in details)
         eligible = (
@@ -168,7 +174,13 @@ def qualify(db: sqlite3.Connection, block: int) -> None:
                 raise ValueError("Numeric search retirement lost a coordinate")
             seal = signature(block, payload, bytes(counts))
         after = blocks.allocation(
-            block, frames, details, quality, len(payload), index_bytes=index_bytes(n, (detail_slots, seal))
+            block,
+            frames,
+            details,
+            quality,
+            len(payload),
+            index_bytes=index_bytes(n, (detail_slots, seal)),
+            counts_bytes=len(counts),
         )
         db.execute(
             "UPDATE market_numeric_block_refs SET detail_slots=?,search_seal=? WHERE id=?",

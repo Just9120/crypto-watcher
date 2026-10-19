@@ -13,7 +13,7 @@ import struct
 import time
 from typing import Any
 
-from . import metric_price_codec, numeric_search
+from . import metric_price_codec, numeric_refs, numeric_search
 from . import numeric_block_codec as codec
 from .candle_blocks import atomic
 from .numeric_pool import fingerprint
@@ -130,6 +130,7 @@ def allocation(
     payload_size: int,
     *,
     index_bytes: int | None = None,
+    counts_bytes: int | None = None,
 ) -> tuple[int, ...]:
     if len(frames) != 64 or len(details) != 64 or len(quality) != 64:
         raise ValueError("Invalid numeric slot cardinality")
@@ -144,7 +145,7 @@ def allocation(
         return (0, 0, 0, 0, 0)
     total = (
         payload_size
-        + len(codec.counts(block, details, quality))
+        + (len(codec.counts(block, details, quality)) if counts_bytes is None else counts_bytes)
         + (16 * n if index_bytes is None else index_bytes)
     )
     # Logical encoded bytes, apportioned by exact frame lengths. Physical
@@ -194,6 +195,9 @@ def put(
             *old[:3],
             len(old[3]),
             index_bytes=numeric_search.index_bytes(sum(bool(f) for f in old[0]), search),
+            counts_bytes=db.execute(
+                "SELECT length(counts) FROM market_numeric_block_refs WHERE id=?", (block,)
+            ).fetchone()[0],
         )
         if old
         else (0, 0, 0, 0, 0)
@@ -213,14 +217,16 @@ def put(
     predicted = any(f and f[0] in (17, 18, 19) for f in frames)
     raw = codec.pack(block, frames, recipes=price_layout(db) if predicted else False) if any(frames) else b""
     search_size = (40 if sealed else 8 + 16 * sum(bool(f) for f in frames)) if modern else None
-    after = allocation(block, frames, details, quality, len(raw), index_bytes=search_size)
+    refs = codec.counts(block, details, quality, compressed=numeric_refs.writing(db))
+    after = allocation(
+        block, frames, details, quality, len(raw), index_bytes=search_size, counts_bytes=len(refs)
+    )
     current = state(db)
     if any(frame and block * 64 + slot + 1 > current[0] for slot, frame in enumerate(frames)):
         raise ValueError("Numeric slot exceeds issued ceiling")
     updated = (current[0], *(current[i + 1] + after[i] - before[i] for i in range(5)))
     digest(updated)
     if after[0]:
-        refs = codec.counts(block, details, quality)
         unused = sum(bool(f) and not (details[i] or quality[i]) for i, f in enumerate(frames))
         db.execute(
             "INSERT INTO market_numeric_blocks VALUES(?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
@@ -322,7 +328,7 @@ def values_many(db: sqlite3.Connection, ids: set[int]) -> dict[int, bytes]:
             continue
         if row[1] is None:
             raise ValueError("Missing numeric lease block")
-        counts = codec.checked(bytes(row[1]), b"NR1\x00", 1196)
+        counts = numeric_refs.header(db, bytes(row[1]))
         if struct.unpack(">Q", counts[:8])[0] != block:
             raise ValueError("Numeric lease identity mismatch")
         sealed = numeric_search.checked(block, bytes(row[0]), bytes(row[1]), row[3], row[4])
@@ -574,7 +580,7 @@ def install_functions(db: sqlite3.Connection, cache: Any = None) -> None:
             return None
         if not counts and raw[:4] == b"NB2\x00" and not price_layout(db):
             raise ValueError("NB2 requires an explicit price layout upgrade")
-        body = codec.checked(raw, b"NR1\x00", 1196) if counts else codec.header(raw)
+        body = numeric_refs.header(db, raw) if counts else codec.header(raw)
         if struct.unpack(">Q", body[:8])[0] != codec.block_number(block):
             raise ValueError("Numeric cached block coordinate mismatch")
 
@@ -664,7 +670,7 @@ def install(db: sqlite3.Connection, cache: Any = None) -> None:
         # DDL is statement-by-statement: executescript would commit the caller.
         for statement in (
             "CREATE TABLE market_numeric_blocks(id INTEGER PRIMARY KEY CHECK(id>=0 AND id<=144115188075855871),payload BLOB NOT NULL CHECK(typeof(payload)='blob' AND length(payload) BETWEEN 109 AND 4096))",
-            "CREATE TABLE market_numeric_block_refs(id INTEGER PRIMARY KEY REFERENCES market_numeric_blocks(id),counts BLOB NOT NULL CHECK(typeof(counts)='blob' AND length(counts) BETWEEN 172 AND 1196),unused INTEGER NOT NULL CHECK(typeof(unused)='integer' AND unused BETWEEN 0 AND 64))",
+            f"CREATE TABLE market_numeric_block_refs(id INTEGER PRIMARY KEY REFERENCES market_numeric_blocks(id),counts BLOB NOT NULL CHECK({numeric_refs.COUNTS_CHECK}),unused INTEGER NOT NULL CHECK(typeof(unused)='integer' AND unused BETWEEN 0 AND 64))",
             "CREATE INDEX market_numeric_block_unused ON market_numeric_block_refs(unused,id) WHERE unused>0",
             "CREATE TABLE market_numeric_block_lookup(fingerprint BLOB NOT NULL CHECK(length(fingerprint)=8),id INTEGER NOT NULL CHECK(id>0),PRIMARY KEY(fingerprint,id)) WITHOUT ROWID",
             "CREATE TABLE market_numeric_totals(id INTEGER PRIMARY KEY CHECK(id=1),issued INTEGER NOT NULL CHECK(typeof(issued)='integer' AND issued>=0),live INTEGER NOT NULL CHECK(typeof(live)='integer' AND live>=0 AND live<=issued),details INTEGER NOT NULL CHECK(typeof(details)='integer' AND details>=0),quality INTEGER NOT NULL CHECK(typeof(quality)='integer' AND quality>=0 AND live=details+quality),detail_bytes INTEGER NOT NULL CHECK(typeof(detail_bytes)='integer' AND detail_bytes>=0),quality_bytes INTEGER NOT NULL CHECK(typeof(quality_bytes)='integer' AND quality_bytes>=0),checksum BLOB NOT NULL CHECK(typeof(checksum)='blob' AND length(checksum)=32))",

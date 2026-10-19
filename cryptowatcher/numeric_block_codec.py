@@ -134,19 +134,62 @@ def unpack(raw: bytes, block: int, *, validate: bool = True) -> list[bytes]:
     return frames
 
 
-def counts(block: int, details: list[int], quality: list[int]) -> bytes:
+def counts(block: int, details: list[int], quality: list[int], *, compressed: bool = False) -> bytes:
     block_number(block)
     if len(details) != SLOTS or len(quality) != SLOTS:
         raise ValueError("Invalid numeric lease cardinality")
-    return seal(
-        b"NR1\x00", struct.pack(">Q", block) + b"".join(integer(number(n)) for n in details + quality)
-    )
+    values = b"".join(integer(number(n)) for n in details + quality)
+    raw = seal(b"NR1\x00", struct.pack(">Q", block) + values)
+    if compressed:
+        candidate = seal(
+            b"NR2\x00",
+            struct.pack(">QH", block, len(values))
+            + zstandard.ZstdCompressor(level=3, write_checksum=True, threads=0).compress(values),
+        )
+        if len(candidate) < len(raw):
+            return candidate
+    return raw
+
+
+def lease_header(raw: bytes) -> bytes:
+    magic = raw[:4] if isinstance(raw, bytes) else b""
+    if magic not in (b"NR1\x00", b"NR2\x00"):
+        raise ValueError("Unknown numeric lease format")
+    body = checked(raw, magic, 44 + SLOTS * 18)
+    if magic == b"NR2\x00":
+        if len(body) <= 10:
+            raise ValueError("Truncated numeric lease frame")
+        size = struct.unpack(">H", body[8:10])[0]
+        try:
+            parameters = zstandard.get_frame_parameters(body[10:])
+        except zstandard.ZstdError as error:
+            raise ValueError("Invalid numeric lease compression") from error
+        if (
+            not SLOTS * 2 <= size <= SLOTS * 18
+            or parameters.content_size != size
+            or parameters.window_size > SLOTS * 18
+            or parameters.dict_id
+            or not parameters.has_checksum
+        ):
+            raise ValueError("Invalid numeric lease compression bounds")
+    return body
 
 
 def leases(raw: bytes, block: int) -> tuple[list[int], list[int]]:
-    body = checked(raw, b"NR1\x00", 44 + SLOTS * 18)
+    body = lease_header(raw)
     if struct.unpack(">Q", body[:8])[0] != block_number(block):
         raise ValueError("Numeric lease identity mismatch")
+    if raw[:4] == b"NR2\x00":
+        size = struct.unpack(">H", body[8:10])[0]
+        try:
+            expanded = zstandard.ZstdDecompressor(max_window_size=1024).decompress(
+                body[10:], max_output_size=size, allow_extra_data=False
+            )
+        except zstandard.ZstdError as error:
+            raise ValueError("Invalid numeric lease compression") from error
+        if len(expanded) != size:
+            raise ValueError("Invalid expanded numeric lease size")
+        body = body[:8] + expanded
     values = []
     offset = 8
     for _ in range(SLOTS * 2):

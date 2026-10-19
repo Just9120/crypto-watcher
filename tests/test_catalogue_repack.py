@@ -81,8 +81,9 @@ def test_upgrade15_resumes_bundle_install_without_repeating_finite_source_catalo
     observe(store, OutcomeWorker(store))
     initial = complete(store)
     previous = copy.deepcopy(initial)
-    previous.update(version=15, operator_note="preserve15")
+    previous.update(version=15, next_phase=0, operator_note="preserve15")
     previous.pop("packet_bundles")
+    previous.pop("numeric_refs")
     store.put_runtime("storage_repack", previous)
     final = complete(store)
     assert final["version"] == VERSION and final["previous_version"] == 15
@@ -96,6 +97,48 @@ def test_upgrade15_resumes_bundle_install_without_repeating_finite_source_catalo
         "numeric_transfer_upper",
     ):
         assert final.get(key) == previous.get(key)
+
+
+def test_upgrade16_adds_finite_numeric_lease_pass_without_reopening_old_geometry(store):
+    import copy
+
+    bounded(store)
+    observe(store, OutcomeWorker(store))
+    initial = complete(store)
+    previous = copy.deepcopy(initial)
+    previous.update(version=16, next_phase=0, operator_note="preserve16")
+    previous.pop("numeric_refs")
+    store.put_runtime("storage_repack", previous)
+    final = complete(store)
+    assert final["version"] == VERSION and final["previous_version"] == 16
+    assert final["operator_note"] == "preserve16"
+    assert final["numeric_refs"]["complete"] and final["numeric_refs"]["format"] == "NR2"
+    for key in (
+        "catalogue_transfer",
+        "catalogue_queue_upper",
+        "packet_bundles",
+        "quality_rows_scanned",
+        "numeric_search_upper",
+    ):
+        assert final.get(key) == previous.get(key)
+
+
+def test_current_repack_cannot_reinstall_missing_lease_marker_or_unknown_boundary(store):
+    bounded(store)
+    initial = complete(store)
+    with store.db:
+        store.db.execute("DELETE FROM market_meta WHERE key='numeric_refs_compression'")
+    before = list(store.db.iterdump())
+    with pytest.raises(ValueError, match="Missing numeric lease writer checkpoint"):
+        work(store, NOW)
+    assert list(store.db.iterdump()) == before
+    with patch("cryptowatcher.capacity.time.time", return_value=NOW / 1000):
+        assert "NUMERIC_LEASE_INITIAL_INCOMPLETE" in stable_reason(store)
+    store.put_runtime("storage_repack", {**initial, "numeric_refs": {"cursor": True, "upper": 9}})
+    before = list(store.db.iterdump())
+    with pytest.raises(ValueError, match="numeric lease boundary"):
+        work(store, NOW)
+    assert list(store.db.iterdump()) == before
 
 
 def test_completed_repack_live_failure_restores_pending_and_durable_checkpoint(store, monkeypatch):

@@ -342,6 +342,10 @@ class Store:
                 from .packet_bundles import validate as validate_bundles
 
                 validate_bundles(self.db)
+            if self.db.execute("SELECT 1 FROM market_meta WHERE key='numeric_refs_compression'").fetchone():
+                from .numeric_refs import installed as validate_numeric_refs
+
+                validate_numeric_refs(self.db)
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA busy_timeout=5000")
         if not readonly:

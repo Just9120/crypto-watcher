@@ -102,6 +102,25 @@ index definition отклоняется. Detail renewal по retained ID ато�
 ceiling; unknown/due partial indexes обслуживаются тем же bounded worker.
 Numeric pending work не объявляется пустым через отсутствие metadata.
 
+Repack17 добавляет NR2 для128integer lease counts. NR1 wire format остаётся
+читаемым и сохраняет прежний minimum172bytes; NR2 имеет full SHA256, block ID,
+declared expanded size128..1152bytes и один checksummed Zstd frame без dictionary,
+trailing data или oversized window. После decompression проверяются все128
+canonical varints и прежний signed63bit range. Числовые values/IDs/NB frames,
+detail/quality leases и методы не меняются. Chooser сохраняет меньший whole frame;
+actual stored counts lengths участвуют в before/after accounting и NS1 seal.
+Обновление/renewal/GC сохраняет outer transaction и rollback.
+Explicit `numeric_refs_compression` устанавливается через upgrade после search
+layout3. Mode1 допускает NR2; NR1_COMPAT сохраняет unreleased prototype table
+с прежним172byte CHECK без её перестройки. Published541 не содержал NB tables:
+его conversion создаёт NR2-capable table сразу. Store open только validates mode;
+missing/unknown marker/checkpoint не переустанавливается автоматически. Initial
+pass имеет конечный block-ID ceiling; новые writes используют выбранный mode.
+Geometry source/numeric/catalogue/quality прежних passes не открывается заново;
+initial reclaim подтверждается отдельно. Mixed NR1/NR2 readers, bounded cache,
+allocation/cohort reports и public/export contracts сохраняются. Component
+compression ratio не означает такой же экономии whole archive или capacity PASS.
+
 Архивный CQ5 packet сохраняет прежний public fact JSON. Общие templates,
 strength/noise columns и точные ordered comparator lists не меняют методику,
 N, ограничения и population_size. Comparator coordinates хранятся внутри packet
@@ -157,13 +176,17 @@ CH1 — frozen template для inline projected heads с полным SHA256. Fi
 reference extraction; Python Unicode sizes учитываются через фактический размер
 objects, cache не заменяет проверку наличия внешних bodies.
 
-Candidate repack16 сохраняет DB1/DB2 catalogue adapters версии13. Upgrade13→16
-повторяет конечный CQ5 quality pass и добавляет NS1 qualification;14→16 добавляет
-только NS1 qualification и physical reclaim. Initial catalogue geometry,
+Candidate repack17 сохраняет DB1/DB2 catalogue adapters версии13. Переход через15:
+13→15 повторяет конечный CQ5 quality pass и добавляет NS1 qualification;14→15
+добавляет только NS1 qualification и physical reclaim. Initial catalogue geometry,
 queue ceiling, numeric IDs/frames/leases и source boundaries сохраняются.
-Upgrade15→16 добавляет bounded parent-bundle regrouping и reclaim, сохраняя
-все завершённые source/numeric/quality/catalogue границы. Explicit marker
-`packet_bundles=1` устанавливается только в upgrade, не при открытии Store.
+Upgrade15→17 добавляет bounded parent-bundle regrouping, NR2 pass и reclaim, сохраняя
+все завершённые source/numeric/quality/catalogue границы.
+Upgrade16→17 сохраняет также завершённый packet ceiling и добавляет только NR2
+pass/reclaim. Упаковка просматривает до4других pending packets внутри finite ceiling;
+новые arrivals её не расширяют. Whole parent с cardinality сверх свободных slots
+пропускается до materialization, oversized whole parent сохраняет явный fallback.
+Explicit marker `packet_bundles=1` устанавливается только в upgrade, не при открытии Store.
 Старые packets получают NULL/unvisited metadata и конечный packet-ID ceiling;
 новые detail packets сразу pending со временем первого поступления. Проверенный
 packet при изменении live refs повторно становится pending; исходное время уже

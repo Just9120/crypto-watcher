@@ -72,7 +72,7 @@ def _live(store: Store, packet: int) -> list[_Seed]:
     return records
 
 
-def _parent(store: Store, parent: int) -> list[record_relocation.Record] | None:
+def _parent(store: Store, parent: int, limit: int) -> list[record_relocation.Record] | None:
     masks = store.db.execute(
         "SELECT packet,slots,checksum FROM market_record_owners WHERE parent=? ORDER BY packet LIMIT 65",
         (parent,),
@@ -91,6 +91,8 @@ def _parent(store: Store, parent: int) -> list[record_relocation.Record] | None:
         count += n
     if count > 64:
         return None
+    if count > limit:
+        return []
     result = []
     size = 0
     for packet, slots, _ in masks:
@@ -112,7 +114,7 @@ def _parent(store: Store, parent: int) -> list[record_relocation.Record] | None:
     return result
 
 
-def compact(store: Store, packet: int) -> tuple[int, int]:
+def compact(store: Store, packet: int, *, upper: int = 2**63 - 1) -> tuple[int, int]:
     """Return moved records/fallbacks, preserving every unselected live slot."""
     with packet_store.atomic(store.db):
         seed = _live(store, packet)
@@ -124,19 +126,33 @@ def compact(store: Store, packet: int) -> tuple[int, int]:
         size = 0
         fallback = 0
         day = seed[0].expires // 86400000
+        candidates = list(seed)
+        neighbors = store.db.execute(
+            "SELECT id FROM market_packets WHERE bundle_checked=0 AND refs>0 "
+            "AND id<>? AND id<=? ORDER BY id LIMIT 4",
+            (packet, upper),
+        ).fetchall()
+        for (identity,) in neighbors:
+            candidates.extend(_live(store, identity))
         # A complete parent is preferred. A parent exceeding either existing
         # limit keeps its seed subset; no hidden larger memory allowance.
-        for record in seed:
+        for record in candidates:
+            if len(expanded) == record_blocks.MAX_RECORDS:
+                break
+            if record.expires // 86400000 != day:
+                continue
             parent = record.binding[2]
             if parent is not None:
                 if parent in seen:
                     continue
                 seen.add(parent)
-                group = _parent(store, parent)
+                group = _parent(store, parent, record_blocks.MAX_RECORDS - len(expanded))
                 if group is None:
                     fallback += 1
                     group = [
-                        record_relocation.capture(store, r.coordinate) for r in seed if r.binding[2] == parent
+                        record_relocation.capture(store, r.coordinate)
+                        for r in candidates
+                        if r.binding[2] == parent and r.binding[0] == record.binding[0]
                     ]
             else:
                 group = [record_relocation.capture(store, record.coordinate)]
@@ -219,7 +235,9 @@ def advance(store: Store, state: dict[str, Any], batch: int, deadline: float) ->
             ).fetchone()
         if pending is None:
             break
-        moved, fallbacks = compact(store, pending[0])
+        moved, fallbacks = compact(
+            store, pending[0], upper=upper if not state.get("initial_complete") else 2**63 - 1
+        )
         state["packets_examined"] = state.get("packets_examined", 0) + 1
         state["records_moved"] = state.get("records_moved", 0) + moved
         state["fallbacks"] = state.get("fallbacks", 0) + fallbacks

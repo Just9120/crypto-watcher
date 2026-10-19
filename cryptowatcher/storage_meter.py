@@ -256,6 +256,16 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         from .numeric_blocks import summary as numeric_summary
 
         numeric_layout.update(state="MIXED_NUMERIC_BLOCKS", **numeric_summary(store.db))
+        from .numeric_refs import installed as numeric_refs_installed
+        from .numeric_refs import writing as numeric_refs_writing
+
+        numeric_layout["lease_format"] = (
+            "NR2"
+            if numeric_refs_writing(store.db)
+            else "NR1_COMPAT"
+            if numeric_refs_installed(store.db)
+            else "NR1"
+        )
         source_tables |= {
             "market_numeric_blocks",
             "market_numeric_block_refs",
