@@ -53,31 +53,52 @@ def checked(raw: bytes, magic: bytes, maximum: int) -> bytes:
     return raw[36:]
 
 
-def pack(block: int, frames: list[bytes]) -> bytes:
+def header(raw: bytes) -> bytes:
+    magic = raw[:4] if isinstance(raw, bytes) else b""
+    if magic not in (b"NB1\x00", b"NB2\x00"):
+        raise ValueError("Unknown numeric block format")
+    return checked(raw, magic, MAX_FRAME)
+
+
+def pack(block: int, frames: list[bytes], *, recipes: bool = False) -> bytes:
     block_number(block)
     if len(frames) != SLOTS or not any(frames):
         raise ValueError("Invalid numeric block slots")
+    predicted = False
     for frame in frames:
         if not isinstance(frame, bytes):
             raise ValueError("Invalid numeric slot bytes")
         if frame:
-            metric(frame)
+            if frame[0] in (17, 18, 19):
+                if not recipes:
+                    raise ValueError("Price operands require an explicit NB2 writer")
+                from .metric_price_codec import frame as price_frame
+
+                price_frame(frame)
+                predicted = True
+            else:
+                metric(frame)
     if block == MAX_BLOCK and frames[-1]:
         raise ValueError("Numeric slot exceeds ID ceiling")
     expanded = b"".join(frames)
     body = struct.pack(">Q", block) + bytes(map(len, frames))
     body += zstandard.ZstdCompressor(level=3, write_checksum=True, threads=0).compress(expanded)
-    return seal(b"NB1\x00", body)
+    return seal(b"NB2\x00" if predicted else b"NB1\x00", body)
 
 
 def unpack(raw: bytes, block: int, *, validate: bool = True) -> list[bytes]:
-    body = checked(raw, b"NB1\x00", MAX_FRAME)
+    body = header(raw)
     block_number(block)
     if len(body) <= 72 or struct.unpack(">Q", body[:8])[0] != block:
         raise ValueError("Numeric block identity mismatch")
     lengths = body[8:72]
     size = sum(lengths)
-    if any(n not in (0, 26, 34) for n in lengths) or not 0 < size <= MAX_RAW:
+    valid_lengths = (
+        all(n == 0 or 6 <= n <= 34 for n in lengths)
+        if raw[:4] == b"NB2\x00"
+        else all(n in (0, 26, 34) for n in lengths)
+    )
+    if not valid_lengths or not 0 < size <= MAX_RAW:
         raise ValueError("Invalid numeric block lengths")
     try:
         parameters = zstandard.get_frame_parameters(body[72:])
@@ -100,7 +121,12 @@ def unpack(raw: bytes, block: int, *, validate: bool = True) -> list[bytes]:
     for length in lengths:
         frame = expanded[offset : offset + length]
         if frame and validate:
-            metric(frame)
+            if raw[:4] == b"NB2\x00":
+                from .metric_price_codec import frame as price_frame
+
+                price_frame(frame)
+            else:
+                metric(frame)
         frames.append(frame)
         offset += length
     if block == MAX_BLOCK and frames[-1]:
