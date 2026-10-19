@@ -120,7 +120,7 @@ def test_native_full_validation_preserves_all_types_and_rejects_writes_and_early
         vfs.stats()
 
 
-@pytest.mark.parametrize("damage", ["check", "index"])
+@pytest.mark.parametrize("damage", ["check", "index", "owner_checksum"])
 def test_native_full_check_rejects_constraint_or_index_corruption_without_changing_source(tmp_path, damage):
     assert available()
     source, _ = closed_backup(tmp_path)
@@ -129,11 +129,18 @@ def test_native_full_check_rejects_constraint_or_index_corruption_without_changi
             db.execute("PRAGMA ignore_check_constraints=ON")
             db.execute("UPDATE owner_settings SET revision=0")
             db.commit()
-        else:
+        elif damage == "index":
             page = db.execute(
                 "SELECT rootpage FROM sqlite_master WHERE type='index' AND tbl_name='runtime'"
             ).fetchone()[0]
             size = db.execute("PRAGMA page_size").fetchone()[0]
+        else:
+            from .test_owner_slots import create_probe
+
+            create_probe(db)
+            db.execute("PRAGMA ignore_check_constraints=ON")
+            db.execute("UPDATE owner_probe SET checksum=zeroblob(32)")
+            db.commit()
     if damage == "index":
         with source.open("r+b") as output:
             output.seek((page - 1) * size)

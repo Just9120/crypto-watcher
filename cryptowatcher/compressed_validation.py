@@ -465,6 +465,9 @@ def full_check(db: apsw.Connection, deadline: float) -> None:
 
     db.set_progress_handler(progress, 10000)
     try:
+        from .owner_slots import sql_signature
+
+        db.create_scalar_function("cw_owner_digest", sql_signature, 3, deterministic=True)
         db.execute("PRAGMA mmap_size=0")
         db.execute("PRAGMA ignore_check_constraints=OFF")
         if list(db.execute("PRAGMA integrity_check")) != [("ok",)]:

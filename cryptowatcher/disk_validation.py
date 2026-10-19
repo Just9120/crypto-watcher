@@ -45,6 +45,9 @@ def validated_disk(path: Path, *, deadline: float) -> Iterator[apsw.Connection]:
         database.execute(f"PRAGMA mmap_size={MMAP_BYTES}")
         database.execute("PRAGMA ignore_check_constraints=OFF")
         database.set_progress_handler(lambda: time.monotonic() >= deadline, 10000)
+        from .owner_slots import sql_signature
+
+        database.create_scalar_function("cw_owner_digest", sql_signature, 3, deterministic=True)
         if list(database.execute("PRAGMA integrity_check")) != [("ok",)]:
             raise IntegrityError("DATABASE_CORRUPT", "Database integrity check failed")
         budget(deadline)

@@ -240,6 +240,7 @@ def main() -> None:
             directory,
             "-c",
             """import hashlib,sqlite3,zstandard
+from cryptowatcher.owner_slots import install_functions
 from pathlib import Path
 p=Path('/data/archived.sqlite3.zst')
 assert hashlib.sha256(p.read_bytes()).hexdigest() == """
@@ -248,6 +249,7 @@ assert hashlib.sha256(p.read_bytes()).hexdigest() == """
 with p.open('rb') as source,Path('/data/archive-restored.sqlite3').open('xb') as target:
     zstandard.ZstdDecompressor().copy_stream(source,target)
 with sqlite3.connect('/data/archive-restored.sqlite3') as db:
+    install_functions(db)
     assert db.execute('PRAGMA integrity_check').fetchall()==[('ok',)]
     with sqlite3.connect('/data/ram-restore.db') as reference:
         for name in ('owner_settings','delivery_preferences','mutes','runtime','legacy_import'):

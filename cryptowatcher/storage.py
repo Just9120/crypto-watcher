@@ -62,6 +62,9 @@ def check_integrity(database: sqlite3.Connection, *, deadline: float) -> None:
 
     database.set_progress_handler(progress, VALIDATION_PROGRESS_STEPS)
     try:
+        from .owner_slots import install_functions as owner_functions
+
+        owner_functions(database)
         previous_cache = int(database.execute("PRAGMA cache_size").fetchone()[0])
         mmap_row = database.execute("PRAGMA mmap_size").fetchone()
         previous_mmap = int(mmap_row[0]) if mmap_row is not None else None
@@ -261,6 +264,9 @@ class Store:
         from .numeric_pool import references as numeric_references
 
         numeric_functions(self.db)
+        from .owner_slots import install_functions as owner_functions
+
+        owner_functions(self.db)
         # Pure functions also serve a read connection opened before an explicit
         # layout upgrade. This registers no tables, markers or migration work.
         from .numeric_blocks import install_functions as numeric_block_functions
