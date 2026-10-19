@@ -322,6 +322,8 @@ def member(db: sqlite3.Connection, episode: str, observed: int, owner: int) -> N
     if type(observed) is not int or type(owner) is not int or owner < 1:
         raise ValueError("Invalid episode membership")
     if layout(db) == 3:
+        if not 0 <= observed < 10**16:
+            raise ValueError("Unsupported catalogue membership time")
         root = db.execute(
             "SELECT public_uuid FROM market_record_parents WHERE id=? AND observed=?", (owner, observed)
         ).fetchone()

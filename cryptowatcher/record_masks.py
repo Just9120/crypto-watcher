@@ -270,6 +270,7 @@ SCHEMA = """
     CREATE TRIGGER market_record_member_new BEFORE INSERT ON market_record_members BEGIN
         SELECT CASE WHEN cw_catalogue_alias_valid('membership',1)<>1 OR NOT EXISTS(
             SELECT 1 FROM market_record_parents WHERE public_uuid=NEW.event_uuid AND observed=NEW.observed)
+            OR NEW.observed<0 OR NEW.observed>=10000000000000000
             THEN RAISE(ABORT,'Invalid record membership or counter') END;
     END;
     CREATE TRIGGER market_record_member_added AFTER INSERT ON market_record_members BEGIN
@@ -288,6 +289,7 @@ SCHEMA = """
     END;
     CREATE TRIGGER market_record_history_new BEFORE UPDATE OF history_published ON market_record_parents BEGIN
         SELECT CASE WHEN OLD.history_published<>0 OR NEW.history_published<>1
+            OR NEW.observed<0 OR NEW.observed>=10000000000000000
             OR cw_catalogue_alias_valid('history',1)<>1
             OR NOT EXISTS(SELECT 1 FROM market_records WHERE kind=0 AND public_uuid=NEW.public_uuid)
             THEN RAISE(ABORT,'Invalid retained history publication') END;

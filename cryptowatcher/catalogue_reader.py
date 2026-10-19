@@ -124,7 +124,11 @@ def equal_public(db: sqlite3.Connection, first: Any, second: Any, cache: Any = N
 
 def lookup(db: sqlite3.Connection, key: str, hot: Any = MISSING, cache: Any = None) -> Any:
     selected = point(key)
-    if selected is None or not reading(db):
+    if selected is None:
+        from .catalogue_aliases import lookup as alias_lookup
+
+        return alias_lookup(db, key, hot)
+    if not reading(db):
         return hot
     stored = cold(db, selected, cache)
     if stored is MISSING:
@@ -281,8 +285,7 @@ def scan(
 ) -> Generator[tuple[str, Any], None, None]:
     """Stream domain revisions/heads in public-key order; caller owns snapshot.
 
-    History and membership indexes are separate adapters, not part of this scan.
-    Every namespace uses its native kind/UUID/revision index, without sorting
+    Every namespace uses its native UUID/time/revision index, without sorting
     computed public TEXT keys or loading the whole catalogue in Python.
     """
     if not isinstance(prefix, str) or (
@@ -292,13 +295,18 @@ def scan(
     if limit == 0:
         return
     selectors = [(namespace, selected_range(namespace, prefix)) for namespace in NAMESPACES]
-    if not any(selected is not None for _, selected in selectors) or not reading(db):
+    from . import catalogue_aliases
+
+    aliases_selected = any(catalogue_aliases.selection(prefix, member=m) is not None for m in (False, True))
+    if not (aliases_selected or any(selected is not None for _, selected in selectors)) or not reading(db):
         return
     streams = [
         namespace_rows(db, namespace, selected, reverse, limit, cache)
         for namespace, selected in selectors
         if selected is not None
     ]
+    if aliases_selected:
+        streams.append(catalogue_aliases.scan(db, prefix, reverse=reverse, limit=limit))
     try:
         for index, item in enumerate(merge(*streams, key=lambda row: row[0], reverse=reverse)):
             yield item
@@ -313,7 +321,10 @@ def count(db: sqlite3.Connection, prefix: str) -> int:
     if not isinstance(prefix, str):
         raise ValueError("Invalid catalogue count prefix")
     selectors = [(namespace, selected_range(namespace, prefix)) for namespace in NAMESPACES]
-    if not any(selected is not None for _, selected in selectors) or not reading(db):
+    from . import catalogue_aliases
+
+    aliases_selected = any(catalogue_aliases.selection(prefix, member=m) is not None for m in (False, True))
+    if not (aliases_selected or any(selected is not None for _, selected in selectors)) or not reading(db):
         return 0
     total = 0
     for namespace, selected in selectors:
@@ -330,7 +341,7 @@ def count(db: sqlite3.Connection, prefix: str) -> int:
             total += db.execute(
                 "SELECT COUNT(*) FROM market_records WHERE " + selected[0], selected[1]
             ).fetchone()[0]
-    return total
+    return total + (catalogue_aliases.count(db, prefix) if aliases_selected else 0)
 
 
 def as_of(db: sqlite3.Connection, kind: str, identity: str, cutoff_ms: int, cache: Any = None) -> Any:
