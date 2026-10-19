@@ -50,10 +50,13 @@ def sql_value(value: Any, kind: str) -> Any:
 
 
 class Codec:
-    def __init__(self, database: sqlite3.Connection, *, body_encoding: str = "zlib"):
+    def __init__(
+        self, database: sqlite3.Connection, *, body_encoding: str = "zlib", binary_cache: Any = None
+    ):
         if body_encoding not in ("zlib", "zstd"):
             raise StateError("Unknown shared snapshot encoding")
         self.db = database
+        self.binary_cache = binary_cache
         self.source_stream: str | None = None
         self.source_expiry = 0
         self.bounded = database.execute("PRAGMA user_version").fetchone()[0] == 2
@@ -231,7 +234,7 @@ class Codec:
             from .market_storage import restore_window
 
             try:
-                return restore_window(self.db, reference)
+                return restore_window(self.db, reference, cache=self.binary_cache)
             except (ValueError, TypeError, KeyError, zlib.error) as exc:
                 raise StateError("Invalid normalized source reference") from exc
         if not isinstance(reference, dict) or set(reference) != {"mode", "ids", "sha256"}:

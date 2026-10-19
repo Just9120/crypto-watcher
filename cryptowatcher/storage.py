@@ -281,6 +281,15 @@ class Store:
                 from .record_ownership import install_functions as catalogue_functions
 
                 catalogue_functions(self.db, self.cached_text, self.cached_bytes)
+            source_tiles = self.db.execute(
+                "SELECT value FROM market_meta WHERE key='candle_blocks'"
+            ).fetchone()
+            if source_tiles is not None:
+                if source_tiles[0] != "1":
+                    raise StateError("Unknown source tile layout; database preserved")
+                from .candle_blocks import install_functions as source_tile_functions
+
+                source_tile_functions(self.db, self.cached_text)
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA busy_timeout=5000")
         if not readonly:

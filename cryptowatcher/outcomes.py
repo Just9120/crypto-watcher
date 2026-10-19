@@ -37,7 +37,7 @@ def read_candles(store: Store, stream: str, start: int, end: int) -> list[Candle
     if store.bounded:
         from .market_storage import read
 
-        result = [Candle(**v) for v in read(store.db, stream, start, end)]
+        result = [Candle(**v) for v in read(store.db, stream, start, end, cache=store.cached_bytes)]
         if key is not None and len(result) <= 4096:
             import sys
 

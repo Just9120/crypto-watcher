@@ -116,6 +116,21 @@ size/window до decompression. Чтение materialize только выбра
 меняет canonical JSON, float bits или numeric types. Linux/resource gates для
 runtime activation остаются обязательными.
 
+SB1 source tiles пока не выбираются обычным startup/repack. Замороженный блок
+содержит32 native временных слота, до256 immutable revisions суммарно,
+точные typed values/needed_until/purge_after и SHA256 actual header/IF1 frame.
+Mixed point/range adapters сохраняют общий revision space, порядок, пропуски
+и frozen window SHA. Пакетная запись переносит legacy tile в том же savepoint;
+непоместившаяся история коррекций остается в прежней таблице с явным fallback
+и scalar counters. SQL guards запрещают изменение старых значений и сокращение
+leases. GC перепроверяет каждую revision по исходной retention/hold policy;
+общая first_due блока — только индекс кандидатов, не срок удаления всех свечей.
+Чистые binary transforms используют прежний общий1MiB cache, actual bytes
+проверяются при чтении. DDL выполняется только explicit install; Store open
+регистрирует UDF существующего известного layout, не включает writer marker.
+Finite migration/source-cells и native mature/resource qualification остаются
+условиями подключения к runtime.
+
 #### Market layout v2: устройство
 
 Format2 включается только для нового reset candidate; schema1 не переписывается обычным open. Private tables сохраняются побайтно по значениям SQL rows; `reset_history.prepare` читает только private state, сохраняет private JSON recovery, проверяет restore на отдельном файле и integrity нового candidate. Он не удаляет и не переключает production. Host cutover/CI/artifact/unit/locks остаются отдельной обязательной процедурой.

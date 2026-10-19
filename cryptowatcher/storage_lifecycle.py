@@ -268,19 +268,19 @@ class BoundedRetention:
             ).fetchall()
             candles = []
             for candidate in candidates:
-                from .market_storage import public
+                from .market_storage import candle_deadline, public
 
                 value = public(bytes(candidate[3]))
-                real_expiry = max(
-                    value["start"] + value["step"] + settings.candle_retention_days * DAY,
-                    candidate[4] + settings.detail_retention_days * DAY,
+                real_expiry = candle_deadline(
+                    store.db,
+                    candidate[0],
+                    value["start"],
+                    value["step"],
+                    candidate[4],
+                    now_ms,
+                    settings.candle_retention_days,
+                    settings.detail_retention_days,
                 )
-                held = store.db.execute(
-                    "SELECT MAX(expires) FROM market_holds WHERE stream=? AND start<=? AND end>? AND expires>?",
-                    (candidate[0], candidate[1], candidate[1], now_ms),
-                ).fetchone()[0]
-                if held:
-                    real_expiry = max(real_expiry, min(held, now_ms + 3600000))
                 if real_expiry > now_ms:
                     store.db.execute(
                         "UPDATE market_candles SET purge_after=? WHERE stream=? AND start=? AND revision=?",
@@ -291,6 +291,15 @@ class BoundedRetention:
             store.db.executemany(
                 "DELETE FROM market_candles WHERE stream=? AND start=? AND revision=?", candles
             )
+            from .candle_access import installed as source_tiles_installed
+
+            removed_source_versions = 0
+            if source_tiles_installed(store.db):
+                from .candle_blocks import gc as collect_source_tiles
+
+                removed_source_versions = collect_source_tiles(
+                    store.db, now_ms, batch=min(16, batch), seconds=0.01
+                )
             context_candidates = store.db.execute(
                 "SELECT stream,kind,at,needed_anchor FROM market_context WHERE purge_after<=? ORDER BY purge_after LIMIT ?",
                 (now_ms, batch),
@@ -354,7 +363,7 @@ class BoundedRetention:
                 "expired_events": processed,
                 "remaining_due_batch": len(due) - processed,
                 "removed_services": service_removed,
-                "removed_candles": len(candles),
+                "removed_candles": len(candles) + removed_source_versions,
                 "removed_context": len(contexts),
                 "removed_summaries": len(quality),
                 "removed_bodies": len(garbage),
@@ -371,7 +380,7 @@ class BoundedRetention:
                 "runs": 1,
                 "expired_events": processed,
                 "removed_services": service_removed,
-                "removed_candles": len(candles),
+                "removed_candles": len(candles) + removed_source_versions,
                 "removed_context": len(contexts),
                 "removed_summary_blocks": len(quality),
                 "removed_bodies": len(garbage),
@@ -392,6 +401,7 @@ class BoundedRetention:
         return (
             removed
             + len(candles)
+            + removed_source_versions
             + len(contexts)
             + len(quality)
             + len(garbage)

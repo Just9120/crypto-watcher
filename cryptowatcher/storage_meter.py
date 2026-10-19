@@ -119,6 +119,8 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "context_integrity",
         "source_windows",
         "prospective_indexes",
+        "source_blocks",
+        "source_block_indexes",
     }
     for category, value in counts.items():
         previous = (base or {}).get("categories", {}).get(category, {"inserted_bytes": 0, "deleted_bytes": 0})
@@ -129,7 +131,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         net = (inserted - deleted + repack_savings) / elapsed if elapsed > 0 else None
         days = (
             candle_dependency_days
-            if category == "candles"
+            if category in ("candles", "source_blocks", "source_block_indexes")
             else settings.candle_retention_days
             if category in ("context", "context_bodies", "context_integrity")
             else 366
@@ -219,19 +221,40 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         else []
     )
     actual = sum(files.values())
+    source_layout: dict[str, Any] = {
+        "state": "LEGACY_NORMALIZED",
+        "legacy_versions": counts.get("candles", {}).get("records", 0),
+    }
+    from .candle_access import installed as source_tiles_installed
+
+    source_tables: set[str] = set()
+    if source_tiles_installed(store.db):
+        from .candle_blocks import summary as source_summary
+
+        source_layout.update(state="MIXED_SOURCE_TILES", **source_summary(store.db))
+        source_layout["total_versions"] = source_layout["legacy_versions"] + source_layout["versions"]
+        source_tables = {
+            "market_candle_blocks",
+            "market_candle_block_totals",
+            "market_candle_fallbacks",
+            "market_candle_gc",
+        }
     indexes = store.get_runtime(
         "storage_index_measurement", {"state": "PENDING", "reason": "No bounded exact measurement yet"}
     )
     if (
         indexes.get("state") == "PASS"
         and store.db.execute("SELECT 1 FROM sqlite_master WHERE name='market_expiry'").fetchone()
-        and not {
-            "market_expiry",
-            "market_quality_blocks",
-            "market_source_windows",
-            "market_numeric",
-            "market_namespaces",
-        }.issubset(indexes.get("tables", {}))
+        and not (
+            {
+                "market_expiry",
+                "market_quality_blocks",
+                "market_source_windows",
+                "market_numeric",
+                "market_namespaces",
+            }
+            | source_tables
+        ).issubset(indexes.get("tables", {}))
     ):
         indexes = {**indexes, "state": "STALE", "reason": "STORAGE_EXTENSION_AFTER_SNAPSHOT"}
     return {
@@ -263,6 +286,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "allocated_database_bytes": pages * page,
         "freelist_bytes": free * page,
         "categories": counts,
+        "source_layout": source_layout,
         "measurement_confidence": "LOW_SHORT_SAMPLE"
         if elapsed < 3600
         else "OBSERVED_WINDOW_WITH_MODEL_LIMITATIONS",

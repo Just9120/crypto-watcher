@@ -27,6 +27,25 @@ FIELDS = (
 )
 
 
+def candle_deadline(
+    db: sqlite3.Connection,
+    stream: int,
+    start: int,
+    step: int,
+    anchor: int,
+    now: int,
+    candle_days: int,
+    detail_days: int,
+) -> int:
+    """One existing retention/hold rule shared by legacy rows and source tiles."""
+    expiry = max(start + step + candle_days * DAY, anchor + detail_days * DAY)
+    held = db.execute(
+        "SELECT MAX(expires) FROM market_holds WHERE stream=? AND start<=? AND end>? AND expires>?",
+        (stream, start, start, now),
+    ).fetchone()[0]
+    return max(expiry, min(held, now + 3600000)) if held else expiry
+
+
 def enable(db: sqlite3.Connection) -> None:
     if db.execute("SELECT 1 FROM runtime LIMIT 1").fetchone():
         raise ValueError("Fresh market layout requires empty runtime")
@@ -172,21 +191,38 @@ def stream_id(db: sqlite3.Connection, name: str, *, create: bool = False) -> int
 def admit(
     db: sqlite3.Connection, stream: str, candle: dict[str, Any], needed_until: int = 0
 ) -> tuple[int, int, int]:
+    return admit_many(db, stream, [candle], needed_until)[0]
+
+
+def admit_many(
+    db: sqlite3.Connection, stream: str, candles: list[dict[str, Any]], needed_until: int = 0
+) -> list[tuple[int, int, int]]:
+    from .candle_access import admit_many as tiled_admit
+    from .candle_access import writing
     from .sources import Candle
 
-    # Validate before any source becomes addressable by a history reference.
-    c = Candle(**candle)
-    if c != Candle.parse(c.row(), stream.rsplit("/", 1)[1], c.source, c.received_ms, c.server_ms):
-        raise ValueError("Invalid normalized candle")
+    if not candles:
+        return []
+    if writing(db):
+        return tiled_admit(db, stream, candles, needed_until)
+    validated = []
+    for candle in candles:
+        c = Candle(**candle)
+        if c != Candle.parse(c.row(), stream.rsplit("/", 1)[1], c.source, c.received_ms, c.server_ms):
+            raise ValueError("Invalid normalized candle")
+        validated.append(c)
     sid = stream_id(db, stream, create=True)
     assert sid is not None
-    value = encoded([candle[f] for f in FIELDS])
     settings = json.loads(db.execute("SELECT settings_json FROM owner_settings LIMIT 1").fetchone()[0])
-    expiry = max(
-        c.end + settings.get("candle_retention_days", 35) * DAY,
-        needed_until + settings.get("detail_retention_days", 30) * DAY,
-    )
-    return admit_value(db, int(sid), c.start, needed_until, expiry, value)
+    result = []
+    for candle, c in zip(candles, validated, strict=True):
+        value = encoded([candle[f] for f in FIELDS])
+        expiry = max(
+            c.end + settings.get("candle_retention_days", 35) * DAY,
+            needed_until + settings.get("detail_retention_days", 30) * DAY,
+        )
+        result.append(admit_value(db, int(sid), c.start, needed_until, expiry, value))
+    return result
 
 
 def admit_value(
@@ -221,11 +257,22 @@ def public(payload: bytes) -> dict[str, Any]:
 
 
 def read(
-    db: sqlite3.Connection, stream: str, start: int = 0, end: int = 2**63 - 1, limit: int | None = None
+    db: sqlite3.Connection,
+    stream: str,
+    start: int = 0,
+    end: int = 2**63 - 1,
+    limit: int | None = None,
+    *,
+    cache: Any = None,
 ) -> list[dict[str, Any]]:
     sid = stream_id(db, stream)
     if sid is None:
         return []
+    from .candle_access import installed
+    from .candle_access import read as mixed_read
+
+    if installed(db):
+        return mixed_read(db, sid, start, end, limit, cache)
     suffix = " ORDER BY c.start DESC" if limit is not None else " ORDER BY c.start"
     query = (
         """SELECT c.payload FROM market_candles c WHERE c.stream=? AND c.start>=? AND c.start<?
@@ -242,28 +289,7 @@ def read(
 def window(
     db: sqlite3.Connection, stream: str, candles: list[dict[str, Any]], expires: int
 ) -> dict[str, Any]:
-    from .sources import Candle
-
-    points = []
-    settings = None
-    sid = None
-    for candle in candles:
-        c = Candle(**candle)
-        if c != Candle.parse(c.row(), stream.rsplit("/", 1)[1], c.source, c.received_ms, c.server_ms):
-            raise ValueError("Invalid normalized candle")
-        if settings is None:
-            # This synchronous loop is inside the caller's transaction. The
-            # stream/settings cannot change halfway through a frozen window.
-            settings = json.loads(
-                db.execute("SELECT settings_json FROM owner_settings LIMIT 1").fetchone()[0]
-            )
-            sid = stream_id(db, stream, create=True)
-        assert sid is not None and settings is not None
-        deadline = max(
-            c.end + settings.get("candle_retention_days", 35) * DAY,
-            expires + settings.get("detail_retention_days", 30) * DAY,
-        )
-        points.append(admit_value(db, sid, c.start, expires, deadline, encoded([candle[f] for f in FIELDS])))
+    points = admit_many(db, stream, candles, expires)
     if not points:
         raise ValueError("Empty source window")
     raw = json.dumps(
@@ -326,7 +352,7 @@ def reference_points(reference: dict[str, Any]) -> list[Any]:
     return decoded(base64.b64decode(reference["points"], validate=True), 2 * 1024 * 1024)
 
 
-def restore_window(db: sqlite3.Connection, reference: dict[str, Any]) -> bytes:
+def restore_window(db: sqlite3.Connection, reference: dict[str, Any], *, cache: Any = None) -> bytes:
     if isinstance(reference, dict) and reference.get("mode") == "source-ref":
         from .source_windows import load
 
@@ -339,6 +365,9 @@ def restore_window(db: sqlite3.Connection, reference: dict[str, Any]) -> bytes:
     points = reference_points(reference)
     if not isinstance(points, list) or not 0 < len(points) <= 65536:
         raise ValueError("Invalid source window coordinates")
+    from .candle_access import Lookup
+
+    reader = Lookup(db, reference["stream"], cache)
     candles = []
     for point in points:
         if (
@@ -347,13 +376,7 @@ def restore_window(db: sqlite3.Connection, reference: dict[str, Any]) -> bytes:
             or any(type(v) is not int or not 0 <= v < 2**63 for v in point)
         ):
             raise ValueError("Invalid candle coordinate")
-        row = db.execute(
-            "SELECT payload FROM market_candles WHERE stream=? AND start=? AND revision=?",
-            (reference["stream"], *point),
-        ).fetchone()
-        if row is None:
-            raise ValueError("Missing retained candle revision")
-        candles.append(public(bytes(row[0])))
+        candles.append(reader.point(*point))
     raw = json.dumps(
         candles, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
     ).encode()

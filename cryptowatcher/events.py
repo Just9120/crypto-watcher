@@ -75,7 +75,7 @@ def event_identity(stream: str, family: str, version: str, settings_revision: in
 class History:
     def __init__(self, store: Store) -> None:
         self.store = store
-        self.codec = Codec(store.db)
+        self.codec = Codec(store.db, binary_cache=store.cached_bytes)
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.resolve(key, self.store.get_runtime(PREFIX + key, default))
