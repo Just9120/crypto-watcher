@@ -27,24 +27,17 @@ def writing(db: sqlite3.Connection) -> bool:
 
 
 def admit_many(
-    db: sqlite3.Connection, stream: str, values: list[dict[str, Any]], anchor: int = 0
+    db: sqlite3.Connection, stream: str, values: list[dict[str, Any]], anchor: int = 0, *, cache: Any = None
 ) -> list[tuple[int, int, int]]:
     """Transfer eligible tiles and publish a whole validated input batch atomically."""
     from .market_storage import stream_id
-    from .sources import Candle
 
     codec.number(anchor)
     tf = stream.rsplit("/", 1)[-1]
     if tf not in ("1m", "3m", "5m", "15m"):
         raise ValueError("Unsupported source stream timeframe")
     step = int(tf[:-1]) * 60000
-    groups: dict[int, list[tuple[int, dict[str, Any]]]] = {}
-    for index, value in enumerate(values):
-        candle = Candle(**value)
-        if candle != Candle.parse(candle.row(), tf, candle.source, candle.received_ms, candle.server_ms):
-            raise ValueError("Invalid normalized candle")
-        at = candle.start // (codec.SLOTS * step) * (codec.SLOTS * step)
-        groups.setdefault(at, []).append((index, value))
+    groups = blocks.validated_groups(step, values)
     result = [(0, 0, 0)] * len(values)
     with blocks.atomic(db):
         sid = stream_id(db, stream, create=True)
@@ -53,18 +46,18 @@ def admit_many(
             try:
                 with blocks.atomic(db):
                     blocks.import_tile(db, sid, at)
-                    coordinates = blocks.admit_many(db, sid, [v for _, v in items], anchor)
+                    coordinates = blocks._admit_groups(db, sid, {at: items}, anchor, cache=cache)
                     db.execute("DELETE FROM market_candle_fallbacks WHERE stream=? AND tile=?", (sid, at))
             except codec.Capacity as error:
                 # The failed speculative transfer/admission was rolled back in
                 # full. Every old revision remains addressable in its old table.
-                coordinates = [_legacy_admit(db, sid, value, anchor) for _, value in items]
+                coordinates = {index: _legacy_admit(db, sid, values[index], anchor) for index, _, _ in items}
                 db.execute(
                     "INSERT INTO market_candle_fallbacks VALUES(?,?,?) ON CONFLICT(stream,tile) DO NOTHING",
                     (sid, at, str(error)),
                 )
-            for (index, _), coordinate in zip(items, coordinates, strict=True):
-                result[index] = coordinate
+            for index, _, _ in items:
+                result[index] = coordinates[index]
     return result
 
 
@@ -139,38 +132,41 @@ class Lookup:
         if require_tiles and self.step is None:
             raise ValueError("Source cells require authenticated tiles")
         self.require_tiles = require_tiles
+        self.all_frozen = self.step is not None
         self.at: int | None = None
-        self.raw: bytes | None = None
+        self.reader: codec.Reader | None = None
 
-    def frozen(self, start: int, revision: int) -> dict[str, Any] | None:
+    def frozen(self, start: int, revision: int) -> tuple[dict[str, Any], int, int] | None:
         codec.number(start)
         codec.number(revision)
         if self.step is None:
             return None
         at = start // (codec.SLOTS * self.step) * (codec.SLOTS * self.step)
         if self.at != at:
-            self.raw = blocks.tile(self.db, self.stream, start, self.step)
+            raw = blocks.tile(self.db, self.stream, start, self.step)
+            self.reader = codec.Reader(raw, self.cache, canonical=True) if raw is not None else None
             self.at = at
-        value = (
-            codec.point(self.raw, self.stream, start, revision, self.cache) if self.raw is not None else None
-        )
-        return value[0] if value is not None else None
+        return self.reader.point(self.stream, start, revision) if self.reader is not None else None
 
     def point(self, start: int, revision: int) -> dict[str, Any]:
         codec.number(start)
         codec.number(revision)
         legacy = self.db.execute(
-            "SELECT payload FROM market_candles WHERE stream=? AND start=? AND revision=?",
+            "SELECT payload,needed_until,purge_after FROM market_candles WHERE stream=? AND start=? AND revision=?",
             (self.stream, start, revision),
         ).fetchone()
         value = public(bytes(legacy[0])) if legacy is not None else None
         frozen = self.frozen(start, revision)
+        if frozen is None:
+            self.all_frozen = False
         if frozen is None and self.require_tiles:
             raise ValueError("Missing authenticated source cell")
         if frozen is not None:
-            if value is not None and encode(value) != encode(frozen):
+            if value is not None and encode(value) != encode(frozen[0]):
                 raise ValueError("Conflicting immutable source revision")
-            value = frozen
+            if legacy is not None and (frozen[1] < legacy[1] or frozen[2] < legacy[2]):
+                self.all_frozen = False
+            value = frozen[0]
         if value is None:
             raise ValueError("Missing retained candle revision")
         if value["start"] != start or self.step is not None and value["step"] != self.step:

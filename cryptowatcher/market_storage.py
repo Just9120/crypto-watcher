@@ -195,7 +195,12 @@ def admit(
 
 
 def admit_many(
-    db: sqlite3.Connection, stream: str, candles: list[dict[str, Any]], needed_until: int = 0
+    db: sqlite3.Connection,
+    stream: str,
+    candles: list[dict[str, Any]],
+    needed_until: int = 0,
+    *,
+    cache: Any = None,
 ) -> list[tuple[int, int, int]]:
     from .candle_access import admit_many as tiled_admit
     from .candle_access import writing
@@ -204,7 +209,7 @@ def admit_many(
     if not candles:
         return []
     if writing(db):
-        return tiled_admit(db, stream, candles, needed_until)
+        return tiled_admit(db, stream, candles, needed_until, cache=cache)
     validated = []
     for candle in candles:
         c = Candle(**candle)
@@ -289,7 +294,7 @@ def read(
 def window(
     db: sqlite3.Connection, stream: str, candles: list[dict[str, Any]], expires: int, *, cache: Any = None
 ) -> dict[str, Any]:
-    points = admit_many(db, stream, candles, expires)
+    points = admit_many(db, stream, candles, expires, cache=cache)
     if not points:
         raise ValueError("Empty source window")
     raw = json.dumps(
@@ -362,6 +367,13 @@ def reference_points(reference: dict[str, Any]) -> list[Any]:
 
 
 def restore_window(db: sqlite3.Connection, reference: dict[str, Any], *, cache: Any = None) -> bytes:
+    return checked_window(db, reference, cache=cache)[0]
+
+
+def checked_window(
+    db: sqlite3.Connection, reference: dict[str, Any], *, cache: Any = None
+) -> tuple[bytes, bool]:
+    """Full old hash plus an ephemeral proof that every value came from a tile."""
     if isinstance(reference, dict) and reference.get("mode") == "source-ref":
         from .source_windows import load
 
@@ -392,7 +404,7 @@ def restore_window(db: sqlite3.Connection, reference: dict[str, Any], *, cache: 
     ).encode()
     if not cells and hashlib.sha256(raw).hexdigest() != reference["sha256"]:
         raise ValueError("Source window hash mismatch")
-    return raw
+    return raw, reader.all_frozen
 
 
 def context_public(db: sqlite3.Connection, row: Any) -> dict[str, Any]:

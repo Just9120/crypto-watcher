@@ -48,6 +48,10 @@ def coordinates(stream: int, tile: int, step: int) -> None:
 def restored(tile: int, step: int, slot: int, tail: Any) -> dict[str, Any]:
     if type(slot) is not int or not 0 <= slot < SLOTS or not isinstance(tail, list) or len(tail) != len(TAIL):
         raise ValueError("Invalid source candle slot")
+    if any(isinstance(value, (dict, list)) for value in tail):
+        from copy import deepcopy
+
+        tail = deepcopy(tail)
     return {"start": tile + slot * step, "step": step, **dict(zip(TAIL, tail, strict=True))}
 
 
@@ -133,12 +137,27 @@ def header(raw: bytes) -> tuple[int, int, int, bytes]:
     return stream, tile, step, frame
 
 
-def unpack(raw: bytes) -> tuple[int, int, int, list[Any]]:
+def cached_slots(raw: bytes, frame: bytes, cache: Any) -> list[Any]:
+    """Pure exact typed-to-JSON transform, sharing the caller's existing budget."""
+    if cache is None:
+        return indexed_frame.all_values(frame)
+    import json
+
+    value = cache("source-tile-slots", "", raw, lambda: encode(indexed_frame.all_values(frame)).encode())
+    if not isinstance(value, bytes):
+        raise ValueError("Invalid pure source tile cache result")
+    result = json.loads(value)
+    if not isinstance(result, list) or len(result) != SLOTS:
+        raise ValueError("Invalid source slot cardinality")
+    return result
+
+
+def unpack(raw: bytes, *, validate: bool = True, cache: Any = None) -> tuple[int, int, int, list[Any]]:
     stream, tile, step, frame = header(raw)
-    slots = indexed_frame.all_values(frame)
+    slots = cached_slots(raw, frame, cache)
     count = 0
     for slot, items in enumerate(slots):
-        count += len(versions(tile, step, slot, items))
+        count += len(versions(tile, step, slot, items, validate=validate))
     if not 0 < count <= MAX_ROWS:
         raise ValueError("Source tile row bound")
     return stream, tile, step, slots
@@ -147,20 +166,51 @@ def unpack(raw: bytes) -> tuple[int, int, int, list[Any]]:
 def point(
     raw: bytes, stream: int, start: int, revision: int, cache: Any = None
 ) -> tuple[dict[str, Any], int, int] | None:
-    sid, tile, step, frame = header(raw)
-    number(start)
-    number(revision)
-    if type(stream) is not int or sid != stream or start % step or not tile <= start < tile + SLOTS * step:
-        raise ValueError("Source tile identity mismatch")
-    slot = (start - tile) // step
-    # Admission/SQL update guards validate Candle semantics before freezing.
-    # Authenticated readers restore typed values exactly, like the legacy
-    # source decoder, without parsing/coercing every historical Candle again.
-    rows = versions(tile, step, slot, indexed_frame.select(frame, slot, cache), validate=False)
-    for rev, needed, purge, tail in rows:
-        if rev == revision:
-            return restored(tile, step, slot, tail), needed, purge
-    return None
+    return Reader(raw, cache, canonical=True).point(stream, start, revision)
+
+
+class Reader:
+    """Authenticate one actual tile once during one synchronous window read."""
+
+    def __init__(self, raw: bytes, cache: Any = None, *, canonical: bool = False):
+        self.stream, self.tile, self.step, frame = header(raw)
+        self.slots = cached_slots(raw, frame, cache) if canonical else None
+        if self.slots is not None and (
+            any(not isinstance(items, list) for items in self.slots)
+            or not 0 < sum(len(items) for items in self.slots) <= MAX_ROWS
+        ):
+            raise ValueError("Source tile row bound")
+        self.offsets, self.data = indexed_frame.data(frame, cache) if not canonical else ((), b"")
+
+    def items(self, slot: int) -> list[Any]:
+        from .compact_json import unpack as typed_unpack
+
+        if type(slot) is not int or not 0 <= slot < SLOTS:
+            raise ValueError("Invalid source candle slot")
+        if self.slots is not None:
+            return versions(self.tile, self.step, slot, self.slots[slot], validate=False)
+        a, b = self.offsets[slot : slot + 2]
+        # Admission/SQL guards validate Candle semantics before freezing.
+        # Restore authenticated typed values without parsing/coercing them.
+        return versions(
+            self.tile, self.step, slot, typed_unpack(self.data[a:b], indexed_frame.MAX_BYTES), validate=False
+        )
+
+    def point(self, stream: int, start: int, revision: int) -> tuple[dict[str, Any], int, int] | None:
+        number(start)
+        number(revision)
+        if (
+            type(stream) is not int
+            or self.stream != stream
+            or start % self.step
+            or not self.tile <= start < self.tile + SLOTS * self.step
+        ):
+            raise ValueError("Source tile identity mismatch")
+        slot = (start - self.tile) // self.step
+        for rev, needed, purge, tail in self.items(slot):
+            if rev == revision:
+                return restored(self.tile, self.step, slot, tail), needed, purge
+        return None
 
 
 def rows(raw: bytes) -> list[tuple[int, int, int, int, int, dict[str, Any]]]:
@@ -176,22 +226,14 @@ def latest(
     raw: bytes, start: int, end: int, *, reverse: bool = False, cache: Any = None
 ) -> Iterator[tuple[int, int, dict[str, Any]]]:
     """Read one bounded tile, materializing only in-range latest revisions."""
-    from .compact_json import unpack as typed_unpack
-
-    _, tile, step, frame = header(raw)
-    offsets, data = indexed_frame.data(frame, cache)
+    reader = Reader(raw, cache)
+    tile, step = reader.tile, reader.step
     order = range(SLOTS - 1, -1, -1) if reverse else range(SLOTS)
     for slot in order:
         when = tile + slot * step
         if not start <= when < end:
             continue
-        items = versions(
-            tile,
-            step,
-            slot,
-            typed_unpack(data[offsets[slot] : offsets[slot + 1]], indexed_frame.MAX_BYTES),
-            validate=False,
-        )
+        items = reader.items(slot)
         if items:
             revision, _, _, tail = items[-1]
             yield when, revision, restored(tile, step, slot, tail)

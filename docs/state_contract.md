@@ -139,6 +139,15 @@ descriptor после проверки полного исходного window 
 снимаются атомарно с заменой owner, source leases/policy не сокращаются.
 Новый формат требует compatible reader/forward-fix. Native mature/resource
 qualification и общий backlog SLO остаются обязательными release gates.
+Проверка старого SHA и доказательство cold-only разрешения выполняются одним
+проходом; при duplicate legacy revision дополнительно требуется не меньшая
+needed_until/purge_after у cold копии. Иначе сохраняется прежний hash/descriptor.
+Один синхронный window удерживает один проверенный tile reader; доказательство
+существования объектов не переживает этот вызов. Чистый typed-to-canonical-JSON
+transform source slots делит прежний1MiB Store cache. Actual header/bytes
+проверяются до его использования, JSON round trip сохраняет IEEE bits/int types;
+возвращаемые mutable values не разделяются. Полная admission/SQL проверка новых
+frames сохраняется; уже проверенные incoming values не парсятся повторно.
 
 #### Market layout v2: устройство
 

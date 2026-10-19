@@ -225,6 +225,12 @@ def admit_many(
     """
     codec.number(anchor)
     step = stream_step(db, sid)
+    result = _admit_groups(db, sid, validated_groups(step, values), anchor)
+    return [result[index] for index in range(len(values))]
+
+
+def validated_groups(step: int, values: list[dict[str, Any]]) -> dict[int, list[tuple[int, int, list[Any]]]]:
+    """Validate the complete batch once, before either tile or legacy admission."""
     groups: dict[int, list[tuple[int, int, list[Any]]]] = {}
     for index, value in enumerate(values):
         if set(value) != {"start", "step", *codec.TAIL} or value["step"] != step:
@@ -237,7 +243,21 @@ def admit_many(
         tail = [value[k] for k in codec.TAIL]
         codec.public(at, step, slot, tail)
         groups.setdefault(at, []).append((index, slot, tail))
-    result = [(0, 0, 0)] * len(values)
+    return groups
+
+
+def _admit_groups(
+    db: sqlite3.Connection,
+    sid: int,
+    groups: dict[int, list[tuple[int, int, list[Any]]]],
+    anchor: int,
+    *,
+    cache: Any = None,
+) -> dict[int, tuple[int, int, int]]:
+    """Consume groups just checked by validated_groups in this synchronous call."""
+    codec.number(anchor)
+    step = stream_step(db, sid)
+    result: dict[int, tuple[int, int, int]] = {}
     with atomic(db):
         candle_days, detail_days = policy(db)
         for at, items in groups.items():
@@ -247,7 +267,14 @@ def admit_many(
             ).fetchone():
                 raise ValueError("Legacy source tile requires atomic transfer before admission")
             old = tile(db, sid, at, step)
-            slots = codec.unpack(old)[3] if old is not None else [[] for _ in range(32)]
+            # Actual frame SHA and typed shape are checked. SQL admission
+            # already validated frozen values; every changed frame is fully
+            # validated again by pack and the existing SQL guards below.
+            slots = (
+                codec.unpack(old, validate=False, cache=cache)[3]
+                if old is not None
+                else [[] for _ in range(32)]
+            )
             dirty = False
             for index, slot, tail in items:
                 at_start = at + slot * step

@@ -125,7 +125,10 @@ class Sources:
         with self.store.db:
             if self.store.bounded:
                 market_storage.admit_many(
-                    self.store.db, stream, [json.loads(payload) for _, payload in writes]
+                    self.store.db,
+                    stream,
+                    [json.loads(payload) for _, payload in writes],
+                    cache=self.store.cached_bytes,
                 )
             else:
                 self.store.db.executemany(RUNTIME_UPSERT, writes)

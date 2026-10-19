@@ -285,3 +285,20 @@ def test_expired_fallback_metadata_is_collected_with_counters_but_retained_sourc
         store.db.execute("UPDATE market_candle_block_totals SET fallbacks=1,index_bytes=40")
     with pytest.raises(ValueError, match="fallback counter"):
         blocks.summary(store.db)
+
+
+@pytest.mark.parametrize("damage", [{"close": 1000.0}, {"step": 300000}, {"unknown": "field"}])
+def test_source_batch_validates_late_invalid_values_before_any_tile_or_fallback_write(store, damage):
+    bounded(store)
+    writer(store)
+    tile, slots = fixture()
+    value = codec.public(tile, 60000, 0, slots[0][0][3])
+    with store.db:
+        market.admit_many(
+            store.db, "spot/BTCUSDT/1m", [{**value, "close": 100.5 + i / 1000} for i in range(256)]
+        )
+    before = list(store.db.iterdump())
+    with pytest.raises((ValueError, TypeError)), store.db:
+        market.admit_many(store.db, "spot/BTCUSDT/1m", [{**value, "close": 101.7}, {**value, **damage}])
+    assert list(store.db.iterdump()) == before
+    assert blocks.summary(store.db)["fallback_tiles"] == 0

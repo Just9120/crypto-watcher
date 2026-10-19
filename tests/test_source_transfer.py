@@ -154,6 +154,26 @@ def test_missing_cold_cell_does_not_use_unhashed_legacy_fallback_and_gc_keeps_co
         market.restore_window(store.db, cells)
 
 
+def test_cell_conversion_keeps_legacy_hash_if_duplicate_revision_has_a_longer_lease(store):
+    tile, values, points = prepare(store, tiles=1)
+    tick(store)
+    with store.db:
+        ref = market.window(store.db, "spot/BTCUSDT/1m", values, tile + 40 * 86400000)
+    # The compatibility writer used the legacy table. Equal values alone are
+    # insufficient evidence for moving this longer lease into a cold-only ref.
+    assert convert(store.db, ref) is None
+    with store.db:
+        assert blocks.gc(store.db, tile + 36 * 86400000, seconds=5) == 1
+    assert market.restore_window(store.db, ref) == encode(values).encode()
+    with store.db:
+        blocks.import_tile(store.db, points[0][0], tile)
+    cells = convert(store.db, ref)
+    assert cells is not None
+    with store.db:
+        assert blocks.gc(store.db, tile + 60 * 86400000, seconds=5) == 0
+    assert market.restore_window(store.db, cells) == encode(values).encode()
+
+
 def test_cell_owners_keep_a_full_record_checksum_and_release_only_descriptor_ownership(store):
     from cryptowatcher.events import History
     from cryptowatcher.history_codec import MARKER, SCHEMA

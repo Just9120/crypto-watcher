@@ -27,6 +27,41 @@ def fixture(step=60000):
     return tile, slots
 
 
+def test_pure_source_snapshot_cache_keeps_random_float_bits_integer_types_fresh_values_and_budget(store):
+    import math
+    import random
+
+    randomizer = random.Random(2844)
+    tile, _ = fixture()
+    for block in range(48):
+        slots = [[] for _ in range(32)]
+        at = tile + block * 32 * 60000
+        for slot in range(32):
+            open_, close = randomizer.uniform(90, 110), randomizer.uniform(90, 110)
+            tail = [
+                open_,
+                max(open_, close) + randomizer.random(),
+                min(open_, close) - randomizer.random(),
+                close,
+                -0.0 if slot == 0 else randomizer.random(),
+                1 if slot == 7 else randomizer.random(),
+                'quote: "Тест"\n',
+                2**60 + block,
+                at + 32 * 60000,
+            ]
+            slots[slot].append([0, at, at + 40 * 86400000, tail])
+        raw = codec.pack(1, at, 60000, slots)
+        reader = codec.Reader(raw, store.cached_bytes, canonical=True)
+        for slot in range(32):
+            public, _, _ = reader.point(1, at + slot * 60000, 0)
+            assert encode(public) == encode(codec.public(at, 60000, slot, slots[slot][0][3]))
+            assert math.copysign(1, public["volume"]) == (-1 if slot == 0 else 1)
+        first = codec.unpack(raw, cache=store.cached_bytes)[3]
+        first[0][0][3][0] = 999
+        assert encode(codec.unpack(raw, cache=store.cached_bytes)[3]) == encode(slots)
+        assert store.reference_cache_bytes <= 1024 * 1024
+
+
 @pytest.mark.parametrize("sid", [1, 2])
 @pytest.mark.parametrize("step", codec.STEPS)
 def test_source_block_keeps_all_fields_types_revisions_gaps_and_lease_metadata(store, sid, step):
