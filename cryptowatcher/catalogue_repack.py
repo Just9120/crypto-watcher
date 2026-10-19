@@ -25,6 +25,7 @@ PREREQUISITES = (
     "quality_meter_complete",
     "key_registry_complete",
     "cohort_meter_complete",
+    "numeric_search_complete",
 )
 
 
@@ -56,7 +57,7 @@ def validate(store: Store, state: dict[str, Any], version: int) -> None:
         or markers.get("catalogue_queue", "1") != "1"
     ):
         raise StateError("Unknown catalogue repack layout; data preserved")
-    if state.get("version") in (13, version):
+    if state.get("version") in (13, 14, version):
         if markers.get(FLAGS[0]) != "1" or not catalogue_lifecycle.active(store.db):
             raise StateError("Missing catalogue runtime checkpoint")
         catalogue_queue.header(store.db)

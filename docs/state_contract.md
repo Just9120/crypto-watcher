@@ -88,6 +88,20 @@ writer. Record pass ждёт finite source+numeric transfer; signed numeric savi
 отклоняется без его восстановления. Clean baseline требует COMPLETE именно
 текущей версии repack. Native/mature qualification обязательны до поставки.
 
+Numeric layout3 добавляет NS1 search seals без изменения NB1/NB2 values и IDs.
+`detail_slots=-1` означает ещё не квалифицированный open block; он сохраняет
+полный FP8 index. Закрытый ID block без detail owners и unleased slots может
+заменить вспомогательные lookup rows явным SHA256, связывающим block ID и actual
+NB/NR bytes. Отсутствующий seal не считается допустимым состоянием cold block.
+Чтение проверяет seal и отсутствие searchable coordinate; незнакомая схема или
+index definition отклоняется. Detail renewal по retained ID атомарно восстанавливает
+все lookup rows блока до публикации нового владельца. GC обновляет seal вместе
+с lease/value bytes либо удаляет пустой block; byte counters учитывают новый
+формат. Новые admissions могут получить новый ID для равного sealed value;
+прежние IDs/values/leases сохраняются. Initial qualification имеет fixed ID
+ceiling; unknown/due partial indexes обслуживаются тем же bounded worker.
+Numeric pending work не объявляется пустым через отсутствие metadata.
+
 Архивный CQ5 packet сохраняет прежний public fact JSON. Общие templates,
 strength/noise columns и точные ordered comparator lists не меняют методику,
 N, ограничения и population_size. Comparator coordinates хранятся внутри packet
@@ -143,9 +157,10 @@ CH1 — frozen template для inline projected heads с полным SHA256. Fi
 reference extraction; Python Unicode sizes учитываются через фактический размер
 objects, cache не заменяет проверку наличия внешних bodies.
 
-Candidate repack14 сохраняет DB1/DB2 catalogue adapters версии13. Upgrade13→14
-повторяет только конечный quality pass и physical reclaim: initial catalogue
-geometry, queue ceiling, numeric IDs/frames/leases и source boundaries сохраняются.
+Candidate repack15 сохраняет DB1/DB2 catalogue adapters версии13. Upgrade13→15
+повторяет конечный CQ5 quality pass и добавляет NS1 qualification;14→15 добавляет
+только NS1 qualification и physical reclaim. Initial catalogue geometry,
+queue ceiling, numeric IDs/frames/leases и source boundaries сохраняются.
 CQ1/CQ2 coordinates получают view0 без повторного intern числовых значений;
 CQ4 coordinates переносятся напрямую. Это frozen blocks
 с отдельно сжатыми projection/detail frames, полным SHA256 actual frames,

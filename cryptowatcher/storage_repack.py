@@ -7,7 +7,7 @@ from typing import Any
 
 from .storage import Store, encode, json_payload
 
-VERSION = 14
+VERSION = 15
 
 
 def normalized_record(store: Store, key: str, value: Any) -> Any:
@@ -395,7 +395,7 @@ def quality_rows(store: Store, state: dict[str, Any], batch: int, deadline: floa
 
 
 def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> dict[str, Any]:
-    from . import catalogue_repack
+    from . import catalogue_repack, numeric_search
     from .candle_access import installed as source_installed
     from .candle_access import writing as source_writing
     from .candle_blocks import install as install_source_tiles
@@ -422,20 +422,25 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
     if (
         not isinstance(state, dict)
         or ("version" in state and type(state["version"]) is not int)
-        or state.get("version") not in (None, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, VERSION)
+        or state.get("version") not in (None, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, VERSION)
     ):
         raise ValueError("Unknown storage repack checkpoint; database preserved")
+    if "next_phase" in state and (type(state["next_phase"]) is not int or not 0 <= state["next_phase"] < 14):
+        raise ValueError("Invalid storage repack phase; database preserved")
     catalogue_repack.validate(store, state, VERSION)
+    numeric_search.validate(state)
+    if state.get("version") == VERSION and not numeric_search.installed(store.db):
+        raise ValueError("Missing numeric search checkpoint; database preserved")
     source_active, numeric_active, price_active = (
         source_writing(store.db),
         numeric_writing(store.db),
         price_writing(store.db),
     )
-    if state.get("version") in (10, 11, 12, 13, VERSION) and not source_active:
+    if state.get("version") in (10, 11, 12, 13, 14, VERSION) and not source_active:
         raise ValueError("Missing source writer checkpoint; database preserved")
-    if state.get("version") in (11, 12, 13, VERSION) and not numeric_active:
+    if state.get("version") in (11, 12, 13, 14, VERSION) and not numeric_active:
         raise ValueError("Missing numeric writer checkpoint; database preserved")
-    if state.get("version") in (12, 13, VERSION) and not price_active:
+    if state.get("version") in (12, 13, 14, VERSION) and not price_active:
         raise ValueError("Missing numeric price writer checkpoint; database preserved")
     if not source_installed(store.db):
         install_source_tiles(store.db, store.cached_text)
@@ -444,6 +449,7 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
     numeric_summary(store.db)
     if not price_layout(store.db):
         upgrade_price(store.db)
+    numeric_search.install(store.db)
     catalogue_repack.install(store)
     if (
         state.get("version") == VERSION
@@ -456,12 +462,14 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
         and state.get("cohort_meter_complete")
         and state.get("source_transfer_complete")
         and state.get("numeric_transfer_complete")
+        and state.get("numeric_search_complete")
         and state.get("catalogue_complete")
         and state.get("initial_reclaim_complete")
         and not catalogue_repack.status(store, now_ms)["pending_work"]
         and cohort_ready(store.db)
         and quality_totals(store.db) is not None
         and namespace_snapshot(store.db) is not None
+        and not numeric_search.pending(store.db)
     ):
         return state
     if state.get("version") == 13:
@@ -482,6 +490,9 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
             "initial_reclaim_complete",
         ):
             state.pop(key, None)
+    elif state.get("version") == 14:
+        state = {**state, "previous_version": 14, "state": "IN_PROGRESS"}
+        state.pop("initial_reclaim_complete", None)
     elif state.get("version") in (3, 4, 5, 6, 7, 8, 9, 10, 11, 12):
         state = {
             "previous_version": state["version"],
@@ -510,11 +521,11 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
         catalogue_repack.activate(store)
         # One shared deadline, with a durable rotating first phase. A slow SQL
         # read/commit may overrun a slice, but cannot always starve the same tail.
-        for offset in range(13):
+        for offset in range(14):
             if time.monotonic() >= deadline:
                 break
-            phase = (first + offset) % 13
-            state["next_phase"] = (phase + 1) % 13
+            phase = (first + offset) % 14
+            state["next_phase"] = (phase + 1) % 14
             if (
                 phase == 0
                 and state.get("source_transfer_complete")
@@ -586,6 +597,30 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
                 catalogue_repack.initial(store, state, batch, deadline)
             elif phase == 12:
                 catalogue_repack.maintenance(store, state, now_ms, batch, deadline)
+            elif phase == 13 and state.get("numeric_transfer_complete"):
+                search_categories = ("numeric_details", "quality_numeric")
+                before = dict(
+                    store.db.execute(
+                        "SELECT category,logical_bytes FROM market_counts WHERE category IN (?,?)",
+                        search_categories,
+                    )
+                )
+                state["numeric_search_complete"] = numeric_search.work(
+                    store.db, state, min(batch, 256), deadline
+                )
+                after = dict(
+                    store.db.execute(
+                        "SELECT category,logical_bytes FROM market_counts WHERE category IN (?,?)",
+                        search_categories,
+                    )
+                )
+                for category in search_categories:
+                    saved = before.get(category, 0) - after.get(category, 0)
+                    if saved:
+                        state["saved_payload_bytes"] += saved
+                        state["saved_categories"][category] = (
+                            state["saved_categories"].get(category, 0) + saved
+                        )
         state.update(
             state="COMPLETE"
             if all(state.get(k) for k in (*catalogue_repack.PREREQUISITES, "catalogue_complete"))

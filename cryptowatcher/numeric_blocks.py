@@ -13,7 +13,7 @@ import struct
 import time
 from typing import Any
 
-from . import metric_price_codec
+from . import metric_price_codec, numeric_search
 from . import numeric_block_codec as codec
 from .candle_blocks import atomic
 from .numeric_pool import fingerprint
@@ -21,16 +21,16 @@ from .numeric_pool import fingerprint
 
 def installed(db: sqlite3.Connection) -> bool:
     row = db.execute("SELECT value FROM market_meta WHERE key='numeric_blocks'").fetchone()
-    if row is not None and row[0] not in ("1", "2"):
+    if row is not None and row[0] not in ("1", "2", "3"):
         raise ValueError("Unknown numeric block layout; database preserved")
     return row is not None
 
 
 def price_layout(db: sqlite3.Connection) -> bool:
     row = db.execute("SELECT value FROM market_meta WHERE key='numeric_blocks'").fetchone()
-    if row is None or row[0] not in ("1", "2"):
+    if row is None or row[0] not in ("1", "2", "3"):
         raise ValueError("Unknown numeric block layout; database preserved")
-    return row[0] == "2"
+    return row[0] in ("2", "3")
 
 
 def price_writing(db: sqlite3.Connection) -> bool:
@@ -82,9 +82,13 @@ def state(db: sqlite3.Connection) -> tuple[int, ...]:
 
 
 def read(db: sqlite3.Connection, block: int) -> tuple[list[bytes], list[int], list[int], bytes] | None:
+    search = numeric_search.installed(db)
+    extra = ",r.detail_slots,r.search_seal" if search else ",-1,NULL"
     try:
         row = db.execute(
-            "SELECT b.payload,r.counts,r.unused,cw_numeric_frames(b.id,b.payload),cw_numeric_counts(b.id,r.counts) FROM market_numeric_blocks b "
+            "SELECT b.payload,r.counts,r.unused,cw_numeric_frames(b.id,b.payload),cw_numeric_counts(b.id,r.counts)"
+            + extra
+            + " FROM market_numeric_blocks b "
             "LEFT JOIN market_numeric_block_refs r ON r.id=b.id WHERE b.id=?",
             (block,),
         ).fetchone()
@@ -114,11 +118,18 @@ def read(db: sqlite3.Connection, block: int) -> tuple[list[bytes], list[int], li
         bool(frame) and not (details[i] or quality[i]) for i, frame in enumerate(frames)
     ):
         raise ValueError("Numeric slot/lease mismatch")
+    numeric_search.checked(block, raw, bytes(row[1]), row[5], row[6], details)
     return frames, details, quality, bytes(row[0])
 
 
 def allocation(
-    block: int, frames: list[bytes], details: list[int], quality: list[int], payload_size: int
+    block: int,
+    frames: list[bytes],
+    details: list[int],
+    quality: list[int],
+    payload_size: int,
+    *,
+    index_bytes: int | None = None,
 ) -> tuple[int, ...]:
     if len(frames) != 64 or len(details) != 64 or len(quality) != 64:
         raise ValueError("Invalid numeric slot cardinality")
@@ -131,7 +142,11 @@ def allocation(
     q = sum(bool(frame) and quality[i] > 0 for i, frame in enumerate(frames))
     if not n:
         return (0, 0, 0, 0, 0)
-    total = payload_size + len(codec.counts(block, details, quality)) + 16 * n
+    total = (
+        payload_size
+        + len(codec.counts(block, details, quality))
+        + (16 * n if index_bytes is None else index_bytes)
+    )
     # Logical encoded bytes, apportioned by exact frame lengths. Physical
     # SQLite pages/indexes/freelist/sidecars are always measured separately.
     qbytes = total * sum(len(f) for i, f in enumerate(frames) if quality[i]) // sum(map(len, frames))
@@ -171,10 +186,34 @@ def put(
         raise ValueError("Numeric block mutation requires an outer transaction")
     summary(db)
     old = read(db, block)
-    before = allocation(block, *old[:3], len(old[3])) if old else (0, 0, 0, 0, 0)
+    modern = numeric_search.installed(db)
+    search = numeric_search.fields(db, block) if old else (-1, None)
+    before = (
+        allocation(
+            block,
+            *old[:3],
+            len(old[3]),
+            index_bytes=numeric_search.index_bytes(sum(bool(f) for f in old[0]), search),
+        )
+        if old
+        else (0, 0, 0, 0, 0)
+    )
+    sealed = search[1] is not None
+    if sealed and (
+        any(details) or (old is not None and any(f and not old[0][i] for i, f in enumerate(frames)))
+    ):
+        assert old is not None
+        # Restore the complete search block before publishing a detail renewal.
+        # A partial/duplicate index is rejected by its primary key.
+        db.executemany(
+            "INSERT INTO market_numeric_block_lookup VALUES(?,?)",
+            [(signature(f), block * 64 + i + 1) for i, f in enumerate(old[0]) if f],
+        )
+        sealed = False
     predicted = any(f and f[0] in (17, 18, 19) for f in frames)
     raw = codec.pack(block, frames, recipes=price_layout(db) if predicted else False) if any(frames) else b""
-    after = allocation(block, frames, details, quality, len(raw))
+    search_size = (40 if sealed else 8 + 16 * sum(bool(f) for f in frames)) if modern else None
+    after = allocation(block, frames, details, quality, len(raw), index_bytes=search_size)
     current = state(db)
     if any(frame and block * 64 + slot + 1 > current[0] for slot, frame in enumerate(frames)):
         raise ValueError("Numeric slot exceeds issued ceiling")
@@ -187,10 +226,19 @@ def put(
             "INSERT INTO market_numeric_blocks VALUES(?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
             (block, raw),
         )
-        db.execute(
-            "INSERT INTO market_numeric_block_refs VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET counts=excluded.counts,unused=excluded.unused",
-            (block, refs, unused),
-        )
+        if modern:
+            seal = numeric_search.signature(block, raw, refs) if sealed else None
+            db.execute(
+                "INSERT INTO market_numeric_block_refs(id,counts,unused,detail_slots,search_seal) VALUES(?,?,?,?,?) "
+                "ON CONFLICT(id) DO UPDATE SET counts=excluded.counts,unused=excluded.unused,"
+                "detail_slots=excluded.detail_slots,search_seal=excluded.search_seal",
+                (block, refs, unused, sum(bool(v) for v in details), seal),
+            )
+        else:
+            db.execute(
+                "INSERT INTO market_numeric_block_refs(id,counts,unused) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET counts=excluded.counts,unused=excluded.unused",
+                (block, refs, unused),
+            )
     elif old:
         db.execute("INSERT INTO market_numeric_gc VALUES(?)", (block,))
         db.execute("DELETE FROM market_numeric_block_refs WHERE id=?", (block,))
@@ -205,10 +253,17 @@ def put(
 
 
 def lookup(db: sqlite3.Connection, identity: int, frame: bytes) -> None:
-    if not db.execute(
-        "SELECT 1 FROM market_numeric_block_lookup WHERE fingerprint=? AND id=?",
-        (signature(frame), identity),
-    ).fetchone():
+    present = (
+        db.execute(
+            "SELECT 1 FROM market_numeric_block_lookup WHERE fingerprint=? AND id=?",
+            (signature(frame), identity),
+        ).fetchone()
+        is not None
+    )
+    sealed = numeric_search.sealed(db, (identity - 1) // 64)
+    if sealed and present:
+        raise ValueError("Sealed numeric coordinate remains searchable")
+    if not sealed and not present:
         raise ValueError("Missing numeric fingerprint coordinate")
 
 
@@ -240,6 +295,9 @@ def values_many(db: sqlite3.Connection, ids: set[int]) -> dict[int, bytes]:
     Ordinary materialization never interprets a count as a metric value.
     """
     ceiling = state(db)[0]
+    search = numeric_search.installed(db)
+    extra = ",r.detail_slots,r.search_seal" if search else ",-1,NULL"
+    sealed_ids: set[int] = set()
     groups: dict[int, list[tuple[int, int]]] = {}
     for identity in ids:
         block, slot = codec.coordinate(identity)
@@ -250,7 +308,9 @@ def values_many(db: sqlite3.Connection, ids: set[int]) -> dict[int, bytes]:
     for block, group in groups.items():
         try:
             row = db.execute(
-                "SELECT b.payload,r.counts,cw_numeric_frames(b.id,b.payload) FROM market_numeric_blocks b "
+                "SELECT b.payload,r.counts,cw_numeric_frames(b.id,b.payload)"
+                + extra
+                + " FROM market_numeric_blocks b "
                 "LEFT JOIN market_numeric_block_refs r ON r.id=b.id WHERE b.id=?",
                 (block,),
             ).fetchone()
@@ -265,20 +325,28 @@ def values_many(db: sqlite3.Connection, ids: set[int]) -> dict[int, bytes]:
         counts = codec.checked(bytes(row[1]), b"NR1\x00", 1196)
         if struct.unpack(">Q", counts[:8])[0] != block:
             raise ValueError("Numeric lease identity mismatch")
+        sealed = numeric_search.checked(block, bytes(row[0]), bytes(row[1]), row[3], row[4])
         lengths, expanded = bytes(row[0])[44:108], bytes(row[2])
         for identity, slot in group:
             size = lengths[slot]
             if size:
                 offset = sum(lengths[:slot])
                 result[identity] = canonical(expanded[offset : offset + size])
+                if sealed:
+                    sealed_ids.add(identity)
     ordered = sorted(result)
     for start in range(0, len(ordered), 256):
         batch = ordered[start : start + 256]
-        coordinates = ",".join("(?,?)" for _ in batch)
-        args = [v for identity in batch for v in (fingerprint(result[identity]), identity)]
+        coordinates = ",".join("(?,?,?)" for _ in batch)
+        args = [
+            v
+            for identity in batch
+            for v in (fingerprint(result[identity]), identity, int(identity in sealed_ids))
+        ]
         missing = db.execute(
-            f"WITH wanted(fingerprint,id) AS (VALUES{coordinates}) SELECT COUNT(*) FROM wanted w "
-            "LEFT JOIN market_numeric_block_lookup l ON l.fingerprint=w.fingerprint AND l.id=w.id WHERE l.id IS NULL",
+            f"WITH wanted(fingerprint,id,sealed) AS (VALUES{coordinates}) SELECT COUNT(*) FROM wanted w "
+            "LEFT JOIN market_numeric_block_lookup l ON l.fingerprint=w.fingerprint AND l.id=w.id "
+            "WHERE (w.sealed=0 AND l.id IS NULL) OR (w.sealed=1 AND l.id IS NOT NULL)",
             args,
         ).fetchone()[0]
         if missing:
@@ -290,6 +358,8 @@ def find(db: sqlite3.Connection, raw: bytes) -> tuple[int, int, int] | None:
     for (identity,) in db.execute(
         "SELECT id FROM market_numeric_block_lookup WHERE fingerprint=? ORDER BY id", (fingerprint(raw),)
     ):
+        if numeric_search.sealed(db, (identity - 1) // 64):
+            raise ValueError("Sealed numeric coordinate remains searchable")
         found = load_many(db, {identity})
         if identity not in found:
             raise ValueError("Orphan numeric fingerprint coordinate")
@@ -386,6 +456,7 @@ def collect(db: sqlite3.Connection, batch: int) -> int:
             if found is None:
                 raise ValueError("Missing numeric GC block")
             frames, details, quality, _ = found
+            sealed = numeric_search.sealed(db, block)
             for slot, frame in enumerate(frames):
                 if frame and not (details[slot] or quality[slot]) and count < batch:
                     identity = block * 64 + slot + 1
@@ -394,7 +465,7 @@ def collect(db: sqlite3.Connection, batch: int) -> int:
                         "DELETE FROM market_numeric_block_lookup WHERE fingerprint=? AND id=?",
                         (signature(frame), identity),
                     ).rowcount
-                    if deleted != 1:
+                    if deleted != (0 if sealed else 1):
                         raise ValueError("Lost numeric GC coordinate")
                     frames[slot] = b""
                     count += 1

@@ -306,8 +306,12 @@ class Store:
                 "SELECT value FROM market_meta WHERE key='numeric_blocks'"
             ).fetchone()
             if numeric_blocks is not None:
-                if numeric_blocks[0] not in ("1", "2"):
+                if numeric_blocks[0] not in ("1", "2", "3"):
                     raise StateError("Unknown numeric block layout; database preserved")
+                if numeric_blocks[0] == "3":
+                    from .numeric_search import header as search_header
+
+                    search_header(self.db)
                 from .numeric_blocks import summary as numeric_summary
 
                 numeric_summary(self.db)

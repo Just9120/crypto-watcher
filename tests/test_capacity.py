@@ -233,7 +233,7 @@ def test_stable_baseline_distinguishes_referenced_backfill_from_normal_pending_h
         with store.db:
             store.put_runtime("analytics_recovery_worker", {"state": "OK"})
         assert stable_reason(store) == []
-        for version in (3, 11, 12, 13, None, str(VERSION), float(VERSION)):
+        for version in (3, 11, 12, 13, 14, None, str(VERSION), float(VERSION)):
             store.put_runtime("storage_repack", {"state": "COMPLETE", "version": version})
             assert stable_reason(store) == ["REPACK"]
         store.put_runtime("storage_repack", complete)
