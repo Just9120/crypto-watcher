@@ -80,8 +80,12 @@ def install(db: sqlite3.Connection, cache: Any = None, binary_cache: Any = None)
             + """
             CREATE TRIGGER market_record_parent_frozen BEFORE UPDATE OF id,public_uuid,observed,expires ON market_record_parents BEGIN
                 SELECT RAISE(ABORT,'Immutable record parent'); END;
-            CREATE TRIGGER market_record_frozen BEFORE UPDATE OF kind,public_uuid,revision,packet,slot,expires ON market_records
+            CREATE TRIGGER market_record_frozen BEFORE UPDATE OF kind,public_uuid,revision,packet,slot ON market_records
                 BEGIN SELECT RAISE(ABORT,'Immutable record coordinate'); END;
+            CREATE TRIGGER market_record_lease BEFORE UPDATE OF expires ON market_records
+                WHEN OLD.kind<>2 OR OLD.expires IS NULL OR NEW.expires IS NULL OR
+                    typeof(NEW.expires)<>'integer' OR NEW.expires<OLD.expires BEGIN
+                SELECT RAISE(ABORT,'Immutable record lease'); END;
             CREATE TRIGGER market_record_keep_parent BEFORE DELETE ON market_record_parents
                 WHEN EXISTS(SELECT 1 FROM market_record_owners WHERE parent=OLD.id) OR
                     EXISTS(SELECT 1 FROM market_record_members WHERE event_uuid=OLD.public_uuid) BEGIN

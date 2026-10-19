@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from collections.abc import Generator
 from typing import Any
 
 SERVICE_FILTER = (
@@ -120,14 +121,73 @@ def byte_counter(db: sqlite3.Connection) -> None:
     END""")
 
 
-def expires(db: sqlite3.Connection, key: str) -> Any:
+def hot_binding(db: sqlite3.Connection, key: str) -> tuple[int, str, str | None] | None:
+    """Read the native owner/lease indexes, never filter decoded public keys."""
     if db.execute("SELECT type FROM sqlite_master WHERE name='market_lifetimes'").fetchone()[0] != "view":
-        hot = db.execute("SELECT expires FROM market_lifetimes WHERE key=?", (key,)).fetchone()
+        rows = db.execute(
+            "SELECT expires,category,event_id FROM market_lifetimes WHERE key=?", (key,)
+        ).fetchall()
     else:
-        hot = db.execute(
-            "SELECT expires FROM market_expiry_legacy WHERE key=? UNION ALL SELECT expires FROM market_expiry WHERE rid IN(SELECT id FROM market_runtime_keys WHERE external IN(?,cw_key_pack(?)))",
+        rows = db.execute(
+            "SELECT expires,category,event_id FROM market_expiry_legacy WHERE key=? UNION ALL "
+            "SELECT e.expires,e.category,i.external FROM market_runtime_keys k "
+            "JOIN market_expiry e ON e.rid=k.id LEFT JOIN market_event_ids i ON i.id=e.event_ref "
+            "WHERE k.external IN(?,cw_key_pack(?)) LIMIT 2",
             (key, key, key),
-        ).fetchone()
+        ).fetchall()
+    if len(rows) > 1:
+        raise ValueError("Conflicting native retention bindings")
+    return tuple(rows[0]) if rows else None
+
+
+def owned_hot(db: sqlite3.Connection, event_id: str, limit: int = 128) -> list[str]:
+    """A bounded native ownership batch; callers repeat after removing it."""
+    if type(limit) is not int or not 1 <= limit <= 1024:
+        raise ValueError("Invalid retention owner batch")
+    return [key for key, _ in owned_hot_rows(db, event_id, limit=limit)]
+
+
+def owned_hot_rows(
+    db: sqlite3.Connection, event_id: str, *, limit: int | None = None
+) -> Generator[tuple[str, str], None, None]:
+    if limit is not None and (type(limit) is not int or not 1 <= limit <= 1024):
+        raise ValueError("Invalid retention owner batch")
+    if db.execute("SELECT type FROM sqlite_master WHERE name='market_lifetimes'").fetchone()[0] != "view":
+        cursor = db.execute(
+            "SELECT key,category FROM market_lifetimes WHERE event_id=? LIMIT ?",
+            (event_id, -1 if limit is None else limit),
+        )
+    else:
+        cursor = db.execute(
+            "SELECT key,category FROM market_expiry_legacy WHERE event_id=? UNION ALL "
+            "SELECT cw_key_unpack(k.external),e.category FROM market_expiry e "
+            "JOIN market_runtime_keys k ON k.id=e.rid "
+            "WHERE e.event_ref=(SELECT id FROM market_event_ids WHERE external=?) LIMIT ?",
+            (event_id, event_id, -1 if limit is None else limit),
+        )
+    try:
+        for key, category in cursor:
+            yield key, category
+    finally:
+        cursor.close()
+
+
+def analytic_heads(db: sqlite3.Connection, event_id: str, cache: Any = None) -> list[tuple[str, str]]:
+    """All method heads and pending methodology, bounded by one event's owners."""
+    from .catalogue_lifecycle import owned_records
+
+    kinds = {"outcome-head", "outcome-job", "comparison-head"}
+    found = {(key, category) for key, category in owned_hot_rows(db, event_id) if category in kinds}
+    for coordinate, current in owned_records(db, event_id, cache):
+        if current and coordinate.kind in ("outcome", "comparison"):
+            category = coordinate.kind + "-head"
+            found.add(("radar:v1:" + category + ":" + coordinate.identity, category))
+    return sorted(found)
+
+
+def expires(db: sqlite3.Connection, key: str) -> Any:
+    binding = hot_binding(db, key)
+    hot = binding[:1] if binding is not None else None
     from .catalogue_lifecycle import expires as cold_expiry
 
     cold = cold_expiry(db, key)
@@ -150,6 +210,19 @@ def remove(db: sqlite3.Connection, key: str) -> None:
 
 
 def renew(db: sqlite3.Connection, key: str, value: int, *, shorten: bool = False) -> None:
+    from . import catalogue_lifecycle, packet_store
+
+    if catalogue_lifecycle.active(db):
+        if not db.in_transaction:
+            db.execute("BEGIN IMMEDIATE")
+        with packet_store.atomic(db):
+            catalogue_lifecycle.renew(db, key, value, shorten=shorten)
+            _renew_hot(db, key, value, shorten=shorten)
+    else:
+        _renew_hot(db, key, value, shorten=shorten)
+
+
+def _renew_hot(db: sqlite3.Connection, key: str, value: int, *, shorten: bool) -> None:
     expression = "min(expires,?)" if shorten else "?"
     if db.execute("SELECT type FROM sqlite_master WHERE name='market_lifetimes'").fetchone()[0] != "view":
         db.execute(f"UPDATE market_lifetimes SET expires={expression} WHERE key=?", (value, key))

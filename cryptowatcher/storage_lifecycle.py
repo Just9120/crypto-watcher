@@ -208,11 +208,10 @@ class BoundedRetention:
         # Chronological history index, no scan over the current candle universe.
         settings = store.snapshot().settings
         cutoff = now_ms - settings.detail_retention_days * DAY
-        prefix = PREFIX + "history:"
-        due = store.db.execute(
-            "SELECT key,payload_json FROM runtime WHERE key>=? AND key<? ORDER BY key LIMIT ?",
-            (prefix, prefix + f"{max(0, cutoff):016d}", batch),
-        ).fetchall()
+        from . import catalogue_retention
+
+        selected = catalogue_retention.due_events(store, now_ms, cutoff, batch)
+        due = selected.rows
         deadline = time.monotonic() + 0.05
         processed = 0
         with store.db:
@@ -223,22 +222,21 @@ class BoundedRetention:
             for row in due:
                 if time.monotonic() >= deadline:
                     break
-                eid = json_payload(row[1])["event_id"]
+                eid = row[1]["event_id"]
                 event = history.metadata("event-head:" + eid)
                 if event is not None:
                     archive_event(store, event)
-                owned = store.db.execute(
-                    "SELECT key FROM market_lifetimes WHERE event_id=?", (eid,)
-                ).fetchall()
-                for item in owned:
-                    raw = store.get_runtime(item[0], {})
-                    state = raw.get("state") if isinstance(raw, dict) else None
-                    if state in ("PENDING", "RETRY", "IN_FLIGHT", "BLOCKED", "INVALID_SOURCE", "INCOMPLETE"):
-                        self._terminal(item[0][len(PREFIX) :].split(":", 1)[0], state)
-                    remove(store, item[0])
-                    removed += 1
+                else:
+                    from .storage import StateError
+
+                    raise StateError("Missing retained event head during expiry; data preserved")
+                removed += catalogue_retention.remove_event(store, eid, self._terminal)
                 remove(store, row[0])
                 processed += 1
+            store.db.execute(
+                "INSERT INTO market_meta VALUES('retention_history_cursor',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (selected.cursor if processed == len(due) else "",),
+            )
             # Service receipts expire first. They do not keep detail alive indefinitely.
             from .expiry_index import due_services
 
@@ -261,9 +259,7 @@ class BoundedRetention:
                 ):
                     # Preserve original pending methodology/revision until its
                     # parent is aggregated, even across a split expiry batch.
-                    if store.db.execute(
-                        "SELECT 1 FROM runtime WHERE key=?", (PREFIX + "event-head:" + raw["event_id"],)
-                    ).fetchone():
+                    if history.metadata("event-head:" + raw["event_id"]) is not None:
                         continue
                 state = raw.get("state") if isinstance(raw, dict) else None
                 if state in ("PENDING", "RETRY", "IN_FLIGHT", "BLOCKED", "INVALID_SOURCE", "INCOMPLETE"):
@@ -271,6 +267,12 @@ class BoundedRetention:
                 remove(store, row[0])
                 removed += 1
                 service_removed += 1
+            for index, (coordinate, _) in enumerate(catalogue_retention.due_services(store, now_ms, batch)):
+                if index and time.monotonic() >= deadline:
+                    break
+                count = catalogue_retention.service(store, coordinate, now_ms)
+                removed += count
+                service_removed += count
             removed += history.prune_pending()
             # A source revision survives the ordinary TTL only while a retained detail
             # references it. Old global `protected` records are not a v2 mechanism.
@@ -360,6 +362,13 @@ class BoundedRetention:
             from .quality_packets import collect as collect_packets
 
             removed_packets = collect_packets(store.db, batch)
+            from .packet_store import collect as collect_record_packets
+
+            removed_record_packets = (
+                collect_record_packets(store.db, batch)
+                if store.db.execute("SELECT 1 FROM market_meta WHERE key='packet_layout'").fetchone()
+                else 0
+            )
             removed_numeric = collect_numeric(store.db, batch)
             from .cohort_meter import collect_current
 
@@ -382,6 +391,7 @@ class BoundedRetention:
                 "removed_source_windows": removed_windows,
                 "removed_numeric": removed_numeric,
                 "removed_quality_components": removed_packets,
+                "removed_record_packets": removed_record_packets,
                 "removed_cohort_counters": removed_cohort_counters,
                 "batch": batch,
                 "state": "OK",
@@ -399,6 +409,7 @@ class BoundedRetention:
                 "removed_source_windows": removed_windows,
                 "removed_numeric": removed_numeric,
                 "removed_quality_components": removed_packets,
+                "removed_record_packets": removed_record_packets,
                 "removed_cohort_counters": removed_cohort_counters,
             }.items():
                 totals[key] = totals.get(key, 0) + count
@@ -420,6 +431,7 @@ class BoundedRetention:
             + removed_windows
             + removed_numeric
             + removed_packets
+            + removed_record_packets
             + removed_cohort_counters
         )
 

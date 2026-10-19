@@ -93,10 +93,9 @@ def archive_event(store: Store, event: dict[str, Any]) -> None:
 
     history = History(store)
     # Owner/event index is bounded to this event; never walk all method heads.
-    owned = store.db.execute(
-        "SELECT key,category FROM market_lifetimes WHERE event_id=? AND category IN ('outcome-head','outcome-job','comparison-head') ORDER BY key",
-        (event["event_id"],),
-    ).fetchall()
+    from .expiry_index import analytic_heads
+
+    owned = analytic_heads(store.db, event["event_id"], store.cached_text)
     outcomes: dict[str, dict[str, Any]] = {}
     jobs = []
     comparisons = []

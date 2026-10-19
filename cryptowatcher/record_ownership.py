@@ -28,9 +28,7 @@ def block_references(raw: bytes) -> list[Any]:
     return result
 
 
-def block_entry(db: sqlite3.Connection, packet: int, slot: int, cache: Any = None) -> list[Any]:
-    if type(slot) is not int or not 0 <= slot < 64:
-        raise ValueError("Invalid catalogue ownership slot")
+def block_entries(db: sqlite3.Connection, packet: int, cache: Any = None) -> list[Any]:
     # Actual bytes are always read and authenticated before a pure cache hit.
     raw = packet_store.read(db, packet)
 
@@ -38,7 +36,20 @@ def block_entry(db: sqlite3.Connection, packet: int, slot: int, cache: Any = Non
         return encode(block_references(raw))
 
     values = json.loads(read() if cache is None else cache("catalogue-refs", "", raw, read))
-    if not isinstance(values, list) or slot >= len(values) or len(values[slot]) != 6:
+    if (
+        not isinstance(values, list)
+        or not 0 < len(values) <= 64
+        or any(not isinstance(value, list) or len(value) != 6 for value in values)
+    ):
+        raise ValueError("Catalogue ownership coordinate mismatch")
+    return values
+
+
+def block_entry(db: sqlite3.Connection, packet: int, slot: int, cache: Any = None) -> list[Any]:
+    if type(slot) is not int or not 0 <= slot < 64:
+        raise ValueError("Invalid catalogue ownership slot")
+    values = block_entries(db, packet, cache)
+    if slot >= len(values):
         raise ValueError("Catalogue ownership coordinate mismatch")
     return values[slot]
 

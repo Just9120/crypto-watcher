@@ -155,6 +155,18 @@ size/window до decompression. Чтение materialize только выбра
 меняет canonical JSON, float bits или numeric types. Linux/resource gates для
 runtime activation остаются обязательными.
 
+Candidate catalogue service expiry отделён от immutable body. Event parent
+deadline неизменяем; episode service row может только продлить lease до MAX
+действительно retained members. Hot duplicate и cold lease обновляются одним
+SAVEPOINT; missing/conflicting member/owner/checksum не даёт продлить или удалить
+запись. Episode extensions с внешними source/context dependencies до отдельного
+lease adapter остаются hot и учитываются в budget. Mixed expiry сначала сохраняет
+все method results/comparators/provenance, затем в той же transaction удаляет
+hot/cold revisions, membership и parent; refs освобождаются до bounded GC.
+Frozen future leases не теряются из-за нового age cutoff; bounded history cursor
+позволяет дойти до остальных due records и сохраняется только вместе с обработкой.
+Это candidate adapter, не runtime activation или подтверждение mature25GB.
+
 SB1 source tiles введены явным finite repack10 и сохраняются в repack11; обычный Store open не
 создает их и не включает writer. Замороженный блок
 содержит32 native временных слота, до256 immutable revisions суммарно,
