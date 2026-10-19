@@ -765,6 +765,61 @@ def test_comparison_admission_finds_ready_canonical_siblings_without_processing_
     assert all(e["symbol"] == anchor["symbol"] and job["next_attempt_ms"] <= NOW for job, e, _, _ in prepared)
 
 
+def test_grouped_comparison_budget_cannot_starve_the_oldest_due_instrument(store):
+    import copy
+
+    from cryptowatcher.analytics_worker import prepare, read_snapshot
+    from cryptowatcher.market_storage import enable
+    from cryptowatcher.outcomes import pending_key
+    from tests.test_outcomes import NOW, OutcomeWorker, observe
+
+    enable(store.db)
+    store.bounded = True
+    store.clock_ms = lambda: NOW
+    observe(store, OutcomeWorker(store))
+    history = History(store)
+    template = history.events(1)[0]
+    worker = OutcomeWorker(store)
+    oldest = identity("oldest-due-instrument")
+    with store.db:
+        for _, job in history.items("comparison-job:"):
+            history.delete(job["pending_key"])
+            history.delete("comparison-job:" + job["event_id"])
+        for index, symbol in enumerate(("ZZZUSDT", "AAAUSDT", "AABUSDT", "AACUSDT")):
+            event = copy.deepcopy(template)
+            event.update(event_id=oldest if index == 0 else identity(symbol), symbol=symbol)
+            history.version("event", event)
+            worker.admit(event)
+            key = "comparison-job:" + event["event_id"]
+            job = history.get(key)
+            history.delete(job["pending_key"])
+            job["next_attempt_ms"] = NOW - 60000 + index
+            job["pending_key"] = pending_key(job["next_attempt_ms"], event["event_id"]).replace(
+                "outcome-pending:", "comparison-pending:"
+            )
+            history.put(key, job)
+            history.put(job["pending_key"], {"event_id": event["event_id"]})
+    assert history.items("comparison-pending:", 1)[0][1]["event_id"] == oldest
+    elapsed = [0.0]
+
+    def calculate(reader, job, event):
+        elapsed[0] += 2.0  # One calculation consumes the finite read budget.
+        return {"frozen": event["event_id"]}
+
+    with patch("cryptowatcher.analytics_worker.time.monotonic", lambda: elapsed[0]):
+        prepared = read_snapshot(
+            store.path,
+            store.owner_id,
+            lambda reader: prepare(
+                reader, "comparison-pending:", "comparison-job:", "event_id", NOW, 4, 1, calculate
+            ),
+        )
+    assert len(prepared) == 1
+    assert prepared[0][1]["event_id"] == oldest
+    assert prepared[0][3] == {"frozen": oldest}
+    assert history.count("comparison-pending:") == 4  # Read preparation commits no job changes.
+
+
 def test_interval_reports_real_flow_deltas_and_rejects_counter_reset():
     import copy
 

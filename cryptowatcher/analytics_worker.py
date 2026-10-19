@@ -86,17 +86,23 @@ def prepare(
                     peer_binding = history.get(candidate["pending_key"])
                     if isinstance(peer_binding, dict) and peer_binding.get(binding_id) == peer:
                         admit(peer_binding)
-    if prefix == "comparison-pending:":
+    if prefix == "comparison-pending:" and due:
         # Calculations are independent and keep their immutable cutoff. Group
         # only this bounded due batch to reuse one population, not a large cache.
+        # The earliest due job must run first even when one calculation consumes
+        # the remaining budget. Otherwise lexical grouping can starve its stream.
+        first = due.pop(0)
+        scope = tuple(first[1][field] for field in ("market_type", "symbol", "timeframe"))
         due.sort(
             key=lambda row: (
+                tuple(row[1][field] for field in ("market_type", "symbol", "timeframe")) != scope,
                 row[1]["market_type"],
                 row[1]["symbol"],
                 row[1]["timeframe"],
                 row[1]["reference_time_ms"],
             )
         )
+        due.insert(0, first)
     for job, event, binding in due:
         if prepared and time.monotonic() >= deadline:
             break
