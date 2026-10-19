@@ -71,6 +71,18 @@ SQLite tables/indexes/free pages/WAL/SHM/journal измеряются отдел
 Старые numeric rows остаются читаемыми до finite transfer. После новых writes
 требуется compatible reader/forward-fix; native и mature capacity gates прежние.
 
+NB2/PR1 candidate backend допускает exact self-contained price operands только
+после explicit numeric layout1→2 и отдельного writer marker. Обычный repack11
+и producers этого пока не выбирают. NB1 bytes/длины frozen; NB2 имеет тот же
+64-slot bound/full SHA256 и хранит raw frames совместно с operands. ID/FP и
+owner leases относятся к восстановленному прежнему26/34byte canonical frame.
+Private offer допускает только byte equality всех metric values/types и
+уменьшение целого compressed block; rollback/readback/quality GC используют
+прежние transaction boundaries. Layout marker/actual bytes проверяются и при
+cache hit. Обычный open не повышает marker, не запускает migration и не включает
+writer. Producer context/method checks, finite feature repack и native/mature
+qualification остаются обязательными до product activation.
+
 Архивный CQ4 packet сохраняет прежний public fact JSON. Общие templates,
 strength/noise columns и точные ordered comparator lists не меняют методику,
 N, ограничения и population_size. Delta имеет не более8ancestor links; numeric

@@ -13,6 +13,7 @@ import struct
 import time
 from typing import Any
 
+from . import metric_price_codec
 from . import numeric_block_codec as codec
 from .candle_blocks import atomic
 from .numeric_pool import fingerprint
@@ -20,9 +21,42 @@ from .numeric_pool import fingerprint
 
 def installed(db: sqlite3.Connection) -> bool:
     row = db.execute("SELECT value FROM market_meta WHERE key='numeric_blocks'").fetchone()
-    if row is not None and row[0] != "1":
+    if row is not None and row[0] not in ("1", "2"):
         raise ValueError("Unknown numeric block layout; database preserved")
     return row is not None
+
+
+def price_layout(db: sqlite3.Connection) -> bool:
+    row = db.execute("SELECT value FROM market_meta WHERE key='numeric_blocks'").fetchone()
+    if row is None or row[0] not in ("1", "2"):
+        raise ValueError("Unknown numeric block layout; database preserved")
+    return row[0] == "2"
+
+
+def price_writing(db: sqlite3.Connection) -> bool:
+    row = db.execute("SELECT value FROM market_meta WHERE key='numeric_price_runtime'").fetchone()
+    if row is not None and (row[0] != "1" or not price_layout(db) or not writing(db)):
+        raise ValueError("Unknown numeric price writer; database preserved")
+    return row is not None
+
+
+def upgrade_price(db: sqlite3.Connection) -> None:
+    """Explicit format admission only; producer/repack activation is separate."""
+    if db.in_transaction or not installed(db):
+        raise ValueError("Price layout upgrade requires an installed outer boundary")
+    with db:
+        db.execute("BEGIN IMMEDIATE")
+        summary(db)
+        db.execute("UPDATE market_meta SET value='2' WHERE key='numeric_blocks'")
+
+
+def canonical(raw: bytes) -> bytes:
+    # Raw frames are validated on admission and covered by the block checksum.
+    return metric_price_codec.frame(raw) if raw and raw[0] in (17, 18, 19) else raw
+
+
+def signature(raw: bytes) -> bytes:
+    return fingerprint(canonical(raw))
 
 
 def writing(db: sqlite3.Connection) -> bool:
@@ -137,7 +171,8 @@ def put(
         raise ValueError("Numeric block mutation requires an outer transaction")
     old = read(db, block)
     before = allocation(block, *old[:3], len(old[3])) if old else (0, 0, 0, 0, 0)
-    raw = codec.pack(block, frames) if any(frames) else b""
+    predicted = any(f and f[0] in (17, 18, 19) for f in frames)
+    raw = codec.pack(block, frames, recipes=price_layout(db) if predicted else False) if any(frames) else b""
     after = allocation(block, frames, details, quality, len(raw))
     current = state(db)
     if any(frame and block * 64 + slot + 1 > current[0] for slot, frame in enumerate(frames)):
@@ -171,7 +206,7 @@ def put(
 def lookup(db: sqlite3.Connection, identity: int, frame: bytes) -> None:
     if not db.execute(
         "SELECT 1 FROM market_numeric_block_lookup WHERE fingerprint=? AND id=?",
-        (fingerprint(frame), identity),
+        (signature(frame), identity),
     ).fetchone():
         raise ValueError("Missing numeric fingerprint coordinate")
 
@@ -193,7 +228,7 @@ def load_many(db: sqlite3.Connection, ids: set[int]) -> dict[int, tuple[bytes, i
         for identity, slot in group:
             if frames[slot]:
                 lookup(db, identity, frames[slot])
-                result[identity] = frames[slot], details[slot], quality[slot]
+                result[identity] = canonical(frames[slot]), details[slot], quality[slot]
     return result
 
 
@@ -234,7 +269,7 @@ def values_many(db: sqlite3.Connection, ids: set[int]) -> dict[int, bytes]:
             size = lengths[slot]
             if size:
                 offset = sum(lengths[:slot])
-                result[identity] = expanded[offset : offset + size]
+                result[identity] = canonical(expanded[offset : offset + size])
     ordered = sorted(result)
     for start in range(0, len(ordered), 256):
         batch = ordered[start : start + 256]
@@ -261,6 +296,31 @@ def find(db: sqlite3.Connection, raw: bytes) -> tuple[int, int, int] | None:
         if frame == raw:
             return identity, details, quality
     return None
+
+
+def offer_price(db: sqlite3.Connection, identity: int, candidate: bytes) -> bool:
+    """Recode equal metrics only when the complete stored block shrinks."""
+    if not price_writing(db):
+        return False
+    if not isinstance(candidate, bytes) or not candidate or candidate[0] not in (17, 18, 19):
+        raise ValueError("Invalid proposed price metric frame")
+    original = metric_price_codec.frame(candidate)
+    block, slot = codec.coordinate(identity)
+    with atomic(db):
+        state(db)
+        old = read(db, block)
+        if old is None or not old[0][slot]:
+            raise ValueError("Missing proposed numeric metric")
+        frames, details, quality, payload = old
+        if canonical(frames[slot]) != original:
+            raise ValueError("Price recipe changed retained metric bits/types")
+        lookup(db, identity, frames[slot])
+        frames[slot] = candidate
+        alternative = codec.pack(block, frames, recipes=True)
+        if len(alternative) >= len(payload):
+            return False
+        put(db, block, frames, details, quality)
+        return True
 
 
 def intern(db: sqlite3.Connection, raw: bytes) -> int:
@@ -331,7 +391,7 @@ def collect(db: sqlite3.Connection, batch: int) -> int:
                     lookup(db, identity, frame)
                     deleted = db.execute(
                         "DELETE FROM market_numeric_block_lookup WHERE fingerprint=? AND id=?",
-                        (fingerprint(frame), identity),
+                        (signature(frame), identity),
                     ).rowcount
                     if deleted != 1:
                         raise ValueError("Lost numeric GC coordinate")
@@ -410,6 +470,7 @@ def transfer(db: sqlite3.Connection, state_value: dict[str, Any], batch: int, de
 
 def summary(db: sqlite3.Connection) -> dict[str, Any]:
     issued, live, details, quality, dbytes, qbytes = state(db)
+    price_writing(db)
     if (
         db.execute("SELECT 1 FROM market_numeric_transfer LIMIT 1").fetchone()
         or db.execute("SELECT 1 FROM market_numeric_gc LIMIT 1").fetchone()
@@ -430,7 +491,9 @@ def install_functions(db: sqlite3.Connection, cache: Any = None) -> None:
     def expanded(block: int, raw: bytes | None, counts: bool = False) -> bytes | None:
         if raw is None:
             return None
-        body = codec.checked(raw, b"NR1\x00" if counts else b"NB1\x00", 1196 if counts else codec.MAX_FRAME)
+        if not counts and raw[:4] == b"NB2\x00" and not price_layout(db):
+            raise ValueError("NB2 requires an explicit price layout upgrade")
+        body = codec.checked(raw, b"NR1\x00", 1196) if counts else codec.header(raw)
         if struct.unpack(">Q", body[:8])[0] != codec.block_number(block):
             raise ValueError("Numeric cached block coordinate mismatch")
 
@@ -450,6 +513,8 @@ def install_functions(db: sqlite3.Connection, cache: Any = None) -> None:
     db.create_function("cw_numeric_counts", 2, lambda block, raw: expanded(block, raw, True))
 
     def admitted(block: int, raw: bytes) -> int:
+        if raw[:4] == b"NB2\x00" and not price_writing(db):
+            raise ValueError("NB2 admission requires explicit writer activation")
         frames = codec.unpack(raw, block)
         ceiling = state(db)[0]
         if any(f and block * 64 + slot + 1 > ceiling for slot, f in enumerate(frames)):
@@ -472,12 +537,15 @@ def install_functions(db: sqlite3.Connection, cache: Any = None) -> None:
         ds, qs = codec.leases(bytes(counts_row[0]), block)
         for slot, frame in enumerate(before):
             if frame and after[slot] != frame:
-                if after[slot] or ds[slot] or qs[slot]:
-                    raise ValueError("Immutable/retained numeric slot")
+                if after[slot]:
+                    if canonical(frame) != metric_price_codec.frame(after[slot]):
+                        raise ValueError("Immutable numeric metric value")
+                    if after[slot][0] in (17, 18, 19) and not price_writing(db):
+                        raise ValueError("Price recoding requires explicit writer activation")
+                elif ds[slot] or qs[slot]:
+                    raise ValueError("Retained numeric slot")
             elif not frame and after[slot]:
-                from .metric_codec import unpack as metric
-
-                metric(after[slot])
+                metric_price_codec.frame(after[slot])
         return 1
 
     def retained(identity: int, raw: bytes, d: int, q: int) -> int:

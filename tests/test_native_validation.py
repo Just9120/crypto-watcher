@@ -19,6 +19,7 @@ def test_native_full_validation_includes_source_tiles_cells_and_their_counters(s
     from cryptowatcher.outcomes import OutcomeWorker
     from cryptowatcher.sources import Sources
     from cryptowatcher.storage_repack import work
+    from tests.test_numeric_price_blocks import activate, population
     from tests.test_outcomes import MINUTE, NOW, future, observe
 
     assert available(), "Build canonical native helper before Linux tests"
@@ -34,6 +35,16 @@ def test_native_full_validation_includes_source_tiles_cells_and_their_counters(s
             break
     assert state["state"] == "COMPLETE" and state["version"] == 11
     assert store.db.execute("SELECT COUNT(*) FROM market_candle_blocks").fetchone()[0] > 0
+    from cryptowatcher import metric_codec, metric_price_codec, numeric_block_codec, numeric_blocks
+
+    metric_ids, metric_values, candidates = population(store)
+    activate(store)
+    with store.db:
+        accepted = sum(
+            numeric_blocks.offer_price(store.db, i, c) for i, c in zip(metric_ids, candidates, strict=True)
+        )
+    assert accepted > 0
+    wanted = {i: metric_codec.pack(v) for i, v in zip(metric_ids, metric_values, strict=True)}
     store.db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
     original = store.path.read_bytes()
     image = cv.Image(store.path, limit=cv.MAX_COMPRESSED_BYTES, deadline=time.monotonic() + 30)
@@ -44,6 +55,13 @@ def test_native_full_validation_includes_source_tiles_cells_and_their_counters(s
         with closing(apsw.Connection(str(sentinel), flags=apsw.SQLITE_OPEN_READWRITE, vfs=vfs.name)) as db:
             cv.configure_cache(db, image)
             cv.full_check(db, image.deadline)
+            actual_metrics = {}
+            for block, payload in db.execute("SELECT id,payload FROM market_numeric_blocks"):
+                for slot, frame in enumerate(numeric_block_codec.unpack(bytes(payload), block)):
+                    identity_value = block * 64 + slot + 1
+                    if identity_value in wanted:
+                        actual_metrics[identity_value] = metric_price_codec.frame(frame)
+            assert actual_metrics == wanted
             for table in (
                 "market_candle_blocks",
                 "market_candle_block_totals",
