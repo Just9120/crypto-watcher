@@ -2,6 +2,7 @@
 **
 !Dockerfile
 !requirements.txt
+!requirements-bootstrap.txt
 !telegram_crypto_watcher.py
 !cryptowatcher/
 !cryptowatcher/**
