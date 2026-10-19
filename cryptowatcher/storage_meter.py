@@ -122,6 +122,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "source_blocks",
         "source_block_indexes",
         "catalogue_overlap",
+        "record_pending",
     }
     for category, value in counts.items():
         previous = (base or {}).get("categories", {}).get(category, {"inserted_bytes": 0, "deleted_bytes": 0})
@@ -294,6 +295,16 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
                 "market_catalogue_index_counts",
                 "market_catalogue_overlap",
             }
+    if store.db.execute("SELECT 1 FROM market_meta WHERE key='catalogue_queue'").fetchone():
+        from .catalogue_queue import header as queue_header
+
+        pending = queue_header(store.db)
+        oldest = pending["oldest_ms"]
+        catalogue_layout["pending"] = {
+            **pending,
+            "oldest_age_ms": max(0, now_ms - oldest) if oldest is not None else None,
+        }
+        source_tables.add("market_record_pending")
     indexes = store.get_runtime(
         "storage_index_measurement", {"state": "PENDING", "reason": "No bounded exact measurement yet"}
     )

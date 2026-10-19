@@ -255,6 +255,7 @@ class Store:
         cohort_functions(self.db)
 
         self.db.create_function("cw_record_json", 1, self.cached_record_json, deterministic=True)
+        self.db.create_function("cw_clock_ms", 0, lambda: int(self.clock_ms()))
         from .catalogue_sql import install_functions as catalogue_sql_functions
 
         catalogue_sql_functions(self)
