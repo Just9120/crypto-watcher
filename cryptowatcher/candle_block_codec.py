@@ -11,10 +11,11 @@ import hashlib
 import struct
 from typing import Any, Iterator
 
-from . import indexed_frame
+from . import indexed_frame, source_slot_json
 from .storage import encode
 
 MAGIC = b"SB1\x00"
+JSON_MAGIC = b"SB2\x00"
 SLOTS = 32
 MAX_ROWS = 256
 MAX_BYTES = 512 * 1024
@@ -109,12 +110,17 @@ def pack(stream: int, tile: int, step: int, slots: list[Any]) -> bytes:
         raise ValueError("Source tile row bound")
     header = struct.pack(">QQQ", stream, tile, step)
     try:
-        checked = header + indexed_frame.pack(slots)
+        frame = indexed_frame.pack(slots)
+        text = source_slot_json.pack(slots)
+        magic = MAGIC
+        if text is not None and len(text) < len(frame):
+            frame, magic = text, JSON_MAGIC
+        checked = header + frame
     except ValueError as error:
         if str(error) in ("Indexed frame expanded bound", "Indexed compressed frame bound"):
             raise Capacity("Source tile allocation bound") from error
         raise
-    result = MAGIC + hashlib.sha256(checked).digest() + checked
+    result = magic + hashlib.sha256(checked).digest() + checked
     if len(result) > MAX_BYTES:
         raise Capacity("Compressed source tile bound")
     return result
@@ -124,14 +130,14 @@ def header(raw: bytes) -> tuple[int, int, int, bytes]:
     if (
         not isinstance(raw, bytes)
         or not 110 < len(raw) <= MAX_BYTES
-        or not raw.startswith(MAGIC)
+        or not raw.startswith((MAGIC, JSON_MAGIC))
         or hashlib.sha256(raw[36:]).digest() != raw[4:36]
     ):
         raise ValueError("Source tile checksum mismatch")
     stream, tile, step = struct.unpack(">QQQ", raw[36:60])
     coordinates(stream, tile, step)
     frame = raw[60:]
-    offsets, _ = indexed_frame.layout(frame)
+    offsets, _ = source_slot_json.layout(frame) if raw.startswith(JSON_MAGIC) else indexed_frame.layout(frame)
     if len(offsets) != SLOTS + 1:
         raise ValueError("Source tile cardinality mismatch")
     return stream, tile, step, frame
@@ -139,11 +145,12 @@ def header(raw: bytes) -> tuple[int, int, int, bytes]:
 
 def cached_slots(raw: bytes, frame: bytes, cache: Any) -> list[Any]:
     """Pure exact typed-to-JSON transform, sharing the caller's existing budget."""
+    read = source_slot_json.all_values if raw.startswith(JSON_MAGIC) else indexed_frame.all_values
     if cache is None:
-        return indexed_frame.all_values(frame)
+        return read(frame)
     import json
 
-    value = cache("source-tile-slots", "", raw, lambda: encode(indexed_frame.all_values(frame)).encode())
+    value = cache("source-tile-slots", "", raw, lambda: encode(read(frame)).encode())
     if not isinstance(value, bytes):
         raise ValueError("Invalid pure source tile cache result")
     result = json.loads(value)
@@ -174,13 +181,15 @@ class Reader:
 
     def __init__(self, raw: bytes, cache: Any = None, *, canonical: bool = False):
         self.stream, self.tile, self.step, frame = header(raw)
+        self.text = raw.startswith(JSON_MAGIC)
         self.slots = cached_slots(raw, frame, cache) if canonical else None
         if self.slots is not None and (
             any(not isinstance(items, list) for items in self.slots)
             or not 0 < sum(len(items) for items in self.slots) <= MAX_ROWS
         ):
             raise ValueError("Source tile row bound")
-        self.offsets, self.data = indexed_frame.data(frame, cache) if not canonical else ((), b"")
+        read = source_slot_json.data if self.text else indexed_frame.data
+        self.offsets, self.data = read(frame, cache) if not canonical else ((), b"")
 
     def items(self, slot: int) -> list[Any]:
         from .compact_json import unpack as typed_unpack
@@ -192,9 +201,12 @@ class Reader:
         a, b = self.offsets[slot : slot + 2]
         # Admission/SQL guards validate Candle semantics before freezing.
         # Restore authenticated typed values without parsing/coercing them.
-        return versions(
-            self.tile, self.step, slot, typed_unpack(self.data[a:b], indexed_frame.MAX_BYTES), validate=False
+        value = (
+            source_slot_json.slot(self.data[a:b])
+            if self.text
+            else typed_unpack(self.data[a:b], indexed_frame.MAX_BYTES)
         )
+        return versions(self.tile, self.step, slot, value, validate=False)
 
     def point(self, stream: int, start: int, revision: int) -> tuple[dict[str, Any], int, int] | None:
         number(start)

@@ -115,7 +115,7 @@ def test_source_block_rejects_wrong_identity_bad_revision_order_and_actual_corru
     with pytest.raises(ValueError, match="checksum"):
         codec.point(bytes(damaged), 1, tile, 1, store.cached_bytes)
     wrong_header = struct.pack(">QQQ", 2, tile, 60000) + raw[60:]
-    rebound = codec.MAGIC + hashlib.sha256(wrong_header).digest() + wrong_header
+    rebound = raw[:4] + hashlib.sha256(wrong_header).digest() + wrong_header
     with pytest.raises(ValueError, match="identity"):
         codec.preserved(raw, rebound)
     slots[0].reverse()

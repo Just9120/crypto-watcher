@@ -272,6 +272,22 @@ transform source slots делит прежний1MiB Store cache. Actual header/
 возвращаемые mutable values не разделяются. Полная admission/SQL проверка новых
 frames сохраняется; уже проверенные incoming values не парсятся повторно.
 
+Candidate source writer также допускает SB2/JS1 для scalar candle tails: те же32
+слота/256revisions, coordinates, needed_until/purge_after и полный SHA256.
+JS1 хранит canonical JSON slices с byte offsets и Zstd level3. Полные allocation,
+offset/content/window/checksum bounds проверяются до materialization; объекты,
+нечисловые/nonfinite/oversized значения и неизвестное представление отклоняются.
+Writer выбирает SB2 только при поддерживаемых scalar types и меньшем полном
+frame; иначе сохраняет frozen SB1/IF1. Integer types, IEEE float bits, signed zero,
+строки и source metadata проходят точный round trip. Необычные старые source
+shapes остаются в typed SB1 без усечения. Point/range, CAS, SQL guards, lease renewal,
+corrections и GC читают оба формата; record/source IDs и retention прежние.
+JS1 использует bounded byte-container validator IF1, но собственный JSON
+materializer. Чистые bytes делят прежний1MiB cache; новый cache/budget не вводится.
+Открытие Store не перекодирует tiles; обычный explicit source writer выбирает
+формат при записи. Native/resource и общая mature25GB qualification остаются
+обязательными, isolated codec equality/size proof их не заменяет.
+
 #### Market layout v2: устройство
 
 Format2 включается только для нового reset candidate; schema1 не переписывается обычным open. Private tables сохраняются побайтно по значениям SQL rows; `reset_history.prepare` читает только private state, сохраняет private JSON recovery, проверяет restore на отдельном файле и integrity нового candidate. Он не удаляет и не переключает production. Host cutover/CI/artifact/unit/locks остаются отдельной обязательной процедурой.
