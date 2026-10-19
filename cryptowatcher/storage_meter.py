@@ -239,6 +239,21 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
             "market_candle_fallbacks",
             "market_candle_gc",
         }
+    from .numeric_blocks import installed as numeric_blocks_installed
+
+    numeric_layout: dict[str, Any] = {"state": "LEGACY_METRIC_ROWS"}
+    if numeric_blocks_installed(store.db):
+        from .numeric_blocks import summary as numeric_summary
+
+        numeric_layout.update(state="MIXED_NUMERIC_BLOCKS", **numeric_summary(store.db))
+        source_tables |= {
+            "market_numeric_blocks",
+            "market_numeric_block_refs",
+            "market_numeric_block_lookup",
+            "market_numeric_totals",
+            "market_numeric_transfer",
+            "market_numeric_gc",
+        }
     indexes = store.get_runtime(
         "storage_index_measurement", {"state": "PENDING", "reason": "No bounded exact measurement yet"}
     )
@@ -287,6 +302,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "freelist_bytes": free * page,
         "categories": counts,
         "source_layout": source_layout,
+        "numeric_layout": numeric_layout,
         "measurement_confidence": "LOW_SHORT_SAMPLE"
         if elapsed < 3600
         else "OBSERVED_WINDOW_WITH_MODEL_LIMITATIONS",

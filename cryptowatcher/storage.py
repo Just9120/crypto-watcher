@@ -256,8 +256,16 @@ class Store:
         from .runtime_meter import namespace
 
         self.db.create_function("cw_namespace", 1, namespace, deterministic=True)
+        from .numeric_pool import install_functions as numeric_functions
         from .numeric_pool import projection
         from .numeric_pool import references as numeric_references
+
+        numeric_functions(self.db)
+        # Pure functions also serve a read connection opened before an explicit
+        # layout upgrade. This registers no tables, markers or migration work.
+        from .numeric_blocks import install_functions as numeric_block_functions
+
+        numeric_block_functions(self.db, self.cached_bytes)
 
         self.db.create_function(
             "cw_numeric_refs",
@@ -274,6 +282,15 @@ class Store:
             from .quality_summary import install
 
             install(self.db)
+            numeric_blocks = self.db.execute(
+                "SELECT value FROM market_meta WHERE key='numeric_blocks'"
+            ).fetchone()
+            if numeric_blocks is not None:
+                if numeric_blocks[0] != "1":
+                    raise StateError("Unknown numeric block layout; database preserved")
+                from .numeric_blocks import summary as numeric_summary
+
+                numeric_summary(self.db)
             catalogue = self.db.execute("SELECT value FROM market_meta WHERE key='record_catalog'").fetchone()
             if catalogue is not None:
                 if catalogue[0] != "2":

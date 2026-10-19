@@ -17,7 +17,132 @@ def fingerprint(raw: bytes) -> bytes:
     return hashlib.sha256(raw).digest()[:8]
 
 
+def install_functions(db: sqlite3.Connection) -> None:
+    def change(raw: str, column: str, delta: int) -> int:
+        values = json.loads(raw)
+        if not isinstance(values, list) or any(type(v) is not int or not 0 < v < 2**63 for v in values):
+            raise ValueError("Invalid numeric lease identities")
+        adjust(db, set(values), column, delta, statement_atomic=True)
+        return 1
+
+    db.create_function("cw_numeric_adjust", 3, change)
+
+    def valid(raw: str, column: str, minimum: int) -> int:
+        if column not in ("detail_refs", "quality_refs") or type(minimum) is not int or minimum not in (0, 1):
+            raise ValueError("Invalid numeric validation request")
+        try:
+            values = json.loads(raw)
+            if not isinstance(values, list):
+                return 0
+            rows = raw_many(db, set(values))
+            return int(all((v[1] if column == "detail_refs" else v[2]) >= minimum for v in rows.values()))
+        except (ValueError, TypeError):
+            return 0
+
+    db.create_function("cw_numeric_valid", 3, valid)
+
+
+def ownership_triggers(db: sqlite3.Connection, *, replace: bool = False) -> None:
+    for event in ("insert", "delete", "update"):
+        name = "market_numeric_owner_" + event
+        if replace:
+            old = db.execute("SELECT sql FROM sqlite_master WHERE name=?", (name,)).fetchone()
+            if old is None or "cw_numeric_refs" not in old[0]:
+                raise ValueError("Unknown numeric owner trigger")
+            db.execute(f"DROP TRIGGER {name}")
+        statements = []
+        for alias, delta in (("OLD", -1), ("NEW", 1)):
+            if (event == "insert" and alias == "OLD") or (event == "delete" and alias == "NEW"):
+                continue
+            statements.append(
+                f"SELECT cw_numeric_adjust(cw_numeric_refs({alias}.key,{alias}.payload_json),'detail_refs',{delta});"
+            )
+        suffix = " OF key,payload_json" if event == "update" else ""
+        when = " WHEN OLD.key<>NEW.key OR OLD.payload_json<>NEW.payload_json" if event == "update" else ""
+        db.execute(
+            f"CREATE TRIGGER {name} AFTER {event.upper()}{suffix} ON runtime{when} BEGIN {' '.join(statements)} END"
+        )
+
+
+def adjust(
+    db: sqlite3.Connection, ids: set[int], column: str, delta: int, *, statement_atomic: bool = False
+) -> None:
+    from contextlib import nullcontext
+
+    from .candle_blocks import atomic
+    from .numeric_blocks import adjust as cold_adjust
+    from .numeric_blocks import installed
+
+    if column not in ("detail_refs", "quality_refs") or type(delta) is not int or delta not in (-1, 1):
+        raise ValueError("Invalid numeric lease operation")
+    if not ids:
+        return
+    # SQLite already rolls back the complete invoking statement (including UDF
+    # writes). Opening a SAVEPOINT inside that statement is not allowed.
+    with nullcontext() if statement_atomic else atomic(db):
+        values = raw_many(db, ids)
+        legacy = set()
+        for identity, (_raw, details, quality, cold) in values.items():
+            count = details if column == "detail_refs" else quality
+            if not 0 <= count + delta < 2**63:
+                raise ValueError("Numeric lease underflow/overflow")
+            if not cold:
+                legacy.add(identity)
+        if legacy:
+            db.executemany(
+                f"UPDATE market_numeric SET {column}={column}+? WHERE id=?", [(delta, i) for i in legacy]
+            )
+        if ids - legacy:
+            if not installed(db):
+                raise ValueError("Missing numeric block adapter")
+            cold_adjust(db, ids - legacy, column, delta)
+
+
+def raw_many(db: sqlite3.Connection, ids: set[int]) -> dict[int, tuple[bytes, int, int, bool]]:
+    return _raw_many(db, ids, leases=True)
+
+
+def _raw_many(
+    db: sqlite3.Connection, ids: set[int], *, leases: bool
+) -> dict[int, tuple[bytes, int, int, bool]]:
+    if any(type(value) is not int or not 0 < value < 2**63 for value in ids):
+        raise ValueError("Invalid numeric metric identity")
+    from .numeric_blocks import installed
+    from .numeric_blocks import load_many as cold_load
+    from .numeric_blocks import values_many as cold_values
+
+    result = {}
+    ordered = sorted(ids)
+    for offset in range(0, len(ordered), 256):
+        group = ordered[offset : offset + 256]
+        placeholders = ",".join("?" for _ in group)
+        for row in db.execute(
+            f"SELECT id,fingerprint,payload,detail_refs,quality_refs FROM market_numeric WHERE id IN({placeholders})",
+            group,
+        ):
+            raw = bytes(row[2])
+            if fingerprint(raw) != bytes(row[1]):
+                raise ValueError("Invalid numeric metric checksum")
+            if any(type(n) is not int or not 0 <= n < 2**63 for n in row[3:5]):
+                raise ValueError("Invalid numeric metric lease")
+            result[int(row[0])] = raw, int(row[3]), int(row[4]), False
+        if installed(db):
+            cold = (
+                cold_load(db, set(group))
+                if leases
+                else {i: (raw, 0, 0) for i, raw in cold_values(db, set(group)).items()}
+            )
+            for identity, (raw, details, quality) in cold.items():
+                if identity in result:
+                    raise ValueError("Duplicate numeric metric coordinate")
+                result[identity] = raw, details, quality, True
+    if set(result) != ids:
+        raise ValueError("Missing retained numeric metric")
+    return result
+
+
 def install(db: sqlite3.Connection) -> None:
+    install_functions(db)
     if db.execute("SELECT 1 FROM sqlite_master WHERE name='market_numeric'").fetchone():
         marker = db.execute("SELECT value FROM market_meta WHERE key='numeric_layout'").fetchone()
         if marker is None or marker[0] != "1":
@@ -104,28 +229,20 @@ def intern(db: sqlite3.Connection, value: Any) -> int | None:
     for row in db.execute("SELECT id,payload FROM market_numeric WHERE fingerprint=?", (signature,)):
         if bytes(row[1]) == raw:
             return int(row[0])
+    from . import numeric_blocks
+
+    if numeric_blocks.installed(db):
+        found = numeric_blocks.find(db, raw)
+        if found:
+            return found[0]
+    if numeric_blocks.writing(db):
+        return numeric_blocks.intern(db, raw)
     result = db.execute("INSERT INTO market_numeric(fingerprint,payload) VALUES(?,?)", (signature, raw))
     return int(result.lastrowid or 0)
 
 
 def load_many(db: sqlite3.Connection, ids: set[int]) -> dict[int, Any]:
-    if any(type(value) is not int or not 0 < value < 2**63 for value in ids):
-        raise ValueError("Invalid numeric metric identity")
-    result = {}
-    ordered = sorted(ids)
-    for offset in range(0, len(ordered), 256):
-        group = ordered[offset : offset + 256]
-        placeholders = ",".join("?" for _ in group)
-        for row in db.execute(
-            f"SELECT id,fingerprint,payload FROM market_numeric WHERE id IN({placeholders})", group
-        ):
-            raw = bytes(row[2])
-            if fingerprint(raw) != bytes(row[1]):
-                raise ValueError("Invalid numeric metric checksum")
-            result[int(row[0])] = unpack(raw)
-    if set(result) != ids:
-        raise ValueError("Missing retained numeric metric")
-    return result
+    return {identity: unpack(value[0]) for identity, value in _raw_many(db, ids, leases=False).items()}
 
 
 def load(db: sqlite3.Connection, identity: int) -> dict[str, Any]:
@@ -179,6 +296,13 @@ def existing_reference(db: sqlite3.Connection, value: Any) -> tuple[dict[str, An
     ):
         if bytes(payload) == raw:
             return {"mode": "numeric2", "id": int(identity) * 4 + view}, int(details), int(quality)
+    from .numeric_blocks import find, installed
+
+    if installed(db):
+        found = find(db, raw)
+        if found:
+            identity, details, quality = found
+            return {"mode": "numeric2", "id": identity * 4 + view}, details, quality
     return None
 
 
@@ -187,10 +311,20 @@ def resolve(db: sqlite3.Connection, reference: dict[str, Any]) -> dict[str, Any]
 
 
 def collect(db: sqlite3.Connection, batch: int = 128) -> int:
-    return db.execute(
-        "DELETE FROM market_numeric WHERE id IN(SELECT id FROM market_numeric WHERE detail_refs=0 AND quality_refs=0 ORDER BY id LIMIT ?)",
-        (batch,),
-    ).rowcount
+    from .candle_blocks import atomic
+    from .numeric_blocks import collect as cold_collect
+    from .numeric_blocks import installed
+
+    if type(batch) is not int or not 0 < batch <= 256:
+        raise ValueError("Invalid numeric collection batch")
+    with atomic(db):
+        count = db.execute(
+            "DELETE FROM market_numeric WHERE id IN(SELECT id FROM market_numeric WHERE detail_refs=0 AND quality_refs=0 ORDER BY id LIMIT ?)",
+            (batch,),
+        ).rowcount
+        if count < batch and installed(db):
+            count += cold_collect(db, batch - count)
+        return count
 
 
 def metric_ids(value: Any, depth: int = 0, *, omit_fields: frozenset[str] = frozenset()) -> set[int]:

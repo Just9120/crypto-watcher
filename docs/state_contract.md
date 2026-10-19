@@ -49,6 +49,28 @@ Numeric IDs никогда не
 переиспользуются после удаления. Runtime refs и expiry leases обновляются в той
 же transaction, что immutable revision; отсутствующая зависимость отклоняется.
 
+Repack11 добавляет NB1/NR1 numeric blocks:64 slots адресуют прежние IDs,
+26/34byte frames остаются точными, без outcome arithmetic или зависимости от
+исходных свечей. SHA256 связывает actual compressed bytes/counts с block ID;
+bounded decoder проверяет header/window/content size до materialization.
+FP8 lookup сравнивает полный frame при совпадении hash. Per-slot detail/quality
+leases и GC атомарны с владельцами runtime/quality/catalogue; потеря counts,
+lookup или totals прекращает изменение. Удаление старой retained строки
+разрешено только после readback exact frame+leases в той же transaction.
+Передается исходный AUTOINCREMENT high water, включая уже удалённые IDs;
+частичная очистка не уплотняет IDs и не переиспользует слоты. Finite PK ceiling
+не растет от новых admissions и переживает restart/DDL/VACUUM. Installation и
+writer activation выполняет explicit repack; Store open регистрирует только
+чистые UDF и проверяет известный marker. Это также поддерживает reader,
+открытый до upgrade, при переходе к новой read transaction.
+Чистые frame/count transforms используют тот же общий1MiB cache; actual bytes,
+lookup presence и актуальные leases проверяются при чтении. Encoded bytes
+block/counts/lookup относятся к detail/quality proportional frame lengths,
+quality lease имеет прежний приоритет над detail. Это logical attribution;
+SQLite tables/indexes/free pages/WAL/SHM/journal измеряются отдельно целиком.
+Старые numeric rows остаются читаемыми до finite transfer. После новых writes
+требуется compatible reader/forward-fix; native и mature capacity gates прежние.
+
 Архивный CQ4 packet сохраняет прежний public fact JSON. Общие templates,
 strength/noise columns и точные ordered comparator lists не меняют методику,
 N, ограничения и population_size. Delta имеет не более8ancestor links; numeric
@@ -60,8 +82,8 @@ retention work даже после удаления последнего event.
 `market_body_links` сохраняет owner/body через compatibility view; новые пары
 хранят integer coordinates существующего owner registry и shared body dictionary.
 Legacy rows остаются видны, пока bounded repack не перенесёт их атомарно.
-Repack9 имеет durable finite phases records/decisions/expiry/quality/namespaces/
-references/quality-tally/key-registry/prospective-cohorts. Secondary registry CK1 сохраняет исходные
+Repack11 сохраняет durable finite phases records/decisions/expiry/quality/namespaces/
+references/quality-tally/key-registry/prospective-cohorts/source-tiles/numeric-blocks. Secondary registry CK1 сохраняет исходные
 runtime keys и stable integer IDs; mixed legacy text/tokens видимы через expiry4/
 reference2 views. Point mutations используют индексы, не полный scan view.
 Словарь prefixes/UUID/hex/padded integers frozen; malformed token отклоняется.
@@ -116,7 +138,7 @@ size/window до decompression. Чтение materialize только выбра
 меняет canonical JSON, float bits или numeric types. Linux/resource gates для
 runtime activation остаются обязательными.
 
-SB1 source tiles выбираются явным finite repack10; обычный Store open не
+SB1 source tiles введены явным finite repack10 и сохраняются в repack11; обычный Store open не
 создает их и не включает writer. Замороженный блок
 содержит32 native временных слота, до256 immutable revisions суммарно,
 точные typed values/needed_until/purge_after и SHA256 actual header/IF1 frame.

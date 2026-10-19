@@ -247,7 +247,7 @@ def test_repack10_selects_source_adapters_only_in_explicit_work_and_is_restartab
             state = work(reopened, NOW + tick, batch=1, seconds=1)
             if state["state"] == "COMPLETE":
                 break
-        assert state["state"] == "COMPLETE" and state["version"] == 10
+        assert state["state"] == "COMPLETE" and state["version"] == 11
         assert state["previous_version"] == 9 and state["source_transfer_complete"]
         assert state["source_rows_moved"] == source_count
         assert reopened.db.execute("SELECT COUNT(*) FROM market_candles").fetchone()[0] == 0

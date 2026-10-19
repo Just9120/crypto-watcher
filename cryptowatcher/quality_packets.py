@@ -115,16 +115,25 @@ def install(db: sqlite3.Connection) -> None:
                 new = f"SELECT value FROM json_each(cw_quality_refs(NEW.facts),'$.{field}')"
                 old = f"SELECT value FROM json_each(cw_quality_refs(OLD.facts),'$.{field}')"
                 if operation != "DELETE":
-                    statements.append(
-                        f"SELECT CASE WHEN EXISTS(SELECT 1 FROM ({new}) r LEFT JOIN {table} t ON t.id=r.value "
-                        "WHERE t.id IS NULL) THEN RAISE(ABORT,'Missing retained quality value') END;"
-                    )
+                    if field != "numeric":
+                        statements.append(
+                            f"SELECT CASE WHEN EXISTS(SELECT 1 FROM ({new}) r LEFT JOIN {table} t ON t.id=r.value "
+                            "WHERE t.id IS NULL) THEN RAISE(ABORT,'Missing retained quality value') END;"
+                        )
                 if operation != "INSERT":
                     difference = old + (" EXCEPT " + new if operation == "UPDATE" else "")
-                    statements.append(f"UPDATE {table} SET {column}={column}-1 WHERE id IN({difference});")
+                    statements.append(
+                        f"SELECT cw_numeric_adjust((SELECT json_group_array(value) FROM ({difference})),'quality_refs',-1);"
+                        if field == "numeric"
+                        else f"UPDATE {table} SET {column}={column}-1 WHERE id IN({difference});"
+                    )
                 if operation != "DELETE":
                     difference = new + (" EXCEPT " + old if operation == "UPDATE" else "")
-                    statements.append(f"UPDATE {table} SET {column}={column}+1 WHERE id IN({difference});")
+                    statements.append(
+                        f"SELECT cw_numeric_adjust((SELECT json_group_array(value) FROM ({difference})),'quality_refs',1);"
+                        if field == "numeric"
+                        else f"UPDATE {table} SET {column}={column}+1 WHERE id IN({difference});"
+                    )
             db.execute(
                 f"CREATE TRIGGER market_quality_packet_{operation} AFTER {operation}"
                 + (" OF facts" if operation == "UPDATE" else "")
@@ -137,6 +146,43 @@ def install(db: sqlite3.Connection) -> None:
     except BaseException:
         db.rollback()
         raise
+
+
+def numeric_trigger_upgrade(db: sqlite3.Connection) -> None:
+    """Explicit block-layout upgrade of the three known packet owner triggers."""
+    for operation in ("INSERT", "DELETE", "UPDATE"):
+        name = "market_quality_packet_" + operation
+        row = db.execute("SELECT sql FROM sqlite_master WHERE name=?", (name,)).fetchone()
+        if row is None or "cw_quality_refs" not in row[0]:
+            raise ValueError("Unknown quality numeric owner trigger")
+        if "cw_numeric_adjust" in row[0]:
+            continue
+        sql = row[0]
+        new = "SELECT value FROM json_each(cw_quality_refs(NEW.facts),'$.numeric')"
+        old = "SELECT value FROM json_each(cw_quality_refs(OLD.facts),'$.numeric')"
+        check = (
+            f"SELECT CASE WHEN EXISTS(SELECT 1 FROM ({new}) r LEFT JOIN market_numeric t ON t.id=r.value "
+            "WHERE t.id IS NULL) THEN RAISE(ABORT,'Missing retained quality value') END;"
+        )
+        if operation != "DELETE":
+            if check not in sql:
+                raise ValueError("Unknown quality numeric validation")
+            sql = sql.replace(check, "")
+        for delta in (-1, 1):
+            if (delta == -1 and operation == "INSERT") or (delta == 1 and operation == "DELETE"):
+                continue
+            difference = (old if delta == -1 else new) + (
+                " EXCEPT " + (new if delta == -1 else old) if operation == "UPDATE" else ""
+            )
+            statement = f"UPDATE market_numeric SET quality_refs=quality_refs{'-1' if delta == -1 else '+1'} WHERE id IN({difference});"
+            if statement not in sql:
+                raise ValueError("Unknown quality numeric counter")
+            sql = sql.replace(
+                statement,
+                f"SELECT cw_numeric_adjust((SELECT json_group_array(value) FROM ({difference})),'quality_refs',{delta});",
+            )
+        db.execute(f"DROP TRIGGER {name}")
+        db.execute(sql)
 
 
 def row(

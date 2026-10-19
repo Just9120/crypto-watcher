@@ -13,13 +13,13 @@ import sqlite3
 import time
 from typing import Any
 
-from . import numeric_pool, quality_packets
+from . import numeric_blocks, numeric_pool, quality_packets
 from .quality_layout import install as install_quality
 from .quality_layout import put
 from .quality_summary import create
 from .storage import encode
 
-MODEL_VERSION = "CQ4_NUMERIC2_SPARSE1_V2"
+MODEL_VERSION = "CQ4_NUMERIC2_SPARSE1_NB1_V3"
 # Bounded qualification includes public facts and every private quality pool/index.
 COEFFICIENTS: tuple[dict[str, Any], ...] = (
     {
@@ -33,7 +33,7 @@ COEFFICIENTS: tuple[dict[str, Any], ...] = (
         "recurring_cohort_days": 7,
         "cohorts": 8,
         "facts": 56,
-        "model_version": "CQ4_NUMERIC2_SPARSE1_V2",
+        "model_version": MODEL_VERSION,
         "sqlite_version": "3.49.1",
         "public_sha256": "38ae547a7f2b16bd3cb61634442396961050dca7f2c79c5ae3eaae440c52b5e0",
     },
@@ -48,7 +48,7 @@ COEFFICIENTS: tuple[dict[str, Any], ...] = (
         "recurring_cohort_days": 7,
         "cohorts": 8,
         "facts": 1792,
-        "model_version": "CQ4_NUMERIC2_SPARSE1_V2",
+        "model_version": MODEL_VERSION,
         "sqlite_version": "3.49.1",
         "public_sha256": "d195564194c302fdd5942df81cf36c1ca533088f47c7d683511a5e39811bce99",
     },
@@ -63,7 +63,7 @@ COEFFICIENTS: tuple[dict[str, Any], ...] = (
         "recurring_cohort_days": 7,
         "cohorts": 8,
         "facts": 7168,
-        "model_version": "CQ4_NUMERIC2_SPARSE1_V2",
+        "model_version": MODEL_VERSION,
         "sqlite_version": "3.49.1",
         "public_sha256": "2bbcc4f6baba4250b85851d9590ef3b2186effb57feb0336b291c519c09b8069",
     },
@@ -71,14 +71,14 @@ COEFFICIENTS: tuple[dict[str, Any], ...] = (
         "facts_per_cohort_day": 32,
         "comparators_per_fact": 20,
         "comparator_reuse": "EXPLICIT_OVERLAPPING_FIXTURE",
-        "encoded_bytes_per_fact": 60.017299107142854,
+        "encoded_bytes_per_fact": 67.84430803571429,
         "packet_bytes_per_fact": 23.904575892857142,
-        "physical_bytes_per_fact": 96.0,
+        "physical_bytes_per_fact": 89.14285714285714,
         "kind": "ISOLATED_CURRENT_CODEC_ALL_QUALITY_TABLES_AND_INDEXES",
         "recurring_cohort_days": 7,
         "cohorts": 8,
         "facts": 1792,
-        "model_version": "CQ4_NUMERIC2_SPARSE1_V2",
+        "model_version": MODEL_VERSION,
         "sqlite_version": "3.49.1",
         "public_sha256": "875e502841cf5d2c0fa48b84622f90435047547d63b12042341fff3941b25a2d",
     },
@@ -86,14 +86,14 @@ COEFFICIENTS: tuple[dict[str, Any], ...] = (
         "facts_per_cohort_day": 32,
         "comparators_per_fact": 20,
         "comparator_reuse": "INDEPENDENT_FIXTURE",
-        "encoded_bytes_per_fact": 646.4436383928571,
+        "encoded_bytes_per_fact": 956.0641741071429,
         "packet_bytes_per_fact": 25.491071428571427,
-        "physical_bytes_per_fact": 1476.5714285714287,
+        "physical_bytes_per_fact": 1248.0,
         "kind": "ISOLATED_CURRENT_CODEC_ALL_QUALITY_TABLES_AND_INDEXES",
         "recurring_cohort_days": 7,
         "cohorts": 8,
         "facts": 1792,
-        "model_version": "CQ4_NUMERIC2_SPARSE1_V2",
+        "model_version": MODEL_VERSION,
         "sqlite_version": "3.49.1",
         "public_sha256": "17f0950098e9181bc3ba6436ae9764ad0dcdfe4422652a38c29e3a5b40062763",
     },
@@ -135,6 +135,9 @@ def measure(
         install_quality(db)
         numeric_pool.install(db)
         quality_packets.install(db)
+        numeric_blocks.install(db)
+        with db:
+            db.execute("INSERT INTO market_meta VALUES('numeric_block_runtime','1')")
         page = db.execute("PRAGMA page_size").fetchone()[0]
         baseline = db.execute("PRAGMA page_count").fetchone()[0] * page
         public = hashlib.sha256()

@@ -137,21 +137,18 @@ def install(db: sqlite3.Connection, cache: Any = None, binary_cache: Any = None)
                     AND NOT EXISTS(SELECT 1 FROM market_record_bodies WHERE body=OLD.body);
             END;
             CREATE TRIGGER market_catalogue_retain AFTER INSERT ON market_records BEGIN
-                SELECT CASE WHEN EXISTS(SELECT 1 FROM json_each(cw_catalogue_refs(NEW.kind,NEW.public_uuid,NEW.revision,NEW.packet,NEW.slot,'numeric')) r
-                    LEFT JOIN market_numeric n ON n.id=r.value WHERE n.id IS NULL)
-                    OR EXISTS(SELECT 1 FROM json_each(cw_catalogue_refs(NEW.kind,NEW.public_uuid,NEW.revision,NEW.packet,NEW.slot,'windows')) r
+                SELECT cw_numeric_adjust(cw_catalogue_refs(NEW.kind,NEW.public_uuid,NEW.revision,NEW.packet,NEW.slot,'numeric'),'detail_refs',1);
+                SELECT CASE WHEN EXISTS(SELECT 1 FROM json_each(cw_catalogue_refs(NEW.kind,NEW.public_uuid,NEW.revision,NEW.packet,NEW.slot,'windows')) r
                     LEFT JOIN market_source_windows w ON w.id=r.value WHERE w.id IS NULL)
                     THEN RAISE(ABORT,'Missing catalogue dependency') END;
-                UPDATE market_numeric SET detail_refs=detail_refs+1 WHERE id IN(SELECT value FROM json_each(cw_catalogue_refs(NEW.kind,NEW.public_uuid,NEW.revision,NEW.packet,NEW.slot,'numeric')));
                 UPDATE market_source_windows SET refs=refs+1 WHERE id IN(SELECT value FROM json_each(cw_catalogue_refs(NEW.kind,NEW.public_uuid,NEW.revision,NEW.packet,NEW.slot,'windows')));
             END;
             CREATE TRIGGER market_catalogue_release BEFORE DELETE ON market_records BEGIN
-                SELECT CASE WHEN EXISTS(SELECT 1 FROM json_each(cw_catalogue_refs(OLD.kind,OLD.public_uuid,OLD.revision,OLD.packet,OLD.slot,'numeric')) r
-                    LEFT JOIN market_numeric n ON n.id=r.value WHERE n.id IS NULL OR n.detail_refs<1)
-                    OR EXISTS(SELECT 1 FROM json_each(cw_catalogue_refs(OLD.kind,OLD.public_uuid,OLD.revision,OLD.packet,OLD.slot,'windows')) r
+                SELECT CASE WHEN cw_numeric_valid(cw_catalogue_refs(OLD.kind,OLD.public_uuid,OLD.revision,OLD.packet,OLD.slot,'numeric'),'detail_refs',1)=0 THEN RAISE(ABORT,'Missing catalogue dependency counter') END;
+                SELECT cw_numeric_adjust(cw_catalogue_refs(OLD.kind,OLD.public_uuid,OLD.revision,OLD.packet,OLD.slot,'numeric'),'detail_refs',-1);
+                SELECT CASE WHEN EXISTS(SELECT 1 FROM json_each(cw_catalogue_refs(OLD.kind,OLD.public_uuid,OLD.revision,OLD.packet,OLD.slot,'windows')) r
                     LEFT JOIN market_source_windows w ON w.id=r.value WHERE w.id IS NULL OR w.refs<1)
                     THEN RAISE(ABORT,'Missing catalogue dependency counter') END;
-                UPDATE market_numeric SET detail_refs=detail_refs-1 WHERE id IN(SELECT value FROM json_each(cw_catalogue_refs(OLD.kind,OLD.public_uuid,OLD.revision,OLD.packet,OLD.slot,'numeric')));
                 UPDATE market_source_windows SET refs=refs-1 WHERE id IN(SELECT value FROM json_each(cw_catalogue_refs(OLD.kind,OLD.public_uuid,OLD.revision,OLD.packet,OLD.slot,'windows')));
             END;
             INSERT INTO market_meta VALUES('record_ownership','1');
@@ -161,6 +158,41 @@ def install(db: sqlite3.Connection, cache: Any = None, binary_cache: Any = None)
     except BaseException:
         db.rollback()
         raise
+
+
+def numeric_trigger_upgrade(db: sqlite3.Connection) -> None:
+    if db.execute("SELECT value FROM market_meta WHERE key='record_ownership'").fetchone() is None:
+        return
+    for name, alias, delta in (
+        ("market_catalogue_retain", "NEW", 1),
+        ("market_catalogue_release", "OLD", -1),
+    ):
+        row = db.execute("SELECT sql FROM sqlite_master WHERE name=?", (name,)).fetchone()
+        if row is None or "cw_catalogue_refs" not in row[0]:
+            raise ValueError("Unknown catalogue numeric ownership")
+        if "cw_numeric_adjust" in row[0]:
+            continue
+        counter = " OR n.detail_refs<1" if delta == -1 else ""
+        old = (
+            f"SELECT CASE WHEN EXISTS(SELECT 1 FROM json_each(cw_catalogue_refs({alias}.kind,{alias}.public_uuid,{alias}.revision,{alias}.packet,{alias}.slot,'numeric')) r\n"
+            f"                    LEFT JOIN market_numeric n ON n.id=r.value WHERE n.id IS NULL{counter})\n"
+            "                    OR EXISTS("
+        )
+        adjust = (
+            (
+                f"SELECT CASE WHEN cw_numeric_valid(cw_catalogue_refs({alias}.kind,{alias}.public_uuid,{alias}.revision,{alias}.packet,{alias}.slot,'numeric'),'detail_refs',1)=0 THEN RAISE(ABORT,'Missing catalogue dependency counter') END;\n                "
+                if delta == -1
+                else ""
+            )
+            + f"SELECT cw_numeric_adjust(cw_catalogue_refs({alias}.kind,{alias}.public_uuid,{alias}.revision,{alias}.packet,{alias}.slot,'numeric'),'detail_refs',{delta});\n"
+            "                SELECT CASE WHEN EXISTS("
+        )
+        update = f"UPDATE market_numeric SET detail_refs=detail_refs{'-1' if delta == -1 else '+1'} WHERE id IN(SELECT value FROM json_each(cw_catalogue_refs({alias}.kind,{alias}.public_uuid,{alias}.revision,{alias}.packet,{alias}.slot,'numeric')));"
+        if old not in row[0] or update not in row[0]:
+            raise ValueError("Unsupported catalogue numeric trigger")
+        sql = row[0].replace(old, adjust).replace(update, "")
+        db.execute(f"DROP TRIGGER {name}")
+        db.execute(sql)
 
 
 def shared_bodies(value: Any, depth: int = 0) -> set[str]:

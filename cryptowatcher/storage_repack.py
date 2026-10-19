@@ -343,6 +343,10 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
     from .cohort_meter import ready as cohort_ready
     from .expiry_index import drain
     from .key_registry import drain as drain_registry
+    from .numeric_blocks import install as install_numeric_blocks
+    from .numeric_blocks import summary as numeric_summary
+    from .numeric_blocks import transfer as transfer_numeric
+    from .numeric_blocks import writing as numeric_writing
     from .quality_meter import drain as drain_quality_meter
     from .quality_meter import read as quality_totals
     from .reference_layout import drain as drain_references
@@ -356,10 +360,14 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
     if not source_installed(store.db):
         install_source_tiles(store.db, store.cached_text)
     source_summary(store.db)
-    if state.get("version") == 10 and not source_writing(store.db):
+    install_numeric_blocks(store.db, store.cached_bytes)
+    numeric_summary(store.db)
+    if state.get("version") in (10, 11) and not source_writing(store.db):
         raise ValueError("Missing source writer checkpoint; database preserved")
+    if state.get("version") == 11 and not numeric_writing(store.db):
+        raise ValueError("Missing numeric writer checkpoint; database preserved")
     if (
-        state.get("version") == 10
+        state.get("version") == 11
         and state.get("state") == "COMPLETE"
         and state.get("decisions_complete")
         and state.get("namespace_meter_complete")
@@ -368,12 +376,13 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
         and state.get("key_registry_complete")
         and state.get("cohort_meter_complete")
         and state.get("source_transfer_complete")
+        and state.get("numeric_transfer_complete")
         and cohort_ready(store.db)
         and quality_totals(store.db) is not None
         and namespace_snapshot(store.db) is not None
     ):
         return state
-    if state.get("version") in (3, 4, 5, 6, 7, 8, 9):
+    if state.get("version") in (3, 4, 5, 6, 7, 8, 9, 10):
         state = {
             "previous_version": state["version"],
             "previous_run": {
@@ -382,7 +391,7 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
             "saved_payload_bytes": state.get("saved_payload_bytes", 0),
             "saved_categories": state.get("saved_categories", {}),
         }
-    state = {"version": 10, "cursor": "", "records": 0, "saved_payload_bytes": 0, **state}
+    state = {"version": 11, "cursor": "", "records": 0, "saved_payload_bytes": 0, **state}
     state.setdefault("saved_categories", {})
     deadline = time.monotonic() + seconds
     first = state.get("next_phase", 9)
@@ -392,13 +401,16 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
         store.db.execute(
             "INSERT INTO market_meta VALUES('candle_block_runtime','1') ON CONFLICT(key) DO NOTHING"
         )
+        store.db.execute(
+            "INSERT INTO market_meta VALUES('numeric_block_runtime','1') ON CONFLICT(key) DO NOTHING"
+        )
         # One shared deadline, with a durable rotating first phase. A slow SQL
         # read/commit may overrun a slice, but cannot always starve the same tail.
-        for offset in range(10):
+        for offset in range(11):
             if time.monotonic() >= deadline:
                 break
-            phase = (first + offset) % 10
-            state["next_phase"] = (phase + 1) % 10
+            phase = (first + offset) % 11
+            state["next_phase"] = (phase + 1) % 11
             if phase == 0 and state.get("source_transfer_complete") and not state.get("records_complete"):
                 record_rows(store, state, batch, deadline)
             elif phase == 1 and not state.get("decisions_complete"):
@@ -439,6 +451,28 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
                         state["saved_categories"][category] = (
                             state["saved_categories"].get(category, 0) + saved
                         )
+            elif phase == 10 and not state.get("numeric_transfer_complete"):
+                numeric_categories = ("numeric_details", "quality_numeric")
+                before = dict(
+                    store.db.execute(
+                        "SELECT category,logical_bytes FROM market_counts WHERE category IN (?,?)",
+                        numeric_categories,
+                    )
+                )
+                transfer_numeric(store.db, state, min(batch, 256), deadline)
+                after = dict(
+                    store.db.execute(
+                        "SELECT category,logical_bytes FROM market_counts WHERE category IN (?,?)",
+                        numeric_categories,
+                    )
+                )
+                for category in numeric_categories:
+                    saved = before.get(category, 0) - after.get(category, 0)
+                    if saved:
+                        state["saved_payload_bytes"] += saved
+                        state["saved_categories"][category] = (
+                            state["saved_categories"].get(category, 0) + saved
+                        )
         state.update(
             state="COMPLETE"
             if all(
@@ -455,6 +489,7 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
                     "key_registry_complete",
                     "cohort_meter_complete",
                     "source_transfer_complete",
+                    "numeric_transfer_complete",
                 )
             )
             else "IN_PROGRESS",

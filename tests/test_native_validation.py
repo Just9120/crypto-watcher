@@ -32,7 +32,7 @@ def test_native_full_validation_includes_source_tiles_cells_and_their_counters(s
         state = work(store, NOW + tick, seconds=1)
         if state["state"] == "COMPLETE":
             break
-    assert state["state"] == "COMPLETE" and state["version"] == 10
+    assert state["state"] == "COMPLETE" and state["version"] == 11
     assert store.db.execute("SELECT COUNT(*) FROM market_candle_blocks").fetchone()[0] > 0
     store.db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
     original = store.path.read_bytes()
@@ -49,6 +49,12 @@ def test_native_full_validation_includes_source_tiles_cells_and_their_counters(s
                 "market_candle_block_totals",
                 "market_candle_fallbacks",
                 "market_candle_gc",
+                "market_numeric_blocks",
+                "market_numeric_block_refs",
+                "market_numeric_block_lookup",
+                "market_numeric_totals",
+                "market_numeric_transfer",
+                "market_numeric_gc",
                 "market_counts",
                 "runtime",
             ):
