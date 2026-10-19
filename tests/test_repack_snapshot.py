@@ -9,7 +9,7 @@ from cryptowatcher.quality_layout import put as put_quality
 from cryptowatcher.quality_summary import encode_facts
 from cryptowatcher.record_codec import pack_binary, pack_binary_v2
 from cryptowatcher.storage import Store, encode
-from cryptowatcher.storage_repack import record_rows, work
+from cryptowatcher.storage_repack import VERSION, record_rows, work
 
 from .test_outcomes import NOW
 
@@ -279,7 +279,7 @@ def test_quality_interval_finishes_with_new_facts_and_keeps_every_numeric_result
 @pytest.mark.parametrize(
     "checkpoint",
     [
-        {"version": 14},
+        {"version": VERSION + 1},
         {"version": "12"},
         {"version": 12.0},
         {"version": None},
@@ -300,7 +300,7 @@ def test_unknown_repack_checkpoint_is_rejected_before_schema_or_data_changes(sto
 def test_missing_price_writer_checkpoint_is_not_recreated_after_a_committed_version(store, version):
     bounded(store)
     initial = work(store, NOW, seconds=0)
-    assert initial["version"] == 13
+    assert initial["version"] == VERSION
     with store.db:
         store.put_runtime("storage_repack", {**initial, "version": version})
         store.db.execute("DELETE FROM market_meta WHERE key='numeric_price_runtime'")

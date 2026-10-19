@@ -13,13 +13,14 @@ import json
 import sqlite3
 from typing import Any
 
-from . import compact_json
+from . import compact_json, quality_vector
 from .market_storage import decoded
 from .record_codec import json_value, pack_binary
 
 LEGACY_MAGIC = b"CQ1\x00"
 PARAMETER_MAGIC = b"CQ2\x00"
-MAGIC = b"CQ4\x00"
+VIEW_MAGIC = b"CQ4\x00"
+MAGIC = b"CQ5\x00"
 MAXIMUM = 1024 * 1024
 MAX_CHAIN = 8
 
@@ -383,7 +384,7 @@ def ownership(
 ) -> dict[str, list[int]]:
     if cache is None:
         cache = {}
-    if not raw.startswith((MAGIC, PARAMETER_MAGIC, LEGACY_MAGIC)):
+    if not raw.startswith((MAGIC, VIEW_MAGIC, PARAMETER_MAGIC, LEGACY_MAGIC)):
         return {"pool": [], "numeric": []}
     rows, columns = packet(raw)
     pool: set[int] = set()
@@ -393,22 +394,30 @@ def ownership(
         values, parent, depth = row(db, columns, "columns", cache)
         if parent is not None or depth or not isinstance(values, list) or len(values) != len(rows):
             raise ValueError("Invalid quality columns")
-    modern = raw.startswith((MAGIC, PARAMETER_MAGIC))
-    views = raw.startswith(MAGIC)
+    modern = raw.startswith((MAGIC, VIEW_MAGIC, PARAMETER_MAGIC))
+    views = raw.startswith((MAGIC, VIEW_MAGIC))
+    inline = raw.startswith(MAGIC)
     for value in rows:
         if not isinstance(value, list) or len(value) != (
             (4 if columns is not None else 6) if modern else (3 if columns is not None else 5)
         ):
             raise ValueError("Invalid quality fact row")
         template, own, comparisons = value[:3]
-        pool.update((positive(template), positive(comparisons)))
+        pool.add(positive(template))
+        if not inline:
+            pool.add(positive(comparisons))
         if modern:
             restore_template(db, template, value[3], cache)
         else:
             metadata, parent, depth = row(db, template, "template", cache)
             if parent is not None or depth or not isinstance(metadata, dict):
                 raise ValueError("Invalid quality template")
-        for reference in [own, *sequence(db, comparisons, cache=cache, kind="set4" if views else "set")]:
+        references = (
+            quality_vector.unpack(comparisons)
+            if inline
+            else sequence(db, comparisons, cache=cache, kind="set4" if views else "set")
+        )
+        for reference in [own, *references]:
             metric_reference(reference, views=views)
             if type(reference) is int:
                 numbers.add(reference // 4 if views else reference)
@@ -463,6 +472,7 @@ def _pack(db: sqlite3.Connection, facts: list[Any], cohort: str | None = None) -
     columns = intern(db, "columns", [[f["strength"], f["noise"]] for f in facts]) if len(facts) >= 8 else None
     shared_minimum = 2 if installed(db) and writing(db) else 4
     rows = []
+    delta_rows = []
     for fact in facts:
         # A unique own result stays inline. Reuse an already retained quality
         # body, or a body shared by multiple immutable records. Block storage
@@ -481,15 +491,68 @@ def _pack(db: sqlite3.Connection, facts: list[Any], cohort: str | None = None) -
         value = [
             intern(db, "template2", metadata),
             own,
-            intern(db, "set4", values, hint=cohort),
+            quality_vector.pack(values, delta=False),
             slots,
         ]
         if columns is None:
             value.extend((fact["strength"], fact["noise"]))
         rows.append(value)
-    result = MAGIC + pack_binary(encode([rows, columns]))
+        delta_rows.append([*value[:2], quality_vector.pack(values, delta=True), *value[3:]])
+    # Compare complete compressed packets; a shorter integer vector need not
+    # produce the shorter compressed record. Both choices own identical IDs.
+    result = MAGIC + min(
+        (pack_binary(encode([rows, columns])), pack_binary(encode([delta_rows, columns]))),
+        key=len,
+    )
     if encode(unpack(db, result)) != encode(facts):
         raise ValueError("Quality packet changed public facts")
+    return result
+
+
+def repack(db: sqlite3.Connection, raw: bytes, cohort: str | None = None) -> bytes:
+    """Retained CQ1/2/4 coordinates keep their exact numeric IDs and leases."""
+    from .storage import encode
+
+    if raw.startswith(MAGIC):
+        return raw
+    if not raw.startswith((VIEW_MAGIC, PARAMETER_MAGIC, LEGACY_MAGIC)):
+        return pack(db, unpack(db, raw), cohort)
+    before = unpack(db, raw)
+    source, columns = packet(raw)
+    modern = raw.startswith((VIEW_MAGIC, PARAMETER_MAGIC))
+    views = raw.startswith(VIEW_MAGIC)
+    cache: dict[Any, Any] = {}
+    rows = []
+    delta_rows = []
+
+    def coordinate(value: Any) -> Any:
+        return value * 4 if type(value) is int and not views else value
+
+    for original in source:
+        template, own, comparisons = original[:3]
+        if modern:
+            slots = original[3]
+        else:
+            metadata = copy.deepcopy(row(db, template, "template", cache)[0])
+            template = intern(db, "template2", [metadata, []])
+            slots = []
+        values = [
+            coordinate(value)
+            for value in sequence(db, comparisons, cache=cache, kind="set4" if views else "set")
+        ]
+        value = [template, coordinate(own), quality_vector.pack(values, delta=False), slots]
+        if columns is None:
+            value.extend(original[4 if modern else 3 :])
+        rows.append(value)
+        delta_rows.append([*value[:2], quality_vector.pack(values, delta=True), *value[3:]])
+    result = MAGIC + min(
+        (pack_binary(encode([rows, columns])), pack_binary(encode([delta_rows, columns]))),
+        key=len,
+    )
+    if encode(unpack(db, result)) != encode(before):
+        raise ValueError("Quality upgrade changed public facts")
+    if ownership(db, result)["numeric"] != ownership(db, raw)["numeric"]:
+        raise ValueError("Quality upgrade changed retained numeric identities")
     return result
 
 
@@ -497,14 +560,15 @@ def unpack(db: sqlite3.Connection, raw: bytes) -> list[Any]:
     from .numeric_pool import load_many, reference_value
     from .storage import encode
 
-    if not raw.startswith((MAGIC, PARAMETER_MAGIC, LEGACY_MAGIC)):
+    if not raw.startswith((MAGIC, VIEW_MAGIC, PARAMETER_MAGIC, LEGACY_MAGIC)):
         return decoded(raw, MAXIMUM)
     cache: dict[Any, Any] = {}
     refs = ownership(db, raw, cache)
     numbers = load_many(db, set(refs["numeric"]))
     rows, column_id = packet(raw)
-    modern = raw.startswith((MAGIC, PARAMETER_MAGIC))
-    views = raw.startswith(MAGIC)
+    modern = raw.startswith((MAGIC, VIEW_MAGIC, PARAMETER_MAGIC))
+    views = raw.startswith((MAGIC, VIEW_MAGIC))
+    inline = raw.startswith(MAGIC)
     columns = row(db, column_id, "columns", cache)[0] if column_id is not None else None
     result = []
     for index, value in enumerate(rows):
@@ -529,9 +593,12 @@ def unpack(db: sqlite3.Connection, raw: bytes) -> list[Any]:
             return copy.deepcopy(numbers[reference])
 
         fact["metrics"] = metric(own)
-        fact["comparator_metrics"] = [
-            metric(r) for r in sequence(db, comparisons, cache=cache, kind="set4" if views else "set")
-        ]
+        references = (
+            quality_vector.unpack(comparisons)
+            if inline
+            else sequence(db, comparisons, cache=cache, kind="set4" if views else "set")
+        )
+        fact["comparator_metrics"] = [metric(r) for r in references]
         result.append(fact)
     if len(encode(result).encode()) > MAXIMUM:
         raise ValueError("Decoded quality exceeds bound")

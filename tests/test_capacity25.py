@@ -13,6 +13,7 @@ from cryptowatcher.digest import aggregate, text
 from cryptowatcher.events import History, identity
 from cryptowatcher.sources import Candle
 from cryptowatcher.storage import Store
+from cryptowatcher.storage_repack import VERSION
 from cryptowatcher.telegram_views import source_summary
 
 
@@ -271,7 +272,7 @@ def test_window_repack_preserves_public_values_and_head_projections_across_resta
         state = work(store, NOW, batch=3, seconds=1)
         if state["state"] == "COMPLETE":
             break
-    assert state["state"] == "COMPLETE" and state["version"] == 13
+    assert state["state"] == "COMPLETE" and state["version"] == VERSION
     assert state["previous_run"]["records"] == 999 and state["saved_payload_bytes"] > 42
     with closing(Store(store.path, store.owner_id, readonly=True)) as reader:
         assert {k: encode(v) for k, v in History(reader).items("event-head:")} == before

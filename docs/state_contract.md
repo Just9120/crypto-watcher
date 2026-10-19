@@ -88,11 +88,16 @@ writer. Record pass ждёт finite source+numeric transfer; signed numeric savi
 отклоняется без его восстановления. Clean baseline требует COMPLETE именно
 текущей версии repack. Native/mature qualification обязательны до поставки.
 
-Архивный CQ4 packet сохраняет прежний public fact JSON. Общие templates,
+Архивный CQ5 packet сохраняет прежний public fact JSON. Общие templates,
 strength/noise columns и точные ordered comparator lists не меняют методику,
-N, ограничения и population_size. Delta имеет не более8ancestor links; numeric
-bodies удерживаются фактическими leaf blocks, а не удалёнными элементами ancestor.
-Старые J/Z/CW2/CW3/CQ1/CQ2 inputs и numeric refs читаются. Provenance body живёт до последнего
+N, ограничения и population_size. Comparator coordinates хранятся внутри packet
+как literal либо signed-delta vector; выбор делается по размеру целого compressed
+packet. Порядок, повторы, numeric IDs/views и unknown inline metrics сохраняются;
+пустой vector имеет значение null. Новые comparator sets не создают отдельных
+dictionary rows. Старые J/Z/CW2/CW3/CQ1/CQ2/CQ4 inputs и numeric refs читаются.
+Legacy set delta имеет не более8ancestor links; numeric bodies удерживаются
+фактическими leaf blocks, а не удалёнными элементами ancestor.
+Provenance body живёт до последнего
 зависимого block. GC всех зависимостей конечен и учитывается как выполненная
 retention work даже после удаления последнего event.
 
@@ -134,7 +139,11 @@ CH1 — frozen template для inline projected heads с полным SHA256. Fi
 reference extraction; Python Unicode sizes учитываются через фактический размер
 objects, cache не заменяет проверку наличия внешних bodies.
 
-Candidate repack13 явно подключает DB1/DB2 catalogue adapters. Это frozen blocks
+Candidate repack14 сохраняет DB1/DB2 catalogue adapters версии13. Upgrade13→14
+повторяет только конечный quality pass и physical reclaim: initial catalogue
+geometry, queue ceiling, numeric IDs/frames/leases и source boundaries сохраняются.
+CQ1/CQ2 coordinates получают view0 без повторного intern числовых значений;
+CQ4 coordinates переносятся напрямую. Это frozen blocks
 с отдельно сжатыми projection/detail frames, полным SHA256 actual frames,
 проверкой UUID/revision/slot и allocation bounds до decompression. Каталог
 хранит immutable coordinates/parent deadlines и не дублирует integer rowid

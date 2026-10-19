@@ -17,7 +17,7 @@ from cryptowatcher.capacity import (
 from cryptowatcher.events import DECISION_HEAD, PREFIX, EventEngine, History, identity
 from cryptowatcher.market_storage import enable
 from cryptowatcher.storage import StateError, Store
-from cryptowatcher.storage_repack import async_work, work
+from cryptowatcher.storage_repack import VERSION, async_work, work
 from scripts import observe_capacity as observer
 from scripts.observe_capacity import advance, atomic
 
@@ -99,7 +99,7 @@ def test_completed_repack_resumes_decision_pass_without_discarding_progress(stor
         if state["state"] == "COMPLETE":
             break
     assert state["state"] == "COMPLETE" and state["decisions_complete"]
-    assert state["version"] == 13 and state["previous_run"]["records"] == 1000
+    assert state["version"] == VERSION and state["previous_run"]["records"] == 1000
     assert state["previous_run"]["cursor"] == previous["cursor"] and state["records"] >= 2
     assert state["saved_payload_bytes"] > 123
     assert h.get(key) == value and store.get_runtime(PREFIX + key) == {DECISION_HEAD: 1}
@@ -233,7 +233,7 @@ def test_stable_baseline_distinguishes_referenced_backfill_from_normal_pending_h
         with store.db:
             store.put_runtime("analytics_recovery_worker", {"state": "OK"})
         assert stable_reason(store) == []
-        for version in (3, 11, 12, None, "13", 13.0):
+        for version in (3, 11, 12, 13, None, str(VERSION), float(VERSION)):
             store.put_runtime("storage_repack", {"state": "COMPLETE", "version": version})
             assert stable_reason(store) == ["REPACK"]
         store.put_runtime("storage_repack", complete)
@@ -396,8 +396,8 @@ def test_controlled_62week_population_plateaus_and_all_numeric_results_survive(t
     assert value["numeric_and_comparator_multiset_equality"] == value["private_equality"] == "PASS"
     assert value["restarts"] == 1 and not any(value["final_remaining"].values())
     if compact:
-        assert value["storage_layout"] == "MIXED_BLOCKS_REPACK13"
-        assert value["compaction"]["state"] == "COMPLETE" and value["compaction"]["version"] == 13
+        assert value["storage_layout"] == f"MIXED_BLOCKS_REPACK{VERSION}"
+        assert value["compaction"]["state"] == "COMPLETE" and value["compaction"]["version"] == VERSION
         assert value["issued_numeric_ids_after_final_gc"] > 0
     stable = value["steady_detail_population"][-8:]
     assert {s["events"] for s in stable} == {50}

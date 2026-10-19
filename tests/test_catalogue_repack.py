@@ -8,7 +8,7 @@ from cryptowatcher.capacity import stable_reason
 from cryptowatcher.events import History
 from cryptowatcher.sources import Sources
 from cryptowatcher.storage import StateError, Store, encode
-from cryptowatcher.storage_repack import async_work, work
+from cryptowatcher.storage_repack import VERSION, async_work, work
 from tests.test_bounded_storage import bounded
 from tests.test_outcomes import MINUTE, NOW, OutcomeWorker, future, observe
 
@@ -28,7 +28,7 @@ def test_repack13_initial_and_live_queue_preserve_graph_and_reopen_without_resca
     OutcomeWorker(store).work(NOW + 6 * MINUTE)
     expected = [(key, encode(value)) for key, value in History(store).scan("")]
     initial = complete(store)
-    assert initial["version"] == 13 and initial["catalogue_transfer"]["bodies_moved"] > 0
+    assert initial["version"] == VERSION and initial["catalogue_transfer"]["bodies_moved"] > 0
     assert initial["catalogue_complete"] and catalogue_queue.verify(store.db)["count"] == 0
     assert [(key, encode(value)) for key, value in History(store).scan("")] == expected
     assert work(store, NOW + 1) == initial
@@ -43,6 +43,35 @@ def test_repack13_initial_and_live_queue_preserve_graph_and_reopen_without_resca
         assert settled["catalogue_queue_upper"] == initial["catalogue_queue_upper"]
         assert [(key, encode(value)) for key, value in History(reopened).scan("")] == expected
         assert reopened.db.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_upgrade13_revisits_only_quality_and_preserves_initial_catalogue_geometry(store):
+    import copy
+
+    from cryptowatcher import quality_packets
+    from tests.test_quality_packets import fact, save_v4
+
+    bounded(store)
+    initial = complete(store)
+    previous = copy.deepcopy(initial)
+    previous.update(version=13, operator_note="preserve extension")
+    with store.db:
+        old = save_v4(store, [fact(7)])
+        store.put_runtime("storage_repack", previous)
+    original_numeric = quality_packets.ownership(store.db, old)["numeric"]
+    first = work(store, NOW, batch=1, seconds=0.001)
+    assert first["version"] == VERSION and first["previous_version"] == 13
+    assert first["catalogue_transfer"] == initial["catalogue_transfer"]
+    final = complete(store)
+    assert final["operator_note"] == previous["operator_note"]
+    assert final["catalogue_transfer"] == initial["catalogue_transfer"]
+    assert final["catalogue_queue_upper"] == initial["catalogue_queue_upper"]
+    assert final["quality_rows_scanned"] == 1
+    upgraded = bytes(store.db.execute("SELECT facts FROM market_quality").fetchone()[0])
+    assert upgraded.startswith(quality_packets.MAGIC)
+    assert encode(quality_packets.unpack(store.db, upgraded)) == encode([fact(7)])
+    assert quality_packets.ownership(store.db, upgraded)["numeric"] == original_numeric
+    assert work(store, NOW) == final
 
 
 def test_completed_repack_live_failure_restores_pending_and_durable_checkpoint(store, monkeypatch):

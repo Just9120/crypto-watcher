@@ -12,6 +12,7 @@ from cryptowatcher import numeric_blocks as blocks
 from cryptowatcher.events import identity
 from cryptowatcher.market_storage import enable
 from cryptowatcher.storage import Store, encode
+from cryptowatcher.storage_repack import VERSION
 from tests.test_quality_packets import fact, metric, save
 
 
@@ -381,7 +382,7 @@ def test_complete_repack_includes_numeric_phase_and_marks_old_physical_snapshot_
         state = work(store, NOW + tick, seconds=1)
         if state["state"] == "COMPLETE":
             break
-    assert state["state"] == "COMPLETE" and state["version"] == 13
+    assert state["state"] == "COMPLETE" and state["version"] == VERSION
     assert state["numeric_transfer_complete"] and state["numeric_rows_moved"] == 1
     value = report(store, NOW + 100)
     assert value["numeric_layout"]["live"] == 1

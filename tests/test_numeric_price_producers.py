@@ -8,7 +8,7 @@ from cryptowatcher.history_codec import Codec
 from cryptowatcher.market_storage import enable
 from cryptowatcher.record_codec import pack_binary
 from cryptowatcher.storage import encode
-from cryptowatcher.storage_repack import normalized_record, record_rows
+from cryptowatcher.storage_repack import VERSION, normalized_record, record_rows
 from cryptowatcher.storage_repack import work as repack
 from tests.test_metric_price_context import frozen
 from tests.test_numeric_blocks import finish, metric, setup
@@ -113,7 +113,7 @@ def test_finite_repack12_activates_feature_and_recodes_retained_data_without_new
         state = repack(store, 1800000000000 + tick, seconds=0.1)
         if state["state"] == "COMPLETE":
             break
-    assert state["state"] == "COMPLETE" and state["version"] == 13
+    assert state["state"] == "COMPLETE" and state["version"] == VERSION
     assert numeric_blocks.price_writing(store.db)
     assert numeric_blocks.read(store.db, 0)[3][:4] == b"NB2\x00"
     assert state["saved_categories"]["numeric_details"] > 0

@@ -7,7 +7,7 @@ from typing import Any
 
 from .storage import Store, encode, json_payload
 
-VERSION = 13
+VERSION = 14
 
 
 def normalized_record(store: Store, key: str, value: Any) -> Any:
@@ -342,7 +342,7 @@ def record_rows(store: Store, state: dict[str, Any], batch: int, deadline: float
 
 def quality_rows(store: Store, state: dict[str, Any], batch: int, deadline: float) -> None:
     from .quality_layout import drain as drain_quality
-    from .quality_packets import MAGIC, pack, unpack
+    from .quality_packets import MAGIC, repack, unpack
     from .quality_summary import provenance_links
 
     quality_moved = drain_quality(store.db, batch=1) if time.monotonic() < deadline else 1
@@ -378,7 +378,7 @@ def quality_rows(store: Store, state: dict[str, Any], batch: int, deadline: floa
             provenance_links(store, day, external, chunk, json_payload(provenance))
             if not bytes(payload).startswith(MAGIC):
                 facts = unpack(store.db, bytes(payload))
-                packed = pack(store.db, facts, str(cohort))
+                packed = repack(store.db, bytes(payload), str(cohort))
                 if encode(unpack(store.db, packed)) != encode(facts):
                     raise ValueError("Repack changed quality facts")
                 store.db.execute(
@@ -422,7 +422,7 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
     if (
         not isinstance(state, dict)
         or ("version" in state and type(state["version"]) is not int)
-        or state.get("version") not in (None, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, VERSION)
+        or state.get("version") not in (None, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, VERSION)
     ):
         raise ValueError("Unknown storage repack checkpoint; database preserved")
     catalogue_repack.validate(store, state, VERSION)
@@ -431,11 +431,11 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
         numeric_writing(store.db),
         price_writing(store.db),
     )
-    if state.get("version") in (10, 11, 12, VERSION) and not source_active:
+    if state.get("version") in (10, 11, 12, 13, VERSION) and not source_active:
         raise ValueError("Missing source writer checkpoint; database preserved")
-    if state.get("version") in (11, 12, VERSION) and not numeric_active:
+    if state.get("version") in (11, 12, 13, VERSION) and not numeric_active:
         raise ValueError("Missing numeric writer checkpoint; database preserved")
-    if state.get("version") in (12, VERSION) and not price_active:
+    if state.get("version") in (12, 13, VERSION) and not price_active:
         raise ValueError("Missing numeric price writer checkpoint; database preserved")
     if not source_installed(store.db):
         install_source_tiles(store.db, store.cached_text)
@@ -464,7 +464,25 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
         and namespace_snapshot(store.db) is not None
     ):
         return state
-    if state.get("version") in (3, 4, 5, 6, 7, 8, 9, 10, 11, 12):
+    if state.get("version") == 13:
+        # CQ5 needs one fresh finite quality pass. Preserve the original domain
+        # and inbox boundaries: this upgrade does not restart catalogue transfer.
+        state = dict(state)
+        state["previous_version"] = 13
+        state["state"] = "IN_PROGRESS"
+        for key in (
+            "quality_complete",
+            "quality_cursor",
+            "quality_key_floor",
+            "quality_next_rowid",
+            "quality_rowid_upper",
+            "quality_schema_version",
+            "quality_rows_scanned",
+            "quality_scan_restarts",
+            "initial_reclaim_complete",
+        ):
+            state.pop(key, None)
+    elif state.get("version") in (3, 4, 5, 6, 7, 8, 9, 10, 11, 12):
         state = {
             "previous_version": state["version"],
             "previous_run": {

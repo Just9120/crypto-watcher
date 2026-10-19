@@ -24,6 +24,7 @@ from cryptowatcher.reset_history import private_state, signature
 from cryptowatcher.source_context import save
 from cryptowatcher.sources import Candle, Sources
 from cryptowatcher.storage import Store, encode
+from cryptowatcher.storage_repack import VERSION
 
 NOW = 1_800_000_000_000
 
@@ -303,7 +304,7 @@ def measure(path: Path, weeks: int = 62, *, compact: bool = False) -> dict[str, 
             "schema": "cryptowatcher.retention-rehearsal.v1",
             "kind": "CONTROLLED_CLOCK_SYNTHETIC",
             "simulated_weeks": weeks,
-            "storage_layout": "MIXED_BLOCKS_REPACK13" if compact else "LEGACY_NORMALIZED",
+            "storage_layout": f"MIXED_BLOCKS_REPACK{VERSION}" if compact else "LEGACY_NORMALIZED",
             "compaction": compaction,
             "issued_numeric_ids_after_final_gc": numeric_issued,
             "families": sorted(families),

@@ -9,6 +9,7 @@ from cryptowatcher import market_storage as market
 from cryptowatcher.source_cells import convert
 from cryptowatcher.source_transfer import advance
 from cryptowatcher.storage import Store, encode
+from cryptowatcher.storage_repack import VERSION
 from tests.test_bounded_storage import bounded
 from tests.test_candle_block_codec import fixture
 
@@ -247,7 +248,7 @@ def test_repack10_selects_source_adapters_only_in_explicit_work_and_is_restartab
             state = work(reopened, NOW + tick, batch=1, seconds=1)
             if state["state"] == "COMPLETE":
                 break
-        assert state["state"] == "COMPLETE" and state["version"] == 13
+        assert state["state"] == "COMPLETE" and state["version"] == VERSION
         assert state["previous_version"] == 9 and state["source_transfer_complete"]
         assert state["source_rows_moved"] == source_count
         assert reopened.db.execute("SELECT COUNT(*) FROM market_candles").fetchone()[0] == 0

@@ -2,7 +2,7 @@ from contextlib import closing
 
 import pytest
 
-from cryptowatcher import numeric_pool, quality_packets
+from cryptowatcher import numeric_pool, quality_packets, quality_vector
 from cryptowatcher.market_storage import enable
 from cryptowatcher.quality_layout import put
 from cryptowatcher.quality_summary import encode_facts
@@ -38,6 +38,19 @@ def fact(index=0, comparisons=None):
 
 def save(store, values, day=20000, cohort="cohort"):
     raw = quality_packets.pack(store.db, values, cohort)
+    put(store.db, (day, cohort, 0, day + 366, encode({"detector": "price"}), "{}", raw, len(values)))
+    return raw
+
+
+def save_v4(store, values, day=20000, cohort="cohort"):
+    """Frozen CQ4 row shape, including actual set4 delta ancestors."""
+    from cryptowatcher.record_codec import pack_binary
+
+    modern = quality_packets.pack(store.db, values, cohort)
+    rows, columns = quality_packets.packet(modern)
+    for row in rows:
+        row[2] = quality_packets.intern(store.db, "set4", quality_vector.unpack(row[2]), hint=cohort)
+    raw = quality_packets.VIEW_MAGIC + pack_binary(encode([rows, columns]))
     put(store.db, (day, cohort, 0, day + 366, encode({"detector": "price"}), "{}", raw, len(values)))
     return raw
 
@@ -156,8 +169,8 @@ def test_delta_ancestor_keeps_coordinates_but_not_expired_numeric_values(store):
     with store.db:
         # Force multi-byte coordinates so this tiny fixture uses a real delta.
         store.db.execute("INSERT INTO sqlite_sequence(name,seq) VALUES('market_numeric',1000000)")
-        first = save(store, [fact(0, [metric(i) for i in range(20)])])
-        second = save(store, [fact(1, [metric(i) for i in range(1, 21)])], 20001)
+        first = save_v4(store, [fact(0, [metric(i) for i in range(20)])])
+        second = save_v4(store, [fact(1, [metric(i) for i in range(1, 21)])], 20001)
     assert (
         store.db.execute(
             "SELECT COUNT(*) FROM market_quality_dictionary WHERE parent IS NOT NULL"
