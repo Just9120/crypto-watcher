@@ -14,6 +14,50 @@ from .test_history_rebuild import closed_backup
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Native Linux validation helper")
 
 
+@pytest.mark.parametrize("damage", [None, "checksum", "heads"])
+def test_native_full_catalogue_checks_owner_masks_and_head_uniqueness(store, tmp_path, damage):
+    from .test_record_catalog import prepare, put
+
+    assert available(), "Build canonical native helper before Linux tests"
+    prepare(store)
+    with store.db:
+        put(store)
+        put(store, 2)
+        if damage == "checksum":
+            store.db.execute("DROP TRIGGER market_record_owner_frozen")
+            store.db.execute("PRAGMA ignore_check_constraints=ON")
+            store.db.execute("UPDATE market_record_owners SET checksum=zeroblob(32)")
+        elif damage == "heads":
+            store.db.execute("DROP TRIGGER market_record_head_changed")
+            store.db.execute("UPDATE market_records SET current=1")
+    assert store.db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0
+    original = store.path.read_bytes()
+    image = cv.Image(store.path, limit=cv.MAX_COMPRESSED_BYTES, deadline=time.monotonic() + 30)
+    sentinel = tmp_path / "catalogue-native.sqlite3"
+    sentinel.touch(mode=0o600)
+    vfs = cv.frozen_vfs(image, sentinel)
+    try:
+        with closing(apsw.Connection(str(sentinel), flags=apsw.SQLITE_OPEN_READWRITE, vfs=vfs.name)) as db:
+            cv.configure_cache(db, image)
+            if damage is None:
+                cv.full_check(db, image.deadline)
+                assert list(
+                    db.execute("SELECT slots,checksum FROM market_record_owners ORDER BY parent,packet")
+                ) == [
+                    tuple(row)
+                    for row in store.db.execute(
+                        "SELECT slots,checksum FROM market_record_owners ORDER BY parent,packet"
+                    )
+                ]
+            else:
+                with pytest.raises(cv.QualificationError, match="DATABASE_CORRUPT"):
+                    cv.full_check(db, image.deadline)
+    finally:
+        vfs.unregister()
+    assert image.reconstructed_hash() == image.sha256
+    assert store.path.read_bytes() == original
+
+
 def test_native_full_validation_includes_source_tiles_cells_and_their_counters(store, tmp_path):
     from cryptowatcher.market_storage import enable
     from cryptowatcher.outcomes import OutcomeWorker

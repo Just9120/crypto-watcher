@@ -11,7 +11,7 @@ import sqlite3
 import uuid
 from typing import Any, Iterable
 
-from . import packet_store, record_blocks
+from . import packet_store, record_blocks, record_masks
 from .record_blocks import Coordinate
 from .storage import encode
 
@@ -20,8 +20,11 @@ def install(db: sqlite3.Connection, cache: Any = None, binary_cache: Any = None)
     from .catalogue_cohorts import install as install_counters
     from .record_ownership import install as install_ownership
 
-    packet_store.install(db)
     marker = db.execute("SELECT value FROM market_meta WHERE key='record_catalog'").fetchone()
+    if marker is not None and marker[0] not in ("2", "3"):
+        raise ValueError("Unknown domain catalogue; database preserved")
+    packet_store.install(db)
+    record_masks.install_functions(db, cache, binary_cache)
     if marker is not None:
         found = {
             r[0]
@@ -29,50 +32,56 @@ def install(db: sqlite3.Connection, cache: Any = None, binary_cache: Any = None)
                 "SELECT name FROM sqlite_master WHERE type='table' AND name IN('market_record_parents','market_records','market_record_members')"
             )
         }
-        if marker[0] != "2" or len(found) != 3:
+        if len(found) != 3:
             raise ValueError("Unknown domain catalogue; database preserved")
+        if marker[0] == "3":
+            record_masks.tallies(db, "record_parents")
+            record_masks.tallies(db, "record_owners")
+            record_masks.tallies(db, "record_aliases")
         install_ownership(db, cache, binary_cache)
         install_counters(db)
         return
     if db.in_transaction:
         raise ValueError("Catalogue installation requires an outer boundary")
     try:
-        db.executescript("""
+        db.executescript(
+            """
             BEGIN IMMEDIATE;
             CREATE TABLE market_record_parents(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 public_uuid BLOB NOT NULL UNIQUE CHECK(typeof(public_uuid)='blob' AND length(public_uuid)=16),
                 observed INTEGER NOT NULL CHECK(typeof(observed)='integer'),
-                expires INTEGER NOT NULL CHECK(typeof(expires)='integer' AND expires>=observed));
-            CREATE INDEX market_record_history ON market_record_parents(observed,public_uuid);
+                expires INTEGER NOT NULL CHECK(typeof(expires)='integer' AND expires>=observed),
+                history_published INTEGER NOT NULL DEFAULT 0 CHECK(typeof(history_published)='integer' AND history_published IN(0,1)));
+            CREATE INDEX market_record_history ON market_record_parents(observed,public_uuid) WHERE history_published=1;
             CREATE INDEX market_record_parent_due ON market_record_parents(expires,id);
             CREATE TABLE market_records(
                 kind INTEGER NOT NULL CHECK(typeof(kind)='integer' AND kind BETWEEN 0 AND 4),
                 public_uuid BLOB NOT NULL CHECK(typeof(public_uuid)='blob' AND length(public_uuid)=16),
                 revision INTEGER NOT NULL CHECK(typeof(revision)='integer' AND revision BETWEEN 1 AND 9999999999),
-                parent INTEGER REFERENCES market_record_parents(id),
                 packet INTEGER NOT NULL REFERENCES market_packets(id),
                 slot INTEGER NOT NULL CHECK(typeof(slot)='integer' AND slot BETWEEN 0 AND 63),
                 current INTEGER NOT NULL CHECK(typeof(current)='integer' AND current IN(0,1)),
                 expires INTEGER CHECK(expires IS NULL OR typeof(expires)='integer'),
-                CHECK((parent IS NULL)<>(expires IS NULL)),
                 PRIMARY KEY(kind,public_uuid,revision)) WITHOUT ROWID;
-            CREATE INDEX market_record_children ON market_records(parent);
-            CREATE UNIQUE INDEX market_record_heads ON market_records(kind,public_uuid) WHERE current=1;
             CREATE INDEX market_record_service_due ON market_records(expires) WHERE expires IS NOT NULL;
             CREATE TABLE market_record_members(
                 episode BLOB NOT NULL CHECK(typeof(episode)='blob' AND length(episode)=16),
                 observed INTEGER NOT NULL CHECK(typeof(observed)='integer'),
-                parent INTEGER NOT NULL REFERENCES market_record_parents(id),
-                PRIMARY KEY(episode,observed,parent)) WITHOUT ROWID;
-            CREATE INDEX market_record_member_parent ON market_record_members(parent,episode,observed);
-            CREATE TRIGGER market_record_parent_frozen BEFORE UPDATE ON market_record_parents BEGIN
+                event_uuid BLOB NOT NULL REFERENCES market_record_parents(public_uuid)
+                    CHECK(typeof(event_uuid)='blob' AND length(event_uuid)=16),
+                PRIMARY KEY(episode,observed,event_uuid)) WITHOUT ROWID;
+            CREATE INDEX market_record_member_parent ON market_record_members(event_uuid,episode,observed);
+            """
+            + record_masks.SCHEMA
+            + """
+            CREATE TRIGGER market_record_parent_frozen BEFORE UPDATE OF id,public_uuid,observed,expires ON market_record_parents BEGIN
                 SELECT RAISE(ABORT,'Immutable record parent'); END;
-            CREATE TRIGGER market_record_frozen BEFORE UPDATE OF kind,public_uuid,revision,parent,packet,slot,expires ON market_records
+            CREATE TRIGGER market_record_frozen BEFORE UPDATE OF kind,public_uuid,revision,packet,slot,expires ON market_records
                 BEGIN SELECT RAISE(ABORT,'Immutable record coordinate'); END;
             CREATE TRIGGER market_record_keep_parent BEFORE DELETE ON market_record_parents
-                WHEN EXISTS(SELECT 1 FROM market_records WHERE parent=OLD.id) OR
-                    EXISTS(SELECT 1 FROM market_record_members WHERE parent=OLD.id) BEGIN
+                WHEN EXISTS(SELECT 1 FROM market_record_owners WHERE parent=OLD.id) OR
+                    EXISTS(SELECT 1 FROM market_record_members WHERE event_uuid=OLD.public_uuid) BEGIN
                 SELECT RAISE(ABORT,'Retained record parent'); END;
             CREATE TRIGGER market_record_new BEFORE INSERT ON market_records BEGIN
                 SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM market_packets WHERE id=NEW.packet)
@@ -94,9 +103,10 @@ def install(db: sqlite3.Connection, cache: Any = None, binary_cache: Any = None)
                 UPDATE market_counts SET records=records-1,logical_bytes=logical_bytes-56,
                     deleted_bytes=deleted_bytes+56 WHERE category='record_catalog';
             END;
-            INSERT INTO market_meta VALUES('record_catalog','2');
+            INSERT INTO market_meta VALUES('record_catalog','3');
             COMMIT;
-        """)
+        """
+        )
     except BaseException:
         db.rollback()
         raise
@@ -111,8 +121,44 @@ def binary(identity: str) -> bytes:
     return value.bytes
 
 
+def layout(db: sqlite3.Connection) -> int:
+    marker = db.execute("SELECT value FROM market_meta WHERE key='record_catalog'").fetchone()
+    if marker is None or marker[0] not in ("2", "3"):
+        raise ValueError("Missing or unknown domain catalogue")
+    return int(marker[0])
+
+
+def valid_heads(db: Any) -> bool:
+    """Restore full uniqueness verification without a duplicate physical index.
+
+    Dedicated validation callers retain their original snapshot/progress budget.
+    Older catalogues retain their physical unique-head index.
+    """
+    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='market_meta'").fetchone() is None:
+        return True
+    marker = db.execute("SELECT value FROM market_meta WHERE key='record_catalog'").fetchone()
+    if marker is None or marker[0] == "2":
+        return True
+    if marker[0] != "3":
+        return False
+    return (
+        db.execute(
+            "SELECT 1 FROM market_records WHERE current=1 GROUP BY kind,public_uuid HAVING COUNT(*)>1 LIMIT 1"
+        ).fetchone()
+        is None
+    )
+
+
 def row(db: sqlite3.Connection, coordinate: Coordinate) -> sqlite3.Row | tuple[Any, ...] | None:
     coordinate.validate()
+    if layout(db) == 3:
+        saved = db.execute(
+            "SELECT packet,slot,expires,current FROM market_records WHERE kind=? AND public_uuid=? AND revision=?",
+            (record_blocks.KINDS.index(coordinate.kind), binary(coordinate.identity), coordinate.revision),
+        ).fetchone()
+        if saved is None:
+            return None
+        return saved[0], saved[1], record_masks.owner(db, *saved[:3]), saved[2], saved[3]
     return db.execute(
         "SELECT packet,slot,parent,expires,current FROM market_records WHERE kind=? AND public_uuid=? AND revision=?",
         (record_blocks.KINDS.index(coordinate.kind), binary(coordinate.identity), coordinate.revision),
@@ -131,12 +177,18 @@ def head(
 ) -> tuple[Coordinate, dict[str, Any] | None] | None:
     if kind not in record_blocks.KINDS:
         raise ValueError("Unknown record kind")
-    saved = db.execute(
-        "SELECT packet,slot,revision FROM market_records WHERE kind=? AND public_uuid=? AND current=1",
+    version = layout(db)
+    rows = db.execute(
+        "SELECT packet,slot,revision,expires FROM market_records WHERE kind=? AND public_uuid=? AND current=1 LIMIT 2",
         (record_blocks.KINDS.index(kind), binary(identity)),
-    ).fetchone()
-    if saved is None:
+    ).fetchall()
+    if not rows:
         return None
+    if len(rows) != 1:
+        raise ValueError("Conflicting current record revisions")
+    saved = rows[0]
+    if version == 3:
+        record_masks.owner(db, saved[0], saved[1], saved[3])
     coordinate = Coordinate(kind, identity, saved[2])
     projected = record_blocks.projected(packet_store.read(db, saved[0]), saved[1], coordinate, cache)
     return coordinate, projected
@@ -146,6 +198,8 @@ def parent(db: sqlite3.Connection, identity: str, observed: int, expires: int) -
     if type(observed) is not int or type(expires) is not int or expires < observed:
         raise ValueError("Invalid event retention anchor")
     public = binary(identity)
+    if layout(db) == 3:
+        record_masks.tallies(db, "record_parents")
     saved = db.execute(
         "SELECT id,observed,expires FROM market_record_parents WHERE public_uuid=?", (public,)
     ).fetchone()
@@ -182,6 +236,7 @@ def append(
         raise ValueError("Invalid catalogue batch")
     if len({(c.kind, c.identity) for c in heads}) != len(heads):
         raise ValueError("Conflicting current catalogue revisions")
+    version = layout(db)
     with packet_store.atomic(db):
         fresh = []
         for coordinate, value, projected in entries:
@@ -221,19 +276,27 @@ def append(
             from .record_ownership import retain_bodies
 
             retain_bodies(db, packet, [value for _, value, _ in fresh])
+            if version == 3:
+                record_masks.bind(db, packet, [owners[coordinate] for coordinate, _, _ in fresh])
         for slot, (coordinate, _, _) in enumerate(fresh):
-            db.execute(
-                "INSERT INTO market_records(kind,public_uuid,revision,parent,packet,slot,current,expires) VALUES(?,?,?,?,?,?,0,?)",
-                (
-                    record_blocks.KINDS.index(coordinate.kind),
-                    binary(coordinate.identity),
-                    coordinate.revision,
-                    owners[coordinate],
-                    packet,
-                    slot,
-                    deadlines[coordinate],
-                ),
+            values = (
+                record_blocks.KINDS.index(coordinate.kind),
+                binary(coordinate.identity),
+                coordinate.revision,
+                packet,
+                slot,
+                deadlines[coordinate],
             )
+            if version == 2:
+                db.execute(
+                    "INSERT INTO market_records(kind,public_uuid,revision,parent,packet,slot,current,expires) VALUES(?,?,?,?,?,?,0,?)",
+                    (*values[:3], owners[coordinate], *values[3:]),
+                )
+            else:
+                db.execute(
+                    "INSERT INTO market_records(kind,public_uuid,revision,packet,slot,current,expires) VALUES(?,?,?,?,?,0,?)",
+                    values,
+                )
         for coordinate in heads:
             previous = head(db, coordinate.kind, coordinate.identity)
             if previous is not None and previous[0].revision > coordinate.revision:
@@ -258,6 +321,16 @@ def append(
 def member(db: sqlite3.Connection, episode: str, observed: int, owner: int) -> None:
     if type(observed) is not int or type(owner) is not int or owner < 1:
         raise ValueError("Invalid episode membership")
+    if layout(db) == 3:
+        root = db.execute(
+            "SELECT public_uuid FROM market_record_parents WHERE id=? AND observed=?", (owner, observed)
+        ).fetchone()
+        if root is None:
+            raise ValueError("Missing episode member anchor")
+        db.execute(
+            "INSERT OR IGNORE INTO market_record_members VALUES(?,?,?)", (binary(episode), observed, root[0])
+        )
+        return
     db.execute(
         "INSERT OR IGNORE INTO market_record_members VALUES(?,?,?)", (binary(episode), observed, owner)
     )

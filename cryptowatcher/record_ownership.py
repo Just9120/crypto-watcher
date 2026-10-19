@@ -26,16 +26,36 @@ def block_references(raw: bytes) -> list[Any]:
     for (coordinate, _), body in zip(projections, bodies, strict=True):
         numeric: list[int] = []
         windows: list[int] = []
+        event = coordinate.identity if coordinate.kind in ("event", "decision") else None
         if coordinate.kind in ("event", "outcome", "comparison"):
             value = record_blocks.expanded(coordinate, body)
             numeric = sorted(numeric_pool.metric_ids(value))
             windows = source_windows.reference_ids(value)
-        result.append([coordinate.kind, coordinate.identity, coordinate.revision, numeric, windows])
+            event = value.get("event_id")
+        result.append([coordinate.kind, coordinate.identity, coordinate.revision, numeric, windows, event])
     return result
 
 
+def block_entry(db: sqlite3.Connection, packet: int, slot: int, cache: Any = None) -> list[Any]:
+    if type(slot) is not int or not 0 <= slot < 64:
+        raise ValueError("Invalid catalogue ownership slot")
+    # Actual bytes are always read and authenticated before a pure cache hit.
+    raw = packet_store.read(db, packet)
+
+    def read() -> str:
+        return encode(block_references(raw))
+
+    values = json.loads(read() if cache is None else cache("catalogue-refs", "", raw, read))
+    if not isinstance(values, list) or slot >= len(values) or len(values[slot]) != 6:
+        raise ValueError("Catalogue ownership coordinate mismatch")
+    return values[slot]
+
+
 def install_functions(db: sqlite3.Connection, cache: Any = None, binary_cache: Any = None) -> None:
+    from .record_masks import install_functions as install_masks
+
     packet_store.install_functions(db)
+    install_masks(db, cache, binary_cache)
 
     def key(kind: int, identity: bytes, revision: int) -> str:
         if type(kind) is not int or not 0 <= kind < len(record_blocks.KINDS):
@@ -65,17 +85,11 @@ def install_functions(db: sqlite3.Connection, cache: Any = None, binary_cache: A
             or which not in ("numeric", "windows")
         ):
             raise ValueError("Invalid owned record kind")
-        # Actual bytes/checksum are read even on a pure-transform cache hit.
-        raw = packet_store.read(db, packet)
-
-        def read() -> str:
-            return encode(block_references(raw))
-
-        values = json.loads(read() if cache is None else cache("catalogue-refs", "", raw, read))
+        value = block_entry(db, packet, slot, cache)
         coordinate = [record_blocks.KINDS[kind], str(uuid.UUID(bytes=identity)), revision]
-        if type(slot) is not int or not 0 <= slot < len(values) or values[slot][:3] != coordinate:
+        if value[:3] != coordinate:
             raise ValueError("Catalogue ownership coordinate mismatch")
-        return json.dumps(values[slot][3 if which == "numeric" else 4])
+        return json.dumps(value[3 if which == "numeric" else 4])
 
     db.create_function("cw_catalogue_refs", 6, references)
     db.create_function("cw_catalogue_key", 3, key, deterministic=True)

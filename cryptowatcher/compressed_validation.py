@@ -472,6 +472,10 @@ def full_check(db: apsw.Connection, deadline: float) -> None:
         db.execute("PRAGMA ignore_check_constraints=OFF")
         if list(db.execute("PRAGMA integrity_check")) != [("ok",)]:
             raise QualificationError("DATABASE_CORRUPT")
+        from .record_catalog import valid_heads
+
+        if not valid_heads(db):
+            raise QualificationError("DATABASE_CORRUPT")
         budget(deadline)
     finally:
         db.set_progress_handler(None, 0)

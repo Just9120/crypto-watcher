@@ -254,6 +254,38 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
             "market_numeric_transfer",
             "market_numeric_gc",
         }
+    catalogue_layout: dict[str, Any] = {"state": "LEGACY_DOMAIN_ROWS"}
+    catalogue = store.db.execute("SELECT value FROM market_meta WHERE key='record_catalog'").fetchone()
+    if catalogue is not None:
+        from . import catalogue_reader, record_catalog, record_masks
+
+        version = record_catalog.layout(store.db)
+        catalogue_layout = {
+            "state": "MIXED_DOMAIN_CATALOGUE"
+            if catalogue_reader.reading(store.db)
+            else "INACTIVE_DOMAIN_CATALOGUE",
+            "version": version,
+        }
+        source_tables |= {
+            "market_packet_arenas",
+            "market_packet_space",
+            "market_packet_empty",
+            "market_packets",
+            "market_record_parents",
+            "market_records",
+            "market_record_members",
+            "market_record_bodies",
+            "market_catalogue_counts",
+            "market_cold_cohort_scan",
+            "market_cold_cohorts",
+            "market_cold_cohort_revisions",
+            "market_cold_cohort_strengths",
+        }
+        if version == 3:
+            catalogue_layout["counts"] = record_masks.tallies(store.db, "record_parents")
+            record_masks.tallies(store.db, "record_owners")
+            record_masks.tallies(store.db, "record_aliases")
+            source_tables |= {"market_record_owners", "market_catalogue_index_counts"}
     indexes = store.get_runtime(
         "storage_index_measurement", {"state": "PENDING", "reason": "No bounded exact measurement yet"}
     )
@@ -285,6 +317,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "at_ms": now_ms,
         "history_generation": store.get_runtime("history_generation", {}),
         "budget_bytes": BUDGET,
+        "catalogue_layout": catalogue_layout,
         "candle_dependency_retention_estimate": {
             "configured_minimum_days": settings.candle_retention_days,
             "detail_days": settings.detail_retention_days,

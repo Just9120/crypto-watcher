@@ -73,6 +73,10 @@ def check_integrity(database: sqlite3.Connection, *, deadline: float) -> None:
         if previous_mmap is not None:
             database.execute(f"PRAGMA mmap_size={VALIDATION_MMAP_BYTES}")
         rows = database.execute("PRAGMA integrity_check").fetchall()
+        from .record_catalog import valid_heads
+
+        if len(rows) == 1 and rows[0][0] == "ok" and not valid_heads(database):
+            rows = [("Conflicting current records",)]
     except sqlite3.DatabaseError as exc:
         validation_failed = True
         code = getattr(exc, "sqlite_errorcode", 0) & 0xFF
@@ -299,7 +303,7 @@ class Store:
                 numeric_summary(self.db)
             catalogue = self.db.execute("SELECT value FROM market_meta WHERE key='record_catalog'").fetchone()
             if catalogue is not None:
-                if catalogue[0] != "2":
+                if catalogue[0] not in ("2", "3"):
                     raise StateError("Unknown record catalogue; database preserved")
                 from .record_ownership import install_functions as catalogue_functions
 

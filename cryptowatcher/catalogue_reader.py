@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from heapq import merge
 from typing import Any
 
-from . import packet_store, record_blocks, record_catalog
+from . import packet_store, record_blocks, record_catalog, record_masks
 from .record_blocks import HEAD_SCHEMA, KINDS, Coordinate
 from .storage import StateError, encode
 
@@ -62,8 +62,14 @@ def reading(db: sqlite3.Connection) -> bool:
             "SELECT key,value FROM market_meta WHERE key IN('record_catalog','record_ownership','catalogue_cohorts')"
         )
     )
-    if markers != {"record_catalog": "2", "record_ownership": "1", "catalogue_cohorts": "1"}:
+    if markers.get("record_catalog") not in ("2", "3") or {
+        key: value for key, value in markers.items() if key != "record_catalog"
+    } != {"record_ownership": "1", "catalogue_cohorts": "1"}:
         raise ValueError("Missing or unknown catalogue reader layout")
+    if markers["record_catalog"] == "3":
+        record_masks.tallies(db, "record_parents")
+        record_masks.tallies(db, "record_owners")
+        record_masks.tallies(db, "record_aliases")
     return True
 
 
@@ -218,7 +224,7 @@ def namespace_rows(
 ) -> Generator[tuple[str, Any], None, None]:
     order = " DESC" if reverse else " ASC"
     sql = (
-        "SELECT public_uuid,revision,packet,slot FROM market_records WHERE "
+        "SELECT public_uuid,revision,packet,slot,expires FROM market_records WHERE "
         + selected[0]
         + " ORDER BY public_uuid"
         + order
@@ -227,10 +233,19 @@ def namespace_rows(
     parameters = selected[1]
     if limit is not None:
         sql += " LIMIT ?"
-        parameters += (limit,)
+        parameters += (limit + int(namespace.head and limit < 2**63 - 1),)
     cursor = db.execute(sql, parameters)
+    version = record_catalog.layout(db)
     try:
-        for identity, revision_number, packet, slot in cursor:
+        saved = cursor.fetchone()
+        emitted = 0
+        while saved is not None:
+            identity, revision_number, packet, slot, expires = saved
+            following = cursor.fetchone()
+            if namespace.head and following is not None and following[0] == identity:
+                raise StateError("Conflicting current record revisions")
+            if version == 3:
+                record_masks.owner(db, packet, slot, expires)
             coordinate = Coordinate(namespace.kind, str(uuid.UUID(bytes=bytes(identity))), revision_number)
             raw = packet_store.read(db, packet)
             if namespace.head:
@@ -248,6 +263,10 @@ def namespace_rows(
                 value = record_blocks.read(raw, slot, coordinate, cache)
                 key = PREFIX + coordinate.key
             yield key, value
+            emitted += 1
+            if limit is not None and emitted == limit:
+                return
+            saved = following
     finally:
         cursor.close()
 

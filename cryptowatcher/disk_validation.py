@@ -50,6 +50,10 @@ def validated_disk(path: Path, *, deadline: float) -> Iterator[apsw.Connection]:
         database.create_scalar_function("cw_owner_digest", sql_signature, 3, deterministic=True)
         if list(database.execute("PRAGMA integrity_check")) != [("ok",)]:
             raise IntegrityError("DATABASE_CORRUPT", "Database integrity check failed")
+        from .record_catalog import valid_heads
+
+        if not valid_heads(database):
+            raise IntegrityError("DATABASE_CORRUPT", "Conflicting current records")
         budget(deadline)
         yield database
         budget(deadline)
