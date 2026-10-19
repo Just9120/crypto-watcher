@@ -212,7 +212,7 @@ class Store:
         self.comparison_population: tuple[Any, Any] | None = None
         self.analytics_ranges: dict[tuple[str, int, int, int], tuple[tuple[Any, ...], int]] = {}
         self.analytics_range_bytes = 0
-        self.reference_cache: dict[tuple[str, str, str | bytes], tuple[str, int]] = {}
+        self.reference_cache: dict[tuple[str, str, str | bytes], tuple[str | bytes, int]] = {}
         self.reference_cache_bytes = 0
         self.clock_ms = lambda: int(time.time() * 1000)
         if path.exists():
@@ -280,7 +280,7 @@ class Store:
                     raise StateError("Unknown record catalogue; database preserved")
                 from .record_ownership import install_functions as catalogue_functions
 
-                catalogue_functions(self.db, self.cached_text)
+                catalogue_functions(self.db, self.cached_text, self.cached_bytes)
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA busy_timeout=5000")
         if not readonly:
@@ -349,13 +349,27 @@ class Store:
         return self.cached_text("record-json", "", raw, lambda: str(sql_payload(raw)))
 
     def cached_text(self, kind: str, key: str, raw: str | bytes, read: Any) -> str:
-        # One existing1MiB budget shared by pure byte-to-text transforms. No
+        value = self._cached_value(kind, key, raw, lambda: str(read()))
+        if not isinstance(value, str):
+            raise StateError("Invalid pure text cache result")
+        return value
+
+    def cached_bytes(self, kind: str, key: str, raw: bytes, read: Any) -> bytes:
+        value = self._cached_value("bytes/" + kind, key, raw, read)
+        if not isinstance(value, bytes):
+            raise StateError("Invalid pure binary cache result")
+        return value
+
+    def _cached_value(self, kind: str, key: str, raw: str | bytes, read: Any) -> str | bytes:
+        # One existing1MiB budget shared by pure text/binary transforms. No
         # referenced body lookup, DB row or object is cached by this method.
         token = (kind, key, raw)
         cached = self.reference_cache.get(token)
         if cached is not None:
             return cached[0]
-        result = str(read())
+        result = read()
+        if not isinstance(result, (str, bytes)):
+            raise StateError("Invalid pure cache result")
         import sys
 
         # Unicode can use four bytes per character even when almost all of a

@@ -15,10 +15,12 @@ from typing import Any, Iterable, Iterator
 
 import zstandard
 
+from . import indexed_frame
 from .record_codec import BINARY_MAGIC, TYPED_MAGIC, pack_binary, sql_payload
 from .storage import encode
 
-MAGIC = b"DB1\x00"
+LEGACY_MAGIC = b"DB1\x00"
+MAGIC = b"DB2\x00"
 KINDS = ("event", "outcome", "episode", "comparison", "decision")
 MAX_RECORDS = 64
 MAX_EXPANDED = 1024 * 1024
@@ -121,7 +123,9 @@ def batches(
         yield result
 
 
-def pack(entries: list[tuple[Coordinate, dict[str, Any], dict[str, Any] | None]]) -> bytes:
+def pack(
+    entries: list[tuple[Coordinate, dict[str, Any], dict[str, Any] | None]], *, legacy: bool = False
+) -> bytes:
     if not 0 < len(entries) <= MAX_RECORDS:
         raise ValueError("Domain block record bound")
     projections = []
@@ -143,12 +147,15 @@ def pack(entries: list[tuple[Coordinate, dict[str, Any], dict[str, Any] | None]]
     texts = encode(projections), encode(bodies)
     if sum(len(t.encode()) for t in texts) > MAX_EXPANDED:
         raise ValueError("Expanded domain block bound")
-    projection, body = (pack_binary(t) for t in texts)
+    if legacy:
+        projection, body = (pack_binary(t) for t in texts)
+    else:
+        projection, body = indexed_frame.pack(projections), indexed_frame.pack(bodies)
     frames = struct.pack(">I", len(projection)) + projection + body
-    raw = MAGIC + hashlib.sha256(frames).digest() + frames
+    raw = (LEGACY_MAGIC if legacy else MAGIC) + hashlib.sha256(frames).digest() + frames
     if len(raw) > MAX_PACKET:
         raise ValueError("Compressed domain block bound")
-    decoded = parse(body)
+    decoded = parse(body) if legacy else indexed_frame.all_values(body)
     if encode([expanded(c, v) for (c, _, _), v in zip(entries, decoded, strict=True)]) != encode(
         [v for _, v, _ in entries]
     ):
@@ -160,7 +167,7 @@ def frames(raw: bytes) -> tuple[bytes, bytes]:
     if (
         not isinstance(raw, bytes)
         or not 40 < len(raw) <= MAX_PACKET
-        or not raw.startswith(MAGIC)
+        or not raw.startswith((LEGACY_MAGIC, MAGIC))
         or hashlib.sha256(raw[36:]).digest() != raw[4:36]
     ):
         raise ValueError("Invalid domain block checksum")
@@ -193,7 +200,8 @@ def parse(frame: bytes) -> Any:
 
 
 def projections(raw: bytes) -> list[tuple[Coordinate, dict[str, Any] | None]]:
-    values = parse(frames(raw)[0])
+    frame = frames(raw)[0]
+    values = parse(frame) if raw.startswith(LEGACY_MAGIC) else indexed_frame.all_values(frame)
     if not isinstance(values, list) or not 0 < len(values) <= MAX_RECORDS:
         raise ValueError("Invalid domain projection shape")
     result = []
@@ -206,16 +214,41 @@ def projections(raw: bytes) -> list[tuple[Coordinate, dict[str, Any] | None]]:
             or not 0 <= row[0] < len(KINDS)
         ):
             raise ValueError("Invalid domain projection row")
-        coordinate = Coordinate(KINDS[row[0]], row[1], row[2])
-        coordinate.validate()
+        coordinate, head = projection(row)
         if coordinate in seen:
             raise ValueError("Duplicate domain projection coordinate")
         seen.add(coordinate)
-        result.append((coordinate, head_expanded(coordinate, row[3])))
+        result.append((coordinate, head))
     return result
 
 
-def read(raw: bytes, slot: int, expected: Coordinate) -> dict[str, Any]:
+def projection(row: Any) -> tuple[Coordinate, dict[str, Any] | None]:
+    if not isinstance(row, list) or len(row) != 4 or type(row[0]) is not int or not 0 <= row[0] < len(KINDS):
+        raise ValueError("Invalid domain projection row")
+    coordinate = Coordinate(KINDS[row[0]], row[1], row[2])
+    coordinate.validate()
+    return coordinate, head_expanded(coordinate, row[3])
+
+
+def bodies(raw: bytes) -> list[Any]:
+    frame = frames(raw)[1]
+    values = parse(frame) if raw.startswith(LEGACY_MAGIC) else indexed_frame.all_values(frame)
+    if not isinstance(values, list) or not 0 < len(values) <= MAX_RECORDS:
+        raise ValueError("Domain body cardinality mismatch")
+    return values
+
+
+def read(raw: bytes, slot: int, expected: Coordinate, cache: Any = None) -> dict[str, Any]:
+    p, b = frames(raw)
+    if raw.startswith(MAGIC):
+        p_offsets, _ = indexed_frame.layout(p)
+        b_offsets, _ = indexed_frame.layout(b)
+        if len(p_offsets) != len(b_offsets):
+            raise ValueError("Domain body cardinality mismatch")
+        actual, _ = projection(indexed_frame.select(p, slot, cache))
+        if actual != expected:
+            raise ValueError("Domain slot identity mismatch")
+        return expanded(expected, indexed_frame.select(b, slot, cache))
     values = projections(raw)
     if type(slot) is not int or not 0 <= slot < len(values) or values[slot][0] != expected:
         raise ValueError("Domain slot identity mismatch")

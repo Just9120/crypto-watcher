@@ -16,7 +16,7 @@ from .record_blocks import Coordinate
 from .storage import encode
 
 
-def install(db: sqlite3.Connection, cache: Any = None) -> None:
+def install(db: sqlite3.Connection, cache: Any = None, binary_cache: Any = None) -> None:
     from .catalogue_cohorts import install as install_counters
     from .record_ownership import install as install_ownership
 
@@ -31,7 +31,7 @@ def install(db: sqlite3.Connection, cache: Any = None) -> None:
         }
         if marker[0] != "2" or len(found) != 3:
             raise ValueError("Unknown domain catalogue; database preserved")
-        install_ownership(db, cache)
+        install_ownership(db, cache, binary_cache)
         install_counters(db)
         return
     if db.in_transaction:
@@ -100,7 +100,7 @@ def install(db: sqlite3.Connection, cache: Any = None) -> None:
     except BaseException:
         db.rollback()
         raise
-    install_ownership(db, cache)
+    install_ownership(db, cache, binary_cache)
     install_counters(db)
 
 
@@ -119,11 +119,11 @@ def row(db: sqlite3.Connection, coordinate: Coordinate) -> sqlite3.Row | tuple[A
     ).fetchone()
 
 
-def read(db: sqlite3.Connection, coordinate: Coordinate) -> dict[str, Any] | None:
+def read(db: sqlite3.Connection, coordinate: Coordinate, cache: Any = None) -> dict[str, Any] | None:
     saved = row(db, coordinate)
     if saved is None:
         return None
-    return record_blocks.read(packet_store.read(db, saved[0]), saved[1], coordinate)
+    return record_blocks.read(packet_store.read(db, saved[0]), saved[1], coordinate, cache)
 
 
 def head(db: sqlite3.Connection, kind: str, identity: str) -> tuple[Coordinate, dict[str, Any] | None] | None:

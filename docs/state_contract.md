@@ -95,7 +95,7 @@ CH1 — frozen template для inline projected heads с полным SHA256. Fi
 reference extraction; Python Unicode sizes учитываются через фактический размер
 objects, cache не заменяет проверку наличия внешних bodies.
 
-DB1 catalogue primitives пока не включены в runtime/repack. Это frozen block
+DB1/DB2 catalogue primitives пока не включены в runtime/repack. Это frozen blocks
 с отдельно сжатыми projection/detail frames, полным SHA256 actual frames,
 проверкой UUID/revision/slot и allocation bounds до decompression. Каталог
 хранит immutable coordinates/parent deadlines и не дублирует integer rowid
@@ -108,6 +108,13 @@ Missing dependency/counter отклоняет удаление. Install/partial 
 retention/accounting adapters, finite restart и resource qualification нужны
 до выбора этого layout приложением. Existing Store open регистрирует UDF для
 уже установленного известного catalogue; DDL/migration при open не добавлены.
+DB2 использует IF1: неизменяемый typed dictionary, byte offsets и общий Zstd
+frame, с полным SHA256 actual header/offsets/compressed bytes и bounded content
+size/window до decompression. Чтение materialize только выбранный typed slice;
+чистая binary decompression разделяет общий1MiB cache с text/reference transforms.
+По IDs/existence данные не кэшируются. DB1 остаётся читаемым; формат IF1 не
+меняет canonical JSON, float bits или numeric types. Linux/resource gates для
+runtime activation остаются обязательными.
 
 #### Market layout v2: устройство
 

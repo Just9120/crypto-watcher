@@ -16,7 +16,7 @@ from .storage import encode
 def block_references(raw: bytes) -> list[Any]:
     projections = record_blocks.projections(raw)
     bodies = (
-        record_blocks.parse(record_blocks.frames(raw)[1])
+        record_blocks.bodies(raw)
         if any(c.kind in ("event", "outcome", "comparison") for c, _ in projections)
         else [None] * len(projections)
     )
@@ -34,7 +34,7 @@ def block_references(raw: bytes) -> list[Any]:
     return result
 
 
-def install_functions(db: sqlite3.Connection, cache: Any = None) -> None:
+def install_functions(db: sqlite3.Connection, cache: Any = None, binary_cache: Any = None) -> None:
     packet_store.install_functions(db)
 
     def key(kind: int, identity: bytes, revision: int) -> str:
@@ -54,7 +54,7 @@ def install_functions(db: sqlite3.Connection, cache: Any = None) -> None:
         raw = packet_store.read(db, packet)
 
         def read() -> str:
-            return encode(record_blocks.read(raw, slot, coordinate))
+            return encode(record_blocks.read(raw, slot, coordinate, binary_cache))
 
         return read() if cache is None else str(cache("catalogue-record", f"{full_key}/{slot}", raw, read))
 
@@ -82,8 +82,8 @@ def install_functions(db: sqlite3.Connection, cache: Any = None) -> None:
     db.create_function("cw_catalogue_record", 5, record)
 
 
-def install(db: sqlite3.Connection, cache: Any = None) -> None:
-    install_functions(db, cache)
+def install(db: sqlite3.Connection, cache: Any = None, binary_cache: Any = None) -> None:
+    install_functions(db, cache, binary_cache)
     marker = db.execute("SELECT value FROM market_meta WHERE key='record_ownership'").fetchone()
     if marker is not None:
         if marker[0] != "1":

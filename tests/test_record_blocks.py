@@ -34,11 +34,13 @@ def entries():
     return result
 
 
+@pytest.mark.parametrize("legacy", [False, True])
 def test_block_preserves_all_kinds_unknown_fields_exact_numbers_and_projection_without_body_decode(
     monkeypatch,
+    legacy,
 ):
     values = entries()
-    raw = blocks.pack(values)
+    raw = blocks.pack(values, legacy=legacy)
     for slot, (coordinate, value, _) in enumerate(values):
         assert encode(blocks.read(raw, slot, coordinate)) == encode(value)
     projection, body = blocks.frames(raw)
@@ -49,6 +51,13 @@ def test_block_preserves_all_kinds_unknown_fields_exact_numbers_and_projection_w
         return original(frame)
 
     monkeypatch.setattr(blocks, "parse", projected_only)
+    original_data = blocks.indexed_frame.data
+
+    def projected_data(frame, *args, **kwargs):
+        assert frame != body
+        return original_data(frame, *args, **kwargs)
+
+    monkeypatch.setattr(blocks.indexed_frame, "data", projected_data)
     assert [(c, encode(h)) for c, h in blocks.projections(raw)] == [(c, encode(h)) for c, _, h in values]
     assert projection != body
 
@@ -80,15 +89,26 @@ def test_block_rejects_identity_or_head_mismatch_and_expansion_before_decode(mon
         blocks.pack([(coordinate, {**value, "revision": 2}, head)])
     with pytest.raises(ValueError):
         blocks.pack([(coordinate, value, {**head, "revision_key": "event:wrong"})])
-    raw = blocks.pack([(coordinate, value, head)])
+    raw = blocks.pack([(coordinate, value, head)], legacy=True)
     projection, body = blocks.frames(raw)
     # A plausible full checksum does not bypass the inner allocation bound.
     projection = projection[:4] + (blocks.MAX_EXPANDED + 1).to_bytes(4, "big") + projection[8:]
     frames = len(projection).to_bytes(4, "big") + projection + body
-    tampered = blocks.MAGIC + hashlib.sha256(frames).digest() + frames
+    tampered = blocks.LEGACY_MAGIC + hashlib.sha256(frames).digest() + frames
     monkeypatch.setattr(blocks, "sql_payload", lambda frame: pytest.fail("decompressed beyond bound"))
     with pytest.raises(ValueError, match="bound"):
         blocks.projections(tampered)
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_frozen_legacy_and_indexed_blocks_expose_same_public_values(legacy):
+    values = entries()
+    raw = blocks.pack(values, legacy=legacy)
+    assert raw.startswith(blocks.LEGACY_MAGIC if legacy else blocks.MAGIC)
+    for i, (coordinate, value, head) in enumerate(values):
+        assert encode(blocks.read(raw, i, coordinate)) == encode(value)
+        assert blocks.projections(raw)[i][0] == coordinate
+        assert encode(blocks.projections(raw)[i][1]) == encode(head)
 
 
 def test_batch_builder_bounds_expanded_records_before_compression_and_keeps_order():
