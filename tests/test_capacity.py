@@ -375,13 +375,18 @@ def test_legacy_capacity_is_explicitly_unmetered_and_flags_do_not_affect_other_c
     assert cli(monkeypatch, infrastructure, "diagnostics", "--capacity-ledger") == 2
 
 
-def test_controlled_62week_population_plateaus_and_all_numeric_results_survive(tmp_path):
+@pytest.mark.parametrize("compact", [False, True])
+def test_controlled_62week_population_plateaus_and_all_numeric_results_survive(tmp_path, compact):
     from scripts.rehearse_retention import measure
 
-    value = measure(tmp_path / "rolling-retention.sqlite3")
+    value = measure(tmp_path / "rolling-retention.sqlite3", compact=compact)
     assert len(value["families"]) == 5 and value["markets"] == 2 and len(value["timeframes"]) == 4
     assert value["numeric_and_comparator_multiset_equality"] == value["private_equality"] == "PASS"
     assert value["restarts"] == 1 and not any(value["final_remaining"].values())
+    if compact:
+        assert value["storage_layout"] == "MIXED_BLOCKS_REPACK11"
+        assert value["compaction"]["state"] == "COMPLETE" and value["compaction"]["version"] == 11
+        assert value["issued_numeric_ids_after_final_gc"] > 0
     stable = value["steady_detail_population"][-8:]
     assert {s["events"] for s in stable} == {50}
     assert {s["quality_facts"] for s in stable} == {1920}
