@@ -104,6 +104,15 @@ Restart восстанавливает episodes, per-direction conditions и pen
 
 `outcomes.py` принимает jobs в event transaction, затем bounded worker вычисляет полные future1m окна без смены reference; `analytics.py` вычисляет frozen prior comparator для каждого события в ограниченном batch и отделяет causal readout от late analytics. Cohort distributions сортирует/агрегирует SQLite, exporter не собирает все raw returns в памяти. Telegram/CLI views имеют явные ограничения выдачи; streaming export через отдельный readonly connection не усечён и pinning snapshot проверен concurrent-writer fixture.
 
+В одном readonly transaction comparison worker держит одну prior population.
+Для того же stream/шага/warmup/data version при движении обоих bounds вперёд
+не более чем на256native bars он сохраняет пересекающуюся часть и читает только
+новый tail. Range остаётся прежним28day window с warmup; ATR/quantiles вычисляются
+заново в прежнем порядке над точными свечами этого range. Обратный cutoff, большой
+скачок или смена cache identity требуют полного чтения. Writer не использует эту
+population; новый snapshot видит committed recovery через data version. Размеры
+byte/range caches, CAS apply, methods и deadlines не меняются.
+
 `source_context.py` архивирует public metadata/ticker availability; historical formula получает доступную тогда liquidity/tick context. Unavailable historical input означает limitation, не future substitution. `analytics_recovery.py` получает один referenced page через существующий HTTP client/budget; live gaps/bootstrap имеют приоритет. Он не создаёт memory windows/WS subscriptions inactive instruments и не переписывает conflicting used source. Outcome/retention holds переживают restart.
 Retirement pending jobs сохраняет свой64/25ms quantum; existing REST admission
 32pages/1s начинается после него. Scheduler delay во время retirement не должен

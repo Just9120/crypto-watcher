@@ -70,10 +70,28 @@ def prior_population(
 
     frozen = store.readonly and store.db.in_transaction
     warmup = max(256, needed) if frozen else needed
-    key = (native, start, reference, warmup, store.db.execute("PRAGMA data_version").fetchone()[0])
-    if frozen and store.comparison_population is not None and store.comparison_population[0] == key:
-        return store.comparison_population[1]
-    candles = read_candles(store, native, max(0, start - warmup * step), reference)
+    key = (native, start, reference, warmup, step, store.db.execute("PRAGMA data_version").fetchone()[0])
+    previous = store.comparison_population if frozen else None
+    if previous is not None and previous[0] == key:
+        return previous[1]
+    lower = max(0, start - warmup * step)
+    candles = None
+    if previous is not None:
+        old, value = previous
+        if (
+            old[0] == native
+            and old[3:] == key[3:]
+            and old[1] <= start
+            and old[2] < reference <= old[2] + 256 * step
+            and lower < old[2]
+        ):
+            # The same read transaction cannot acquire recovered/changed bars.
+            # Source ranges select starts in [lower, reference), including gaps.
+            # Keep one bounded window and validate only its newly exposed tail.
+            candles = [c for c in value[0] if c.start >= lower]
+            candles.extend(read_candles(store, native, max(lower, old[2]), reference))
+    if candles is None:
+        candles = read_candles(store, native, lower, reference)
     ranges = [0.0] + [true_range(b, a) for a, b in zip(candles, candles[1:])]
     points = []
     contiguous = 0
