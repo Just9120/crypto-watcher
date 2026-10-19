@@ -28,13 +28,14 @@ def admitted(store, value, observed=100 * DAY):
     return event, observed
 
 
-def populated(store):
-    prepare(store)
+def populated(store, offset=0, *, initialized=False):
+    if not initialized:
+        prepare(store)
     public = {}
     with store.db:
         store.db.execute("BEGIN IMMEDIATE")
         for value in (1, 2, 15, 255, 256, 65535):
-            event, observed = admitted(store, value, 100 * DAY + value % 2)
+            event, observed = admitted(store, value + offset, 100 * DAY + value % 2)
             for episode in (None, str(uuid.UUID(int=101)), str(uuid.UUID(int=65535))):
                 binding = aliases.Alias(event, observed, episode)
                 value = {"event_id": event}

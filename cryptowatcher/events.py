@@ -14,7 +14,7 @@ from .detector_config import FAMILIES, effective_parameters
 from .detectors import FORMULAS, UNITS, VERSIONS, Detection, DetectorUnavailable, atr14, evaluate, freshness
 from .history_codec import Codec
 from .sources import Candle
-from .storage import RUNTIME_UPSERT, StateError, Store, encode, json_payload
+from .storage import RUNTIME_UPSERT, StateError, Store, encode
 
 PREFIX = "radar:v1:"
 HEAD_SCHEMA = "cryptowatcher.history-head.v1"
@@ -256,25 +256,14 @@ class History:
         self.store.db.execute("DELETE FROM runtime WHERE key=?", (PREFIX + key,))
 
     def items(self, prefix: str, limit: int | None = None, *, reverse: bool = False) -> list[tuple[str, Any]]:
-        prefix = PREFIX + prefix
-        sql = "SELECT key,payload_json FROM runtime WHERE key>=? AND key<? ORDER BY key " + (
-            "DESC" if reverse else "ASC"
-        )
-        values: tuple[Any, ...] = (prefix, prefix + "~")
-        if limit is not None:
-            sql += " LIMIT ?"
-            values += (limit,)
         return [
-            (row[0][len(PREFIX) :], self.resolve(row[0][len(PREFIX) :], json_payload(row[1])))
-            for row in self.store.db.execute(sql, values)
+            (key[len(PREFIX) :], self.resolve(key[len(PREFIX) :], value))
+            for key, value in self.store.scan_runtime(PREFIX + prefix, limit, reverse=reverse)
         ]
 
     def scan(self, prefix: str) -> Iterator[tuple[str, Any]]:
-        start = PREFIX + prefix
-        for row in self.store.db.execute(
-            "SELECT key,payload_json FROM runtime WHERE key>=? AND key<? ORDER BY key", (start, start + "~")
-        ):
-            yield row[0][len(PREFIX) :], self.resolve(row[0][len(PREFIX) :], json_payload(row[1]))
+        for key, value in self.store.scan_runtime(PREFIX + prefix):
+            yield key[len(PREFIX) :], self.resolve(key[len(PREFIX) :], value)
 
     def count(self, prefix: str) -> int:
         start = PREFIX + prefix

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from heapq import merge
 from typing import Any
 
-from . import packet_store, record_blocks, record_catalog, record_masks
+from . import catalogue_bounds, packet_store, record_blocks, record_catalog, record_masks
 from .record_blocks import HEAD_SCHEMA, KINDS, Coordinate
 from .storage import StateError, encode
 
@@ -225,16 +225,22 @@ def namespace_rows(
     reverse: bool,
     limit: int | None,
     cache: Any,
+    after: str | None = None,
+    before: str | None = None,
 ) -> Generator[tuple[str, Any], None, None]:
     order = " DESC" if reverse else " ASC"
+    fields = (("public_uuid", "uuid"),) + (() if namespace.head else (("revision", "revision"),))
+    where, parameters = catalogue_bounds.keyset(namespace.root, fields, after, before)
     sql = (
         "SELECT public_uuid,revision,packet,slot,expires FROM market_records WHERE "
         + selected[0]
+        + " AND "
+        + where
         + " ORDER BY public_uuid"
         + order
         + ("" if namespace.head else ",revision" + order)
     )
-    parameters = selected[1]
+    parameters = selected[1] + parameters
     if limit is not None:
         sql += " LIMIT ?"
         parameters += (limit + int(namespace.head and limit < 2**63 - 1),)
@@ -282,6 +288,8 @@ def scan(
     reverse: bool = False,
     limit: int | None = None,
     cache: Any = None,
+    after: str | None = None,
+    before: str | None = None,
 ) -> Generator[tuple[str, Any], None, None]:
     """Stream domain revisions/heads in public-key order; caller owns snapshot.
 
@@ -301,12 +309,14 @@ def scan(
     if not (aliases_selected or any(selected is not None for _, selected in selectors)) or not reading(db):
         return
     streams = [
-        namespace_rows(db, namespace, selected, reverse, limit, cache)
+        namespace_rows(db, namespace, selected, reverse, limit, cache, after, before)
         for namespace, selected in selectors
         if selected is not None
     ]
     if aliases_selected:
-        streams.append(catalogue_aliases.scan(db, prefix, reverse=reverse, limit=limit))
+        streams.append(
+            catalogue_aliases.scan(db, prefix, reverse=reverse, limit=limit, after=after, before=before)
+        )
     try:
         for index, item in enumerate(merge(*streams, key=lambda row: row[0], reverse=reverse)):
             yield item

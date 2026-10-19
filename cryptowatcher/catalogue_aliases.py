@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from heapq import merge
 from typing import Any
 
-from . import record_catalog, record_masks
+from . import catalogue_bounds, record_catalog, record_masks
 from .catalogue_reader import MISSING, PREFIX, UUID, reading, uuid_range
 from .record_blocks import Coordinate
 from .storage import StateError, encode
@@ -194,10 +194,23 @@ def selection(prefix: str, *, member: bool) -> Selection | None:
 
 
 def rows(
-    db: sqlite3.Connection, selected: Selection, reverse: bool, limit: int | None
+    db: sqlite3.Connection,
+    selected: Selection,
+    reverse: bool,
+    limit: int | None,
+    after: str | None,
+    before: str | None,
 ) -> Generator[tuple[str, Any], None, None]:
     fields = "episode,observed,event_uuid" if selected.member else "observed,public_uuid"
     order = " DESC" if reverse else " ASC"
+    indexed_fields = (
+        (("episode", "uuid"), ("observed", "time"), ("event_uuid", "uuid"))
+        if selected.member
+        else (("observed", "time"), ("public_uuid", "uuid"))
+    )
+    where, parameters = catalogue_bounds.keyset(
+        MEMBERS if selected.member else HISTORY, indexed_fields, after, before
+    )
     sql = (
         "SELECT "
         + fields
@@ -205,10 +218,12 @@ def rows(
         + selected.source
         + " WHERE "
         + selected.where
+        + " AND "
+        + where
         + " ORDER BY "
         + (",".join(f + order for f in fields.split(",")))
     )
-    parameters = selected.parameters
+    parameters = selected.parameters + parameters
     if limit is not None:
         sql += " LIMIT ?"
         parameters += (limit,)
@@ -239,7 +254,13 @@ def rows(
 
 
 def scan(
-    db: sqlite3.Connection, prefix: str, *, reverse: bool = False, limit: int | None = None
+    db: sqlite3.Connection,
+    prefix: str,
+    *,
+    reverse: bool = False,
+    limit: int | None = None,
+    after: str | None = None,
+    before: str | None = None,
 ) -> Generator[tuple[str, Any], None, None]:
     if not isinstance(prefix, str) or (
         limit is not None and (type(limit) is not int or not 0 <= limit < 2**63)
@@ -250,7 +271,7 @@ def scan(
     selected = [value for member in (False, True) if (value := selection(prefix, member=member)) is not None]
     if not selected or not active(db):
         return
-    streams = [rows(db, value, reverse, limit) for value in selected]
+    streams = [rows(db, value, reverse, limit, after, before) for value in selected]
     try:
         for number, item in enumerate(merge(*streams, key=lambda row: row[0], reverse=reverse)):
             yield item

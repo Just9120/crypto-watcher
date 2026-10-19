@@ -11,7 +11,7 @@ import time
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from .config import ConfigError, OwnerSettings, instrument_key, normalize_pair, number
 
@@ -494,7 +494,34 @@ class Store:
 
     def get_runtime(self, key: str, default: Any = None) -> Any:
         row = self.db.execute("SELECT payload_json FROM runtime WHERE key=?", (key,)).fetchone()
+        if self.bounded:
+            from .catalogue_reader import MISSING, lookup
+
+            value = lookup(self.db, key, json_payload(row[0]) if row else MISSING, self.cached_bytes)
+            return default if value is MISSING else value
         return json_payload(row[0]) if row else default
+
+    def scan_runtime(
+        self,
+        prefix: str,
+        limit: int | None = None,
+        *,
+        reverse: bool = False,
+        after: str | None = None,
+        before: str | None = None,
+    ) -> Iterator[tuple[str, Any]]:
+        from .catalogue_store import scan
+
+        yield from scan(
+            self.db,
+            prefix,
+            bounded=self.bounded,
+            limit=limit,
+            reverse=reverse,
+            after=after,
+            before=before,
+            cache=self.cached_bytes,
+        )
 
     def put_runtime(self, key: str, payload: Any) -> None:
         with self.db:
