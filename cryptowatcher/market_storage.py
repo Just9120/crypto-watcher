@@ -294,7 +294,13 @@ def read(
 def window(
     db: sqlite3.Connection, stream: str, candles: list[dict[str, Any]], expires: int, *, cache: Any = None
 ) -> dict[str, Any]:
-    points = admit_many(db, stream, candles, expires, cache=cache)
+    from .candle_access import admit_window, writing
+
+    tiled = writing(db)
+    if tiled:
+        points, all_tiled = admit_window(db, stream, candles, expires, cache=cache)
+    else:
+        points, all_tiled = admit_many(db, stream, candles, expires, cache=cache), False
     if not points:
         raise ValueError("Empty source window")
     raw = json.dumps(
@@ -303,9 +309,11 @@ def window(
     reference = compact_reference(
         points[0][0], [[p[1], p[2]] for p in points], hashlib.sha256(raw).hexdigest()
     )
-    from .candle_access import writing
-
-    if writing(db):
+    if all_tiled and db.in_transaction:
+        # Admission just checked these actual values/revisions and renewed all
+        # exact leases. No writer or await intervenes before this descriptor.
+        return {"mode": "source-cells", "stream": reference["stream"], "runs": reference["runs"]}
+    if tiled:
         from .source_cells import convert
 
         cells = convert(db, reference, cache=cache)

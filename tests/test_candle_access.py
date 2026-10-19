@@ -1,3 +1,4 @@
+import hashlib
 import sqlite3
 from contextlib import closing
 
@@ -197,6 +198,70 @@ def test_source_capacity_fallback_keeps_all_revisions_global_numbering_leases_an
     assert lease == (tile + 40 * 86400000, tile + 70 * 86400000)
 
 
+@pytest.mark.parametrize("stream", ["spot/BTCUSDT/1m", "linear/ETHUSDT/15m"])
+def test_new_source_window_preserves_full_checked_reference_and_rechecks_actual_tile_after_cache(
+    store, stream
+):
+    from cryptowatcher.source_cells import convert
+
+    bounded(store)
+    writer(store)
+    step = int(stream.rsplit("/", 1)[1][:-1]) * 60000
+    tile, slots = fixture(step)
+    values = [codec.public(tile, step, slot, slots[slot][0][3]) for slot in (0, 7, 31)]
+    frozen = [values[2], values[0], values[1], values[0], {**values[0], "close": 102.0}]
+    anchor = tile + 40 * 86400000
+    with store.db:
+        store.db.execute("BEGIN IMMEDIATE")
+        actual = market.window(store.db, stream, frozen, anchor, cache=store.cached_bytes)
+        points = market.admit_many(store.db, stream, frozen, anchor, cache=store.cached_bytes)
+    original = market.compact_reference(
+        points[0][0],
+        [[point[1], point[2]] for point in points],
+        hashlib.sha256(encode(frozen).encode()).hexdigest(),
+    )
+    assert actual == convert(store.db, original, cache=store.cached_bytes)
+    assert market.restore_window(store.db, actual, cache=store.cached_bytes) == encode(frozen).encode()
+    with pytest.raises(ValueError, match="hash mismatch"):
+        convert(store.db, {**original, "sha256": "0" * 64}, cache=store.cached_bytes)
+    for sid, at, revision in points:
+        assert codec.point(blocks.tile(store.db, sid, at, step), sid, at, revision)[1:] == (
+            anchor,
+            anchor + 30 * 86400000,
+        )
+    assert store.reference_cache_bytes <= 1024 * 1024
+    with store.db:
+        store.db.execute("DROP TRIGGER market_candle_block_update_guard")
+        row = store.db.execute("SELECT id,payload FROM market_candle_blocks LIMIT 1").fetchone()
+        bad = bytes(row[1][:-1]) + bytes([row[1][-1] ^ 1])
+        store.db.execute("UPDATE market_candle_blocks SET payload=? WHERE id=?", (bad, row[0]))
+    with pytest.raises(ValueError, match="checksum"):
+        market.window(store.db, stream, frozen, anchor, cache=store.cached_bytes)
+
+
+def test_new_window_rechecks_if_admission_transaction_was_committed_before_return(store, monkeypatch):
+    bounded(store)
+    writer(store)
+    tile, slots = fixture()
+    value = codec.public(tile, 60000, 0, slots[0][0][3])
+    original = access.admit_window
+
+    def changed_after_commit(db, *args, **kwargs):
+        points, proof = original(db, *args, **kwargs)
+        db.commit()
+        assert not db.in_transaction
+        with db:
+            db.execute("DROP TRIGGER market_candle_block_update_guard")
+            row = db.execute("SELECT id,payload FROM market_candle_blocks LIMIT 1").fetchone()
+            bad = bytes(row[1][:-1]) + bytes([row[1][-1] ^ 1])
+            db.execute("UPDATE market_candle_blocks SET payload=? WHERE id=?", (bad, row[0]))
+        return points, proof
+
+    monkeypatch.setattr(access, "admit_window", changed_after_commit)
+    with pytest.raises(ValueError, match="checksum"):
+        market.window(store.db, "spot/BTCUSDT/1m", [value], tile, cache=store.cached_bytes)
+
+
 def test_source_batch_rolls_back_all_tiles_after_late_failure_and_refuses_shortened_lease(store):
     bounded(store)
     writer(store)
@@ -277,7 +342,13 @@ def test_expired_fallback_metadata_is_collected_with_counters_but_retained_sourc
     with store.db:
         assert blocks.collect_fallbacks(store.db, 4, time.monotonic() + 5) == 0
     assert blocks.summary(store.db)["fallback_tiles"] == 1
-    Retention(store).work(tile + 40 * 86400000)
+    for _ in range(16):
+        Retention(store).work(tile + 40 * 86400000)
+        if (
+            blocks.summary(store.db)["fallback_tiles"] == 0
+            and store.db.execute("SELECT count(*) FROM market_candles").fetchone()[0] == 0
+        ):
+            break
     assert blocks.summary(store.db)["fallback_tiles"] == 0
     assert store.db.execute("SELECT count(*) FROM market_candles").fetchone()[0] == 0
     with store.db:

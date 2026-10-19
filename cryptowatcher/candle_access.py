@@ -30,6 +30,27 @@ def admit_many(
     db: sqlite3.Connection, stream: str, values: list[dict[str, Any]], anchor: int = 0, *, cache: Any = None
 ) -> list[tuple[int, int, int]]:
     """Transfer eligible tiles and publish a whole validated input batch atomically."""
+    return _admit(db, stream, values, anchor, cache=cache)[0]
+
+
+def admit_window(
+    db: sqlite3.Connection, stream: str, values: list[dict[str, Any]], anchor: int = 0, *, cache: Any = None
+) -> tuple[list[tuple[int, int, int]], bool]:
+    """Return a synchronous proof that every admitted point is in a checked tile.
+
+    Admission leaves its write transaction active. The caller must consume the
+    proof immediately in that transaction, without another writer or await.
+    A capacity fallback retains the original checked-window conversion path.
+    """
+    if not values:
+        return [], False
+    points, all_tiled = _admit(db, stream, values, anchor, cache=cache)
+    return points, all_tiled and db.in_transaction
+
+
+def _admit(
+    db: sqlite3.Connection, stream: str, values: list[dict[str, Any]], anchor: int, *, cache: Any = None
+) -> tuple[list[tuple[int, int, int]], bool]:
     from .market_storage import stream_id
 
     codec.number(anchor)
@@ -39,6 +60,7 @@ def admit_many(
     step = int(tf[:-1]) * 60000
     groups = blocks.validated_groups(step, values)
     result = [(0, 0, 0)] * len(values)
+    all_tiled = True
     with blocks.atomic(db):
         sid = stream_id(db, stream, create=True)
         assert sid is not None
@@ -52,13 +74,14 @@ def admit_many(
                 # The failed speculative transfer/admission was rolled back in
                 # full. Every old revision remains addressable in its old table.
                 coordinates = {index: _legacy_admit(db, sid, values[index], anchor) for index, _, _ in items}
+                all_tiled = False
                 db.execute(
                     "INSERT INTO market_candle_fallbacks VALUES(?,?,?) ON CONFLICT(stream,tile) DO NOTHING",
                     (sid, at, str(error)),
                 )
             for index, _, _ in items:
                 result[index] = coordinates[index]
-    return result
+    return result, all_tiled
 
 
 def _legacy_admit(

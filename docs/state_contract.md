@@ -309,6 +309,13 @@ descriptor после проверки полного исходного window 
 защищены full-checksum owner record, который сохраняется даже без выигрыша
 длины; каждый source block проверяется по actual bytes. Descriptor leases
 снимаются атомарно с заменой owner, source leases/policy не сокращаются.
+Новый window producer может сразу вернуть тот же source-cells descriptor по
+результату собственной checked tile admission. Доказательство действительно
+только внутри текущего синхронного вызова при удерживаемой write transaction;
+оно не сохраняется в cache или БД. После commit либо при capacity fallback
+используется прежняя проверка полного window SHA. Конвертация уже сохранённого
+descriptor всегда проверяет его исходный SHA и actual values; markers/existence
+не заменяют эту проверку. Общий cache остаётся1MiB.
 Новый формат требует compatible reader/forward-fix. Native mature/resource
 qualification и общий backlog SLO остаются обязательными release gates.
 Проверка старого SHA и доказательство cold-only разрешения выполняются одним
