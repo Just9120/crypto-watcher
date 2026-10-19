@@ -338,6 +338,10 @@ class Store:
                 from .candle_blocks import install_functions as source_tile_functions
 
                 source_tile_functions(self.db, self.cached_text)
+            if self.db.execute("SELECT 1 FROM market_meta WHERE key='packet_bundles'").fetchone():
+                from .packet_bundles import validate as validate_bundles
+
+                validate_bundles(self.db)
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA busy_timeout=5000")
         if not readonly:

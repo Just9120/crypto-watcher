@@ -157,10 +157,36 @@ CH1 — frozen template для inline projected heads с полным SHA256. Fi
 reference extraction; Python Unicode sizes учитываются через фактический размер
 objects, cache не заменяет проверку наличия внешних bodies.
 
-Candidate repack15 сохраняет DB1/DB2 catalogue adapters версии13. Upgrade13→15
-повторяет конечный CQ5 quality pass и добавляет NS1 qualification;14→15 добавляет
+Candidate repack16 сохраняет DB1/DB2 catalogue adapters версии13. Upgrade13→16
+повторяет конечный CQ5 quality pass и добавляет NS1 qualification;14→16 добавляет
 только NS1 qualification и physical reclaim. Initial catalogue geometry,
 queue ceiling, numeric IDs/frames/leases и source boundaries сохраняются.
+Upgrade15→16 добавляет bounded parent-bundle regrouping и reclaim, сохраняя
+все завершённые source/numeric/quality/catalogue границы. Explicit marker
+`packet_bundles=1` устанавливается только в upgrade, не при открытии Store.
+Старые packets получают NULL/unvisited metadata и конечный packet-ID ceiling;
+новые detail packets сразу pending со временем первого поступления. Проверенный
+packet при изменении live refs повторно становится pending; исходное время уже
+pending packet не обновляется при следующих изменениях. Partial indexes дают
+bounded initial/oldest-first selection. `bundle_pending` — gauge количества;
+его byte flows равны0, физические columns/index pages учитываются полностью.
+Parent grouping сохраняет public UUID/revision, current head, private body и
+projection, parent deadline и logical numeric/window references. Guarded
+delete/publication/readback выполняются в одном savepoint outer writer transaction;
+GC между release и повторным admission не допускается. Stale snapshot и поздний
+отказ откатывают только этот savepoint. Все записи имеют прежний expiry UTC-day,
+до64records/expanded1MiB; oversized/compressed-limit fallback сохраняет исходный
+layout с явным счётчиком. Служебные leases не сокращаются. Частично освобождённые
+packets обслуживаются повторно. Partial sparse-arena index выбирает detail arenas
+с used>768KiB и live_bytes<used/2; один шаг читает до32indexed packet rows,
+освобождает zero-ref prefix и переносит не более одного live packet прежним
+exact-byte relocator. Packet ID/refs/SHA/category/bucket прежние, savepoint rollback
+охватывает и blob bytes/append position. Empty arenas собирает прежний GC; actual
+free-page reclaim остаётся отдельным baseline gate. Новый phase40ms worker не задерживает hot transfer и не создаёт
+scheduler. Initial completion отдельно от текущих поступлений; baseline отвергает
+unknown/future clocks и backlog старше прежних60s. Deep ledger сверяет фактический
+pending count. Whole physical25GB/native/production throughput остаются отдельными
+gates, не следуют из успешной упаковки компонента.
 CQ1/CQ2 coordinates получают view0 без повторного intern числовых значений;
 CQ4 coordinates переносятся напрямую. Это frozen blocks
 с отдельно сжатыми projection/detail frames, полным SHA256 actual frames,

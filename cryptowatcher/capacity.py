@@ -334,6 +334,17 @@ def stable_reason(store: Store) -> list[str]:
                 reasons.append("CATALOGUE_CLOCK_UNKNOWN")
             elif pending["oldest_age_ms"] is not None and pending["oldest_age_ms"] > 60000:
                 reasons.append("CATALOGUE_BACKLOG")
+            bundles = pending["bundles"]
+            if (
+                bundles is None
+                or bundles["unknown"]
+                or repack.get("packet_bundles", {}).get("initial_complete") is not True
+            ):
+                reasons.append("CATALOGUE_BUNDLE_INITIAL_INCOMPLETE")
+            elif bundles["oldest_ms"] is not None and bundles["oldest_ms"] > time.time() * 1000 + 30000:
+                reasons.append("CATALOGUE_BUNDLE_CLOCK_UNKNOWN")
+            elif bundles["oldest_age_ms"] is not None and bundles["oldest_age_ms"] > 60000:
+                reasons.append("CATALOGUE_BUNDLE_BACKLOG")
         except (ValueError, StateError, sqlite3.Error):
             reasons.append("CATALOGUE_CHECKPOINT_UNKNOWN")
     for key in ("repack_worker", "analytics_recovery_worker"):

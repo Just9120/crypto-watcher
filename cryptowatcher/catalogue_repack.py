@@ -57,7 +57,7 @@ def validate(store: Store, state: dict[str, Any], version: int) -> None:
         or markers.get("catalogue_queue", "1") != "1"
     ):
         raise StateError("Unknown catalogue repack layout; data preserved")
-    if state.get("version") in (13, 14, version):
+    if state.get("version") in (13, 14, 15, version):
         if markers.get(FLAGS[0]) != "1" or not catalogue_lifecycle.active(store.db):
             raise StateError("Missing catalogue runtime checkpoint")
         catalogue_queue.header(store.db)
@@ -113,7 +113,13 @@ def maintenance(store: Store, state: dict[str, Any], now_ms: int, batch: int, de
 
 
 def status(store: Store, now_ms: int) -> dict[str, Any]:
+    from . import packet_bundles
+
     pending = catalogue_queue.header(store.db)
+    bundles = packet_bundles.header(store.db) if packet_bundles.installed(store.db) else None
+    if bundles is not None:
+        stamp = bundles["oldest_ms"]
+        bundles["oldest_age_ms"] = max(0, now_ms - stamp) if stamp is not None else None
     oldest = pending["oldest_ms"]
     gc = bool(
         store.db.execute("SELECT 1 FROM market_packets WHERE refs=0 LIMIT 1").fetchone()
@@ -125,7 +131,15 @@ def status(store: Store, now_ms: int) -> dict[str, Any]:
         "oldest_age_ms": max(0, now_ms - oldest) if oldest is not None else None,
         "free_pages": free_pages,
         "vacuum_pending": free_pages > 256,
-        "pending_work": bool(pending["count"] or gc or free_pages > 256),
+        "gc_pending": gc,
+        "bundles": bundles,
+        "pending_work": bool(
+            pending["count"]
+            or gc
+            or free_pages > 256
+            or bundles
+            and (bundles["count"] or bundles["unknown"] or bundles["sparse"])
+        ),
         "at_ms": now_ms,
     }
 

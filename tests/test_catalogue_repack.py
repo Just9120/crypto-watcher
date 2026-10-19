@@ -74,6 +74,30 @@ def test_upgrade13_revisits_only_quality_and_preserves_initial_catalogue_geometr
     assert work(store, NOW) == final
 
 
+def test_upgrade15_resumes_bundle_install_without_repeating_finite_source_catalogue_or_quality(store):
+    import copy
+
+    bounded(store)
+    observe(store, OutcomeWorker(store))
+    initial = complete(store)
+    previous = copy.deepcopy(initial)
+    previous.update(version=15, operator_note="preserve15")
+    previous.pop("packet_bundles")
+    store.put_runtime("storage_repack", previous)
+    final = complete(store)
+    assert final["version"] == VERSION and final["previous_version"] == 15
+    assert final["operator_note"] == "preserve15"
+    assert final["packet_bundles"]["initial_complete"]
+    for key in (
+        "catalogue_transfer",
+        "catalogue_queue_upper",
+        "quality_rows_scanned",
+        "source_transfer_upper",
+        "numeric_transfer_upper",
+    ):
+        assert final.get(key) == previous.get(key)
+
+
 def test_completed_repack_live_failure_restores_pending_and_durable_checkpoint(store, monkeypatch):
     bounded(store)
     observe(store, OutcomeWorker(store))
@@ -130,6 +154,25 @@ def test_baseline_accepts_current_pending_compaction_but_rejects_overdue_unknown
             store.db.execute("DELETE FROM market_counts WHERE category='record_pending'")
         reasons = stable_reason(store)
         assert "CATALOGUE_CHECKPOINT_UNKNOWN" in reasons and "CATALOGUE_BACKLOG" not in reasons
+
+
+@pytest.mark.parametrize(
+    "age,reason", [(1, None), (60001, "CATALOGUE_BUNDLE_BACKLOG"), (-30001, "CATALOGUE_BUNDLE_CLOCK_UNKNOWN")]
+)
+def test_baseline_distinguishes_young_bundle_work_from_overdue_and_future_clock(store, age, reason):
+    bounded(store)
+    observe(store, OutcomeWorker(store))
+    complete(store)
+    with patch("cryptowatcher.capacity.time.time", return_value=NOW / 1000):
+        baseline = stable_reason(store)
+        packet = store.db.execute("SELECT id FROM market_packets WHERE refs>0 LIMIT 1").fetchone()[0]
+        with store.db:
+            store.db.execute(
+                "UPDATE market_packets SET bundle_checked=0,bundle_since=? WHERE id=?", (NOW - age, packet)
+            )
+        actual = stable_reason(store)
+        assert [value for value in actual if value != reason] == baseline
+        assert reason is None or reason in actual
 
 
 @pytest.mark.asyncio

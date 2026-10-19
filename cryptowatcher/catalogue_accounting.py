@@ -63,6 +63,12 @@ def measure(store: Store, hot: dict[str, dict[str, int]]) -> dict[str, Any]:
     pending: dict[str, Any] = {"state": "N/A_NOT_INSTALLED"}
     if store.db.execute("SELECT 1 FROM market_meta WHERE key='catalogue_queue'").fetchone():
         pending = {"state": "MEASURED", **catalogue_queue.verify(store.db)}
+    bundles: dict[str, Any] = {"state": "N/A_NOT_INSTALLED"}
+    if store.db.execute("SELECT 1 FROM market_meta WHERE key='packet_bundles'").fetchone():
+        from . import packet_bundles
+
+        packet_bundles.validate(store.db)
+        bundles = {"state": "MEASURED", **packet_bundles.verify(store.db)}
     return {
         "state": "MEASURED",
         "method": "NATIVE_DOMAIN_AND_INDEX_COUNTS_WITH_CHECKED_TRANSACTIONAL_OVERLAPS",
@@ -70,6 +76,7 @@ def measure(store: Store, hot: dict[str, dict[str, int]]) -> dict[str, Any]:
         "indexes": observed,
         "overlaps": overlaps,
         "pending": pending,
+        "bundles": bundles,
         "public_namespace_records": public,
         "public_records_accounted": sum(public.values()),
         "limitations": [

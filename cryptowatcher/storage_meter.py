@@ -123,6 +123,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "source_block_indexes",
         "catalogue_overlap",
         "record_pending",
+        "bundle_pending",
     }
     if store.db.execute(
         "SELECT 1 FROM market_meta WHERE key='record_catalogue_runtime' AND value='1'"
@@ -312,6 +313,17 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
             "oldest_age_ms": max(0, now_ms - oldest) if oldest is not None else None,
         }
         source_tables.add("market_record_pending")
+    if store.db.execute("SELECT 1 FROM market_meta WHERE key='packet_bundles'").fetchone():
+        from .packet_bundles import INDEXES as bundle_indexes
+        from .packet_bundles import header as bundle_header
+
+        bundles = bundle_header(store.db)
+        oldest = bundles["oldest_ms"]
+        catalogue_layout["bundles"] = {
+            **bundles,
+            "oldest_age_ms": max(0, now_ms - oldest) if oldest is not None else None,
+        }
+        source_tables.update(bundle_indexes)
     indexes = store.get_runtime(
         "storage_index_measurement", {"state": "PENDING", "reason": "No bounded exact measurement yet"}
     )

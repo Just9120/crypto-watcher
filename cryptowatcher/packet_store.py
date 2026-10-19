@@ -187,12 +187,20 @@ def write_segment(
 
 
 def append(db: sqlite3.Connection, category: str, bucket: int, raw: bytes) -> int:
+    from .packet_bundles import installed
+
     with atomic(db):
         arena, offset = write_segment(db, category, bucket, raw)
-        row = db.execute(
-            "INSERT INTO market_packets(arena,offset,length,sha256) VALUES(?,?,?,?)",
-            (arena, offset, len(raw), hashlib.sha256(raw).digest()),
-        )
+        fields = (arena, offset, len(raw), hashlib.sha256(raw).digest())
+        if installed(db):
+            pending = category == "detail_packets"
+            row = db.execute(
+                "INSERT INTO market_packets(arena,offset,length,sha256,bundle_checked,bundle_since) "
+                "VALUES(?,?,?,?,?,CASE WHEN ? THEN cw_clock_ms() END)",
+                (*fields, 0 if pending else 1, pending),
+            )
+        else:
+            row = db.execute("INSERT INTO market_packets(arena,offset,length,sha256) VALUES(?,?,?,?)", fields)
         return int(row.lastrowid or 0)
 
 
