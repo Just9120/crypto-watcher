@@ -233,3 +233,51 @@ def test_discarded_empty_packet_candidate_rolls_back_every_speculative_write(sto
     with store.db:
         assert quality_packets.pack(store.db, values, "empty-candidate") == encode_facts(values)
     assert list(store.db.iterdump()) == before
+
+
+@pytest.mark.parametrize("cold", [False, True])
+@pytest.mark.parametrize("owners", [1, 2, 3])
+def test_shared_own_metric_survives_detail_expiry_without_promoting_singletons(store, cold, owners):
+    from cryptowatcher import numeric_blocks
+    from cryptowatcher.events import identity
+
+    enable(store.db)
+    if cold:
+        numeric_blocks.install(store.db, store.cached_bytes)
+        with store.db:
+            store.db.execute("INSERT INTO market_meta VALUES('numeric_block_runtime','1')")
+    value = fact(0, [metric(100 + i) for i in range(20)])
+    keys = []
+    with store.db:
+        ref = numeric_pool.encode_reference(store.db, value["metrics"])
+        for index in range(owners):
+            key = f"radar:v1:outcome:{identity(f'shared-own/{index}')}:0000000001"
+            keys.append(key)
+            store.put_runtime(
+                key,
+                {
+                    "_history_storage": {
+                        "schema": "cryptowatcher.shared-fields.v1",
+                        "fields": {"metrics": ref},
+                    }
+                },
+            )
+        raw = save(store, [value])
+    metric_id = numeric_pool.reference_id(ref)
+    assert numeric_pool.raw_many(store.db, {metric_id})[metric_id][1:3] == (
+        owners,
+        int(cold and owners >= 2),
+    )
+    with store.db:
+        store.db.executemany("DELETE FROM runtime WHERE key=?", [(key,) for key in keys])
+        numeric_pool.collect(store.db, 256)
+    assert encode(quality_packets.unpack(store.db, raw)) == encode([value])
+    with store.db:
+        store.db.execute("DELETE FROM market_quality")
+        for _ in range(12):
+            quality_packets.collect(store.db)
+        numeric_pool.collect(store.db, 256)
+    assert not store.db.execute("SELECT 1 FROM market_quality_dictionary").fetchone()
+    assert not store.db.execute("SELECT 1 FROM market_numeric").fetchone()
+    if cold:
+        assert numeric_blocks.summary(store.db)["live"] == 0

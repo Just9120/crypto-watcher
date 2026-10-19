@@ -445,6 +445,7 @@ def pack(db: sqlite3.Connection, facts: list[Any], cohort: str | None = None) ->
 
 
 def _pack(db: sqlite3.Connection, facts: list[Any], cohort: str | None = None) -> bytes:
+    from .numeric_blocks import installed, writing
     from .numeric_pool import encode_reference, existing_reference
     from .storage import encode
 
@@ -460,13 +461,18 @@ def _pack(db: sqlite3.Connection, facts: list[Any], cohort: str | None = None) -
 
         return encode_facts(facts)
     columns = intern(db, "columns", [[f["strength"], f["noise"]] for f in facts]) if len(facts) >= 8 else None
+    shared_minimum = 2 if installed(db) and writing(db) else 4
     rows = []
     for fact in facts:
         # A unique own result stays inline. Reuse an already retained quality
-        # body, or a body shared by at least four live immutable records. This
-        # avoids paying a separate SQLite row/index for every unique own value.
+        # body, or a body shared by multiple immutable records. Block storage
+        # amortizes the old per-value row cost; legacy rows keep the old cutoff.
         found = existing_reference(db, fact["metrics"])
-        own = found[0]["id"] if found is not None and (found[1] >= 4 or found[2] > 0) else [fact["metrics"]]
+        own = (
+            found[0]["id"]
+            if found is not None and (found[1] >= shared_minimum or found[2] > 0)
+            else [fact["metrics"]]
+        )
         values = []
         for metric in fact["comparator_metrics"]:
             reference = encode_reference(db, metric)
