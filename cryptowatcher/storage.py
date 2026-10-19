@@ -274,6 +274,13 @@ class Store:
             from .quality_summary import install
 
             install(self.db)
+            catalogue = self.db.execute("SELECT value FROM market_meta WHERE key='record_catalog'").fetchone()
+            if catalogue is not None:
+                if catalogue[0] != "2":
+                    raise StateError("Unknown record catalogue; database preserved")
+                from .record_ownership import install_functions as catalogue_functions
+
+                catalogue_functions(self.db, self.cached_text)
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA busy_timeout=5000")
         if not readonly:

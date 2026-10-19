@@ -200,3 +200,36 @@ def test_parameterized_templates_keep_population_values_types_and_multiple_metho
         ]
         == 1
     )
+
+
+def test_sparse_empty_comparators_share_metadata_without_inventing_samples(store):
+    enable(store.db)
+    values = [fact(7, [])]
+    with store.db:
+        raw = save(store, values)
+    assert raw.startswith(quality_packets.MAGIC)
+    assert encode(quality_packets.unpack(store.db, raw)) == encode(values)
+    assert quality_packets.ownership(store.db, raw)["numeric"] == []
+    assert store.db.execute("SELECT COUNT(*) FROM market_numeric").fetchone()[0] == 0
+    dense = [fact(i, []) for i in range(32)]
+    with store.db:
+        assert quality_packets.pack(store.db, dense) == encode_facts(dense)
+    with store.db:
+        store.db.execute("DELETE FROM market_quality")
+        quality_packets.collect(store.db)
+    assert store.db.execute("SELECT COUNT(*) FROM market_quality_dictionary").fetchone()[0] == 0
+
+
+def test_discarded_empty_packet_candidate_rolls_back_every_speculative_write(store, monkeypatch):
+    enable(store.db)
+    values = [fact(19, [])]
+    original = quality_packets._pack
+    before = list(store.db.iterdump())
+
+    def oversized(db, facts, cohort=None):
+        return original(db, facts, cohort) + bytes(4096)
+
+    monkeypatch.setattr(quality_packets, "_pack", oversized)
+    with store.db:
+        assert quality_packets.pack(store.db, values, "empty-candidate") == encode_facts(values)
+    assert list(store.db.iterdump()) == before

@@ -95,6 +95,20 @@ CH1 — frozen template для inline projected heads с полным SHA256. Fi
 reference extraction; Python Unicode sizes учитываются через фактический размер
 objects, cache не заменяет проверку наличия внешних bodies.
 
+DB1 catalogue primitives пока не включены в runtime/repack. Это frozen block
+с отдельно сжатыми projection/detail frames, полным SHA256 actual frames,
+проверкой UUID/revision/slot и allocation bounds до decompression. Каталог
+хранит immutable coordinates/parent deadlines и не дублирует integer rowid
+для primary domain key. Oversized отдельная запись требует прежнего layout.
+Append-only SQLite arenas публикуют packets атомарно; refs/verified relocation
+и GC не меняют logical packet identity. Numeric/source-window leases считаются
+по logical revision, shared JSON bodies — по packet до последнего владельца.
+Missing dependency/counter отклоняет удаление. Install/partial primitives
+не являются разрешением migration: полные mixed readers, analytics/export,
+retention/accounting adapters, finite restart и resource qualification нужны
+до выбора этого layout приложением. Existing Store open регистрирует UDF для
+уже установленного известного catalogue; DDL/migration при open не добавлены.
+
 #### Market layout v2: устройство
 
 Format2 включается только для нового reset candidate; schema1 не переписывается обычным open. Private tables сохраняются побайтно по значениям SQL rows; `reset_history.prepare` читает только private state, сохраняет private JSON recovery, проверяет restore на отдельном файле и integrity нового candidate. Он не удаляет и не переключает production. Host cutover/CI/artifact/unit/locks остаются отдельной обязательной процедурой.

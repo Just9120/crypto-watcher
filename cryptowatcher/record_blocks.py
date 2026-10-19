@@ -1,0 +1,225 @@
+"""Frozen lossless immutable domain blocks, independent of runtime activation.
+
+Projection and detail frames are separate. Metadata is bound to the actual
+compressed bytes by a full SHA256, so a catalogue slot can never silently name
+another public identity. Unsupported shapes remain in the legacy layout.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import struct
+import uuid
+from dataclasses import dataclass
+from typing import Any, Iterable, Iterator
+
+import zstandard
+
+from .record_codec import BINARY_MAGIC, TYPED_MAGIC, pack_binary, sql_payload
+from .storage import encode
+
+MAGIC = b"DB1\x00"
+KINDS = ("event", "outcome", "episode", "comparison", "decision")
+MAX_RECORDS = 64
+MAX_EXPANDED = 1024 * 1024
+MAX_PACKET = 512 * 1024
+HEAD_SCHEMA = "cryptowatcher.history-head.v1"
+
+
+@dataclass(frozen=True)
+class Coordinate:
+    kind: str
+    identity: str
+    revision: int
+
+    def validate(self) -> None:
+        if (
+            self.kind not in KINDS
+            or type(self.revision) is not int
+            or not 0 < self.revision <= 9999999999
+            or not isinstance(self.identity, str)
+            or str(uuid.UUID(self.identity)) != self.identity
+        ):
+            raise ValueError("Invalid domain record coordinate")
+
+    @property
+    def field(self) -> str:
+        return "event_id" if self.kind == "decision" else self.kind + "_id"
+
+    @property
+    def key(self) -> str:
+        prefix = "decision:telegram" if self.kind == "decision" else self.kind
+        return f"{prefix}:{self.identity}:{self.revision:010d}"
+
+
+def compact(coordinate: Coordinate, value: dict[str, Any]) -> dict[str, Any]:
+    coordinate.validate()
+    if (
+        not isinstance(value, dict)
+        or value.get(coordinate.field) != coordinate.identity
+        or type(value.get("revision")) is not int
+        or value["revision"] != coordinate.revision
+    ):
+        raise ValueError("Domain record does not match coordinate")
+    return {k: v for k, v in value.items() if k not in (coordinate.field, "revision")}
+
+
+def expanded(coordinate: Coordinate, value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or coordinate.field in value or "revision" in value:
+        raise ValueError("Invalid stripped domain record")
+    return {**value, coordinate.field: coordinate.identity, "revision": coordinate.revision}
+
+
+def head_compact(coordinate: Coordinate, head: dict[str, Any] | None) -> Any:
+    if head is None:
+        return None
+    if (
+        coordinate.kind == "decision"
+        or head.get("schema") != HEAD_SCHEMA
+        or head.get("revision_key") != coordinate.key
+    ):
+        raise ValueError("Invalid projected domain head")
+    result = compact(coordinate, head)
+    return {k: v for k, v in result.items() if k not in ("schema", "revision_key")}
+
+
+def head_expanded(coordinate: Coordinate, value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if (
+        coordinate.kind == "decision"
+        or not isinstance(value, dict)
+        or any(name in value for name in ("schema", "revision_key"))
+    ):
+        raise ValueError("Invalid projected block head")
+    return {**expanded(coordinate, value), "schema": HEAD_SCHEMA, "revision_key": coordinate.key}
+
+
+def batches(
+    entries: Iterable[tuple[Coordinate, dict[str, Any], dict[str, Any] | None]],
+) -> Iterator[list[tuple[Coordinate, dict[str, Any], dict[str, Any] | None]]]:
+    """Bound the materialized batch before compression, including projections.
+
+    A caller encountering an oversized single record must leave it in the
+    legacy layout. No data is truncated or silently removed from this iterator.
+    """
+    result: list[tuple[Coordinate, dict[str, Any], dict[str, Any] | None]] = []
+    size = 0
+    maximum = MAX_PACKET - 65536
+    for entry in entries:
+        coordinate, value, head = entry
+        coordinate.validate()
+        cost = len(encode(value).encode()) + len(encode(head).encode()) + 128
+        if cost > maximum:
+            raise ValueError("Domain record requires legacy storage")
+        if result and (len(result) == MAX_RECORDS or size + cost > maximum):
+            yield result
+            result, size = [], 0
+        result.append(entry)
+        size += cost
+    if result:
+        yield result
+
+
+def pack(entries: list[tuple[Coordinate, dict[str, Any], dict[str, Any] | None]]) -> bytes:
+    if not 0 < len(entries) <= MAX_RECORDS:
+        raise ValueError("Domain block record bound")
+    projections = []
+    bodies = []
+    seen = set()
+    for coordinate, value, head in entries:
+        if coordinate in seen:
+            raise ValueError("Repeated domain block coordinate")
+        seen.add(coordinate)
+        bodies.append(compact(coordinate, value))
+        projections.append(
+            [
+                KINDS.index(coordinate.kind),
+                coordinate.identity,
+                coordinate.revision,
+                head_compact(coordinate, head),
+            ]
+        )
+    texts = encode(projections), encode(bodies)
+    if sum(len(t.encode()) for t in texts) > MAX_EXPANDED:
+        raise ValueError("Expanded domain block bound")
+    projection, body = (pack_binary(t) for t in texts)
+    frames = struct.pack(">I", len(projection)) + projection + body
+    raw = MAGIC + hashlib.sha256(frames).digest() + frames
+    if len(raw) > MAX_PACKET:
+        raise ValueError("Compressed domain block bound")
+    decoded = parse(body)
+    if encode([expanded(c, v) for (c, _, _), v in zip(entries, decoded, strict=True)]) != encode(
+        [v for _, v, _ in entries]
+    ):
+        raise ValueError("Domain block changed records")
+    return raw
+
+
+def frames(raw: bytes) -> tuple[bytes, bytes]:
+    if (
+        not isinstance(raw, bytes)
+        or not 40 < len(raw) <= MAX_PACKET
+        or not raw.startswith(MAGIC)
+        or hashlib.sha256(raw[36:]).digest() != raw[4:36]
+    ):
+        raise ValueError("Invalid domain block checksum")
+    size = struct.unpack(">I", raw[36:40])[0]
+    if not 0 < size < len(raw) - 40:
+        raise ValueError("Invalid projected frame length")
+    return raw[40 : 40 + size], raw[40 + size :]
+
+
+def parse(frame: bytes) -> Any:
+    import json
+
+    if frame.startswith(TYPED_MAGIC):
+        offset = 40
+        if not 0 < int.from_bytes(frame[4:8], "big") <= MAX_EXPANDED:
+            raise ValueError("Expanded typed domain bound")
+    elif frame.startswith(BINARY_MAGIC):
+        offset = 36
+    else:
+        raise ValueError("Unsupported domain frame")
+    parameters = zstandard.get_frame_parameters(frame[offset:])
+    if not 0 < parameters.content_size <= MAX_EXPANDED or parameters.window_size > MAX_EXPANDED:
+        raise ValueError("Expanded domain frame bound")
+    # Bound allocation before decompressing; the underlying frozen typed codec
+    # then checks canonical bytes, finite numbers/types and framing.
+    text = sql_payload(frame)
+    if len(text.encode()) > MAX_EXPANDED:
+        raise ValueError("Expanded domain frame bound")
+    return json.loads(text)
+
+
+def projections(raw: bytes) -> list[tuple[Coordinate, dict[str, Any] | None]]:
+    values = parse(frames(raw)[0])
+    if not isinstance(values, list) or not 0 < len(values) <= MAX_RECORDS:
+        raise ValueError("Invalid domain projection shape")
+    result = []
+    seen = set()
+    for row in values:
+        if (
+            not isinstance(row, list)
+            or len(row) != 4
+            or type(row[0]) is not int
+            or not 0 <= row[0] < len(KINDS)
+        ):
+            raise ValueError("Invalid domain projection row")
+        coordinate = Coordinate(KINDS[row[0]], row[1], row[2])
+        coordinate.validate()
+        if coordinate in seen:
+            raise ValueError("Duplicate domain projection coordinate")
+        seen.add(coordinate)
+        result.append((coordinate, head_expanded(coordinate, row[3])))
+    return result
+
+
+def read(raw: bytes, slot: int, expected: Coordinate) -> dict[str, Any]:
+    values = projections(raw)
+    if type(slot) is not int or not 0 <= slot < len(values) or values[slot][0] != expected:
+        raise ValueError("Domain slot identity mismatch")
+    bodies = parse(frames(raw)[1])
+    if not isinstance(bodies, list) or len(bodies) != len(values):
+        raise ValueError("Domain body cardinality mismatch")
+    return expanded(expected, bodies[slot])

@@ -19,21 +19,21 @@ from .quality_layout import put
 from .quality_summary import create
 from .storage import encode
 
-MODEL_VERSION = "CQ4_NUMERIC2_LAYOUT3_V1"
+MODEL_VERSION = "CQ4_NUMERIC2_SPARSE1_V2"
 # Bounded qualification includes public facts and every private quality pool/index.
 COEFFICIENTS: tuple[dict[str, Any], ...] = (
     {
         "facts_per_cohort_day": 1,
         "comparators_per_fact": 0,
         "comparator_reuse": "INDEPENDENT_FIXTURE",
-        "encoded_bytes_per_fact": 196.0,
-        "packet_bytes_per_fact": 196.0,
+        "encoded_bytes_per_fact": 140.44642857142858,
+        "packet_bytes_per_fact": 139.0,
         "physical_bytes_per_fact": 219.42857142857142,
         "kind": "ISOLATED_CURRENT_CODEC_ALL_QUALITY_TABLES_AND_INDEXES",
         "recurring_cohort_days": 7,
         "cohorts": 8,
         "facts": 56,
-        "model_version": "CQ4_NUMERIC2_LAYOUT3_V1",
+        "model_version": "CQ4_NUMERIC2_SPARSE1_V2",
         "sqlite_version": "3.49.1",
         "public_sha256": "38ae547a7f2b16bd3cb61634442396961050dca7f2c79c5ae3eaae440c52b5e0",
     },
@@ -48,7 +48,7 @@ COEFFICIENTS: tuple[dict[str, Any], ...] = (
         "recurring_cohort_days": 7,
         "cohorts": 8,
         "facts": 1792,
-        "model_version": "CQ4_NUMERIC2_LAYOUT3_V1",
+        "model_version": "CQ4_NUMERIC2_SPARSE1_V2",
         "sqlite_version": "3.49.1",
         "public_sha256": "d195564194c302fdd5942df81cf36c1ca533088f47c7d683511a5e39811bce99",
     },
@@ -63,7 +63,7 @@ COEFFICIENTS: tuple[dict[str, Any], ...] = (
         "recurring_cohort_days": 7,
         "cohorts": 8,
         "facts": 7168,
-        "model_version": "CQ4_NUMERIC2_LAYOUT3_V1",
+        "model_version": "CQ4_NUMERIC2_SPARSE1_V2",
         "sqlite_version": "3.49.1",
         "public_sha256": "2bbcc4f6baba4250b85851d9590ef3b2186effb57feb0336b291c519c09b8069",
     },
@@ -78,7 +78,7 @@ COEFFICIENTS: tuple[dict[str, Any], ...] = (
         "recurring_cohort_days": 7,
         "cohorts": 8,
         "facts": 1792,
-        "model_version": "CQ4_NUMERIC2_LAYOUT3_V1",
+        "model_version": "CQ4_NUMERIC2_SPARSE1_V2",
         "sqlite_version": "3.49.1",
         "public_sha256": "875e502841cf5d2c0fa48b84622f90435047547d63b12042341fff3941b25a2d",
     },
@@ -93,7 +93,7 @@ COEFFICIENTS: tuple[dict[str, Any], ...] = (
         "recurring_cohort_days": 7,
         "cohorts": 8,
         "facts": 1792,
-        "model_version": "CQ4_NUMERIC2_LAYOUT3_V1",
+        "model_version": "CQ4_NUMERIC2_SPARSE1_V2",
         "sqlite_version": "3.49.1",
         "public_sha256": "17f0950098e9181bc3ba6436ae9764ad0dcdfe4422652a38c29e3a5b40062763",
     },

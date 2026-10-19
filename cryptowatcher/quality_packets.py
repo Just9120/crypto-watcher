@@ -370,6 +370,35 @@ def ownership(
 
 
 def pack(db: sqlite3.Connection, facts: list[Any], cohort: str | None = None) -> bytes:
+    from .quality_summary import encode_facts
+
+    if any(isinstance(f, dict) and f.get("comparator_metrics") for f in facts):
+        return _pack(db, facts, cohort)
+    legacy = encode_facts(facts)
+    if not 0 < len(facts) < 8 or not all(
+        isinstance(f, dict) and isinstance(f.get("comparator_metrics"), list) for f in facts
+    ):
+        return legacy
+    # Empty comparisons are never comparator-reuse evidence. Their repeated
+    # metadata can still share templates. Dense self-contained packets may be
+    # smaller: discard every speculative dictionary write on that fallback.
+    if not db.in_transaction:
+        db.execute("BEGIN")
+    db.execute("SAVEPOINT cw_empty_quality")
+    try:
+        candidate = _pack(db, facts, cohort)
+        if len(legacy) < len(candidate):
+            db.execute("ROLLBACK TO cw_empty_quality")
+            return legacy
+        return candidate
+    except BaseException:
+        db.execute("ROLLBACK TO cw_empty_quality")
+        raise
+    finally:
+        db.execute("RELEASE cw_empty_quality")
+
+
+def _pack(db: sqlite3.Connection, facts: list[Any], cohort: str | None = None) -> bytes:
     from .numeric_pool import encode_reference, existing_reference
     from .storage import encode
 
@@ -381,10 +410,6 @@ def pack(db: sqlite3.Connection, facts: list[Any], cohort: str | None = None) ->
         and all(isinstance(m, dict) for m in f["comparator_metrics"])
         for f in facts
     ):
-        from .quality_summary import encode_facts
-
-        return encode_facts(facts)
-    if not any(f["comparator_metrics"] for f in facts):
         from .quality_summary import encode_facts
 
         return encode_facts(facts)

@@ -134,6 +134,11 @@ def references(key: str, payload: Any) -> str:
     if isinstance(payload, str) and "source-ref" not in payload:
         return "[]"
     value = json_payload(payload)
+    return json.dumps(reference_ids(value))
+
+
+def reference_ids(value: Any) -> list[int]:
+    """Pure extraction shared by legacy records and frozen domain blocks."""
     ids: set[int] = set()
 
     def visit(item: Any, depth: int = 0) -> None:
@@ -162,4 +167,4 @@ def references(key: str, payload: Any) -> str:
                 visit(child, depth + 1)
 
     visit(value)
-    return json.dumps(sorted(ids))
+    return sorted(ids)
