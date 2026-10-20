@@ -13,7 +13,7 @@ import struct
 import time
 from typing import Any
 
-from . import metric_price_codec, numeric_refs, numeric_search
+from . import metric_price_codec, numeric_frames, numeric_refs, numeric_search
 from . import numeric_block_codec as codec
 from .candle_blocks import atomic
 from .numeric_pool import fingerprint
@@ -86,7 +86,7 @@ def read(db: sqlite3.Connection, block: int) -> tuple[list[bytes], list[int], li
     extra = ",r.detail_slots,r.search_seal" if search else ",-1,NULL"
     try:
         row = db.execute(
-            "SELECT b.payload,r.counts,r.unused,cw_numeric_frames(b.id,b.payload),cw_numeric_counts(b.id,r.counts)"
+            "SELECT b.payload,r.counts,r.unused,cw_numeric_data(b.id,b.payload),cw_numeric_counts(b.id,r.counts)"
             + extra
             + " FROM market_numeric_blocks b "
             "LEFT JOIN market_numeric_block_refs r ON r.id=b.id WHERE b.id=?",
@@ -103,8 +103,8 @@ def read(db: sqlite3.Connection, block: int) -> tuple[list[bytes], list[int], li
     # Every read authenticates actual bytes/header. Semantic metric validation
     # happens for materialized slots; immutable guards validate newly added ones.
     raw = bytes(row[0])
-    lengths = raw[44:108]
-    expanded = bytes(row[3])
+    value_data = bytes(row[3])
+    lengths, expanded = value_data[9:73], value_data[73:]
     frames = []
     offset = 0
     for length in lengths:
@@ -118,7 +118,15 @@ def read(db: sqlite3.Connection, block: int) -> tuple[list[bytes], list[int], li
         bool(frame) and not (details[i] or quality[i]) for i, frame in enumerate(frames)
     ):
         raise ValueError("Numeric slot/lease mismatch")
-    numeric_search.checked(block, raw, bytes(row[1]), row[5], row[6], details)
+    numeric_search.checked(
+        block,
+        raw,
+        bytes(row[1]),
+        row[5],
+        row[6],
+        details,
+        binding=value_data if numeric_frames.coordinate(raw) is not None else None,
+    )
     return frames, details, quality, bytes(row[0])
 
 
@@ -214,7 +222,7 @@ def put(
             [(signature(f), block * 64 + i + 1) for i, f in enumerate(old[0]) if f],
         )
         sealed = False
-    if old is not None and frames == old[0]:
+    if old is not None and frames == old[0] and (numeric_frames.coordinate(old[3]) is None or sealed):
         # Lease churn cannot change an immutable body. Keep its authenticated
         # encoding, including a representation chosen by an earlier writer.
         raw = old[3]
@@ -243,7 +251,7 @@ def put(
                 (block, raw),
             )
         if modern:
-            seal = numeric_search.signature(block, raw, refs) if sealed else None
+            seal = numeric_search.bound_signature(db, block, raw, refs) if sealed else None
             db.execute(
                 "INSERT INTO market_numeric_block_refs(id,counts,unused,detail_slots,search_seal) VALUES(?,?,?,?,?) "
                 "ON CONFLICT(id) DO UPDATE SET counts=excluded.counts,unused=excluded.unused,"
@@ -324,7 +332,7 @@ def values_many(db: sqlite3.Connection, ids: set[int]) -> dict[int, bytes]:
     for block, group in groups.items():
         try:
             row = db.execute(
-                "SELECT b.payload,r.counts,cw_numeric_frames(b.id,b.payload)"
+                "SELECT b.payload,r.counts,cw_numeric_data(b.id,b.payload)"
                 + extra
                 + " FROM market_numeric_blocks b "
                 "LEFT JOIN market_numeric_block_refs r ON r.id=b.id WHERE b.id=?",
@@ -341,8 +349,16 @@ def values_many(db: sqlite3.Connection, ids: set[int]) -> dict[int, bytes]:
         counts = numeric_refs.header(db, bytes(row[1]))
         if struct.unpack(">Q", counts[:8])[0] != block:
             raise ValueError("Numeric lease identity mismatch")
-        sealed = numeric_search.checked(block, bytes(row[0]), bytes(row[1]), row[3], row[4])
-        lengths, expanded = bytes(row[0])[44:108], bytes(row[2])
+        sealed = numeric_search.checked(
+            block,
+            bytes(row[0]),
+            bytes(row[1]),
+            row[3],
+            row[4],
+            binding=bytes(row[2]) if numeric_frames.coordinate(bytes(row[0])) is not None else None,
+        )
+        value_data = bytes(row[2])
+        lengths, expanded = value_data[9:73], value_data[73:]
         for identity, slot in group:
             size = lengths[slot]
             if size:
@@ -587,9 +603,13 @@ def summary(db: sqlite3.Connection) -> dict[str, Any]:
 
 
 def install_functions(db: sqlite3.Connection, cache: Any = None) -> None:
+    numeric_frames.install_functions(db, cache)
+
     def expanded(block: int, raw: bytes | None, counts: bool = False) -> bytes | None:
         if raw is None:
             return None
+        if not counts:
+            raw = numeric_frames.block_bytes(db, block, raw, cache)
         if not counts and raw[:4] == b"NB2\x00" and not price_layout(db):
             raise ValueError("NB2 requires an explicit price layout upgrade")
         body = numeric_refs.header(db, raw) if counts else codec.header(raw)
@@ -611,7 +631,24 @@ def install_functions(db: sqlite3.Connection, cache: Any = None) -> None:
     db.create_function("cw_numeric_frames", 2, expanded)
     db.create_function("cw_numeric_counts", 2, lambda block, raw: expanded(block, raw, True))
 
+    def value_data(block: int, raw: bytes) -> bytes:
+        bound = numeric_frames.signed_bytes(db, block, raw, cache)
+        if bound is not None:
+            return bound
+        values = expanded(block, raw)
+        assert values is not None
+        return struct.pack(">Q", block) + bytes([int(raw.startswith(b"NB2\x00"))]) + raw[44:108] + values
+
+    db.create_function("cw_numeric_data", 2, value_data)
+    db.create_function(
+        "cw_numeric_block_bytes", 2, lambda block, raw: numeric_frames.block_bytes(db, block, raw, cache)
+    )
+    db.create_function(
+        "cw_numeric_frame_binding", 2, lambda block, raw: numeric_frames.signed_bytes(db, block, raw, cache)
+    )
+
     def admitted(block: int, raw: bytes) -> int:
+        raw = numeric_frames.block_bytes(db, block, raw, cache, admission=True)
         if raw[:4] == b"NB2\x00" and not price_writing(db):
             raise ValueError("NB2 admission requires explicit writer activation")
         frames = codec.unpack(raw, block)
@@ -621,8 +658,14 @@ def install_functions(db: sqlite3.Connection, cache: Any = None) -> None:
         return 1
 
     def change(block: int, old: bytes, new: bytes | None) -> int:
-        before = codec.unpack(old, block, validate=False)
-        after = codec.unpack(new, block, validate=False) if new is not None else [b""] * 64
+        before = codec.unpack(numeric_frames.block_bytes(db, block, old, cache), block, validate=False)
+        after = (
+            codec.unpack(
+                numeric_frames.block_bytes(db, block, new, cache, admission=True), block, validate=False
+            )
+            if new is not None
+            else [b""] * 64
+        )
         counts_row = db.execute(
             "SELECT counts FROM market_numeric_block_refs WHERE id=?", (block,)
         ).fetchone()
@@ -681,7 +724,7 @@ def install(db: sqlite3.Connection, cache: Any = None) -> None:
             BEGIN SELECT RAISE(ABORT,'Retained numeric metric'); END""")
         # DDL is statement-by-statement: executescript would commit the caller.
         for statement in (
-            "CREATE TABLE market_numeric_blocks(id INTEGER PRIMARY KEY CHECK(id>=0 AND id<=144115188075855871),payload BLOB NOT NULL CHECK(typeof(payload)='blob' AND length(payload) BETWEEN 109 AND 4096))",
+            numeric_frames.TABLE_SQL,
             f"CREATE TABLE market_numeric_block_refs(id INTEGER PRIMARY KEY REFERENCES market_numeric_blocks(id),counts BLOB NOT NULL CHECK({numeric_refs.COUNTS_CHECK}),unused INTEGER NOT NULL CHECK(typeof(unused)='integer' AND unused BETWEEN 0 AND 64))",
             "CREATE INDEX market_numeric_block_unused ON market_numeric_block_refs(unused,id) WHERE unused>0",
             "CREATE TABLE market_numeric_block_lookup(fingerprint BLOB NOT NULL CHECK(length(fingerprint)=8),id INTEGER NOT NULL CHECK(id>0),PRIMARY KEY(fingerprint,id)) WITHOUT ROWID",

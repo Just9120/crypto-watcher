@@ -124,6 +124,32 @@ initial reclaim подтверждается отдельно. Mixed NR1/NR2 rea
 allocation/cohort reports и public/export contracts сохраняются. Component
 compression ratio не означает такой же экономии whole archive или capacity PASS.
 
+Explicit `numeric_frames=1` допускает NF1 coordinates в новом guarded NB table.
+BF1 объединяет до64закрытых quality-only blocks, каждый с прежними64metric slots.
+Container хранит IDs, format flags, lengths и exact literal/PR1 operand bytes;
+BR1/BP1 и checksummed Zstd выбирают меньшее представление без округления.
+Раскрытие ограничено143941bytes до decompression; dictionary, unknown size,
+oversized window, trailing frame, duplicate IDs и invalid slots отвергаются.
+Один OW1 mask с full checksum связывает владельцев с текущими NF1 coordinates.
+Publication выполняет immutable comparison, CAS и counter updates в одной outer
+transaction; failure откатывает контейнер и все опубликованные coordinates.
+Lease-only changes не переписывают container. Detail renewal восстанавливает
+обычный NB block и полный search index; GC удаляет только необладаемые slots
+и сохраняет retained bytes/positions. Старые WAL readers видят прежний snapshot.
+
+Для NF1 positive seal NS2 связывает ID, actual pointer, uncompressed typed metric
+bytes и actual NR bytes; одной подписи указателя недостаточно. Чтение не зависит
+от повторного получения source prices или результата будущего NB compressor.
+NS1 и прежние NB/NR readers остаются неизменными. Actual container/owner/counter
+binding проверяется перед pure reuse в прежнем shared1MiB cache. Unknown/missing
+layout или dependency не превращается в пустой результат. `NB_COMPAT` сохраняет
+старый populated unreleased CHECK109 table без rebuild и без NF1 writer; normal
+conversion published541 создаёт guarded NF1-capable table сразу. `Store` только
+validates установленный mode. Новые container bytes учитываются отдельной
+`quality_numeric_frames` category без повторного счёта numeric block payload.
+Эти primitives включаются явно; их наличие не подтверждает runtime queue,
+полные capacity boundaries, native service или25GB qualification.
+
 Архивный CQ5 packet сохраняет прежний public fact JSON. Общие templates,
 strength/noise columns и точные ordered comparator lists не меняют методику,
 N, ограничения и population_size. Comparator coordinates хранятся внутри packet

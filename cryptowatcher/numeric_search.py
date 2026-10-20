@@ -38,11 +38,30 @@ def installed(db: sqlite3.Connection) -> bool:
     return row is not None and row[0] == "3"
 
 
-def signature(block: int, payload: bytes, counts: bytes) -> bytes:
+def signature(block: int, payload: bytes, counts: bytes, *, binding: bytes | None = None) -> bytes:
     from .numeric_block_codec import block_number
 
     block_number(block)
+    if payload.startswith(b"NF1\x00"):
+        if not isinstance(binding, bytes) or len(binding) < 73:
+            raise ValueError("Missing numeric frame value binding")
+        return hashlib.sha256(b"NS2\x00" + struct.pack(">Q", block) + payload + binding + counts).digest()
+    if binding is not None:
+        raise ValueError("Unexpected numeric frame value binding")
     return hashlib.sha256(b"NS1\x00" + struct.pack(">Q", block) + payload + counts).digest()
+
+
+def binding(db: sqlite3.Connection, block: int, payload: bytes) -> bytes | None:
+    if not payload.startswith(b"NF1\x00"):
+        return None
+    row = db.execute("SELECT cw_numeric_frame_binding(?,?)", (block, payload)).fetchone()
+    if row is None or row[0] is None:
+        raise ValueError("Missing numeric frame value binding")
+    return bytes(row[0])
+
+
+def bound_signature(db: sqlite3.Connection, block: int, payload: bytes, counts: bytes) -> bytes:
+    return signature(block, payload, counts, binding=binding(db, block, payload))
 
 
 def fields(db: sqlite3.Connection, block: int) -> tuple[int, bytes | None]:
@@ -63,18 +82,22 @@ def checked(
     detail_slots: int,
     seal: bytes | None,
     details: list[int] | None = None,
+    *,
+    binding: bytes | None = None,
 ) -> bool:
     if type(detail_slots) is not int or not -1 <= detail_slots <= 64:
         raise ValueError("Invalid numeric search detail count")
     if details is not None and detail_slots >= 0 and detail_slots != sum(bool(v) for v in details):
         raise ValueError("Numeric search detail count mismatch")
     if seal is None:
+        if payload.startswith(b"NF1\x00"):
+            raise ValueError("Missing or corrupt positive numeric search seal")
         return False
     if (
         detail_slots != 0
         or not isinstance(seal, bytes)
         or len(seal) != 32
-        or seal != signature(block, payload, counts)
+        or seal != signature(block, payload, counts, binding=binding)
     ):
         raise ValueError("Missing or corrupt positive numeric search seal")
     return True
@@ -90,7 +113,8 @@ def sealed(db: sqlite3.Connection, block: int) -> bool:
     ).fetchone()
     if row is None:
         raise ValueError("Missing numeric search state")
-    return checked(block, bytes(row[0]), bytes(row[1]), row[2], row[3])
+    raw = bytes(row[0])
+    return checked(block, raw, bytes(row[1]), row[2], row[3], binding=binding(db, block, raw))
 
 
 def index_bytes(n: int, state: tuple[int, bytes | None]) -> int | None:
@@ -172,7 +196,7 @@ def qualify(db: sqlite3.Connection, block: int) -> None:
             ).rowcount
             if deleted != len(coordinates):
                 raise ValueError("Numeric search retirement lost a coordinate")
-            seal = signature(block, payload, bytes(counts))
+            seal = bound_signature(db, block, payload, bytes(counts))
         after = blocks.allocation(
             block,
             frames,

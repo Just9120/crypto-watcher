@@ -8,7 +8,9 @@ from typing import Any
 from .storage import Store
 
 BUDGET = 25_000_000_000
-QUALITY_CATEGORIES = frozenset({"quality", "quality_numeric", "quality_components", "quality_frames"})
+QUALITY_CATEGORIES = frozenset(
+    {"quality", "quality_numeric", "quality_components", "quality_frames", "quality_numeric_frames"}
+)
 SAMPLE_FORMAT = 9
 
 
@@ -290,6 +292,13 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
             "market_numeric_transfer",
             "market_numeric_gc",
         }
+        from . import numeric_frames
+
+        numeric_layout["frame_mode"] = numeric_frames.mode(store.db)
+        if numeric_layout["frame_mode"] is not None:
+            numeric_frames.header(store.db)
+        if numeric_frames.writing(store.db):
+            source_tables.add("market_numeric_frames")
     catalogue_layout: dict[str, Any] = {"state": "LEGACY_DOMAIN_ROWS"}
     catalogue = store.db.execute("SELECT value FROM market_meta WHERE key='record_catalog'").fetchone()
     if catalogue is not None:

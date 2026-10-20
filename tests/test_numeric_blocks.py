@@ -254,7 +254,13 @@ def test_corruption_is_detected_on_actual_read_and_prevents_owner_publication(st
             store.db.execute("DELETE FROM market_numeric_block_refs")
         else:
             store.db.execute("DROP TRIGGER market_numeric_block_guard")
-            store.db.execute("UPDATE market_numeric_blocks SET payload=zeroblob(length(payload))")
+            with pytest.raises(sqlite3.IntegrityError, match="CHECK"):
+                store.db.execute("UPDATE market_numeric_blocks SET payload=zeroblob(length(payload))")
+            # The new CHECK rejects an unknown format even without the guard.
+            # Incremental BLOB I/O still models corruption below SQL triggers.
+            block = codec.coordinate(identity_value)[0]
+            with store.db.blobopen("market_numeric_blocks", "payload", block) as blob:
+                blob.write(bytes(len(blob)))
     before = list(store.db.iterdump())
     with pytest.raises(ValueError):
         numeric_pool.load(store.db, identity_value)
