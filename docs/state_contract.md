@@ -244,6 +244,16 @@ parent event. Срок используемой точки равен MAX(raw35d
 pending diagnostics сохраняются через reopen; обычные bounded passes возобновляются
 после разгрузки retention. Начальные boundaries не объявляются готовыми заранее.
 
+Retention сохраняет старейший выбранный seed и может добавить до7due parents
+того же actual native tuple из существующего64-row indexed hint range. Eligibility
+проверяется после LIMIT, по current expiry/observed/cutoff; truncated hash не заменяет
+полное сравнение native fields. Прежний50ms admission deadline и общий caller batch
+limit сохраняются. Суммарный encoded prepared charge группы не превышает1MiB;
+single/legacy/unsupported случай использует прежний путь. Все quality summaries
+публикуются до удаления любого parent в одной writer transaction. Любой отказ
+откатывает summaries, owners, leases, removals и telemetry вместе. Extras вне
+первоначального due window не продвигают его cursor и не дают отрицательный остаток.
+
 В существующем rotating worker добавлена конечная initial граница
 stream/kind/time и отдельная persistent live очередь с первым queued_at.
 Full64-point chunks доступны сразу; tails8..63 — после закрытия UTC дня,

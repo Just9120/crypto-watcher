@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from itertools import islice
+from typing import Any
 
 from . import catalogue_aliases, catalogue_lifecycle, catalogue_reader, record_blocks, record_catalog
 from .events import PREFIX
@@ -60,6 +62,58 @@ def due_events(store: Store, now: int, cutoff: int, batch: int) -> EventBatch:
         # The merged admission limit may leave later hot rows unselected.
         next_cursor = min(next_cursor, selected[-1][0])
     return EventBatch(selected, next_cursor)
+
+
+def archive_candidates(
+    store: Store, seed: dict[str, Any], now: int, cutoff: int, deadline: float
+) -> Iterator[tuple[str, dict[str, Any]]]:
+    """Bounded hints only; the oldest selected seed always expires first."""
+    from . import parent_affinity
+    from .events import History
+
+    fields = parent_affinity.native(seed)
+    if fields is None or not parent_affinity.installed(store.db):
+        return
+    try:
+        identity = record_catalog.binary(seed["event_id"])
+    except (ValueError, TypeError, AttributeError):
+        return
+    hint = store.db.execute(
+        "SELECT a.day,a.fingerprint,p.observed,p.expires FROM market_record_parents p "
+        "JOIN market_parent_affinity a ON a.parent=p.id WHERE p.public_uuid=?",
+        (identity,),
+    ).fetchone()
+    if (
+        hint is None
+        or bytes(hint[1]) != parent_affinity.fingerprint(fields)
+        or hint[2] != seed.get("market_observation_ms")
+        or hint[2] >= cutoff
+        or hint[3] > now
+    ):
+        return
+    # LIMIT precedes eligibility filtering, so a future-heavy day cannot turn
+    # this optional lookup into an unbounded scan of rejected parent rows.
+    rows = store.db.execute(
+        "SELECT p.public_uuid,p.observed,p.expires FROM market_parent_affinity a "
+        "INDEXED BY market_parent_affinity_cohort "
+        "JOIN market_record_parents p ON p.id=a.parent WHERE a.day=? AND a.fingerprint=? "
+        "ORDER BY a.parent LIMIT 64",
+        tuple(hint[:2]),
+    ).fetchall()
+    history = History(store)
+    for public, observed, expires in sorted(rows, key=lambda row: (row[1], bytes(row[0]))):
+        if time.monotonic() >= deadline:
+            return
+        if bytes(public) == identity or expires > now or observed >= cutoff:
+            continue
+        event_id = str(uuid.UUID(bytes=bytes(public)))
+        event = history.metadata("event-head:" + event_id)
+        if (
+            event is not None
+            and parent_affinity.native(event) == fields
+            and event.get("market_observation_ms") == observed
+        ):
+            yield PREFIX + f"history:{observed:016d}:" + event_id, event
 
 
 def remove_event(store: Store, event_id: str, terminal: Callable[[str, str], None]) -> int:

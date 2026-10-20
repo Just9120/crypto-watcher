@@ -199,7 +199,8 @@ class BoundedRetention:
     def work(self, now_ms: int, batch: int = 200) -> int:
         from .events import History
         from .history_codec import BLOB_PREFIX
-        from .quality_summary import archive_event
+        from .quality_summary import archive_event, archive_facts, prepare_event_facts
+        from .storage import encode
 
         store = self.store
         started = time.monotonic()
@@ -214,28 +215,61 @@ class BoundedRetention:
         due = selected.rows
         deadline = time.monotonic() + 0.05
         processed = 0
+        retired: set[str] = set()
+        due_keys = {row[0] for row in due}
         with store.db:
             # Repair only these two singleton scheduling indexes from initial v2.
             # A permanent target failure is retained until an owner re-enables it.
             for singleton in (PREFIX + "target:telegram", PREFIX + "agent:target"):
                 remove_expiry(store.db, singleton)
             for row in due:
-                if time.monotonic() >= deadline:
+                if row[0] in retired:
+                    continue
+                if processed >= batch or time.monotonic() >= deadline:
                     break
                 eid = row[1]["event_id"]
                 event = history.metadata("event-head:" + eid)
                 if event is not None:
-                    archive_event(store, event)
+                    events = [(row[0], event)]
+                    prepared = None
+                    charge = 0
+                    if min(8, batch - processed) > 1:
+                        for key, candidate in catalogue_retention.archive_candidates(
+                            store, event, now_ms, cutoff, deadline
+                        ):
+                            if key in retired:
+                                continue
+                            if prepared is None:
+                                prepared = prepare_event_facts(store, event)
+                                charge = len(encode(prepared).encode())
+                            if charge >= 1024 * 1024 or time.monotonic() >= deadline:
+                                break
+                            facts = prepare_event_facts(store, candidate)
+                            extra = len(encode(facts).encode())
+                            if charge + extra > 1024 * 1024:
+                                break
+                            prepared.extend(facts)
+                            charge += extra
+                            events.append((key, candidate))
+                            if len(events) >= min(8, batch - processed):
+                                break
+                    if len(events) > 1:
+                        assert prepared is not None
+                        archive_facts(store, prepared)
+                    else:
+                        archive_event(store, event)
                 else:
                     from .storage import StateError
 
                     raise StateError("Missing retained event head during expiry; data preserved")
-                removed += catalogue_retention.remove_event(store, eid, self._terminal)
-                remove(store, row[0])
-                processed += 1
+                for key, current in events:
+                    removed += catalogue_retention.remove_event(store, current["event_id"], self._terminal)
+                    remove(store, key)
+                    retired.add(key)
+                    processed += 1
             store.db.execute(
                 "INSERT INTO market_meta VALUES('retention_history_cursor',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (selected.cursor if processed == len(due) else "",),
+                (selected.cursor if due_keys <= retired else "",),
             )
             # Service receipts expire first. They do not keep detail alive indefinitely.
             from .expiry_index import due_services
@@ -385,7 +419,7 @@ class BoundedRetention:
             telemetry = {
                 "at_ms": now_ms,
                 "expired_events": processed,
-                "remaining_due_batch": len(due) - processed,
+                "remaining_due_batch": len(due_keys - retired),
                 "removed_services": service_removed,
                 "removed_candles": len(candles) + removed_source_versions,
                 "removed_context": len(contexts) + removed_context_tiles,
