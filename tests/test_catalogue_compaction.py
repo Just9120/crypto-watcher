@@ -303,7 +303,7 @@ def test_fresh_reader_rejects_missing_bundle_guard(store):
         Store(store.path, store.owner_id, readonly=True)
 
 
-def sparse_arena(store):
+def sparse_arena(store, removed=2):
     from tests.test_record_catalog import prepare
 
     prepare(store)
@@ -316,7 +316,7 @@ def sparse_arena(store):
         for identity in identities:
             packet_store.retain(store.db, identity)
             packet_bundles.checked(store.db, identity)
-        for identity in identities[:2]:
+        for identity in identities[:removed]:
             packet_store.release(store.db, identity)
         packet_store.collect(store.db)
     return identities[-1]
@@ -361,4 +361,104 @@ def test_sparse_arena_failure_rolls_back_new_blob_bytes_position_and_counters(st
         with store.db:
             store.db.execute("BEGIN IMMEDIATE")
             catalogue_compaction.evacuate(store)
+    assert list(store.db.iterdump()) == before
+
+
+def legacy_bundle_index(store):
+    with store.db:
+        store.db.execute("DROP INDEX market_bundle_sparse")
+        store.db.execute(
+            "CREATE INDEX market_bundle_sparse ON market_packet_arenas(category,bucket,id) WHERE "
+            + packet_bundles.LEGACY_SPARSE
+        )
+        store.db.execute("UPDATE market_meta SET value='1' WHERE key='packet_bundles'")
+    packet_bundles.validate(store.db)
+
+
+def test_moderately_fragmented_arena_upgrade_and_finite_drain_preserve_old_reader(store):
+    sparse_arena(store, removed=1)
+    expected = {
+        identity: packet_store.read(store.db, identity)
+        for (identity,) in store.db.execute("SELECT id FROM market_packets WHERE refs>0")
+    }
+    assert len(expected) == 2
+    legacy_bundle_index(store)
+    assert packet_bundles.sparse(store.db) is None
+    with closing(Store(store.path, store.owner_id, readonly=True)) as reader:
+        reader.db.execute("BEGIN")
+        assert packet_bundles.sparse(reader.db) is None
+        before = list(store.db.execute("SELECT * FROM market_counts ORDER BY category"))
+        packet_bundles.install(store.db)
+        assert list(store.db.execute("SELECT * FROM market_counts ORDER BY category")) == before
+        assert packet_bundles.sparse(store.db) is not None
+        plan = " ".join(
+            row[3]
+            for row in store.db.execute(
+                "EXPLAIN QUERY PLAN SELECT id FROM market_packet_arenas WHERE "
+                + packet_bundles.SPARSE
+                + " ORDER BY category,bucket,id LIMIT 1"
+            )
+        )
+        assert "market_bundle_sparse" in plan and "TEMP B-TREE" not in plan
+        state = {}
+        settle(store, state)
+        assert state["packets_relocated"] == 2
+        assert packet_bundles.sparse(reader.db) is None  # The original v1 snapshot.
+        assert {identity: packet_store.read(reader.db, identity) for identity in expected} == expected
+        reader.db.rollback()
+        assert {identity: packet_store.read(reader.db, identity) for identity in expected} == expected
+    with closing(Store(store.path, store.owner_id, readonly=True)) as reader:
+        assert {identity: packet_store.read(reader.db, identity) for identity in expected} == expected
+        assert packet_bundles.sparse(reader.db) is None
+    packet_bundles.install(store.db)  # Idempotent v2 install, no work requeued.
+    assert store.db.execute("SELECT count(*) FROM market_packet_arenas").fetchone()[0] == 1
+    assert store.db.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_bundle_index_upgrade_ddl_failure_keeps_legacy_marker_guards_and_bytes(store):
+    sparse_arena(store, removed=1)
+    legacy_bundle_index(store)
+    before = list(store.db.iterdump())
+
+    def deny_index(action, first, _second, _database, _trigger):
+        return (
+            sqlite3.SQLITE_DENY
+            if action == sqlite3.SQLITE_CREATE_INDEX and first == "market_bundle_sparse"
+            else sqlite3.SQLITE_OK
+        )
+
+    store.db.set_authorizer(deny_index)
+    try:
+        with pytest.raises(sqlite3.DatabaseError, match="authorized"):
+            packet_bundles.install(store.db)
+    finally:
+        store.db.set_authorizer(None)
+    assert list(store.db.iterdump()) == before
+    packet_bundles.validate(store.db)
+    with closing(Store(store.path, store.owner_id, readonly=True)) as reader:
+        packet_bundles.validate(reader.db)
+    packet_bundles.install(store.db)
+    assert packet_bundles.sparse(store.db) is not None
+
+
+@pytest.mark.parametrize("size,count,removed", [(200000, 4, 1), (250000, 3, 1)])
+def test_density_work_excludes_three_quarter_live_ratio_and_open_append_tails(store, size, count, removed):
+    from tests.test_record_catalog import prepare
+
+    prepare(store)
+    packet_bundles.install(store.db)
+    with store.db:
+        store.db.execute("BEGIN IMMEDIATE")
+        identities = [packet_store.append(store.db, "detail_packets", 130, b"x" * size) for _ in range(count)]
+        for identity in identities:
+            packet_store.retain(store.db, identity)
+            packet_bundles.checked(store.db, identity)
+        for identity in identities[:removed]:
+            packet_store.release(store.db, identity)
+        packet_store.collect(store.db)
+    assert packet_bundles.sparse(store.db) is None
+    before = list(store.db.iterdump())
+    with store.db:
+        store.db.execute("BEGIN IMMEDIATE")
+        assert catalogue_compaction.evacuate(store) is None
     assert list(store.db.iterdump()) == before

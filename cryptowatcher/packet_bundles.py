@@ -13,7 +13,11 @@ from typing import Any
 from .storage import StateError
 
 CATEGORY = "bundle_pending"
-SPARSE = "category='detail_packets' AND used>786432 AND live_bytes<used/2 AND live_packets>0"
+LEGACY_SPARSE = "category='detail_packets' AND used>786432 AND live_bytes<used/2 AND live_packets>0"
+# A closed arena may otherwise retain almost half its allocation indefinitely.
+# The gap between the admission threshold and the live ratio bounds copying to
+# less than three live bytes per obsolete byte; open append tails stay excluded.
+SPARSE = "category='detail_packets' AND used>786432 AND live_bytes*4<used*3 AND live_packets>0"
 INDEXES = {
     "market_bundle_pending": "CREATE INDEX market_bundle_pending ON market_packets(id) WHERE bundle_checked=0 AND refs>0",
     "market_bundle_age": "CREATE INDEX market_bundle_age ON market_packets(bundle_since,id) WHERE bundle_checked=0 AND refs>0",
@@ -66,11 +70,15 @@ TRIGGERS = {
 }
 
 
-def installed(db: sqlite3.Connection) -> bool:
+def _layout(db: sqlite3.Connection) -> str | None:
     row = db.execute("SELECT value FROM market_meta WHERE key='packet_bundles'").fetchone()
-    if row is not None and row[0] != "1":
+    if row is not None and row[0] not in ("1", "2"):
         raise StateError("Unknown packet bundle layout; data preserved")
-    return row is not None
+    return row[0] if row is not None else None
+
+
+def installed(db: sqlite3.Connection) -> bool:
+    return _layout(db) is not None
 
 
 def validate(db: sqlite3.Connection) -> None:
@@ -79,7 +87,13 @@ def validate(db: sqlite3.Connection) -> None:
     columns = [r[1] for r in db.execute("PRAGMA table_info(market_packets)")]
     if columns != ["id", "arena", "offset", "length", "sha256", "refs", "bundle_checked", "bundle_since"]:
         raise StateError("Unknown packet bundle columns")
-    for name, sql in {**INDEXES, **TRIGGERS}.items():
+    expected = {**INDEXES, **TRIGGERS}
+    if _layout(db) == "1":
+        expected["market_bundle_sparse"] = (
+            "CREATE INDEX market_bundle_sparse ON market_packet_arenas(category,bucket,id) WHERE "
+            + LEGACY_SPARSE
+        )
+    for name, sql in expected.items():
         row = db.execute("SELECT sql FROM sqlite_master WHERE name=?", (name,)).fetchone()
         if row is None or " ".join(row[0].split()) != " ".join(sql.split()):
             raise StateError("Missing or unknown packet bundle guard")
@@ -89,6 +103,23 @@ def validate(db: sqlite3.Connection) -> None:
 def install(db: sqlite3.Connection) -> None:
     if installed(db):
         validate(db)
+        if _layout(db) == "1":
+            if db.in_transaction:
+                raise StateError("Packet bundle upgrade requires an outer boundary")
+            # Validate the old guards before replacing only the bounded work
+            # index. Marker and DDL commit together, including on failed DDL.
+            with db:
+                db.execute("BEGIN IMMEDIATE")
+                validate(db)
+                db.execute("DROP INDEX market_bundle_sparse")
+                db.execute(INDEXES["market_bundle_sparse"])
+                if (
+                    db.execute(
+                        "UPDATE market_meta SET value='2' WHERE key='packet_bundles' AND value='1'"
+                    ).rowcount
+                    != 1
+                ):
+                    raise StateError("Changed packet bundle upgrade marker")
         return
     if db.in_transaction:
         raise StateError("Packet bundle installation requires an outer boundary")
@@ -108,7 +139,7 @@ def install(db: sqlite3.Connection) -> None:
         db.execute("INSERT INTO market_counts VALUES('bundle_pending',0,0,0,0)")
         for sql in (*INDEXES.values(), *TRIGGERS.values()):
             db.execute(sql)
-        db.execute("INSERT INTO market_meta VALUES('packet_bundles','1')")
+        db.execute("INSERT INTO market_meta VALUES('packet_bundles','2')")
 
 
 def header(db: sqlite3.Connection) -> dict[str, Any]:
@@ -148,8 +179,9 @@ def header(db: sqlite3.Connection) -> dict[str, Any]:
 
 
 def sparse(db: sqlite3.Connection) -> int | None:
+    predicate = LEGACY_SPARSE if _layout(db) == "1" else SPARSE
     row = db.execute(
-        f"SELECT id FROM market_packet_arenas WHERE {SPARSE} ORDER BY category,bucket,id LIMIT 1"
+        f"SELECT id FROM market_packet_arenas WHERE {predicate} ORDER BY category,bucket,id LIMIT 1"
     ).fetchone()
     return row[0] if row is not None else None
 
