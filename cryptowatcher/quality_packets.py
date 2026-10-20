@@ -26,6 +26,10 @@ MAXIMUM = 1024 * 1024
 MAX_CHAIN = 8
 
 
+class AppendSizeError(ValueError):
+    """The valid retained prefix and new facts need separate bounded chunks."""
+
+
 def packed(value: Any) -> bytes:
     from .storage import encode
 
@@ -499,35 +503,52 @@ def append(
     expected_count: int | None = None,
 ) -> bytes:
     """Append one fact without re-interning retained prefix numeric coordinates."""
+    return append_many(db, raw, [fact], cohort, expected_count=expected_count)
+
+
+def append_many(
+    db: sqlite3.Connection,
+    raw: bytes,
+    facts: list[Any],
+    cohort: str | None = None,
+    *,
+    expected_count: int | None = None,
+) -> bytes:
+    """Authenticate one retained prefix before a bounded ordered append."""
     from .quality_summary import encode_facts
     from .storage import encode
 
+    if not isinstance(facts, list) or not 0 < len(facts) < 128:
+        raise ValueError("Quality append requires a bounded nonempty fact list")
     protected_prefix = db.in_transaction
     previous = unpack(db, raw)
     if expected_count is not None and (type(expected_count) is not int or expected_count != len(previous)):
         raise ValueError("Quality append count disagrees with retained packet")
-    if not 0 < len(previous) < 128:
+    if not 0 < len(previous) < 128 or len(previous) + len(facts) > 128:
         raise ValueError("Quality append requires a nonempty incomplete packet")
-    expected = [*previous, fact]
+    expected = [*previous, *facts]
+    if len(encode(expected).encode()) > MAXIMUM:
+        raise AppendSizeError("Decoded quality exceeds bound")
     if raw.startswith((LEGACY_MAGIC, PARAMETER_MAGIC, VIEW_MAGIC)):
         raw = repack(db, raw, cohort)
     if not raw.startswith((MAGIC, FRAME_MAGIC)):
         return pack(db, expected, cohort)
-    single = _pack(db, [fact], cohort)
+    single = _pack(db, facts, cohort)
     if not single.startswith(MAGIC):
         return pack(db, expected, cohort)
     rows, columns = packet(raw, db)
-    added, _ = packet(single)
+    added, added_columns = packet(single)
     pairs = row(db, columns, "columns")[0] if columns is not None else [value[4:] for value in rows]
-    pairs = [*pairs, added[0][4:]]
+    added_pairs = (
+        row(db, added_columns, "columns")[0] if added_columns is not None else [value[4:] for value in added]
+    )
+    pairs = [*pairs, *added_pairs]
     columns = intern(db, "columns", pairs) if len(expected) >= 8 else None
     rows = [
         [*value[:4], *([] if columns is not None else pair)]
-        for value, pair in zip([*rows, added[0]], pairs, strict=True)
+        for value, pair in zip([*rows, *added], pairs, strict=True)
     ]
     result = envelope(rows, columns)
-    if len(encode(expected).encode()) > MAXIMUM:
-        raise ValueError("Decoded quality exceeds bound")
     # The prefix was fully authenticated/materialized above, and _pack checked
     # the new fact. Immutable dictionary/numeric coordinates bind their values.
     # Verify every coordinate, ordered comparator, slot and scalar after the

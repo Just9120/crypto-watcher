@@ -155,6 +155,14 @@ Current existence/kind/parent/depth/checksum/content hash читаются и с
 Lease counts и DB existence не кешируются. Rollback, GC и смена snapshot не превращают cache hit в проверку
 состояния. CQ1/CQ2/CQ4 и connections без cache используют прежний extractor.
 CQ1/CQ2/CQ4 prefix сначала преобразуется с прежними numeric IDs/leases.
+Подготовка archive facts читает frozen outcomes/settings/methods без DML.
+Публикация группирует подготовленные facts по day/cohort/exact provenance,
+сохраняя их порядок внутри группы, прежние128facts/chunk и1MiB public bound.
+Append-many один раз проверяет сохранённый prefix, оставляя его numeric IDs/views
+и ordered comparator vectors прежними. Byte-full partial chunk остаётся сохранён:
+specific size rejection до interning начинает следующий chunk; corruption errors
+не перехватываются. Parent deletion остаётся в той же внешней transaction.
+Отбор нескольких due parents этим core не включается автоматически.
 QF1 coordinate (`frame ID`, slot0..63) может заменять logical CQ5 packet.
 Shared IF1 frame содержит до64blocks одного birth day с admission1MiB expanded;
 day/cohort/chunk и scalar strength/noise сохранены внутри каждой записи.
