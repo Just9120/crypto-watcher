@@ -144,6 +144,18 @@ round trip. Лимит полного decoded JSON остаётся1MiB. Ownersh
 раз за read и возвращают отдельные public dicts. Persistent cache/новый format
 и изменение scalar lease counts этим не вводятся.
 CQ1/CQ2/CQ4 prefix сначала преобразуется с прежними numeric IDs/leases.
+QF1 coordinate (`frame ID`, slot0..63) может заменять logical CQ5 packet.
+Shared IF1 frame содержит до64blocks одного birth day с admission1MiB expanded;
+day/cohort/chunk и scalar strength/noise сохранены внутри каждой записи.
+Numeric IDs/frames/leases, ordered comparator vectors и public JSON не меняются.
+Ownership mask и checksum обновляются атомарно с публикацией pointers. Partial
+expiry очищает только unowned slots; последняя ссылка освобождает frame.
+Late append возвращает block в CQ5 с прежними prefix coordinates и ставит его
+в durable очередь. Partial frontier tail остаётся CQ5 до следующего UTC дня;
+full128fact block допустим сразу. queued_at не обновляется повторным write,
+eligible_at отделяет штатную открытую границу от просроченной очереди.
+QF1 устанавливается только explicit maintenance на известном layout3;
+Store open регистрирует readers, без DDL и автоматической миграции.
 Provenance body живёт до последнего
 зависимого block. GC всех зависимостей конечен и учитывается как выполненная
 retention work даже после удаления последнего event.

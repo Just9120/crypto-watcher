@@ -15,6 +15,7 @@ from typing import Any
 
 from . import compact_json, quality_vector
 from .market_storage import decoded
+from .quality_frames import MAGIC as FRAME_MAGIC
 from .record_codec import json_value, pack_binary
 
 LEGACY_MAGIC = b"CQ1\x00"
@@ -42,8 +43,10 @@ def positive(value: Any) -> int:
 
 
 def install_functions(db: sqlite3.Connection) -> None:
+    from .quality_frames import install_functions as frame_functions
     from .storage import encode
 
+    frame_functions(db)
     db.create_function("cw_quality_json", 1, lambda raw: encode(unpack(db, bytes(raw))))
     db.create_function("cw_quality_refs", 1, lambda raw: json.dumps(ownership(db, bytes(raw))))
 
@@ -320,7 +323,13 @@ def intern(db: sqlite3.Connection, kind: str, value: Any, *, hint: str | None = 
     return identity
 
 
-def packet(raw: bytes) -> list[Any]:
+def packet(raw: bytes, db: sqlite3.Connection | None = None) -> list[Any]:
+    if raw.startswith(FRAME_MAGIC):
+        from .quality_frames import packet as framed_packet
+
+        if db is None:
+            raise ValueError("Quality frame requires its retained database")
+        return framed_packet(db, raw)
     if len(raw) > MAXIMUM:
         raise ValueError("Quality packet exceeds bound")
     value = json_value(raw[len(MAGIC) :])
@@ -390,9 +399,9 @@ def ownership(
 ) -> dict[str, list[int]]:
     if cache is None:
         cache = {}
-    if not raw.startswith((MAGIC, VIEW_MAGIC, PARAMETER_MAGIC, LEGACY_MAGIC)):
+    if not raw.startswith((MAGIC, FRAME_MAGIC, VIEW_MAGIC, PARAMETER_MAGIC, LEGACY_MAGIC)):
         return {"pool": [], "numeric": []}
-    rows, columns = packet(raw)
+    rows, columns = packet(raw, db)
     pool: set[int] = set()
     numbers: set[int] = set()
     if columns is not None:
@@ -400,9 +409,9 @@ def ownership(
         values, parent, depth = row(db, columns, "columns", cache)
         if parent is not None or depth or not isinstance(values, list) or len(values) != len(rows):
             raise ValueError("Invalid quality columns")
-    modern = raw.startswith((MAGIC, VIEW_MAGIC, PARAMETER_MAGIC))
-    views = raw.startswith((MAGIC, VIEW_MAGIC))
-    inline = raw.startswith(MAGIC)
+    modern = raw.startswith((MAGIC, FRAME_MAGIC, VIEW_MAGIC, PARAMETER_MAGIC))
+    views = raw.startswith((MAGIC, FRAME_MAGIC, VIEW_MAGIC))
+    inline = raw.startswith((MAGIC, FRAME_MAGIC))
     for value in rows:
         if not isinstance(value, list) or len(value) != (
             (4 if columns is not None else 6) if modern else (3 if columns is not None else 5)
@@ -486,12 +495,12 @@ def append(
     expected = [*previous, fact]
     if raw.startswith((LEGACY_MAGIC, PARAMETER_MAGIC, VIEW_MAGIC)):
         raw = repack(db, raw, cohort)
-    if not raw.startswith(MAGIC):
+    if not raw.startswith((MAGIC, FRAME_MAGIC)):
         return pack(db, expected, cohort)
     single = _pack(db, [fact], cohort)
     if not single.startswith(MAGIC):
         return pack(db, expected, cohort)
-    rows, columns = packet(raw)
+    rows, columns = packet(raw, db)
     added, _ = packet(single)
     pairs = row(db, columns, "columns")[0] if columns is not None else [value[4:] for value in rows]
     pairs = [*pairs, added[0][4:]]
@@ -525,9 +534,9 @@ def append(
 
 
 def _append_rows(db: sqlite3.Connection, raw: bytes) -> list[Any]:
-    if not raw.startswith(MAGIC):
+    if not raw.startswith((MAGIC, FRAME_MAGIC)):
         raise ValueError("Invalid quality append format")
-    rows, columns = packet(raw)
+    rows, columns = packet(raw, db)
     if any(not isinstance(value, list) for value in rows):
         raise ValueError("Invalid quality append row")
     if columns is not None:
@@ -619,7 +628,7 @@ def repack(db: sqlite3.Connection, raw: bytes, cohort: str | None = None) -> byt
     """Retained CQ1/2/4 coordinates keep their exact numeric IDs and leases."""
     from .storage import encode
 
-    if raw.startswith(MAGIC):
+    if raw.startswith((MAGIC, FRAME_MAGIC)):
         return raw
     if not raw.startswith((VIEW_MAGIC, PARAMETER_MAGIC, LEGACY_MAGIC)):
         return pack(db, unpack(db, raw), cohort)
@@ -661,15 +670,15 @@ def unpack(db: sqlite3.Connection, raw: bytes) -> list[Any]:
     from .numeric_pool import load_many, reference_value
     from .storage import encode
 
-    if not raw.startswith((MAGIC, VIEW_MAGIC, PARAMETER_MAGIC, LEGACY_MAGIC)):
+    if not raw.startswith((MAGIC, FRAME_MAGIC, VIEW_MAGIC, PARAMETER_MAGIC, LEGACY_MAGIC)):
         return decoded(raw, MAXIMUM)
     cache: dict[Any, Any] = {}
     refs = ownership(db, raw, cache)
     numbers = load_many(db, set(refs["numeric"]))
-    rows, column_id = packet(raw)
-    modern = raw.startswith((MAGIC, VIEW_MAGIC, PARAMETER_MAGIC))
-    views = raw.startswith((MAGIC, VIEW_MAGIC))
-    inline = raw.startswith(MAGIC)
+    rows, column_id = packet(raw, db)
+    modern = raw.startswith((MAGIC, FRAME_MAGIC, VIEW_MAGIC, PARAMETER_MAGIC))
+    views = raw.startswith((MAGIC, FRAME_MAGIC, VIEW_MAGIC))
+    inline = raw.startswith((MAGIC, FRAME_MAGIC))
     columns = row(db, column_id, "columns", cache)[0] if column_id is not None else None
     result = []
     metrics: dict[int, dict[str, Any]] = {}
