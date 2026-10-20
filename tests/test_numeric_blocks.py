@@ -78,6 +78,42 @@ def test_codec_preserves_all_float_bits_integer_flags_sparse_slots_and_bounds():
             codec.coordinate(invalid)
 
 
+def test_lease_only_adjustment_keeps_payload_without_blob_write(store):
+    setup(store)
+    value = metric(37)
+    with store.db:
+        identity = numeric_pool.intern(store.db, value)
+    block, _ = codec.coordinate(identity)
+    payload = bytes(
+        store.db.execute("SELECT payload FROM market_numeric_blocks WHERE id=?", (block,)).fetchone()[0]
+    )
+    store.db.executescript("""
+        CREATE TEMP TABLE payload_writes(n INTEGER NOT NULL);
+        INSERT INTO payload_writes VALUES(0);
+        CREATE TEMP TRIGGER count_payload_writes AFTER UPDATE OF payload ON main.market_numeric_blocks BEGIN
+            UPDATE payload_writes SET n=n+1;
+        END;
+    """)
+    with store.db:
+        numeric_pool.adjust(store.db, {identity}, "detail_refs", 1)
+    assert blocks.load_many(store.db, {identity})[identity][1:3] == (1, 0)
+    with pytest.raises(RuntimeError), store.db:
+        numeric_pool.adjust(store.db, {identity}, "quality_refs", 1)
+        raise RuntimeError("rollback lease")
+    assert blocks.load_many(store.db, {identity})[identity][1:3] == (1, 0)
+    with store.db:
+        numeric_pool.adjust(store.db, {identity}, "detail_refs", -1)
+    assert blocks.load_many(store.db, {identity})[identity][1:3] == (0, 0)
+    assert encode(numeric_pool.load(store.db, identity)) == encode(value)
+    assert (
+        bytes(
+            store.db.execute("SELECT payload FROM market_numeric_blocks WHERE id=?", (block,)).fetchone()[0]
+        )
+        == payload
+    )
+    assert store.db.execute("SELECT n FROM payload_writes").fetchone()[0] == 0
+
+
 def test_legacy_transfer_keeps_ids_views_leases_restart_and_issued_high_water(store):
     enable(store.db)
     store.bounded = True

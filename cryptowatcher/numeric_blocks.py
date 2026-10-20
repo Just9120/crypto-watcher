@@ -214,8 +214,17 @@ def put(
             [(signature(f), block * 64 + i + 1) for i, f in enumerate(old[0]) if f],
         )
         sealed = False
-    predicted = any(f and f[0] in (17, 18, 19) for f in frames)
-    raw = codec.pack(block, frames, recipes=price_layout(db) if predicted else False) if any(frames) else b""
+    if old is not None and frames == old[0]:
+        # Lease churn cannot change an immutable body. Keep its authenticated
+        # encoding, including a representation chosen by an earlier writer.
+        raw = old[3]
+    else:
+        predicted = any(f and f[0] in (17, 18, 19) for f in frames)
+        raw = (
+            codec.pack(block, frames, recipes=price_layout(db) if predicted else False)
+            if any(frames)
+            else b""
+        )
     search_size = (40 if sealed else 8 + 16 * sum(bool(f) for f in frames)) if modern else None
     refs = codec.counts(block, details, quality, compressed=numeric_refs.writing(db))
     after = allocation(
@@ -228,10 +237,11 @@ def put(
     digest(updated)
     if after[0]:
         unused = sum(bool(f) and not (details[i] or quality[i]) for i, f in enumerate(frames))
-        db.execute(
-            "INSERT INTO market_numeric_blocks VALUES(?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
-            (block, raw),
-        )
+        if old is None or raw != old[3]:
+            db.execute(
+                "INSERT INTO market_numeric_blocks VALUES(?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
+                (block, raw),
+            )
         if modern:
             seal = numeric_search.signature(block, raw, refs) if sealed else None
             db.execute(

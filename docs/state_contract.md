@@ -68,6 +68,9 @@ lookup presence и актуальные leases проверяются при ч�
 block/counts/lookup относятся к detail/quality proportional frame lengths,
 quality lease имеет прежний приоритет над detail. Это logical attribution;
 SQLite tables/indexes/free pages/WAL/SHM/journal измеряются отдельно целиком.
+Lease-only changes сохраняют уже проверенные encoded numeric body bytes и не
+выполняют BLOB UPDATE этого тела. Counts, allocation/totals и search seal всё
+так же обновляются атомарно; новые или изменённые slots проходят прежние guards.
 Старые numeric rows остаются читаемыми до finite transfer. После новых writes
 требуется compatible reader/forward-fix; native и mature capacity gates прежние.
 
@@ -225,6 +228,14 @@ samples/event-frequency и учитывает cold/queue bytes и новые nat
 Production upgrade, native/resource SLO и mature whole25GB proof ещё необходимы;
 component equality/physical saving этих gates не заменяет. Recovery после
 выбора writer требует compatible reader/forward-fix.
+
+Capacity context нельзя механически считать как OHLCV prior28d плюс detail30d.
+Штатный producer выбирает latest context по server cutoff, а dependency anchor
+фиксирует market observation event. При raw35d/detail30d это даёт raw window
+и максимум одного старого predecessor на stream/kind после gap. Это условная
+оценка для этого пути, а не сокращение retention. Explicit older references,
+frozen leases прежних policies и прочие exceptions сохраняются по прежнему MAX
+и должны учитываться отдельным измеренным хвостом; без него whole bound не доказан.
 
 Repack20 добавляет явный `parent_affinity=1`: native hint по UTC expiry day и
 полному cohort ключу market/symbol/TF/detector/direction/settings revision.
