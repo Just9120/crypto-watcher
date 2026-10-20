@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sqlite3
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -63,6 +64,7 @@ def message(tf="1m", symbol="BTCUSDT", confirm=True, start=NOW, **changes):
 @pytest.fixture
 def radar(store):
     instance = BybitRadar(store)
+    instance.connector = lambda *args, **kwargs: Socket()
     instance.observe_clock(NOW)
     for market in ("spot", "linear"):
         item, _ = classify(market, metadata(market=market))
@@ -95,6 +97,127 @@ def test_persisted_block_diagnostics_are_exact_bounded_and_distinguish_inactive_
     assert value["blocked_streams"] == 0
     assert value["blocked_reasons"] == {} and value["blocked_stream_samples"] == []
     assert not value["blocked_stream_samples_truncated"]
+
+
+async def test_retiring_session_cannot_freeze_discovery_and_partial_scope_is_retryable(radar, monkeypatch):
+    entered = asyncio.Event()
+    closing = asyncio.Event()
+    release = asyncio.Event()
+
+    async def old_socket():
+        try:
+            entered.set()
+            await asyncio.Event().wait()
+        finally:
+            closing.set()
+            await release.wait()
+
+    old = asyncio.create_task(old_socket())
+    retained = asyncio.create_task(asyncio.Event().wait())
+    await entered.wait()
+    radar._groups = {
+        market + ":0": tuple(sorted(s for s in radar.streams if s.startswith(market + "/")))
+        for market in ("spot", "linear")
+    }
+    radar._sessions = {"linear:0": old, "spot:0": retained}
+    radar.connections = {
+        name: {"state": "CONNECTED", "requested": len(group), "acknowledged": len(group)}
+        for name, group in radar._groups.items()
+    }
+    before = radar.store.snapshot()
+    current = radar.store.update(
+        before.revision,
+        before.settings.changed(alert_universe_mode="custom", watchlist=("spot/BTCUSDT",)),
+    )
+    monkeypatch.setattr(ingestion, "SESSION_SHUTDOWN_SECONDS", 0.01, raising=False)
+    try:
+        with pytest.raises(MarketError, match="subscription_shutdown_timeout"):
+            await asyncio.wait_for(radar.reconcile(current.settings), 0.5)
+        assert closing.is_set()
+        assert radar.streams == {"spot/BTCUSDT/" + tf for tf in TIMEFRAMES}
+        assert radar._groups["linear:0"] and not radar.scope_synced()
+        await asyncio.sleep(0)
+        await asyncio.wait_for(radar.reconcile(current.settings), 0.5)
+        assert set(radar._groups) == set(radar._sessions) == {"spot:0"}
+        assert radar._sessions["spot:0"] is retained and not retained.done()
+        assert radar.scope_synced() and radar.components_healthy()
+        assert radar.store.snapshot() == current
+    finally:
+        release.set()
+        await radar.close()
+
+
+async def test_manager_retains_sanitized_failure_and_continues_refresh(radar, monkeypatch):
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def refresh(settings):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise sqlite3.OperationalError("fixture_private_error_body")
+        entered.set()
+        await release.wait()
+
+    monkeypatch.setattr(radar, "refresh", refresh)
+    monkeypatch.setattr(ingestion, "MANAGER_INTERVAL_SECONDS", 0.01, raising=False)
+    task = asyncio.create_task(radar._manager())
+    radar._tasks = [task]
+    try:
+        await asyncio.wait_for(entered.wait(), 0.5)
+        assert not task.done() and calls == 2
+        radar.persist_diagnostics()
+        value = radar.store.get_runtime("ingestion")
+        assert value["manager_failures"]["count"] == 1
+        assert value["manager_failures"]["last_error_class"] == "OperationalError"
+        assert "fixture_private_error_body" not in json.dumps(value)
+    finally:
+        release.set()
+        await radar.close()
+
+
+async def test_configuration_retries_partial_scope_after_retirement_timeout(radar, monkeypatch):
+    retried = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+    current = radar.store.snapshot()
+
+    async def reconcile(settings):
+        nonlocal calls
+        calls += 1
+        radar._scope_revision = current.revision
+        if calls == 1:
+            raise MarketError("subscription_shutdown_timeout")
+        retried.set()
+        await release.wait()
+
+    monkeypatch.setattr(radar, "reconcile", reconcile)
+    monkeypatch.setattr(ingestion, "MANAGER_INTERVAL_SECONDS", 0.01)
+    task = asyncio.create_task(radar._configuration_loop())
+    radar._tasks = [task]
+    try:
+        await asyncio.wait_for(retried.wait(), 0.5)
+        assert calls == 2 and not task.done()
+        assert radar.market_errors["configuration"] == "subscription_shutdown_timeout"
+        assert radar.store.snapshot() == current
+    finally:
+        release.set()
+        await radar.close()
+
+
+async def test_independent_diagnostics_expose_finished_component_and_discovery_ages(radar):
+    task = asyncio.create_task(asyncio.sleep(0))
+    await task
+    radar._tasks = [task]
+    radar.persist_diagnostics()
+    value = radar.store.get_runtime("ingestion")
+    assert value["components_healthy"] is False
+    assert value["components"][0]["state"] == "FINISHED"
+    for market in ("spot", "linear"):
+        assert value["discovery"][market]["metadata_age_seconds"] > 600
+        assert value["discovery"][market]["ticker_age_seconds"] > 300
+    await radar.close()
 
 
 async def test_owner_scope_applies_while_rest_manager_is_waiting(radar, monkeypatch):

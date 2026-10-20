@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import sqlite3
@@ -9,6 +10,7 @@ import time
 from collections import Counter, defaultdict
 from typing import Any
 
+from .config import METADATA_REFRESH_SECONDS, SOURCE_REFRESH_GRACE_SECONDS, TICKER_REFRESH_SECONDS
 from .events import PREFIX, History
 from .history_codec import Codec
 from .queue_health import snapshot as queue_snapshot
@@ -293,12 +295,39 @@ def stable_reason(store: Store) -> list[str]:
             reasons.append(key.upper())
     if ingestion.get("market_errors"):
         reasons.append("MARKET_ERRORS")
+    if ingestion.get("components_healthy") is not True:
+        reasons.append("INGESTION_COMPONENTS_NOT_CURRENT")
+    if ingestion.get("scope_synced") is not True:
+        reasons.append("SUBSCRIPTION_SCOPE_PENDING")
+    discovery = ingestion.get("discovery", {})
+    frame_age = max(0, time.time() - ingestion.get("at", 0))
+    for kind, field, ready, cadence in (
+        ("METADATA", "metadata_age_seconds", "metadata_ready", METADATA_REFRESH_SECONDS),
+        ("TICKERS", "ticker_age_seconds", "tickers_ready", TICKER_REFRESH_SECONDS),
+    ):
+        if any(
+            discovery.get(market, {}).get(ready) is not True
+            or type(age := discovery.get(market, {}).get(field)) not in (int, float)
+            or not math.isfinite(age)
+            or not 0 <= age
+            or age + frame_age > cadence + SOURCE_REFRESH_GRACE_SECONDS
+            for market in ("spot", "linear")
+        ):
+            reasons.append(kind + "_STALE_OR_UNKNOWN")
     connections = ingestion.get("subscriptions", {})
     if not connections or any(
         c.get("state") != "CONNECTED" or c.get("requested") != c.get("acknowledged")
         for c in connections.values()
     ):
         reasons.append("SUBSCRIPTION_ACK")
+    if any(c.get("task_state") != "RUNNING" for c in connections.values()):
+        reasons.append("SUBSCRIPTION_TASK_NOT_CURRENT")
+    if any(
+        type(received := c.get("last_received_ms")) is not int
+        or not -5000 <= int(time.time() * 1000) - received <= 90000
+        for c in connections.values()
+    ):
+        reasons.append("SUBSCRIPTION_STALE")
     if not store.get_runtime("radar:v1:outcome-admission", {}).get("complete"):
         reasons.append("OUTCOME_BOOTSTRAP")
     # Referenced analytics backfill has a different queue from live ingestion

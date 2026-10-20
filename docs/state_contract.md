@@ -385,6 +385,18 @@ recovery не создаёт live alert. До ACK/rejection buffer не пише
 Это bounded transient ingestion state, не durable consumer outbox и не history;
 restart восстанавливает пропуски существующим source recovery.
 
+`ingestion` публикует `components_healthy`, named `components`, `scope_synced`,
+`manager_failures` без exception bodies, per-market `metadata_age_seconds` /
+`ticker_age_seconds` и per-subscription `task_state` / `last_received_ms`.
+RUNNING task не доказывает свежесть source. Clean baseline требует обеих readiness
+flags, конечных неотрицательных ages не старше600/300s +60s request/reconcile grace
+с добавлением возраста diagnostic snapshot; каждый acknowledged subscription должен
+принадлежать RUNNING task и иметь receipt не старше90s (receive65s + retirement15s
++10s allowance), будущий receipt допускается лишь в пределах5s clock skew.
+Прежние diagnostic frames без новых полей не считаются clean baseline.
+Незавершённый retirement не теряет ownership и не создаёт overlapping sockets;
+повторный reconcile завершает частичный scope без новой owner revision.
+
 Physical SQLite user_version остаётся1. Public immutable revisions могут содержать
 `_history_storage` / `cryptowatcher.shared-fields.v1`: content-addressed ссылки на
 полные lossless settings/context/windows; head `cryptowatcher.history-head.v1`

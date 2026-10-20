@@ -205,7 +205,26 @@ def test_stable_baseline_distinguishes_referenced_backfill_from_normal_pending_h
                 "recovery_pending": 0,
                 "recovery_working": 0,
                 "historical_gaps_pending": 0,
-                "subscriptions": {"spot:0": {"state": "CONNECTED", "requested": 1, "acknowledged": 1}},
+                "components_healthy": True,
+                "scope_synced": True,
+                "discovery": {
+                    market: {
+                        "metadata_ready": True,
+                        "tickers_ready": True,
+                        "metadata_age_seconds": 0,
+                        "ticker_age_seconds": 0,
+                    }
+                    for market in ("spot", "linear")
+                },
+                "subscriptions": {
+                    "spot:0": {
+                        "state": "CONNECTED",
+                        "requested": 1,
+                        "acknowledged": 1,
+                        "task_state": "RUNNING",
+                        "last_received_ms": NOW,
+                    }
+                },
             },
         )
         store.put_runtime("radar:v1:outcome-admission", {"complete": True})
@@ -221,6 +240,45 @@ def test_stable_baseline_distinguishes_referenced_backfill_from_normal_pending_h
     assert complete["state"] == "COMPLETE"
     with patch("cryptowatcher.capacity.time.time", return_value=NOW / 1000):
         assert stable_reason(store) == []
+        import copy
+
+        healthy = store.get_runtime("ingestion")
+        for field, limit, reason in (
+            ("metadata_age_seconds", 660, "METADATA_STALE_OR_UNKNOWN"),
+            ("ticker_age_seconds", 360, "TICKERS_STALE_OR_UNKNOWN"),
+        ):
+            for invalid in (None, True, -1, limit + 0.001, 40 * 3600):
+                changed = copy.deepcopy(healthy)
+                changed["discovery"]["linear"][field] = invalid
+                store.put_runtime("ingestion", changed)
+                assert stable_reason(store) == [reason]
+            changed["discovery"]["linear"][field] = limit
+            store.put_runtime("ingestion", changed)
+            assert stable_reason(store) == []
+            store.put_runtime("ingestion", healthy)
+        for field, reason in (
+            ("components_healthy", "INGESTION_COMPONENTS_NOT_CURRENT"),
+            ("scope_synced", "SUBSCRIPTION_SCOPE_PENDING"),
+        ):
+            changed = {**healthy, field: False}
+            store.put_runtime("ingestion", changed)
+            assert stable_reason(store) == [reason]
+        changed = copy.deepcopy(healthy)
+        changed["subscriptions"]["spot:0"]["last_received_ms"] = NOW - 40 * 3600 * 1000
+        store.put_runtime("ingestion", changed)
+        assert stable_reason(store) == ["SUBSCRIPTION_STALE"]
+        changed["subscriptions"]["spot:0"]["last_received_ms"] = NOW
+        changed["subscriptions"]["spot:0"]["task_state"] = "STOPPING"
+        store.put_runtime("ingestion", changed)
+        assert stable_reason(store) == ["SUBSCRIPTION_TASK_NOT_CURRENT"]
+        store.put_runtime("ingestion", healthy)
+        assert stable_reason(store) == []
+        changed = copy.deepcopy(healthy)
+        changed["at"] -= 20
+        changed["discovery"]["linear"]["ticker_age_seconds"] = 350
+        store.put_runtime("ingestion", changed)
+        assert stable_reason(store) == ["TICKERS_STALE_OR_UNKNOWN"]
+        store.put_runtime("ingestion", healthy)
         with store.db:
             History(store).put("analytics-gap-pending:queued", {"id": "referenced-backfill"})
         assert stable_reason(store) == ["ANALYTICS_RECOVERY_PENDING"]

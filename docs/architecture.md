@@ -35,6 +35,16 @@ Binding/activation/recovery — в [agent procedure](runbooks/agent-delivery.md)
 
 Owner configuration loop применяет смену selected source scope независимо от REST discovery/backoff. Reconcile сериализован; завершившийся старый REST refresh перечитывает owner revision и не возвращает прежний scope. Диагностика отдельно показывает revision applied scope, metadata readiness, freshness и completeness.
 
+Retirement прежних WS tasks ограничен15s: при timeout ownership/groups сохраняются,
+replacement не запускается до их завершения. Manager и configuration loop повторяют
+незавершённый reconcile даже при уже применённом active stream set/revision.
+Неожиданная ошибка refresh сохраняет безопасный class/code/count/time и не завершает
+discovery task; cancellation по-прежнему распространяется. Независимая диагностика
+показывает named tasks, STOPPING/FAILED, соответствие groups/sessions/connections и
+возраст последнего успешного metadata/ticker refresh для обоих рынков.
+Cadence600/300s сохраняется; допустимый refresh grace60s не меняет HTTP/backoff policy.
+Delivery и clean capacity baseline требуют актуальных discovery и согласованного scope.
+
 Network I/O выполняется вне DB transactions. Snapshot до market fetch имеет revision; смена settings во время fetch отменяет применение результата. Alerts маркируют использованную revision. SQLite update использует compare-and-swap; отправка сообщения не удерживает DB/state lock.
 
 Analytics calculations выполняются через `analytics_worker.py` в отдельном thread с собственным read-only WAL snapshot connection и `query_only`. Application event loop остаётся единственным writer: применяет результат только при совпадении сохранённой job с прочитанной, атомарно сохраняет revision/protected sources/intents и фиксирует фактический completion time как availability. Отмена reader не меняет pending work. Outcome/comparator batches ограничены256/64 jobs и2s между завершёнными calculations; отдельный долгий calculation не обрывается с fabricated metrics. Между writer-side results происходит yield. Telegram analytics/diagnostics также читаются в отдельном snapshot; дорогие diagnostic counts имеют общий3s budget и показывают PENDING вместо выдуманного0. WS/recovery snapshot публикуется отдельным5s task независимо от REST discovery/backoff; возраст snapshot виден явно.

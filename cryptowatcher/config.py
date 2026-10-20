@@ -12,6 +12,9 @@ from typing import Any, Mapping
 from .detector_config import FAMILIES, effective_parameters, preset, validate_parameters
 
 TIMEFRAMES = ("1m", "3m", "5m", "15m")
+METADATA_REFRESH_SECONDS = 600
+TICKER_REFRESH_SECONDS = 300
+SOURCE_REFRESH_GRACE_SECONDS = 60
 
 
 class ConfigError(ValueError):

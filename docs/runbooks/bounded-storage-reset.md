@@ -204,6 +204,12 @@ ingestion recovery/gaps и отдельной analytics-gap-pending queue, с п
 current analytics и COMPLETE repack/admission. Analytics queue проверяется одним
 indexed existence lookup с LIMIT1, без count/scan. Нормальные ожидающие наступления
 outcome horizons сами по себе не являются backfill и не блокируют baseline.
+Также обязательны healthy named ingestion tasks, согласованные active streams /
+groups/sessions/connections, обе readiness flags и свежие metadata/tickers обоих
+рынков:600/300s +60s request/reconcile grace, включая возраст самого snapshot.
+Каждый ACKed subscription принадлежит RUNNING task с receipt<=90s и clock skew<=5s.
+Свежий heartbeat/общий WS snapshot не заменяет эти проверки; старый runtime без
+таких diagnostic fields получает явные reasons и не принимается как clean.
 Время завершения bootstrap/repack фиксируется как observed, не выдуманный exact end.
 Ожидание ограничено12h; затем WAIT_LIMIT_REACHED с причинами. После baseline —24h,
 deep scans только на baseline/final. Обычные samples не обходят runtime/quality/indexes.

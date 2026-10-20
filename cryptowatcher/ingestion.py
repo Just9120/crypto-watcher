@@ -13,7 +13,14 @@ from typing import Any
 import httpx
 from websockets.asyncio.client import connect
 
-from .config import TIMEFRAMES, ConfigError, OwnerSettings
+from .config import (
+    METADATA_REFRESH_SECONDS,
+    SOURCE_REFRESH_GRACE_SECONDS,
+    TICKER_REFRESH_SECONDS,
+    TIMEFRAMES,
+    ConfigError,
+    OwnerSettings,
+)
 from .detector_config import effective_parameters
 from .market import BybitREST, MarketError, RadarResult, evaluate_composite, finite
 from .source_context import save
@@ -24,6 +31,8 @@ from .universe import CLASSIFICATION_VERSION, Instrument, active_instruments, di
 SUBSCRIPTION_BUFFER_MESSAGES = 128
 SUBSCRIPTION_BUFFER_BYTES = 2 * 1024 * 1024
 SUBSCRIPTION_SHARD_TOPICS = 100
+SESSION_SHUTDOWN_SECONDS = 15
+MANAGER_INTERVAL_SECONDS = 5
 
 
 def topic(stream: str) -> str:
@@ -85,6 +94,7 @@ class BybitRadar(BybitREST):
         self._started = False
         self._scope_revision: int | None = None
         self._scope_lock = asyncio.Lock()
+        self._manager_failures: dict[str, Any] = {"count": 0}
         self.on_observation: Callable[[str, list[Candle], float, float, int, bool], None] | None = None
 
     def publish_observation(self, stream: str, *, live: bool, through: int | None = None) -> None:
@@ -129,11 +139,11 @@ class BybitRadar(BybitREST):
             return
         self._started = True
         self._tasks = [
-            asyncio.create_task(self._manager()),
-            asyncio.create_task(self._diagnostic_loop()),
-            asyncio.create_task(self._configuration_loop()),
+            asyncio.create_task(self._manager(), name="ingestion:discovery"),
+            asyncio.create_task(self._diagnostic_loop(), name="ingestion:diagnostics"),
+            asyncio.create_task(self._configuration_loop(), name="ingestion:configuration"),
         ]
-        self._tasks += [asyncio.create_task(self._worker()) for _ in range(4)]
+        self._tasks += [asyncio.create_task(self._worker(), name=f"ingestion:recovery:{i}") for i in range(4)]
 
     async def close(self) -> None:
         tasks = [*self._tasks, *self._sessions.values()]
@@ -150,7 +160,7 @@ class BybitRadar(BybitREST):
         revision = self.store.snapshot().revision
         for market in ("spot", "linear"):
             try:
-                if time.monotonic() - self.metadata_at.get(market, float("-inf")) >= 600:
+                if time.monotonic() - self.metadata_at.get(market, float("-inf")) >= METADATA_REFRESH_SECONDS:
                     instruments, quarantine = await discover(self, market)
                     records = [
                         (
@@ -215,7 +225,7 @@ class BybitRadar(BybitREST):
         await self.reconcile(current.settings if current.revision != revision else settings)
         self.persist_diagnostics()
 
-    async def refresh_tickers(self, market: str, max_age: int = 300) -> None:
+    async def refresh_tickers(self, market: str, max_age: int = TICKER_REFRESH_SECONDS) -> None:
         async with self.ticker_locks[market]:
             if time.monotonic() - self.tickers_at.get(market, float("-inf")) < max_age:
                 return
@@ -260,7 +270,11 @@ class BybitRadar(BybitREST):
         new_streams = {f"{instrument.key}/{tf}" for instrument in active for tf in TIMEFRAMES}
         current = self.store.snapshot()
         self._scope_revision = current.revision if settings == current.settings else None
-        if new_streams == self.streams:
+        new_groups: dict[str, tuple[str, ...]] = {}
+        for market in ("spot", "linear"):
+            for index, group in enumerate(shards([s for s in new_streams if s.startswith(market + "/")])):
+                new_groups[f"{market}:{index}"] = tuple(group)
+        if new_streams == self.streams and new_groups == self._groups and self.scope_synced():
             return
         removed = self.streams - new_streams
         added = new_streams - self.streams
@@ -291,25 +305,35 @@ class BybitRadar(BybitREST):
             for market in by_market:
                 if index < len(by_market[market]):
                     self.request_recovery(by_market[market][index], 10)
-        new_groups: dict[str, tuple[str, ...]] = {}
-        for market in ("spot", "linear"):
-            for index, group in enumerate(shards([s for s in new_streams if s.startswith(market + "/")])):
-                new_groups[f"{market}:{index}"] = tuple(group)
         changed = {
             name
             for name in set(self._groups) | set(new_groups)
             if self._groups.get(name) != new_groups.get(name)
+            or name not in self._sessions
+            or self._sessions[name].done()
+            or self._sessions[name].cancelling()
         }
         old_sessions = [self._sessions[name] for name in changed if name in self._sessions]
         for task in old_sessions:
             task.cancel()
-        await asyncio.gather(*old_sessions, return_exceptions=True)
+        if old_sessions:
+            done, pending = await asyncio.wait(old_sessions, timeout=SESSION_SHUTDOWN_SECONDS)
+            for task in done:
+                if not task.cancelled():
+                    task.exception()  # Retire the old task without exporting its exception body.
+            if pending:
+                for task in pending:
+                    task.cancel()
+                # Keep ownership and the old groups until retirement completes.
+                # A retry must finish this partial scope before replacing sockets.
+                raise MarketError("subscription_shutdown_timeout")
         for name in changed:
             self._sessions.pop(name, None)
             self.connections.pop(name, None)
             if name in new_groups:
                 self._sessions[name] = asyncio.create_task(
-                    self._session(name, name.split(":")[0], list(new_groups[name]))
+                    self._session(name, name.split(":")[0], list(new_groups[name])),
+                    name="ingestion:ws:" + name,
                 )
         self._groups = new_groups
 
@@ -318,12 +342,22 @@ class BybitRadar(BybitREST):
             try:
                 await self.refresh(self.store.snapshot().settings)
                 self.market_errors.pop("manager", None)
-            except MarketError as exc:
-                self.market_errors["manager"] = str(exc)
-            if not self.components_healthy():
-                self.market_errors["manager"] = "ingestion_worker_failed"
-            self.persist_diagnostics()
-            await asyncio.sleep(5)
+                if not self.components_healthy():
+                    self.market_errors["manager"] = "ingestion_worker_failed"
+                self.persist_diagnostics()
+            except Exception as exc:
+                self.market_errors["manager"] = (
+                    str(exc) if isinstance(exc, MarketError) else "manager_failed_" + type(exc).__name__
+                )
+                self._manager_failures = {
+                    "count": self._manager_failures["count"] + 1,
+                    "last_error_class": type(exc).__name__,
+                    "last_failure_ms": int(time.time() * 1000),
+                    "last_failure_code": "SUBSCRIPTION_SHUTDOWN_TIMEOUT"
+                    if isinstance(exc, MarketError) and str(exc) == "subscription_shutdown_timeout"
+                    else "REFRESH_FAILED",
+                }
+            await asyncio.sleep(MANAGER_INTERVAL_SECONDS)
 
     async def _diagnostic_loop(self) -> None:
         # REST discovery/backoff must not freeze the persisted WS/recovery snapshot.
@@ -336,10 +370,14 @@ class BybitRadar(BybitREST):
         # Metadata/ticker refresh remains owned by the manager, with the same policy.
         while True:
             snapshot = self.store.snapshot()
-            if snapshot.revision != self._scope_revision:
-                await self.reconcile(snapshot.settings)
+            if snapshot.revision != self._scope_revision or not self.scope_synced():
+                try:
+                    await self.reconcile(snapshot.settings)
+                    self.market_errors.pop("configuration", None)
+                except MarketError as exc:
+                    self.market_errors["configuration"] = str(exc)
                 self.persist_diagnostics()
-            await asyncio.sleep(5)
+            await asyncio.sleep(MANAGER_INTERVAL_SECONDS)
 
     def request_recovery(self, stream: str, priority: int = 0) -> None:
         if stream not in self.streams or stream in self._working:
@@ -856,12 +894,20 @@ class BybitRadar(BybitREST):
                 errors[market] = "discovery_pending"
             elif market in self.market_errors:
                 errors[market] = self.market_errors[market]
+            elif self._started and not self.discovery_fresh(market):
+                errors[market] = "discovery_stale"
         if "manager" in self.market_errors:
             errors["manager"] = self.market_errors["manager"]
+        if "configuration" in self.market_errors:
+            errors["configuration"] = self.market_errors["configuration"]
         return RadarResult(quotes, errors, len(active) * len(TIMEFRAMES))
 
     def delivery_ready(self, result: RadarResult) -> bool:
-        if not self.components_healthy() or "manager" in self.market_errors:
+        if not self.components_healthy() or {"manager", "configuration"} & self.market_errors.keys():
+            return False
+        if self._started and (
+            not self.scope_synced() or not all(self.discovery_fresh(m) for m in ("spot", "linear"))
+        ):
             return False
         if any(
             m not in self.metadata_at or m not in self.tickers_at or m in self.market_errors
@@ -880,7 +926,41 @@ class BybitRadar(BybitREST):
         return expected <= available
 
     def components_healthy(self) -> bool:
-        return all(not task.done() for task in self._tasks)
+        return all(
+            not task.done() and not task.cancelling() for task in (*self._tasks, *self._sessions.values())
+        )
+
+    def scope_synced(self) -> bool:
+        return (
+            self.streams == {stream for group in self._groups.values() for stream in group}
+            and set(self._groups) == set(self._sessions)
+            and set(self._groups) == set(self.connections)
+            and all(not task.done() and not task.cancelling() for task in self._sessions.values())
+        )
+
+    def discovery_fresh(self, market: str) -> bool:
+        now = time.monotonic()
+        return all(
+            market in times and 0 <= now - times[market] <= cadence + SOURCE_REFRESH_GRACE_SECONDS
+            for times, cadence in (
+                (self.metadata_at, METADATA_REFRESH_SECONDS),
+                (self.tickers_at, TICKER_REFRESH_SECONDS),
+            )
+        )
+
+    @staticmethod
+    def task_diagnostic(task: asyncio.Task[Any]) -> dict[str, Any]:
+        result = {"name": task.get_name()}
+        if task.cancelled():
+            return {**result, "state": "CANCELLED"}
+        if task.done():
+            error = task.exception()
+            return {
+                **result,
+                "state": "FAILED" if error else "FINISHED",
+                "error_class": type(error).__name__ if error else None,
+            }
+        return {**result, "state": "STOPPING" if task.cancelling() else "RUNNING"}
 
     def persist_diagnostics(self) -> None:
         self.store.put_runtime(
@@ -891,6 +971,12 @@ class BybitRadar(BybitREST):
                     market: {
                         "metadata_ready": market in self.metadata_at,
                         "tickers_ready": market in self.tickers_at,
+                        "metadata_age_seconds": time.monotonic() - self.metadata_at[market]
+                        if market in self.metadata_at
+                        else None,
+                        "ticker_age_seconds": time.monotonic() - self.tickers_at[market]
+                        if market in self.tickers_at
+                        else None,
                     }
                     for market in ("spot", "linear")
                 },
@@ -902,7 +988,19 @@ class BybitRadar(BybitREST):
                 "quarantine_reasons": {
                     r: list(self.quarantine.values()).count(r) for r in set(self.quarantine.values())
                 },
-                "subscriptions": self.connections,
+                "components_healthy": self.components_healthy(),
+                "components": [self.task_diagnostic(task) for task in self._tasks],
+                "manager_failures": dict(self._manager_failures),
+                "scope_synced": self.scope_synced(),
+                "subscriptions": {
+                    name: {
+                        **value,
+                        "task_state": self.task_diagnostic(self._sessions[name])["state"]
+                        if name in self._sessions
+                        else "UNOWNED",
+                    }
+                    for name, value in self.connections.items()
+                },
                 "active_streams": len(self.streams),
                 "startup_recovered_buckets": sorted("/".join(bucket) for bucket in self._recovered_buckets),
                 "bootstrap_pending_streams": len(self.streams - self.sources.windows.keys()),
