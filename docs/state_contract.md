@@ -226,6 +226,22 @@ Production upgrade, native/resource SLO и mature whole25GB proof ещё нео�
 component equality/physical saving этих gates не заменяет. Recovery после
 выбора writer требует compatible reader/forward-fix.
 
+Repack20 добавляет явный `parent_affinity=1`: native hint по UTC expiry day и
+полному cohort ключу market/symbol/TF/detector/direction/settings revision.
+8byte fingerprint служит только ранжированию: actual private tuple, ownership,
+revisions, heads, source/numeric leases проверяет прежний relocation path.
+Oldest seed сохраняет приоритет; выбирается максимум32 peers, целый parent
+в пределах64 records/1MiB. Collision/unsupported shape не меняет исходные факты.
+Hint guards и native counters атомарны с publication/deletion; Store open только
+проверяет известный layout и регистрирует trigger UDF, без скрытого installation.
+Finite parent/packet ceilings сохраняются после restart; checked detail packets
+перечитываются один раз, прежний age уже pending packets не сбрасывается.
+Переход19→20 сохраняет все прежние context/frame/source/numeric/catalogue/reclaim
+границы. Observer отдельно блокирует незавершённые affinity scan/reclaim;
+meter format9 учитывает hint/index bytes, сохраняя samples и frequency.
+Новый job, cache или увеличение RAM не требуются. Поставка и whole/mature
+capacity/native SLO подтверждаются отдельными обязательными gates.
+
 Byte-flow samples после завершения новой версии repack имеют отдельный epoch:
 backfill pools/digests не выдаётся за последующий ежедневный прирост. Старые
 samples и event-frequency observations сохраняются.

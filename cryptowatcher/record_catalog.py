@@ -305,6 +305,12 @@ def append(
                     "INSERT INTO market_records(kind,public_uuid,revision,packet,slot,current,expires) VALUES(?,?,?,?,?,0,?)",
                     values,
                 )
+        from .parent_affinity import bind as bind_affinity
+
+        for coordinate, _, _ in fresh:
+            owner = owners[coordinate]
+            if coordinate.kind == "event" and owner is not None:
+                bind_affinity(db, owner, coordinate.revision)
         for coordinate in heads:
             previous = head(db, coordinate.kind, coordinate.identity)
             if previous is not None and previous[0].revision > coordinate.revision:

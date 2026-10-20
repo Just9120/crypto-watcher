@@ -353,7 +353,14 @@ def stable_reason(store: Store) -> list[str]:
     elif repack.get("initial_reclaim_complete") is not True:
         reasons.append("CATALOGUE_INITIAL_RECLAIM_PENDING")
     else:
-        from . import catalogue_repack, context_tile_maintenance, context_tiles, numeric_refs, quality_frames
+        from . import (
+            catalogue_repack,
+            context_tile_maintenance,
+            context_tiles,
+            numeric_refs,
+            parent_affinity,
+            quality_frames,
+        )
         from .storage import StateError
 
         try:
@@ -397,6 +404,15 @@ def stable_reason(store: Store) -> list[str]:
                     reasons.append("CONTEXT_TILE_BACKLOG")
         except (ValueError, StateError, sqlite3.Error):
             reasons.append("CONTEXT_TILE_CHECKPOINT_UNKNOWN")
+        try:
+            affinity = repack.get("parent_affinity", {})
+            parent_affinity.validate(affinity)
+            if affinity.get("initial_complete") is not True or not parent_affinity.header(store.db):
+                reasons.append("PARENT_AFFINITY_INITIAL_INCOMPLETE")
+            elif repack.get("parent_affinity_initial_reclaim_complete") is not True:
+                reasons.append("PARENT_AFFINITY_INITIAL_RECLAIM_PENDING")
+        except (ValueError, StateError, sqlite3.Error):
+            reasons.append("PARENT_AFFINITY_CHECKPOINT_UNKNOWN")
         try:
             catalogue_repack.validate(store, repack, VERSION)
             pending = catalogue_repack.status(store, int(time.time() * 1000))

@@ -11,7 +11,15 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from . import owner_slots, packet_bundles, packet_store, record_blocks, record_catalog, record_relocation
+from . import (
+    owner_slots,
+    packet_bundles,
+    packet_store,
+    parent_affinity,
+    record_blocks,
+    record_catalog,
+    record_relocation,
+)
 from .indexed_frame import FrameSizeError
 from .storage import StateError, Store
 
@@ -114,6 +122,13 @@ def _parent(store: Store, parent: int, limit: int) -> list[record_relocation.Rec
     return result
 
 
+def _native(records: list[record_relocation.Record]) -> tuple[Any, ...] | None:
+    events = [record for record in records if record.coordinate.kind == "event"]
+    if not events:
+        return None
+    return parent_affinity.native(min(events, key=lambda record: record.coordinate.revision).value)
+
+
 def compact(store: Store, packet: int, *, upper: int = 2**63 - 1) -> tuple[int, int]:
     """Return moved records/fallbacks, preserving every unselected live slot."""
     with packet_store.atomic(store.db):
@@ -164,6 +179,27 @@ def compact(store: Store, packet: int, *, upper: int = 2**63 - 1) -> tuple[int, 
             ):
                 expanded.extend(group)
                 size += charge
+                # Keep the original oldest seed first, then prefer complete
+                # peers from one bounded native index prefix. Hints never
+                # substitute for actual private values or ownership checks.
+                native = _native(group) if record is seed[0] and parent is not None else None
+                if native is not None:
+                    assert parent is not None
+                    for peer in parent_affinity.candidates(store.db, parent, upper):
+                        if len(expanded) == record_blocks.MAX_RECORDS:
+                            break
+                        if peer in seen:
+                            continue
+                        selected = _parent(store, peer, record_blocks.MAX_RECORDS - len(expanded))
+                        if not selected or _native(selected) != native:
+                            continue
+                        cost = sum(value.charge for value in selected)
+                        if size + cost <= record_blocks.MAX_EXPANDED and all(
+                            value.expires // 86400000 == day for value in selected
+                        ):
+                            seen.add(peer)
+                            expanded.extend(selected)
+                            size += cost
         if not expanded:
             raise StateError("No bounded seed bundle")
         original_slots = len(record_blocks.projections(packet_store.read(store.db, packet)))

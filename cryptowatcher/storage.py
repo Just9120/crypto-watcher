@@ -281,6 +281,9 @@ class Store:
         from .context_tiles import install_functions as context_tile_functions
 
         context_tile_functions(self.db)
+        from .parent_affinity import install_functions as parent_affinity_functions
+
+        parent_affinity_functions(self.db, self.cached_bytes)
         # Pure functions also serve a read connection opened before an explicit
         # layout upgrade. This registers no tables, markers or migration work.
         from .numeric_blocks import install_functions as numeric_block_functions
@@ -356,6 +359,9 @@ class Store:
             from .context_tiles import installed as validate_context_tiles
 
             validate_context_tiles(self.db)
+            from .parent_affinity import header as validate_parent_affinity
+
+            validate_parent_affinity(self.db)
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA busy_timeout=5000")
         if not readonly:

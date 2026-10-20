@@ -7,7 +7,7 @@ from typing import Any
 
 from .storage import Store, encode, json_payload
 
-VERSION = 19
+VERSION = 20
 
 
 def normalized_record(store: Store, key: str, value: Any) -> Any:
@@ -414,6 +414,7 @@ def work(
         numeric_refs,
         numeric_search,
         packet_bundles,
+        parent_affinity,
         quality_frames,
     )
     from .candle_access import installed as source_installed
@@ -445,12 +446,14 @@ def work(
         not isinstance(state, dict)
         or ("version" in state and type(state["version"]) is not int)
         or state.get("version")
-        not in (None, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, VERSION)
+        not in (None, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, VERSION)
     ):
         raise ValueError("Unknown storage repack checkpoint; database preserved")
     phases = (
-        18
+        19
         if state.get("version") == VERSION
+        else 18
+        if state.get("version") == 19
         else 17
         if state.get("version") == 18
         else 16
@@ -466,42 +469,52 @@ def work(
     catalogue_repack.validate(store, state, VERSION)
     quality_frames.validate(state.get("quality_frames", {}))
     context_tile_maintenance.validate(state.get("context_tiles", {}))
-    context_layout = context_tiles.installed(store.db)
-    if state.get("version") == VERSION and not context_layout:
-        raise ValueError("Missing context tile writer checkpoint; database preserved")
+    parent_affinity.validate(state.get("parent_affinity", {}))
+    affinity_layout = parent_affinity.header(store.db)
+    if state.get("version") == VERSION and not affinity_layout:
+        raise ValueError("Missing parent affinity writer checkpoint; database preserved")
     if (
         state.get("version") == VERSION
+        and state.get("state") == "COMPLETE"
+        and state.get("parent_affinity", {}).get("initial_complete") is not True
+    ):
+        raise ValueError("Missing completed parent affinity boundary; database preserved")
+    context_layout = context_tiles.installed(store.db)
+    if state.get("version") in (19, VERSION) and not context_layout:
+        raise ValueError("Missing context tile writer checkpoint; database preserved")
+    if (
+        state.get("version") in (19, VERSION)
         and state.get("state") == "COMPLETE"
         and state.get("context_tiles", {}).get("initial_complete") is not True
     ):
         raise ValueError("Missing completed context tile boundary; database preserved")
-    if state.get("version") in (18, VERSION) and not quality_frames.installed(store.db):
+    if state.get("version") in (18, 19, VERSION) and not quality_frames.installed(store.db):
         raise ValueError("Missing quality frame writer checkpoint; database preserved")
     if (
-        state.get("version") in (18, VERSION)
+        state.get("version") in (18, 19, VERSION)
         and state.get("state") == "COMPLETE"
         and state.get("quality_frames", {}).get("initial_complete") is not True
     ):
         raise ValueError("Missing completed quality frame boundary; database preserved")
     catalogue_compaction.validate(state.get("packet_bundles", {}))
-    if state.get("version") in (16, 17, 18, VERSION) and not packet_bundles.installed(store.db):
+    if state.get("version") in (16, 17, 18, 19, VERSION) and not packet_bundles.installed(store.db):
         raise ValueError("Missing packet bundle checkpoint; database preserved")
     if packet_bundles.installed(store.db):
         packet_bundles.validate(store.db)
     if (
-        state.get("version") in (16, 17, 18, VERSION)
+        state.get("version") in (16, 17, 18, 19, VERSION)
         and state.get("state") == "COMPLETE"
         and not state.get("packet_bundles", {}).get("initial_complete")
     ):
         raise ValueError("Missing completed packet bundle boundary; database preserved")
     numeric_search.validate(state)
-    if state.get("version") in (15, 16, 17, 18, VERSION) and not numeric_search.installed(store.db):
+    if state.get("version") in (15, 16, 17, 18, 19, VERSION) and not numeric_search.installed(store.db):
         raise ValueError("Missing numeric search checkpoint; database preserved")
     numeric_refs.validate(state.get("numeric_refs", {}))
-    if state.get("version") in (17, 18, VERSION) and not numeric_refs.installed(store.db):
+    if state.get("version") in (17, 18, 19, VERSION) and not numeric_refs.installed(store.db):
         raise ValueError("Missing numeric lease writer checkpoint; database preserved")
     if (
-        state.get("version") in (17, 18, VERSION)
+        state.get("version") in (17, 18, 19, VERSION)
         and state.get("state") == "COMPLETE"
         and not state.get("numeric_refs", {}).get("complete")
     ):
@@ -511,11 +524,11 @@ def work(
         numeric_writing(store.db),
         price_writing(store.db),
     )
-    if state.get("version") in (10, 11, 12, 13, 14, 15, 16, 17, 18, VERSION) and not source_active:
+    if state.get("version") in (10, 11, 12, 13, 14, 15, 16, 17, 18, 19, VERSION) and not source_active:
         raise ValueError("Missing source writer checkpoint; database preserved")
-    if state.get("version") in (11, 12, 13, 14, 15, 16, 17, 18, VERSION) and not numeric_active:
+    if state.get("version") in (11, 12, 13, 14, 15, 16, 17, 18, 19, VERSION) and not numeric_active:
         raise ValueError("Missing numeric writer checkpoint; database preserved")
-    if state.get("version") in (12, 13, 14, 15, 16, 17, 18, VERSION) and not price_active:
+    if state.get("version") in (12, 13, 14, 15, 16, 17, 18, 19, VERSION) and not price_active:
         raise ValueError("Missing numeric price writer checkpoint; database preserved")
     if not source_installed(store.db):
         install_source_tiles(store.db, store.cached_text)
@@ -530,6 +543,7 @@ def work(
     numeric_refs.install(store.db)
     quality_frames.install(store.db)
     context_tiles.install(store.db)
+    parent_affinity.install(store.db, store.cached_bytes)
     maintenance = catalogue_repack.status(store, now_ms)
     frame_maintenance = quality_frames.status(store.db, now_ms)
     context_maintenance = context_tile_maintenance.status(store.db, now_ms)
@@ -549,6 +563,7 @@ def work(
         and state.get("initial_reclaim_complete")
         and state.get("quality_frame_initial_reclaim_complete")
         and state.get("context_tile_initial_reclaim_complete")
+        and state.get("parent_affinity_initial_reclaim_complete")
         and not maintenance["pending_work"]
         and not frame_maintenance["pending_work"]
         and not context_maintenance["pending_work"]
@@ -592,7 +607,7 @@ def work(
     elif state.get("version") in (14, 15, 16):
         state = {**state, "previous_version": state["version"], "state": "IN_PROGRESS"}
         state.pop("initial_reclaim_complete", None)
-    elif state.get("version") in (17, 18):
+    elif state.get("version") in (17, 18, 19):
         # Keep the qualified body/reclaim boundary so retention priority can
         # drain old events while the independent finite frame pass proceeds.
         state = {**state, "previous_version": state["version"], "state": "IN_PROGRESS"}
@@ -624,11 +639,11 @@ def work(
         catalogue_repack.activate(store)
         # One shared deadline, with a durable rotating first phase. A slow SQL
         # read/commit may overrun a slice, but cannot always starve the same tail.
-        for offset in range(18):
+        for offset in range(19):
             if time.monotonic() >= deadline:
                 break
-            phase = (first + offset) % 18
-            state["next_phase"] = (phase + 1) % 18
+            phase = (first + offset) % 19
+            state["next_phase"] = (phase + 1) % 19
             if (
                 phase == 0
                 and state.get("source_transfer_complete")
@@ -727,6 +742,7 @@ def work(
             elif (
                 phase == 14
                 and all(state.get(k) for k in (*catalogue_repack.PREREQUISITES, "catalogue_complete"))
+                and state.get("parent_affinity", {}).get("initial_complete")
                 and not (defer_compaction and state.get("initial_reclaim_complete"))
             ):
                 catalogue_compaction.advance(
@@ -756,6 +772,14 @@ def work(
                     deadline,
                     now_ms=now_ms,
                 )
+            elif phase == 18:
+                parent_affinity.advance(
+                    store.db,
+                    state.setdefault("parent_affinity", {}),
+                    min(batch, 256),
+                    deadline,
+                    store.cached_bytes,
+                )
         body_complete = (
             all(state.get(k) for k in (*catalogue_repack.PREREQUISITES, "catalogue_complete"))
             and state.get("packet_bundles", {}).get("initial_complete")
@@ -767,6 +791,7 @@ def work(
                 body_complete
                 and state.get("quality_frames", {}).get("initial_complete")
                 and state.get("context_tiles", {}).get("initial_complete")
+                and state.get("parent_affinity", {}).get("initial_complete")
             )
             else "IN_PROGRESS",
             at_ms=now_ms,
@@ -795,5 +820,7 @@ def work(
             and not maintenance["pending_work"]
         ):
             state["context_tile_initial_reclaim_complete"] = True
+        if state.get("parent_affinity", {}).get("initial_complete") and not maintenance["pending_work"]:
+            state["parent_affinity_initial_reclaim_complete"] = True
         store.put_runtime("storage_repack", state)
     return state

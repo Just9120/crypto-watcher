@@ -9,7 +9,7 @@ from .storage import Store
 
 BUDGET = 25_000_000_000
 QUALITY_CATEGORIES = frozenset({"quality", "quality_numeric", "quality_components", "quality_frames"})
-SAMPLE_FORMAT = 8
+SAMPLE_FORMAT = 9
 
 
 def create(db: Any) -> None:
@@ -356,6 +356,12 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
     context_tile_layout = context_tile_status(store.db, now_ms)
     if context_tile_layout["installed"]:
         source_tables |= {"market_context_tiles", "market_context_tile_pending"}
+    from .parent_affinity import header as parent_affinity_header
+
+    affinity_layout: dict[str, Any] = {"installed": parent_affinity_header(store.db)}
+    if affinity_layout["installed"]:
+        source_tables.add("market_parent_affinity")
+        affinity_layout.update(counts["parent_affinity"])
     if (
         indexes.get("state") == "PASS"
         and store.db.execute("SELECT 1 FROM sqlite_master WHERE name='market_expiry'").fetchone()
@@ -387,6 +393,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "catalogue_layout": catalogue_layout,
         "quality_frame_layout": frame_layout,
         "context_tile_layout": context_tile_layout,
+        "parent_affinity_layout": affinity_layout,
         "candle_dependency_retention_estimate": {
             "configured_minimum_days": settings.candle_retention_days,
             "detail_days": settings.detail_retention_days,
