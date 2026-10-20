@@ -172,6 +172,37 @@ def test_current_repack_cannot_reinstall_missing_numeric_frame_marker(store, mar
         assert "NUMERIC_FRAME_CHECKPOINT_UNKNOWN" in stable_reason(store)
 
 
+def test_upgrade21_activates_column_writer_without_reopening_existing_numeric_and_body_boundaries(store):
+    bounded(store)
+    observe(store, OutcomeWorker(store))
+    previous = complete(store)
+    previous = {**previous, "version": 21, "next_phase": 0, "operator_note": "preserve21"}
+    expected = [(key, encode(value)) for key, value in History(store).scan("")]
+    with store.db:
+        store.db.execute("DELETE FROM market_meta WHERE key='quality_frame_columns'")
+        store.put_runtime("storage_repack", previous)
+    final = complete(store)
+    assert final["version"] == VERSION and final["previous_version"] == 21
+    assert final["operator_note"] == "preserve21"
+    for key in (
+        "numeric_frames",
+        "numeric_frame_initial_reclaim_complete",
+        "catalogue_transfer",
+        "catalogue_queue_upper",
+        "source_transfer_upper",
+        "numeric_transfer_upper",
+        "quality_frames",
+        "context_tiles",
+        "parent_affinity",
+        "quality_rows_scanned",
+    ):
+        assert final.get(key) == previous.get(key)
+    from cryptowatcher.quality_frames import column_writing
+
+    assert column_writing(store.db)
+    assert [(key, encode(value)) for key, value in History(store).scan("")] == expected
+
+
 @pytest.mark.parametrize("fault", ["writer", "boundary"])
 def test_previous20_preserves_quality_frame_guards_before_installing_new_extensions(store, fault):
     bounded(store)

@@ -190,6 +190,18 @@ specific size rejection до interning начинает следующий chunk
 не перехватываются. Parent deletion остаётся в той же внешней transaction.
 Отбор нескольких due parents этим core не включается автоматически.
 QF1 coordinate (`frame ID`, slot0..63) может заменять logical CQ5 packet.
+Explicit `quality_frame_columns=1` разрешает QC1 body рядом с прежним IF1.
+QC1 переставляет шесть полей CQ5 rows в шесть колонок внутри прежнего bounded
+indexed frame; checksum, offsets,64slots,1MiB admission и общий cache1MiB прежние.
+Reader восстанавливает точные typed entry bytes, включая vectors/порядок/IDs,
+scalar types и nullable dead slots. Writer выбирает меньший из IF1/QC1;
+если column candidate превышает frame bound, остаётся уже допустимый IF1.
+Прежние IF1 читаются без нового marker; QC1 требует известный marker при каждом
+чтении текущего frame до pure cache. Store не устанавливает marker. Explicit
+maintenance обновляет совместимый writer без переписывания всех старых frames;
+обычные новые публикации и GC могут выбрать QC1. Missing marker текущего repack
+не исправляется скрытой переустановкой и блокирует clean baseline. Ни QF1 pointer,
+ни public facts, ownership/NR counts, срок хранения или аналитический N не меняются.
 Shared IF1 frame содержит до64blocks одного birth day с admission1MiB expanded;
 day/cohort/chunk и scalar strength/noise сохранены внутри каждой записи.
 Numeric IDs/frames/leases, ordered comparator vectors и public JSON не меняются.

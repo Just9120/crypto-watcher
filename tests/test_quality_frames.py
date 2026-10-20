@@ -13,13 +13,13 @@ from tests.test_outcomes import NOW
 from tests.test_quality_packets import fact, save
 
 
-def setup(store, count=3):
+def setup(store, count=3, items=8):
     enable(store.db)
     store.bounded = True
     store.clock_ms = lambda: NOW
     with store.db:
         for index in range(count):
-            save(store, [fact(index * 100 + i) for i in range(8)], cohort=f"cohort{index}")
+            save(store, [fact(index * 100 + i) for i in range(items)], cohort=f"cohort{index}")
     return public(store)
 
 
@@ -70,10 +70,15 @@ def test_framing_preserves_numeric_ids_leases_old_snapshot_and_reopen(store):
         assert not reader.db.execute("PRAGMA foreign_key_check").fetchall()
 
 
-def test_partial_expiry_clears_only_unowned_slot_and_last_owner_releases_frame(store):
-    expected = setup(store, 2)
+@pytest.mark.parametrize("items", [8, 128])
+def test_partial_expiry_clears_only_unowned_slot_and_last_owner_releases_frame(store, items):
+    expected = setup(store, 2, items)
     quality_frames.install(store.db)
     tick(store, {})
+    if items == 128:
+        assert bytes(store.db.execute("SELECT payload FROM market_quality_frames").fetchone()[0]).startswith(
+            b"QC1\0"
+        )
     with store.db:
         store.db.execute("DELETE FROM market_quality WHERE cohort='cohort0'")
     assert quality_frames.status(store.db, NOW)["pending_work"]
@@ -81,7 +86,7 @@ def test_partial_expiry_clears_only_unowned_slot_and_last_owner_releases_frame(s
         store.db.execute("BEGIN IMMEDIATE")
         quality_frames.collect(store.db, time.monotonic() + 5)
     assert public(store) == expected[1:]
-    from cryptowatcher.indexed_frame import all_values
+    from cryptowatcher.quality_frame_codec import all_values
 
     frame = store.db.execute("SELECT payload FROM market_quality_frames").fetchone()[0]
     assert all_values(bytes(frame))[0] is None
@@ -89,6 +94,72 @@ def test_partial_expiry_clears_only_unowned_slot_and_last_owner_releases_frame(s
         store.db.execute("DELETE FROM market_quality")
         quality_frames.collect(store.db, time.monotonic() + 5)
     assert not store.db.execute("SELECT 1 FROM market_quality_frames").fetchone()
+
+
+def test_legacy_if1_without_column_marker_remains_readable_and_explicit_upgrade_preserves_values(
+    store, monkeypatch
+):
+    from cryptowatcher import quality_frame_codec
+
+    expected = setup(store, 2)
+    quality_frames.install(store.db)
+    original_pack = quality_frame_codec.pack
+    with monkeypatch.context() as legacy:
+        legacy.setattr(
+            quality_frame_codec, "pack", lambda values, **kwargs: original_pack(values, use_columns=False)
+        )
+        state = {}
+        tick(store, state)
+    assert all(
+        bytes(row[0]).startswith(b"IF1\0")
+        for row in store.db.execute("SELECT payload FROM market_quality_frames")
+    )
+    with store.db:
+        store.db.execute("DELETE FROM market_meta WHERE key='quality_frame_columns'")
+    numbers = numeric(store)
+    with closing(Store(store.path, store.owner_id, readonly=True)) as reader:
+        reader.db.execute("BEGIN")
+        assert public(reader) == expected and not quality_frames.column_writing(reader.db)
+        quality_frames.install(store.db)
+        assert quality_frames.column_writing(store.db)
+        assert public(reader) == expected and numeric(reader) == numbers
+    with store.db:
+        save(store, [fact(1000 + i) for i in range(128)], cohort="columns")
+    expected = public(store)
+    numbers = numeric(store)
+    assert tick(store, state)
+    assert any(
+        bytes(row[0]).startswith(quality_frame_codec.MAGIC)
+        for row in store.db.execute("SELECT payload FROM market_quality_frames")
+    )
+    assert public(store) == expected and numeric(store) == numbers
+    with closing(Store(store.path, store.owner_id, readonly=True)) as reader:
+        assert public(reader) == expected and numeric(reader) == numbers
+        assert reader.db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert reader.db.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+@pytest.mark.parametrize("marker", [None, "unknown"])
+def test_column_frame_does_not_read_through_missing_or_unknown_activation_marker(store, marker):
+    setup(store, 0)
+    with store.db:
+        save(store, [fact(i) for i in range(128)])
+    quality_frames.install(store.db)
+    tick(store, {})
+    assert bytes(store.db.execute("SELECT payload FROM market_quality_frames").fetchone()[0]).startswith(
+        b"QC1\0"
+    )
+    raw = bytes(store.db.execute("SELECT facts FROM market_quality").fetchone()[0])
+    quality_packets.unpack(store.db, raw)  # Warm existing pure caches.
+    with store.db:
+        if marker is None:
+            store.db.execute("DELETE FROM market_meta WHERE key='quality_frame_columns'")
+        else:
+            store.db.execute("UPDATE market_meta SET value=? WHERE key='quality_frame_columns'", (marker,))
+    before = list(store.db.iterdump())
+    with pytest.raises((StateError, ValueError, sqlite3.Error)):
+        quality_packets.unpack(store.db, raw)
+    assert list(store.db.iterdump()) == before
 
 
 def test_late_append_keeps_prefix_and_uses_original_queue_age_until_reframed(store):

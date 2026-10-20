@@ -364,6 +364,10 @@ class Store:
                 from .quality_frames import installed as validate_quality_frames
 
                 validate_quality_frames(self.db)
+            if self.db.execute("SELECT 1 FROM market_meta WHERE key='quality_frame_columns'").fetchone():
+                from .quality_frames import column_writing
+
+                column_writing(self.db)
             from .context_tiles import installed as validate_context_tiles
 
             validate_context_tiles(self.db)

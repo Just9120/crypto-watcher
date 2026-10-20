@@ -1,4 +1,4 @@
-"""QF1: bounded shared IF1 containers for existing logical CQ5 packets.
+"""QF1 pointers to bounded IF1/QC1 containers for logical CQ5 packets.
 
 Only explicit maintenance installs/publishes this representation. Coordinates,
 numeric leases and public facts stay unchanged; obsolete private column rows
@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from . import indexed_frame, owner_slots
+from . import indexed_frame, owner_slots, quality_frame_codec
 from .compact_json import unpack as typed_unpack
 from .storage import StateError, encode
 
@@ -74,6 +74,8 @@ def _frame(db: sqlite3.Connection, identity: int) -> tuple[bytes, bytes]:
     ).fetchone()
     if found is None or owner_slots.signature(1, identity, bytes(found[1])) != bytes(found[2]):
         raise StateError("Missing or corrupt quality frame owner")
+    if bytes(found[0]).startswith(quality_frame_codec.MAGIC) and not column_writing(db):
+        raise StateError("Missing quality column writer checkpoint")
     return bytes(found[0]), bytes(found[1])
 
 
@@ -84,10 +86,7 @@ def entry_bytes(db: sqlite3.Connection, raw: bytes, cache: Any = None) -> bytes:
         raise ValueError("Not a quality frame reference")
     identity, slot = selected
     frame, _ = _frame(db, identity)
-    offsets, expanded = indexed_frame.data(frame, cache)
-    if slot >= len(offsets) - 1:
-        raise ValueError("Invalid indexed frame slot")
-    return expanded[offsets[slot] : offsets[slot + 1]]
+    return quality_frame_codec.entry_bytes(frame, slot, cache)
 
 
 def checked_entry(value: Any) -> list[Any]:
@@ -131,9 +130,12 @@ def install_functions(db: sqlite3.Connection) -> None:
 
 def install(db: sqlite3.Connection) -> None:
     if installed(db):
+        install_columns(db)
         return
     if db.in_transaction:
         raise StateError("Quality frame installation requires an outer boundary")
+    if db.execute("SELECT 1 FROM market_meta WHERE key='quality_frame_columns'").fetchone():
+        raise StateError("Unmarked quality column layout; data preserved")
     layout = db.execute("SELECT value FROM market_meta WHERE key='quality_layout'").fetchone()
     if layout is None or layout[0] != "3":
         raise StateError("Quality frames require normalized archive rows")
@@ -226,10 +228,29 @@ def install(db: sqlite3.Connection) -> None:
                     f"CREATE TRIGGER count_{table}_{operation} AFTER {operation} ON {table} BEGIN {sql} END"
                 )
         db.execute("INSERT INTO market_meta VALUES('quality_frames','1')")
+        db.execute("INSERT INTO market_meta VALUES('quality_frame_columns','1')")
         db.commit()
     except BaseException:
         db.rollback()
         raise
+
+
+def column_writing(db: sqlite3.Connection) -> bool:
+    row = db.execute("SELECT value FROM market_meta WHERE key='quality_frame_columns'").fetchone()
+    if row is None:
+        return False
+    if row[0] != "1" or not installed(db):
+        raise StateError("Unknown quality column writer checkpoint; data preserved")
+    return True
+
+
+def install_columns(db: sqlite3.Connection) -> None:
+    if column_writing(db):
+        return
+    if db.in_transaction or not installed(db):
+        raise StateError("Quality column installation requires an outer frame boundary")
+    with db:
+        db.execute("INSERT INTO market_meta VALUES('quality_frame_columns','1')")
 
 
 @dataclass(frozen=True)
@@ -268,8 +289,8 @@ def publish(db: sqlite3.Connection, records: list[Prepared]) -> int:
     values = [record.value for record in records]
     if len(encode(values).encode()) > MAX_EXPANDED:
         raise StateError("Quality frame admission bound")
-    frame = indexed_frame.pack(values)
-    if encode(indexed_frame.all_values(frame)) != encode(values):
+    frame = quality_frame_codec.pack(values, use_columns=column_writing(db))
+    if encode(quality_frame_codec.all_values(frame)) != encode(values):
         raise StateError("Quality frame changed logical packet values")
     with atomic(db):
         row = db.execute("SELECT seq FROM sqlite_sequence WHERE name='market_quality_frames'").fetchone()
@@ -299,7 +320,7 @@ def collect(db: sqlite3.Connection, deadline: float, batch: int = 16) -> int:
         if time.monotonic() >= deadline:
             break
         raw, slots = _frame(db, identity)
-        values = indexed_frame.all_values(raw)
+        values = quality_frame_codec.all_values(raw)
         if owner_slots.bits(slots) >> len(values):
             raise StateError("Quality frame owner exceeds frame")
         for slot, value in enumerate(values):
@@ -319,8 +340,8 @@ def collect(db: sqlite3.Connection, deadline: float, batch: int = 16) -> int:
             db.execute("DELETE FROM market_quality_frames WHERE id=?", (identity,))
             removed += 1
         else:
-            replacement = indexed_frame.pack(values)
-            if encode(indexed_frame.all_values(replacement)) != encode(values):
+            replacement = quality_frame_codec.pack(values, use_columns=column_writing(db))
+            if encode(quality_frame_codec.all_values(replacement)) != encode(values):
                 raise StateError("Quality frame GC changed retained values")
             db.execute(
                 "UPDATE market_quality_frames SET payload=?,gc_since=NULL WHERE id=?", (replacement, identity)

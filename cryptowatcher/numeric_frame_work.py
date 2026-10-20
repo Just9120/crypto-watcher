@@ -390,6 +390,7 @@ def measure(db: sqlite3.Connection, deadline: float, cache: Any = None) -> dict[
         return {"state": "N/A_COMPAT" if current else "N/A_NOT_INSTALLED", "mode": current}
     header(db)
     numeric_frames.header(db)
+    compressed_leases = numeric_refs.writing(db)
     cursor = frames = payload_bytes = owned = 0
     last = db.execute("SELECT id FROM market_numeric_frames ORDER BY id DESC LIMIT 1").fetchone()
     upper = last[0] if last else 0
@@ -442,7 +443,11 @@ def measure(db: sqlite3.Connection, deadline: float, cache: Any = None) -> dict[
                     if found[2] is None:
                         raise ValueError("Missing actual numeric frame lease")
                     counts = bytes(found[2])
-                    body = numeric_refs.header(db, counts)
+                    if counts.startswith(b"NR2\x00") and not compressed_leases:
+                        raise ValueError("NR2 requires explicit lease compression activation")
+                    # The caller owns one read snapshot; validate its fixed
+                    # writer mode once, while still authenticating every row.
+                    body = blocks.lease_header(counts)
                     if struct.unpack(">Q", body[:8])[0] != block:
                         raise ValueError("Conflicting actual numeric frame lease identity")
                     if not numeric_search.checked(block, pointer, counts, found[3], found[4], binding=entry):

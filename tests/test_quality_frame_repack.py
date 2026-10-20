@@ -51,13 +51,16 @@ def test_upgrade17_only_adds_frame_boundary_preserving_body_reclaim_and_private_
         assert public(reopened) == expected
 
 
-@pytest.mark.parametrize("fault", ["marker", "boundary", "forged"])
+@pytest.mark.parametrize("fault", ["marker", "columns", "boundary", "forged"])
 def test_current_frame_checkpoint_failure_preserves_all_database_state(store, fault):
     setup(store)
     state = complete(store)
     if fault == "marker":
         with store.db:
             store.db.execute("DELETE FROM market_meta WHERE key='quality_frames'")
+    elif fault == "columns":
+        with store.db:
+            store.db.execute("DELETE FROM market_meta WHERE key='quality_frame_columns'")
     else:
         frame = copy.deepcopy(state["quality_frames"])
         if fault == "boundary":
@@ -66,7 +69,7 @@ def test_current_frame_checkpoint_failure_preserves_all_database_state(store, fa
             frame["cursor"] = [-1, -1, -1]
         store.put_runtime("storage_repack", {**state, "quality_frames": frame})
     before = list(store.db.iterdump())
-    with pytest.raises((StateError, ValueError), match="quality frame"):
+    with pytest.raises((StateError, ValueError), match="quality (frame|column)"):
         work(store, NOW)
     assert list(store.db.iterdump()) == before
     with patch("cryptowatcher.capacity.time.time", return_value=NOW / 1000):
@@ -187,6 +190,7 @@ def test_frame_transfer_forecast_counts_staging_once_and_marks_old_index_measure
     assert rows["quality_frames"]["allocation_excluded"]
     assert rows["quality_frame_pending"]["basis"] == "CURRENT_OCCUPANCY_PLUS_POSITIVE_NET_GROWTH"
     assert value["quality_frame_layout"]["installed"]
+    assert value["quality_frame_layout"]["writer"] == "IF1_OR_QC1_MIN"
     assert value["indexes"]["state"] == "STALE"
     assert old_samples[0] in store.get_runtime("storage_samples")
 

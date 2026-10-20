@@ -7,7 +7,7 @@ from typing import Any
 
 from .storage import Store, encode, json_payload
 
-VERSION = 21
+VERSION = 22
 
 
 def normalized_record(store: Store, key: str, value: Any) -> Any:
@@ -448,12 +448,12 @@ def work(
         not isinstance(state, dict)
         or ("version" in state and type(state["version"]) is not int)
         or state.get("version")
-        not in (None, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, VERSION)
+        not in (None, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, VERSION)
     ):
         raise ValueError("Unknown storage repack checkpoint; database preserved")
     phases = (
         20
-        if state.get("version") == VERSION
+        if state.get("version") in (21, VERSION)
         else 19
         if state.get("version") == 20
         else 18
@@ -475,56 +475,60 @@ def work(
     context_tile_maintenance.validate(state.get("context_tiles", {}))
     parent_affinity.validate(state.get("parent_affinity", {}))
     affinity_layout = parent_affinity.header(store.db)
-    if state.get("version") in (20, VERSION) and not affinity_layout:
+    if state.get("version") in (20, 21, VERSION) and not affinity_layout:
         raise ValueError("Missing parent affinity writer checkpoint; database preserved")
     if (
-        state.get("version") in (20, VERSION)
+        state.get("version") in (20, 21, VERSION)
         and state.get("state") == "COMPLETE"
         and state.get("parent_affinity", {}).get("initial_complete") is not True
     ):
         raise ValueError("Missing completed parent affinity boundary; database preserved")
     context_layout = context_tiles.installed(store.db)
-    if state.get("version") in (19, 20, VERSION) and not context_layout:
+    if state.get("version") in (19, 20, 21, VERSION) and not context_layout:
         raise ValueError("Missing context tile writer checkpoint; database preserved")
     if (
-        state.get("version") in (19, 20, VERSION)
+        state.get("version") in (19, 20, 21, VERSION)
         and state.get("state") == "COMPLETE"
         and state.get("context_tiles", {}).get("initial_complete") is not True
     ):
         raise ValueError("Missing completed context tile boundary; database preserved")
-    if state.get("version") in (18, 19, 20, VERSION) and not quality_frames.installed(store.db):
+    if state.get("version") in (18, 19, 20, 21, VERSION) and not quality_frames.installed(store.db):
         raise ValueError("Missing quality frame writer checkpoint; database preserved")
     if (
-        state.get("version") in (18, 19, 20, VERSION)
+        state.get("version") in (18, 19, 20, 21, VERSION)
         and state.get("state") == "COMPLETE"
         and state.get("quality_frames", {}).get("initial_complete") is not True
     ):
         raise ValueError("Missing completed quality frame boundary; database preserved")
     catalogue_compaction.validate(state.get("packet_bundles", {}))
-    if state.get("version") in (16, 17, 18, 19, 20, VERSION) and not packet_bundles.installed(store.db):
+    if state.get("version") in (16, 17, 18, 19, 20, 21, VERSION) and not packet_bundles.installed(store.db):
         raise ValueError("Missing packet bundle checkpoint; database preserved")
     if packet_bundles.installed(store.db):
         packet_bundles.validate(store.db)
     if (
-        state.get("version") in (16, 17, 18, 19, 20, VERSION)
+        state.get("version") in (16, 17, 18, 19, 20, 21, VERSION)
         and state.get("state") == "COMPLETE"
         and not state.get("packet_bundles", {}).get("initial_complete")
     ):
         raise ValueError("Missing completed packet bundle boundary; database preserved")
     numeric_search.validate(state)
-    if state.get("version") in (15, 16, 17, 18, 19, 20, VERSION) and not numeric_search.installed(store.db):
+    if state.get("version") in (15, 16, 17, 18, 19, 20, 21, VERSION) and not numeric_search.installed(
+        store.db
+    ):
         raise ValueError("Missing numeric search checkpoint; database preserved")
     numeric_refs.validate(state.get("numeric_refs", {}))
-    if state.get("version") in (17, 18, 19, 20, VERSION) and not numeric_refs.installed(store.db):
+    if state.get("version") in (17, 18, 19, 20, 21, VERSION) and not numeric_refs.installed(store.db):
         raise ValueError("Missing numeric lease writer checkpoint; database preserved")
     if (
-        state.get("version") in (17, 18, 19, 20, VERSION)
+        state.get("version") in (17, 18, 19, 20, 21, VERSION)
         and state.get("state") == "COMPLETE"
         and not state.get("numeric_refs", {}).get("complete")
     ):
         raise ValueError("Missing completed numeric lease boundary; database preserved")
     numeric_frame_work.validate(state.get("numeric_frames", {}))
-    if state.get("version") == VERSION:
+    if state.get("version") == VERSION and not quality_frames.column_writing(store.db):
+        raise ValueError("Missing quality column writer checkpoint; database preserved")
+    if state.get("version") in (21, VERSION):
         numeric_frames.header(store.db)
         numeric_frame_work.header(store.db)
         if (
@@ -541,11 +545,14 @@ def work(
         numeric_writing(store.db),
         price_writing(store.db),
     )
-    if state.get("version") in (10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, VERSION) and not source_active:
+    if (
+        state.get("version") in (10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, VERSION)
+        and not source_active
+    ):
         raise ValueError("Missing source writer checkpoint; database preserved")
-    if state.get("version") in (11, 12, 13, 14, 15, 16, 17, 18, 19, 20, VERSION) and not numeric_active:
+    if state.get("version") in (11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, VERSION) and not numeric_active:
         raise ValueError("Missing numeric writer checkpoint; database preserved")
-    if state.get("version") in (12, 13, 14, 15, 16, 17, 18, 19, 20, VERSION) and not price_active:
+    if state.get("version") in (12, 13, 14, 15, 16, 17, 18, 19, 20, 21, VERSION) and not price_active:
         raise ValueError("Missing numeric price writer checkpoint; database preserved")
     if not source_installed(store.db):
         install_source_tiles(store.db, store.cached_text)
@@ -632,7 +639,7 @@ def work(
     elif state.get("version") in (14, 15, 16):
         state = {**state, "previous_version": state["version"], "state": "IN_PROGRESS"}
         state.pop("initial_reclaim_complete", None)
-    elif state.get("version") in (17, 18, 19, 20):
+    elif state.get("version") in (17, 18, 19, 20, 21):
         # Keep the qualified body/reclaim boundary so retention priority can
         # drain old events while the independent finite frame pass proceeds.
         state = {**state, "previous_version": state["version"], "state": "IN_PROGRESS"}

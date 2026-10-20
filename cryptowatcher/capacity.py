@@ -410,6 +410,8 @@ def stable_reason(store: Store) -> list[str]:
             quality_frames.validate(frames)
             if frames.get("initial_complete") is not True or not quality_frames.installed(store.db):
                 reasons.append("QUALITY_FRAME_INITIAL_INCOMPLETE")
+            elif not quality_frames.column_writing(store.db):
+                reasons.append("QUALITY_FRAME_COLUMNS_INCOMPLETE")
             elif repack.get("quality_frame_initial_reclaim_complete") is not True:
                 reasons.append("QUALITY_FRAME_INITIAL_RECLAIM_PENDING")
             else:

@@ -114,13 +114,25 @@ def _expanded(raw: bytes) -> bytes:
     if not valid_ids or len(valid_ids) != len(set(valid_ids)):
         raise ValueError("Empty or duplicate numeric frame identities")
     if body[:4] == b"BP1\x00":
-        flat = [bytearray(size) for size in lengths]
-        for index in range(max(lengths)):
-            for frame in flat:
-                if len(frame) > index:
-                    frame[index] = body[position]
-                    position += 1
-        frames = list(map(bytes, flat))
+        # Every positive metric has at least six bytes. Transpose their common
+        # prefix in C-backed slices instead of testing every slot at every
+        # byte position, including empty slots and already-ended metrics.
+        positive_sizes = [size for size in lengths if size]
+        width = min(positive_sizes)
+        count = len(positive_sizes)
+        prefix = bytearray(count * width)
+        for index in range(width):
+            prefix[index::width] = body[position : position + count]
+            position += count
+        flat = [bytearray(prefix[start : start + width]) for start in range(0, len(prefix), width)]
+        active = [(frame, size) for frame, size in zip(flat, positive_sizes, strict=True) if size > width]
+        for index in range(width, max(positive_sizes)):
+            active = [(frame, size) for frame, size in active if size > index]
+            for frame, _ in active:
+                frame.append(body[position])
+                position += 1
+        remaining = iter(map(bytes, flat))
+        frames = [next(remaining) if size else b"" for size in lengths]
     else:
         frames = []
         for size in lengths:

@@ -11,7 +11,7 @@ BUDGET = 25_000_000_000
 QUALITY_CATEGORIES = frozenset(
     {"quality", "quality_numeric", "quality_components", "quality_frames", "quality_numeric_frames"}
 )
-SAMPLE_FORMAT = 10
+SAMPLE_FORMAT = 11
 
 
 def create(db: Any) -> None:
@@ -145,6 +145,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
     from . import quality_frames
 
     frame_layout = quality_frames.status(store.db, now_ms)
+    frame_layout["writer"] = "IF1_OR_QC1_MIN" if quality_frames.column_writing(store.db) else "IF1_COMPAT"
     if frame_layout["installed"]:
         # CQ5 becomes staging plus permanent13byte coordinates. Gross CQ5
         # admissions are the same facts subsequently owned by QF1 containers.
