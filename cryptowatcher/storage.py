@@ -307,7 +307,7 @@ class Store:
         if self.bounded:
             from .quality_summary import install
 
-            install(self.db)
+            install(self.db, binary_cache=self.cached_bytes)
             numeric_blocks = self.db.execute(
                 "SELECT value FROM market_meta WHERE key='numeric_blocks'"
             ).fetchone()

@@ -42,13 +42,16 @@ def positive(value: Any) -> int:
     return value
 
 
-def install_functions(db: sqlite3.Connection) -> None:
+def install_functions(db: sqlite3.Connection, binary_cache: Any = None) -> None:
     from .quality_frames import install_functions as frame_functions
+    from .quality_ownership import sql_ownership
     from .storage import encode
 
     frame_functions(db)
     db.create_function("cw_quality_json", 1, lambda raw: encode(unpack(db, bytes(raw))))
-    db.create_function("cw_quality_refs", 1, lambda raw: json.dumps(ownership(db, bytes(raw))))
+    db.create_function(
+        "cw_quality_refs", 1, lambda raw: json.dumps(sql_ownership(db, bytes(raw), binary_cache))
+    )
 
 
 def install(db: sqlite3.Connection) -> None:
@@ -358,6 +361,14 @@ def template_parts(fact: dict[str, Any]) -> tuple[list[Any], list[Any]]:
 
 
 def _template(db: sqlite3.Connection, identity: int, slots: Any, cache: dict[Any, Any]) -> dict[str, Any]:
+    if not isinstance(slots, list):
+        raise ValueError("Invalid quality parameterized template")
+    return _template_count(db, identity, len(slots), cache)
+
+
+def _template_count(
+    db: sqlite3.Connection, identity: int, slot_count: int, cache: dict[Any, Any]
+) -> dict[str, Any]:
     value, parent, depth = row(db, identity, "template2", cache)
     if (
         parent is not None
@@ -366,13 +377,13 @@ def _template(db: sqlite3.Connection, identity: int, slots: Any, cache: dict[Any
         or len(value) != 2
         or not isinstance(value[0], dict)
         or not isinstance(value[1], list)
-        or not isinstance(slots, list)
-        or len(slots) != len(value[1])
+        or type(slot_count) is not int
+        or slot_count != len(value[1])
         or len(set(value[1])) != len(value[1])
     ):
         raise ValueError("Invalid quality parameterized template")
     sets = value[0].get("comparator_sets", [])
-    for index, slot in zip(value[1], slots):
+    for index in value[1]:
         if (
             type(index) is not int
             or not 0 <= index < len(sets)

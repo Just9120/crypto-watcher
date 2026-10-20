@@ -146,6 +146,12 @@ round trip. Лимит полного decoded JSON остаётся1MiB. Ownersh
 без лишней mutable copy; повторные scalar numeric views восстанавливаются один
 раз за read и возвращают отдельные public dicts. Persistent cache/новый format
 и изменение scalar lease counts этим не вводятся.
+SQL extraction CQ5/QF1 может сохранять чистый byte summary ссылок в прежнем
+общем Store cache1MiB. Перед QF1 cache lookup читаются и проверяются actual
+container bytes, offsets и ownership mask; current dictionary payload/shape и
+наличие dependencies проверяются при каждом вызове. Lease counts и DB existence
+не кешируются. Rollback, GC и смена snapshot не превращают cache hit в проверку
+состояния. CQ1/CQ2/CQ4 и connections без cache используют прежний extractor.
 CQ1/CQ2/CQ4 prefix сначала преобразуется с прежними numeric IDs/leases.
 QF1 coordinate (`frame ID`, slot0..63) может заменять logical CQ5 packet.
 Shared IF1 frame содержит до64blocks одного birth day с admission1MiB expanded;

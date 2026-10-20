@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import indexed_frame, owner_slots
+from .compact_json import unpack as typed_unpack
 from .storage import StateError, encode
 
 MAGIC = b"QF1\x00"
@@ -76,13 +77,20 @@ def _frame(db: sqlite3.Connection, identity: int) -> tuple[bytes, bytes]:
     return bytes(found[0]), bytes(found[1])
 
 
-def entry(db: sqlite3.Connection, raw: bytes) -> list[Any]:
+def entry_bytes(db: sqlite3.Connection, raw: bytes, cache: Any = None) -> bytes:
+    """Read/authenticate the current container before any pure extraction cache."""
     selected = coordinate(raw)
     if selected is None:
         raise ValueError("Not a quality frame reference")
     identity, slot = selected
     frame, _ = _frame(db, identity)
-    value = indexed_frame.select(frame, slot)
+    offsets, expanded = indexed_frame.data(frame, cache)
+    if slot >= len(offsets) - 1:
+        raise ValueError("Invalid indexed frame slot")
+    return expanded[offsets[slot] : offsets[slot + 1]]
+
+
+def checked_entry(value: Any) -> list[Any]:
     if (
         not isinstance(value, list)
         or len(value) != 4
@@ -93,6 +101,10 @@ def entry(db: sqlite3.Connection, raw: bytes) -> list[Any]:
     ):
         raise StateError("Invalid retained quality frame entry")
     return value
+
+
+def entry(db: sqlite3.Connection, raw: bytes) -> list[Any]:
+    return checked_entry(typed_unpack(entry_bytes(db, raw), indexed_frame.MAX_BYTES))
 
 
 def packet(db: sqlite3.Connection, raw: bytes) -> list[Any]:

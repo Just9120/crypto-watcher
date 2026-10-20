@@ -44,10 +44,10 @@ def month_boundary(day: int, months: int) -> int:
     return int(date.timestamp()) // 86400
 
 
-def install(db: Any) -> None:
+def install(db: Any, *, binary_cache: Any = None) -> None:
     from .quality_packets import install_functions
 
-    install_functions(db)
+    install_functions(db, binary_cache)
 
 
 def create(db: Any) -> None:
