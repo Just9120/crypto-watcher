@@ -332,6 +332,9 @@ class BoundedRetention:
                 else:
                     contexts.append(candidate[:3])
             store.db.executemany("DELETE FROM market_context WHERE stream=? AND kind=? AND at=?", contexts)
+            from .context_tiles import expire as expire_context_tiles
+
+            removed_context_tiles = expire_context_tiles(store.db, now_ms, batch=1)
             context_garbage = store.db.execute(
                 "SELECT id FROM market_context_bodies WHERE refs=0 LIMIT ?",
                 (batch,),
@@ -385,7 +388,7 @@ class BoundedRetention:
                 "remaining_due_batch": len(due) - processed,
                 "removed_services": service_removed,
                 "removed_candles": len(candles) + removed_source_versions,
-                "removed_context": len(contexts),
+                "removed_context": len(contexts) + removed_context_tiles,
                 "removed_summaries": len(quality),
                 "removed_bodies": len(garbage),
                 "removed_source_windows": removed_windows,
@@ -403,7 +406,7 @@ class BoundedRetention:
                 "expired_events": processed,
                 "removed_services": service_removed,
                 "removed_candles": len(candles) + removed_source_versions,
-                "removed_context": len(contexts),
+                "removed_context": len(contexts) + removed_context_tiles,
                 "removed_summary_blocks": len(quality),
                 "removed_bodies": len(garbage),
                 "removed_source_windows": removed_windows,
@@ -426,6 +429,7 @@ class BoundedRetention:
             + len(candles)
             + removed_source_versions
             + len(contexts)
+            + removed_context_tiles
             + len(quality)
             + len(garbage)
             + removed_windows

@@ -278,6 +278,9 @@ class Store:
         from .owner_slots import install_functions as owner_functions
 
         owner_functions(self.db)
+        from .context_tiles import install_functions as context_tile_functions
+
+        context_tile_functions(self.db)
         # Pure functions also serve a read connection opened before an explicit
         # layout upgrade. This registers no tables, markers or migration work.
         from .numeric_blocks import install_functions as numeric_block_functions
@@ -350,6 +353,9 @@ class Store:
                 from .quality_frames import installed as validate_quality_frames
 
                 validate_quality_frames(self.db)
+            from .context_tiles import installed as validate_context_tiles
+
+            validate_context_tiles(self.db)
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA busy_timeout=5000")
         if not readonly:

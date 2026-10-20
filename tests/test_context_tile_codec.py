@@ -52,6 +52,26 @@ def test_context_tile_exact_values_frozen_hashes_and_leases_share_existing_bound
         codec.get(damaged, 0, store.cached_bytes)
 
 
+def test_bulk_validation_decodes_each_lease_vector_and_frame_once(monkeypatch):
+    tile = codec.pack(1, [point(index, frozen=True) for index in range(64)])
+    leases, data = numeric_block_codec.leases, indexed_frame.data
+    calls = {"leases": 0, "frame": 0}
+
+    def read_leases(*args):
+        calls["leases"] += 1
+        return leases(*args)
+
+    def read_frame(*args):
+        calls["frame"] += 1
+        return data(*args)
+
+    monkeypatch.setattr(numeric_block_codec, "leases", read_leases)
+    monkeypatch.setattr(indexed_frame, "data", read_frame)
+    expected = [point(index, frozen=True) for index in range(64)]
+    assert codec.signature(codec.points(tile)) == codec.signature(expected)
+    assert calls == {"leases": 1, "frame": 1}
+
+
 def test_late_anchor_and_purge_renewal_are_monotonic_without_changing_immutable_frame():
     tile = codec.pack(1, [point(0, frozen=True), point(1)])
     later = BASE + 28 * DAY

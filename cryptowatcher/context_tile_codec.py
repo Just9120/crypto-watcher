@@ -13,6 +13,7 @@ from typing import Any
 
 from . import indexed_frame, owner_slots
 from . import numeric_block_codec as nc
+from .compact_json import unpack as typed_unpack
 from .market_storage import DAY
 from .storage import encode
 
@@ -108,6 +109,10 @@ def get(tile: Tile, slot: int, cache: Any = None) -> Point:
     if type(slot) is not int or not 0 <= slot < count:
         raise ValueError("Invalid context tile slot")
     value = indexed_frame.select(tile.payload, slot, cache)
+    return _decoded_point(tile, slot, value, anchors, purges)
+
+
+def _decoded_point(tile: Tile, slot: int, value: Any, anchors: list[int], purges: list[int]) -> Point:
     if (
         not isinstance(value, list)
         or len(value) != 5
@@ -124,8 +129,12 @@ def get(tile: Tile, slot: int, cache: Any = None) -> Point:
 
 
 def points(tile: Tile, cache: Any = None) -> list[Point]:
-    count, _, _ = _header(tile)
-    rows = [get(tile, slot, cache) for slot in range(count)]
+    _, anchors, purges = _header(tile)
+    offsets, raw = indexed_frame.data(tile.payload, cache)
+    rows = [
+        _decoded_point(tile, slot, typed_unpack(raw[a:b], MAX_EXPANDED), anchors, purges)
+        for slot, (a, b) in enumerate(zip(offsets, offsets[1:]))
+    ]
     if any(a.at >= b.at for a, b in zip(rows, rows[1:])):
         raise ValueError("Unordered context tile points")
     if len(encode([_value(row) for row in rows]).encode()) > MAX_EXPANDED:

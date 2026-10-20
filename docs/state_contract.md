@@ -187,8 +187,9 @@ SHA256; body/timing/coordinates и установленный digest неизм�
 rows не конвертируются; сроки/leases прежние, public context bytes неизменны.
 Digest counters и detail ref conversion атомарны с writer transaction.
 
-Isolated candidate `context_tile_codec` пока не выбирается runtime writer и не
-устанавливает tables/markers при открытии Store. Он квалифицирует до64points
+Explicit repack19 устанавливает context tiles после проверки прежних boundaries;
+Store open регистрирует readers/UDF и проверяет известный marker без DDL.
+`context_tile_codec` сохраняет до64points
 одного stream/kind/UTC-day: IF1 хранит exact stable body/timing/coordinates,
 NR2 — два64-slot вектора anchor/purge, OW1 — frozen mask, связанный с stream и
 tile ID. Перед упаковкой проверяется каждый прежний frozen SHA256; его точное
@@ -197,10 +198,33 @@ digest остаётся неустановленным, а поздний freeze
 Renewal только повышает anchor/purge, не переписывая immutable point frame.
 Partial expiry пересчитывает актуальные сроки и сохраняет прочие points/digests;
 повторная упаковка сохраняет stream/kind/time coordinates. Admission JSON и
-typed expansion ограничены1MiB, pure decompression использует прежний общий
-Store cache1MiB. DB publication/renewal authority/retention/compatibility view,
-native validation, worker/observer/meter integration и capacity proof пока
-не реализованы этим standalone core.
+typed expansion ограничены1MiB; codec допускает прежний общий pure cache1MiB,
+новый cache не вводится. Полная проверка frame декодирует IF1/NR2 один раз,
+сохраняя прежние bytes и проверки каждой logical point.
+
+`market_context` остаётся hot-таблицей. Indexed exact/as-of adapters объединяют
+её с непересекающимися интервалами `market_context_tiles`; full scan SQL view
+не используется. Старые combined-hash и contexts2 references сохраняют прежние
+coordinates и public bytes. Поздняя точка внутри интервала может остаться hot.
+Публикация проверяет исходные frozen hashes, переносит exact hot rows через
+SAVEPOINT/CAS, сверяет cold readback и изменяет body refs/counters в той же
+транзакции. SQL guards запрещают duplicate ownership, изменение public values,
+уменьшение leases/frozen bits и преждевременное удаление. Partial/final expiry
+повторно учитывает текущую policy и MAX dependency; GC не сокращает сроков.
+
+В существующем rotating worker добавлена конечная initial граница
+stream/kind/time и отдельная persistent live очередь с первым queued_at.
+Full64-point chunks доступны сразу; tails8..63 — после закрытия UTC дня,
+менее8points остаются hot. Несколько bounded групп обслуживаются до общего
+deadline; новый job/RAM не добавляется. Неподдерживаемые старые shapes остаются
+hot с явным blocker baseline. Observer различает future tails, overdue work,
+неизвестный clock/checkpoint и initial reclaim. Meter format8 сохраняет старые
+samples/event-frequency и учитывает cold/queue bytes и новые native indexes.
+Совместимость native validators опирается на прежний OW1 CHECK UDF; новые UDF
+применяются в SQL triggers, не добавляя обязательного native CHECK API.
+Production upgrade, native/resource SLO и mature whole25GB proof ещё необходимы;
+component equality/physical saving этих gates не заменяет. Recovery после
+выбора writer требует compatible reader/forward-fix.
 
 Byte-flow samples после завершения новой версии repack имеют отдельный epoch:
 backfill pools/digests не выдаётся за последующий ежедневный прирост. Старые

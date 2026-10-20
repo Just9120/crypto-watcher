@@ -353,7 +353,7 @@ def stable_reason(store: Store) -> list[str]:
     elif repack.get("initial_reclaim_complete") is not True:
         reasons.append("CATALOGUE_INITIAL_RECLAIM_PENDING")
     else:
-        from . import catalogue_repack, numeric_refs, quality_frames
+        from . import catalogue_repack, context_tile_maintenance, context_tiles, numeric_refs, quality_frames
         from .storage import StateError
 
         try:
@@ -378,6 +378,25 @@ def stable_reason(store: Store) -> list[str]:
                     reasons.append("QUALITY_FRAME_BACKLOG")
         except (ValueError, StateError, sqlite3.Error):
             reasons.append("QUALITY_FRAME_CHECKPOINT_UNKNOWN")
+        try:
+            context = repack.get("context_tiles", {})
+            context_tile_maintenance.validate(context)
+            if context.get("initial_complete") is not True or not context_tiles.installed(store.db):
+                reasons.append("CONTEXT_TILE_INITIAL_INCOMPLETE")
+            elif repack.get("context_tile_initial_reclaim_complete") is not True:
+                reasons.append("CONTEXT_TILE_INITIAL_RECLAIM_PENDING")
+            else:
+                context_pending = context_tile_maintenance.status(store.db, int(time.time() * 1000))
+                if context_pending["clock_unknown"]:
+                    reasons.append("CONTEXT_TILE_CLOCK_UNKNOWN")
+                elif context_pending["unsupported_pending"]:
+                    reasons.append("CONTEXT_TILE_UNQUALIFIED_FALLBACK")
+                elif (
+                    context_pending["oldest_age_ms"] is not None and context_pending["oldest_age_ms"] > 60000
+                ):
+                    reasons.append("CONTEXT_TILE_BACKLOG")
+        except (ValueError, StateError, sqlite3.Error):
+            reasons.append("CONTEXT_TILE_CHECKPOINT_UNKNOWN")
         try:
             catalogue_repack.validate(store, repack, VERSION)
             pending = catalogue_repack.status(store, int(time.time() * 1000))

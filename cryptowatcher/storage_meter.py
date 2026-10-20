@@ -9,7 +9,7 @@ from .storage import Store
 
 BUDGET = 25_000_000_000
 QUALITY_CATEGORIES = frozenset({"quality", "quality_numeric", "quality_components", "quality_frames"})
-SAMPLE_FORMAT = 7
+SAMPLE_FORMAT = 8
 
 
 def create(db: Any) -> None:
@@ -117,6 +117,8 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "context",
         "context_bodies",
         "context_integrity",
+        "context_tiles",
+        "context_tile_pending",
         "source_windows",
         "prospective_indexes",
         "source_blocks",
@@ -151,7 +153,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
             candle_dependency_days
             if category in ("candles", "source_blocks", "source_block_indexes")
             else settings.candle_retention_days
-            if category in ("context", "context_bodies", "context_integrity")
+            if category in ("context", "context_bodies", "context_integrity", "context_tiles")
             else 366
             if category in QUALITY_CATEGORIES
             else settings.detail_retention_days
@@ -349,6 +351,11 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
     )
     if frame_layout["installed"]:
         source_tables |= {"market_quality_frames", "market_quality_frame_pending"}
+    from .context_tile_maintenance import status as context_tile_status
+
+    context_tile_layout = context_tile_status(store.db, now_ms)
+    if context_tile_layout["installed"]:
+        source_tables |= {"market_context_tiles", "market_context_tile_pending"}
     if (
         indexes.get("state") == "PASS"
         and store.db.execute("SELECT 1 FROM sqlite_master WHERE name='market_expiry'").fetchone()
@@ -379,6 +386,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "budget_bytes": BUDGET,
         "catalogue_layout": catalogue_layout,
         "quality_frame_layout": frame_layout,
+        "context_tile_layout": context_tile_layout,
         "candle_dependency_retention_estimate": {
             "configured_minimum_days": settings.candle_retention_days,
             "detail_days": settings.detail_retention_days,

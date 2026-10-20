@@ -430,6 +430,19 @@ def save_context(
     sid = stream_id(db, instrument, create=True)
     assert sid is not None
     when = value["available_at_ms"]
+    settings = json.loads(db.execute("SELECT settings_json FROM owner_settings LIMIT 1").fetchone()[0])
+    expires = max(
+        when + settings.get("candle_retention_days", 35) * DAY,
+        anchor + settings.get("detail_retention_days", 30) * DAY,
+    )
+    from . import context_tile_codec, context_tiles
+
+    tiled = context_tiles.cold(db, sid, kind, when)
+    if tiled is not None:
+        if encode(context_tile_codec.public(context_tile_codec.get(*tiled))) != encode(value):
+            raise ValueError("Conflicting public source snapshot")
+        context_tiles.renew(db, tiled, anchor=anchor, purge=expires)
+        return sid, kind, when
     timing = {k: v for k, v in value.items() if k in ("available_at_ms", "market_observation_ms")}
     stable = {k: v for k, v in value.items() if k not in timing}
     raw = encoded(stable)
@@ -447,11 +460,6 @@ def save_context(
     ).fetchone()
     if previous is not None and encode(context_public(db, previous)) != encode(value):
         raise ValueError("Conflicting public source snapshot")
-    settings = json.loads(db.execute("SELECT settings_json FROM owner_settings LIMIT 1").fetchone()[0])
-    expires = max(
-        when + settings.get("candle_retention_days", 35) * DAY,
-        anchor + settings.get("detail_retention_days", 30) * DAY,
-    )
     db.execute(
         "INSERT INTO market_context(stream,kind,at,body,timing,needed_anchor,purge_after) VALUES (?,?,?,?,?,?,?) ON CONFLICT(stream,kind,at) DO UPDATE SET needed_anchor=max(needed_anchor,excluded.needed_anchor),purge_after=max(purge_after,excluded.purge_after)",
         (sid, kind, when, body[0], encoded(timing), anchor, expires),
@@ -460,12 +468,13 @@ def save_context(
 
 
 def read_context(db: sqlite3.Connection, kind: str, instrument: str, cutoff: int) -> dict[str, Any] | None:
+    from . import context_tile_codec, context_tiles
+
     sid = stream_id(db, instrument)
-    row = db.execute(
-        "SELECT body,timing FROM market_context WHERE stream=? AND kind=? AND at<=? ORDER BY at DESC LIMIT 1",
-        (sid, kind, cutoff),
-    ).fetchone()
-    return context_public(db, row) if row else None
+    if sid is None:
+        return None
+    point = context_tiles.lookup(db, sid, kind, cutoff, exact=False)
+    return context_tile_codec.public(point) if point is not None else None
 
 
 def context_window(db: sqlite3.Connection, stream: str, value: dict[str, Any], anchor: int) -> dict[str, Any]:
@@ -501,12 +510,12 @@ def restore_context(db: sqlite3.Connection, ref: dict[str, Any]) -> bytes:
             or point[1] != kind
         ):
             raise ValueError("Invalid context coordinate")
-        row = db.execute(
-            "SELECT body,timing FROM market_context WHERE stream=? AND kind=? AND at=?", point
-        ).fetchone()
-        if row is None:
+        from . import context_tile_codec, context_tiles
+
+        found = context_tiles.lookup(db, point[0], kind, point[2])
+        if found is None:
             raise ValueError("Missing retained context")
-        result[kind] = context_public(db, row)
+        result[kind] = context_tile_codec.public(found)
     raw = json.dumps(
         result, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
     ).encode()

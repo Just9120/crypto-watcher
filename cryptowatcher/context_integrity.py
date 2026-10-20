@@ -62,6 +62,7 @@ def install(db: sqlite3.Connection) -> None:
 
 
 def part(db: sqlite3.Connection, kind: str, point: Any, *, bind: bool = False) -> dict[str, Any]:
+    from . import context_tile_codec, context_tiles
     from .market_storage import context_public
 
     if (
@@ -75,6 +76,14 @@ def part(db: sqlite3.Connection, kind: str, point: Any, *, bind: bool = False) -
     ):
         raise ValueError("Invalid frozen context coordinate")
     key = (point[0], kind, point[1])
+    tiled = context_tiles.cold(db, *key)
+    if tiled is not None:
+        frozen = context_tile_codec.get(*tiled)
+        if frozen.integrity is None:
+            if not bind:
+                raise ValueError("Missing frozen context integrity")
+            context_tiles.freeze(db, tiled, context_tile_codec.digest(frozen))
+        return context_tile_codec.public(frozen)
     row = db.execute(
         "SELECT body,timing,integrity FROM market_context WHERE stream=? AND kind=? AND at=?", key
     ).fetchone()

@@ -33,7 +33,12 @@ def validate(store: Store, state: dict[str, Any], version: int) -> None:
     """Reject unknown durable state before installing any extension."""
     catalogue_transfer.validate(state.get("catalogue_transfer", {}))
     catalogue_queue.validate(state.get("catalogue_queue", {}))
-    for name in ("catalogue_complete", "initial_reclaim_complete", "quality_frame_initial_reclaim_complete"):
+    for name in (
+        "catalogue_complete",
+        "initial_reclaim_complete",
+        "quality_frame_initial_reclaim_complete",
+        "context_tile_initial_reclaim_complete",
+    ):
         if name in state and type(state[name]) is not bool:
             raise StateError("Invalid catalogue repack completion")
     upper = state.get("catalogue_queue_upper")
@@ -57,7 +62,7 @@ def validate(store: Store, state: dict[str, Any], version: int) -> None:
         or markers.get("catalogue_queue", "1") != "1"
     ):
         raise StateError("Unknown catalogue repack layout; data preserved")
-    if state.get("version") in (13, 14, 15, 16, 17, version):
+    if state.get("version") in (13, 14, 15, 16, 17, 18, version):
         if markers.get(FLAGS[0]) != "1" or not catalogue_lifecycle.active(store.db):
             raise StateError("Missing catalogue runtime checkpoint")
         catalogue_queue.header(store.db)
@@ -148,4 +153,5 @@ def busy(state: dict[str, Any]) -> bool:
     return state.get("state") not in ("COMPLETE", "N/A_LEGACY") or bool(
         state.get("catalogue_maintenance", {}).get("pending_work")
         or state.get("quality_frame_maintenance", {}).get("pending_work")
+        or state.get("context_tile_maintenance", {}).get("pending_work")
     )
