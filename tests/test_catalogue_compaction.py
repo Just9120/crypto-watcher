@@ -50,6 +50,44 @@ def test_finite_parent_regroup_preserves_all_public_private_references_and_reope
     assert store.db.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
+def test_expiry_priority_keeps_initial_reclaim_and_defers_only_later_live_compaction(store):
+    from cryptowatcher.catalogue_repack import busy
+    from cryptowatcher.storage_repack import work
+    from tests.test_outcomes import NOW
+
+    records = fragmented(store)
+    expected = public(store)
+    for _ in range(500):
+        state = work(store, NOW, batch=7, defer_compaction=True)
+        if state.get("initial_reclaim_complete") and not busy(state):
+            break
+    else:
+        pytest.fail("Priority must not suppress initial compaction/reclaim")
+    assert public(store) == expected
+    with store.db:
+        store.db.execute("BEGIN IMMEDIATE")
+        record_relocation.relocate(store, [record_relocation.capture(store, records[0].coordinate)])
+    expected_refs = references(store)
+    pending = packet_bundles.verify(store.db)["count"]
+    assert pending > 0
+    for _ in range(16):
+        state = work(store, NOW, defer_compaction=True)
+    assert busy(state) and state["catalogue_maintenance"]["pending_work"]
+    assert packet_bundles.verify(store.db)["count"] == pending
+    assert public(store) == expected and references(store) == expected_refs
+    for _ in range(500):
+        state = work(store, NOW)
+        if not busy(state):
+            break
+    else:
+        pytest.fail("Normal compaction must resume after expiry priority")
+    assert not packet_bundles.verify(store.db)["count"]
+    assert public(store) == expected and references(store) == expected_refs
+    with closing(Store(store.path, store.owner_id)) as reopened:
+        assert public(reopened) == expected and references(reopened) == expected_refs
+        assert not reopened.db.execute("PRAGMA foreign_key_check").fetchall()
+
+
 def test_partial_packet_reference_loss_repends_once_and_keeps_original_age(store):
     records = fragmented(store)
     packet_bundles.install(store.db)

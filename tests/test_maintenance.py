@@ -563,6 +563,167 @@ def steady_repack(store, infrastructure, monkeypatch):
     return controller, radar, wall
 
 
+@pytest.mark.parametrize("stop,expected", [("burst", 4), ("deadline", 3), ("empty", 1), ("live", 1)])
+async def test_existing_maintenance_prioritizes_expiry_yields_and_keeps_other_work_bounded(
+    store, infrastructure, monkeypatch, stop, expected
+):
+    controller, radar, _ = steady_repack(store, infrastructure, monkeypatch)
+    store.put_runtime("storage_repack", {"initial_reclaim_complete": True})
+    pending = {"state": "OK", "at_ms": radar.server_now(), "expired_events": 1, "remaining_due_batch": 50}
+    store.put_runtime("market_retention", pending)
+    clock = [0.0]
+    entered = asyncio.Event()
+    turns = []
+
+    def expire(now):
+        if turns:
+            assert entered.is_set()
+        turns.append(now)
+        if stop == "deadline":
+            clock[0] += 0.201
+        store.put_runtime(
+            "market_retention",
+            {**pending, "expired_events": 0, "remaining_due_batch": 0} if stop == "empty" else pending,
+        )
+
+    async def another_turn():
+        while not turns:
+            await asyncio.sleep(0)
+        entered.set()
+        if stop == "live":
+            radar._pending["spot/NEWUSDT/1m"] = (0, 0)
+
+    task = asyncio.create_task(another_turn())
+    with (
+        patch("cryptowatcher.bot.time.monotonic", side_effect=lambda: clock[0]),
+        patch.object(controller.retention, "work", side_effect=expire),
+        patch(
+            "cryptowatcher.storage_repack.async_work", new=AsyncMock(return_value={"state": "COMPLETE"})
+        ) as repack,
+    ):
+        await controller.repack_job(None)
+        await task
+    assert len(turns) == expected
+    telemetry = store.get_runtime("retention_worker")
+    assert telemetry["state"] == "OK" and telemetry["slices"] == expected
+    assert telemetry["expired_events"] == (0 if stop == "empty" else expected)
+    assert repack.await_count == (0 if stop == "live" else 1)
+    if repack.await_count:
+        assert repack.await_args.kwargs == (
+            {"slices": 1} if stop == "empty" else {"slices": 1, "defer_compaction": True}
+        )
+    assert not controller.retention_lock.locked()
+    await radar.close()
+
+
+@pytest.mark.parametrize("condition", ["initial", "stale", "failed", "analytics", "retention", "startup"])
+async def test_expiry_priority_preserves_initial_freshness_failure_and_lock_guards(
+    store, infrastructure, monkeypatch, condition
+):
+    controller, radar, wall = steady_repack(store, infrastructure, monkeypatch)
+    store.put_runtime("storage_repack", {"initial_reclaim_complete": condition != "initial"})
+    pending = {"state": "OK", "at_ms": radar.server_now(), "expired_events": 1, "remaining_due_batch": 50}
+    if condition == "stale":
+        pending["at_ms"] -= 60001
+    store.put_runtime("market_retention", pending)
+    if condition == "failed":
+        store.put_runtime("retention_worker", {"state": "FAILED", "at_ms": radar.server_now()})
+    if condition == "startup":
+        controller.maintenance_started_at = wall - 599
+    lock = controller.analytics_lock if condition == "analytics" else controller.retention_lock
+    if condition in ("analytics", "retention"):
+        await lock.acquire()
+    try:
+        with patch.object(controller.retention, "work") as expire:
+            assert await controller.retention_priority() == 0
+            expire.assert_not_called()
+    finally:
+        if condition in ("analytics", "retention"):
+            lock.release()
+        await radar.close()
+
+
+async def test_expiry_failure_is_sanitized_and_regular_success_allows_priority_again(
+    store, infrastructure, monkeypatch
+):
+    controller, radar, _ = steady_repack(store, infrastructure, monkeypatch)
+    store.put_runtime("storage_repack", {"initial_reclaim_complete": True})
+    pending = {"state": "OK", "at_ms": radar.server_now(), "expired_events": 1, "remaining_due_batch": 50}
+    store.put_runtime("market_retention", pending)
+    with patch.object(controller.retention, "work", side_effect=RuntimeError("private fixture error body")):
+        await controller.repack_job(None)
+    assert store.get_runtime("retention_worker")["state"] == "FAILED"
+    assert "private fixture error body" not in encode(store.get_runtime("retention_worker"))
+    with patch.object(controller.retention, "work") as expire:
+        assert await controller.retention_priority() == 0
+        expire.assert_not_called()
+        controller.retention_once(radar.server_now())
+        assert store.get_runtime("retention_worker")["state"] == "OK"
+    await radar.close()
+
+
+async def test_expiry_priority_yields_to_analytics_and_serializes_the_regular_call(
+    store, infrastructure, monkeypatch
+):
+    controller, radar, _ = steady_repack(store, infrastructure, monkeypatch)
+    store.put_runtime("storage_repack", {"initial_reclaim_complete": True})
+    pending = {"state": "OK", "at_ms": radar.server_now(), "expired_events": 1, "remaining_due_batch": 10}
+    store.put_runtime("market_retention", pending)
+    entered = asyncio.Event()
+    calls = []
+
+    def expire(now):
+        calls.append("regular" if controller.analytics_lock.locked() else "priority")
+        assert controller.retention_lock.locked()
+        store.put_runtime(
+            "market_retention",
+            pending if len(calls) == 1 else {**pending, "expired_events": 0, "remaining_due_batch": 0},
+        )
+        entered.set()
+
+    async def analytics_arrives():
+        await entered.wait()
+        await controller.analytics_job(None)
+
+    task = asyncio.create_task(analytics_arrives())
+    with (
+        patch.object(controller.retention, "work", side_effect=expire),
+        patch.object(controller.outcomes, "async_work", new=AsyncMock(return_value=0)),
+        patch("cryptowatcher.bot.ComparisonWorker.async_work", new=AsyncMock(return_value=0)),
+        patch("cryptowatcher.storage_repack.async_work", new=AsyncMock(return_value={"state": "COMPLETE"})),
+    ):
+        await controller.repack_job(None)
+        await task
+    assert calls == ["priority", "regular"]
+    assert not controller.retention_lock.locked() and not controller.analytics_lock.locked()
+    assert store.get_runtime("retention_worker")["state"] == "OK"
+    await radar.close()
+
+
+async def test_cancelling_expiry_priority_releases_locks_without_another_expiry_call(
+    store, infrastructure, monkeypatch
+):
+    controller, radar, _ = steady_repack(store, infrastructure, monkeypatch)
+    store.put_runtime("storage_repack", {"initial_reclaim_complete": True})
+    pending = {"state": "OK", "at_ms": radar.server_now(), "expired_events": 1, "remaining_due_batch": 10}
+    store.put_runtime("market_retention", pending)
+    entered = asyncio.Event()
+
+    def expire(now):
+        store.put_runtime("market_retention", pending)
+        entered.set()
+
+    with patch.object(controller.retention, "work", side_effect=expire) as expiry:
+        task = asyncio.create_task(controller.repack_job(None))
+        await entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert expiry.call_count == 1
+    assert not controller.retention_lock.locked() and not controller.repack_lock.locked()
+    await radar.close()
+
+
 @pytest.mark.parametrize(
     "condition",
     [

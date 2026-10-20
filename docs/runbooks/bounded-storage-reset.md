@@ -169,6 +169,18 @@ coverage>=95%, ingestion age<=5s, poll age<=120s, analytics OK/age<=60s и от�
 200ms; readiness/live priority перепроверяются между slices. При потере условий
 дополнительные slices не выполняются, startup/current recovery guard сохраняется;
 отдельный SQLite I/O/commit может выйти за time check. COMPLETE прекращает slices.
+В уже существующем1s callback successful fresh retention backlog получает до4
+calls/0.5s admission с yield/recheck между calls, после600s startup и initial
+reclaim. Каждый call сохраняет50ms admission/atomic archive-before-delete;
+начатый event/SQL не обрывается по таймеру. Analytics и priority сериализованы
+одной retention lock. Нового scheduled callback/host task нет. Пока backlog
+подтверждён, один40ms repack slice сохраняет transfer/GC, но откладывает только
+последующую parent-bundle compaction; pending_work не скрывается. Initial reclaim
+не откладывается, нормальная compaction возобновляется после backlog. Worker
+failure виден в diagnostics/capacity и запрещает clean baseline; regular success
+восстанавливает работу. Native one-CPU throughput проверяется отдельно от local
+microbenchmark; RAM/CPU и CD/observer budgets не увеличиваются.
+
 Durable rotation phases сохраняет fairness после slow SQL и restart; каждая phase
 использует остаток общего deadline, не создает новый таймер внутри slice.
 Records/decision heads/quality используют fixed rowid interval и durable next ID,

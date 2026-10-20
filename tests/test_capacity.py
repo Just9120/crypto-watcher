@@ -273,6 +273,10 @@ def test_stable_baseline_distinguishes_referenced_backfill_from_normal_pending_h
         assert stable_reason(store) == ["SUBSCRIPTION_TASK_NOT_CURRENT"]
         store.put_runtime("ingestion", healthy)
         assert stable_reason(store) == []
+        store.put_runtime("retention_worker", {"state": "FAILED", "error_class": "RuntimeError"})
+        assert stable_reason(store) == ["RETENTION_WORKER_FAILED"]
+        store.put_runtime("retention_worker", {"state": "OK"})
+        assert stable_reason(store) == []
         changed = copy.deepcopy(healthy)
         changed["at"] -= 20
         changed["discovery"]["linear"]["ticker_age_seconds"] = 350

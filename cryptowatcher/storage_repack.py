@@ -133,7 +133,9 @@ def scan_bounds(store: Store, state: dict[str, Any], kind: str) -> tuple[int, in
     return state[f"{kind}_next_rowid"], state[f"{kind}_rowid_upper"]
 
 
-async def async_work(store: Store, now_ms: int, slices: int = 8) -> dict[str, Any]:
+async def async_work(
+    store: Store, now_ms: int, slices: int = 8, *, defer_compaction: bool = False
+) -> dict[str, Any]:
     """Advance a finite queue without one long transaction or event-loop stall.
 
     Each existing40ms slice commits its own checkpoint. Eight slices add at
@@ -142,9 +144,11 @@ async def async_work(store: Store, now_ms: int, slices: int = 8) -> dict[str, An
     """
     import asyncio
 
+    if type(defer_compaction) is not bool:
+        raise ValueError("Invalid compaction priority")
     state = store.get_runtime("storage_repack", {})
     for _ in range(slices):
-        state = work(store, now_ms)
+        state = work(store, now_ms, defer_compaction=True) if defer_compaction else work(store, now_ms)
         from .catalogue_repack import busy
 
         if not busy(state):
@@ -394,7 +398,14 @@ def quality_rows(store: Store, state: dict[str, Any], batch: int, deadline: floa
     state["quality_legacy_empty"] = quality_moved == 0
 
 
-def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> dict[str, Any]:
+def work(
+    store: Store,
+    now_ms: int,
+    batch: int = 256,
+    seconds: float = 0.04,
+    *,
+    defer_compaction: bool = False,
+) -> dict[str, Any]:
     from . import catalogue_compaction, catalogue_repack, numeric_refs, numeric_search, packet_bundles
     from .candle_access import installed as source_installed
     from .candle_access import writing as source_writing
@@ -416,6 +427,8 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
     from .runtime_meter import read as namespace_snapshot
     from .source_transfer import advance as transfer_sources
 
+    if type(defer_compaction) is not bool:
+        raise ValueError("Invalid compaction priority")
     if not store.bounded:
         return {"state": "N/A_LEGACY"}
     state = store.get_runtime("storage_repack", {})
@@ -656,8 +669,10 @@ def work(store: Store, now_ms: int, batch: int = 256, seconds: float = 0.04) -> 
                         state["saved_categories"][category] = (
                             state["saved_categories"].get(category, 0) + saved
                         )
-            elif phase == 14 and all(
-                state.get(k) for k in (*catalogue_repack.PREREQUISITES, "catalogue_complete")
+            elif (
+                phase == 14
+                and all(state.get(k) for k in (*catalogue_repack.PREREQUISITES, "catalogue_complete"))
+                and not (defer_compaction and state.get("initial_reclaim_complete"))
             ):
                 catalogue_compaction.advance(
                     store, state.setdefault("packet_bundles", {}), min(batch, 256), deadline

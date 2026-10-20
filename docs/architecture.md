@@ -165,6 +165,20 @@ poll age<=120s, analytics OK/current<=60s и отсутствии фактиче
 Общий intended wall deadline200ms ограничивает burst, отдельный SQL/commit может
 превысить time check. COMPLETE прекращает лишние slices. При потере условий остается
 один slice; общий startup/current recovery guard сохраняется. RAM/cache не меняются.
+Тот же существующий1s maintenance callback после startup/initial reclaim сначала
+обслуживает backlog, подтверждённый successful retention telemetry не старше60s:
+до4прежних retention calls с0.5s admission window. Каждый call сохраняет50ms
+admission и atomic archive-before-delete; отдельный event/SQL может превысить time
+check. Между calls выполняется yield и повторная проверка live recovery/coverage/
+analytics freshness; analytics lock приостанавливает priority. Обычный analytics
+path и priority делят одну retention lock. Новые callbacks/timers не создаются.
+При backlog выполняется один40ms repack slice без повторной parent-bundle
+compaction уже истекающих details; transfer/GC/остальные phases продолжаются,
+pending_work остаётся видимым. Initial compaction/reclaim не откладывается.
+После очистки backlog обычная compaction возобновляется. Retention failure виден
+в singleton worker/diagnostics и блокирует clean baseline; successful regular
+call снимает failure. RAM4GiB/CPU1, retained data/N/settings и cache неизменны.
+
 Фазы records/decisions/expiry/quality имеют один deadline и сохраняют очередность
 первого хода. Slow SQL может превысить time check, но не вытесняет всегда одну фазу.
 Records/decision/quality scans фиксируют physical high water и следующий rowid.

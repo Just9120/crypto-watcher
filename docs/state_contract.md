@@ -532,6 +532,7 @@ D22 заменяет прежнюю indefinite policy: details30d, small-TF35d �
 | source:v1:candle:market/symbol/TF:start | Closed OHLCV/turnover, interval/start, source, exchange/receipt times; quote units USDT |
 | source:v1:gap:market/symbol/TF | Durable start/end historical recovery cursor и PENDING/COMPLETE |
 | ingestion | Actual source/market errors, subscription acknowledgements, TF, pending/buffer diagnostics |
+| retention_worker | Singleton priority/regular expiry state, actual expired count/slices/timing; sanitized failure blocks clean baseline, not an additional annual history stream |
 
 Native свечи закрыты по confirm=true либо REST exchange time. Historical/bootstrap/recovered записи сохраняются, но live eligibility — process-local и после restart пуста. Cached window≤256; остальные rows остаются в DB. Online backup schema1 включает все source namespaces. Raw retention35d и используемые snapshots до окончания срока подробных расчетов определены D22; owner/import/backup data не входят в market cleanup.
 

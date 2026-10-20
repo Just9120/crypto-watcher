@@ -383,7 +383,7 @@ def stable_reason(store: Store) -> list[str]:
                 reasons.append("CATALOGUE_BUNDLE_BACKLOG")
         except (ValueError, StateError, sqlite3.Error):
             reasons.append("CATALOGUE_CHECKPOINT_UNKNOWN")
-    for key in ("repack_worker", "analytics_recovery_worker"):
+    for key in ("repack_worker", "analytics_recovery_worker", "retention_worker"):
         if store.get_runtime(key, {}).get("state") == "FAILED":
             reasons.append(key.upper() + "_FAILED")
     analytics = store.get_runtime("analytics", {})
@@ -486,6 +486,7 @@ def snapshot(store: Store, *, deep: bool = False, cohorts: bool = False) -> dict
                 for name in ("outcome", "comparison", "analytics-gap")
             },
             "retention": store.get_runtime("market_retention"),
+            "retention_worker": store.get_runtime("retention_worker"),
             "retention_totals": store.get_runtime("market_retention_totals", {}),
             "quality_actual": quality,
             "comparator_sample": comparator_sample(store) if deep else {"state": "NOT_REQUESTED"},
