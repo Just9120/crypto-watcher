@@ -57,7 +57,10 @@ def save_v4(store, values, day=20000, cohort="cohort"):
 
 @pytest.mark.parametrize("legacy", [False, True])
 @pytest.mark.parametrize("count", [7, 8, 127])
-def test_append_keeps_prefix_coordinates_and_only_interns_new_comparators(store, monkeypatch, legacy, count):
+@pytest.mark.parametrize("transactional", [False, True])
+def test_append_keeps_prefix_coordinates_and_only_interns_new_comparators(
+    store, monkeypatch, legacy, count, transactional
+):
     enable(store.db)
     values = [fact(i, [metric(1000 + i * 20 + j) for j in range(20)]) for i in range(count)]
     added = fact(9999, [metric(100000 + i) for i in range(20)])
@@ -73,6 +76,8 @@ def test_append_keeps_prefix_coordinates_and_only_interns_new_comparators(store,
 
     monkeypatch.setattr(numeric_pool, "encode_reference", record)
     with store.db:
+        if transactional:
+            store.db.execute("BEGIN")
         result = quality_packets.append(store.db, raw, added, "cohort", expected_count=count)
         put(store.db, (20000, "cohort", 0, 20366, encode({"detector": "price"}), "{}", result, count + 1))
     assert calls == [encode(value) for value in added["comparator_metrics"]]
@@ -110,6 +115,38 @@ def test_append_n0_and_legacy_self_contained_packets_keep_public_facts(store):
         legacy = encode_facts(values[:8])
         result = quality_packets.append(store.db, legacy, values[8])
         assert encode(quality_packets.unpack(store.db, result)) == encode(values[:9])
+
+
+def test_append_rejects_changed_prefix_and_rolls_back_all_speculative_writes(store, monkeypatch):
+    enable(store.db)
+    with store.db:
+        raw = save(store, [fact(7)])
+    before = list(store.db.iterdump())
+    original = quality_packets.envelope
+
+    def changed_prefix(rows, columns):
+        if len(rows) > 1:
+            rows[0][1] = [metric(12345)]
+        return original(rows, columns)
+
+    monkeypatch.setattr(quality_packets, "envelope", changed_prefix)
+    with pytest.raises(ValueError, match="changed public facts"), store.db:
+        store.db.execute("BEGIN")
+        quality_packets.append(store.db, raw, fact(8), expected_count=1)
+    assert list(store.db.iterdump()) == before
+
+
+def test_append_still_bounds_full_decoded_public_facts(store, monkeypatch):
+    enable(store.db)
+    original = fact(7)
+    with store.db:
+        raw = save(store, [original])
+    before = list(store.db.iterdump())
+    monkeypatch.setattr(quality_packets, "MAXIMUM", len(encode([original]).encode()) + 1)
+    with pytest.raises(ValueError, match="Decoded quality exceeds bound"), store.db:
+        store.db.execute("BEGIN")
+        quality_packets.append(store.db, raw, fact(8), expected_count=1)
+    assert list(store.db.iterdump()) == before
 
 
 def test_archive_packets_preserve_exact_facts_mixed_formats_reopen_refs_and_rollback(store):
@@ -270,6 +307,19 @@ def test_parameterized_templates_keep_population_values_types_and_multiple_metho
         ]
         == 1
     )
+
+
+def test_repeated_numeric_views_restore_independent_public_dictionaries(store):
+    enable(store.db)
+    values = [fact(i, [metric(7), metric(7)]) for i in range(16)]
+    with store.db:
+        raw = save(store, values)
+    restored = quality_packets.unpack(store.db, raw)
+    assert encode(restored) == encode(values)
+    restored[0]["comparator_metrics"][0]["mae_pct"] = 999
+    assert encode(restored[0]["comparator_metrics"][1]) == encode(metric(7))
+    assert encode(restored[1]["comparator_metrics"][0]) == encode(metric(7))
+    assert encode(quality_packets.unpack(store.db, raw)) == encode(values)
 
 
 def test_sparse_empty_comparators_share_metadata_without_inventing_samples(store):

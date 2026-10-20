@@ -348,9 +348,7 @@ def template_parts(fact: dict[str, Any]) -> tuple[list[Any], list[Any]]:
     return [metadata, positions], slots
 
 
-def restore_template(
-    db: sqlite3.Connection, identity: int, slots: Any, cache: dict[Any, Any]
-) -> dict[str, Any]:
+def _template(db: sqlite3.Connection, identity: int, slots: Any, cache: dict[Any, Any]) -> dict[str, Any]:
     value, parent, depth = row(db, identity, "template2", cache)
     if (
         parent is not None
@@ -364,8 +362,7 @@ def restore_template(
         or len(set(value[1])) != len(value[1])
     ):
         raise ValueError("Invalid quality parameterized template")
-    result = copy.deepcopy(value[0])
-    sets = result.get("comparator_sets", [])
+    sets = value[0].get("comparator_sets", [])
     for index, slot in zip(value[1], slots):
         if (
             type(index) is not int
@@ -375,7 +372,16 @@ def restore_template(
             or sets[index]["population_size"] is not None
         ):
             raise ValueError("Invalid quality population slot")
-        sets[index]["population_size"] = slot
+    return value[0]
+
+
+def restore_template(
+    db: sqlite3.Connection, identity: int, slots: Any, cache: dict[Any, Any]
+) -> dict[str, Any]:
+    result = copy.deepcopy(_template(db, identity, slots, cache))
+    positions = row(db, identity, "template2", cache)[0][1]
+    for index, slot in zip(positions, slots):
+        result["comparator_sets"][index]["population_size"] = slot
     return result
 
 
@@ -407,7 +413,9 @@ def ownership(
         if not inline:
             pool.add(positive(comparisons))
         if modern:
-            restore_template(db, template, value[3], cache)
+            # Ownership validates the frozen template and parameter slots, but
+            # does not need a materialized public fact or a mutable deep copy.
+            _template(db, template, value[3], cache)
         else:
             metadata, parent, depth = row(db, template, "template", cache)
             if parent is not None or depth or not isinstance(metadata, dict):
@@ -417,8 +425,12 @@ def ownership(
             if inline
             else sequence(db, comparisons, cache=cache, kind="set4" if views else "set")
         )
+        metric_reference(own, views=views)
+        # Inline vectors always validate each comparator. Legacy sequences can
+        # arrive through a caller-provided cache, so keep their second guard.
         for reference in [own, *references]:
-            metric_reference(reference, views=views)
+            if not inline:
+                metric_reference(reference, views=views)
             if type(reference) is int:
                 numbers.add(reference // 4 if views else reference)
     return {"pool": sorted(pool), "numeric": sorted(numbers)}
@@ -465,6 +477,7 @@ def append(
     from .quality_summary import encode_facts
     from .storage import encode
 
+    protected_prefix = db.in_transaction
     previous = unpack(db, raw)
     if expected_count is not None and (type(expected_count) is not int or expected_count != len(previous)):
         raise ValueError("Quality append count disagrees with retained packet")
@@ -488,7 +501,19 @@ def append(
         for value, pair in zip([*rows, added[0]], pairs, strict=True)
     ]
     result = envelope(rows, columns)
-    if encode(unpack(db, result)) != encode(expected):
+    if len(encode(expected).encode()) > MAXIMUM:
+        raise ValueError("Decoded quality exceeds bound")
+    # The prefix was fully authenticated/materialized above, and _pack checked
+    # the new fact. Immutable dictionary/numeric coordinates bind their values.
+    # Verify every coordinate, ordered comparator, slot and scalar after the
+    # envelope round trip without materializing the same prefix a second time.
+    unchanged = (
+        db.in_transaction
+        and encode(_append_rows(db, result)) == encode([*_append_rows(db, raw), *_append_rows(db, single)])
+        if protected_prefix
+        else encode(unpack(db, result)) == encode(expected)
+    )
+    if not unchanged:
         raise ValueError("Quality append changed public facts")
     # Self-contained N0 may remain smaller, but it must not replace any retained
     # numeric coordinate. Comparator packets keep their established ownership.
@@ -496,6 +521,31 @@ def append(
         alternative = encode_facts(expected)
         if len(alternative) < len(result):
             return alternative
+    return result
+
+
+def _append_rows(db: sqlite3.Connection, raw: bytes) -> list[Any]:
+    if not raw.startswith(MAGIC):
+        raise ValueError("Invalid quality append format")
+    rows, columns = packet(raw)
+    if any(not isinstance(value, list) for value in rows):
+        raise ValueError("Invalid quality append row")
+    if columns is not None:
+        pairs, parent, depth = row(db, columns, "columns")
+        if parent is not None or depth or not isinstance(pairs, list) or len(pairs) != len(rows):
+            raise ValueError("Invalid quality columns")
+    else:
+        pairs = [value[4:] for value in rows]
+    result = []
+    for value, pair in zip(rows, pairs, strict=True):
+        if (
+            not isinstance(value, list)
+            or len(value) != (4 if columns is not None else 6)
+            or not isinstance(pair, list)
+            or len(pair) != 2
+        ):
+            raise ValueError("Invalid quality append row")
+        result.append([*value[:2], quality_vector.unpack(value[2]), value[3], *pair])
     return result
 
 
@@ -622,6 +672,21 @@ def unpack(db: sqlite3.Connection, raw: bytes) -> list[Any]:
     inline = raw.startswith(MAGIC)
     columns = row(db, column_id, "columns", cache)[0] if column_id is not None else None
     result = []
+    metrics: dict[int, dict[str, Any]] = {}
+
+    def metric(reference: Any) -> Any:
+        if type(reference) is not int:
+            return copy.deepcopy(reference[0])
+        if reference not in metrics:
+            metrics[reference] = (
+                reference_value({"mode": "numeric2", "id": reference}, numbers[reference // 4])
+                if views
+                else numbers[reference]
+            )
+        # Numeric frames contain only scalar numbers. Preserve independent
+        # public dictionaries while restoring each repeated view once per read.
+        return dict(metrics[reference])
+
     for index, value in enumerate(rows):
         template, own, comparisons = value[:3]
         fact = (
@@ -635,13 +700,6 @@ def unpack(db: sqlite3.Connection, raw: bytes) -> list[Any]:
         if not isinstance(pair, list) or len(pair) != 2:
             raise ValueError("Invalid quality strength/noise columns")
         fact["strength"], fact["noise"] = pair
-
-        def metric(reference: Any) -> Any:
-            if type(reference) is not int:
-                return copy.deepcopy(reference[0])
-            if views:
-                return reference_value({"mode": "numeric2", "id": reference}, numbers[reference // 4])
-            return copy.deepcopy(numbers[reference])
 
         fact["metrics"] = metric(own)
         references = (

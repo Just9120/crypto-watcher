@@ -133,6 +133,16 @@ Legacy set delta имеет не более8ancestor links; numeric bodies уд�
 При добавлении факта CQ5 сохраняет numeric coordinates прежнего prefix и
 кодирует только новый факт. Stored n проверяется против decoded prefix;
 переход к общим strength/noise columns и граница128 остаются точными.
+
+Append полностью проверяет прежний public prefix и новый факт. Если prefix прочитан
+в уже открытой transaction, после envelope round trip сравниваются все template /
+numeric coordinates, порядок и повторы comparator vector, population slots,
+strength/noise, без повторной materialization того же prefix. Immutable dependencies
+и та же transaction остаются обязательными; вне неё сохраняется full public
+round trip. Лимит полного decoded JSON остаётся1MiB. Ownership проверяет template
+без лишней mutable copy; повторные scalar numeric views восстанавливаются один
+раз за read и возвращают отдельные public dicts. Persistent cache/новый format
+и изменение scalar lease counts этим не вводятся.
 CQ1/CQ2/CQ4 prefix сначала преобразуется с прежними numeric IDs/leases.
 Provenance body живёт до последнего
 зависимого block. GC всех зависимостей конечен и учитывается как выполненная
