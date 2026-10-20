@@ -84,9 +84,9 @@ runtime source/image и operator SHA256/head/CI; helper в running artifact до
 уже поддерживать используемый API. После операции hotfix проходит обычный merge/CD
 на новой малой working DB. Receiver/permit/protections/budgets не меняются.
 
-После reset автоматические delivery используют full source integrity и SQLite online backup на диске с полной integrity и streaming SHA256. Вся DB в RAM/tmpfs не копируется; cap4GiB/CPU1/no swap остается. Source+backup делят оставшееся время общего900s deadline с резервом переключения/post-checks. При нехватке места/времени stage завершается failure до switch; gates не ослабляются. Target20GB не является гарантией выполнения полного scan любой20GB базы за15min: фактическая скорость и длительность видны в records, превышение требует переработки, не автоматического увеличения deadline.
+После reset автоматические delivery используют full source integrity и SQLite online backup на диске с полной integrity и streaming SHA256. Вся DB в RAM/tmpfs не копируется; cap4GiB/CPU1/no swap остается. Source+backup делят оставшееся время общего900s deadline с резервом переключения/post-checks. При нехватке места/времени stage завершается failure до switch; gates не ослабляются. Текущий target25GB не гарантирует полный scan любой25GB базы за15min: фактическая скорость и длительность видны в records, превышение требует переработки, не автоматического увеличения deadline.
 
-Retention работает batches через indexes/transactional counters, summaries12 календарных месяцев; routine control не сканирует все DB pages. `storage-indexes` — отдельное ограниченное измерение, размер snapshot помечен временем. Его отсутствие/timeout не считается доказанным размером индексов. Forecast отражает short-window/model limitations и предупреждает о20GB без скрытого сокращения данных. Последующее наблюдение — отдельная задача владельца после завершения исправлений/reset.
+Retention работает batches через indexes/transactional counters, summaries12 календарных месяцев; routine control не сканирует все DB pages. `storage-indexes` — отдельное ограниченное измерение, размер snapshot помечен временем. Его отсутствие/timeout не считается доказанным размером индексов. Forecast отражает short-window/model limitations и текущий предел25,000,000,000bytes без скрытого сокращения данных. Исторические20GB records остаются snapshots прежнего требования. Последующее наблюдение входит в текущую Goal после завершения исправлений и штатной поставки, без нового reset.
 
 ## Storage extension3: routine delivery без reset
 
@@ -130,7 +130,7 @@ connection и освобождения live WAL snapshot. Полный SHA256/р
 backup integrity и все post-checks сохраняются. Small backups и TMPFS/compressed
 qualification не меняются. Qualification17Oct на live2.89GB:57.11s, peakRSS2.95GB,
 zero data writes; это snapshot текущего размера, не обещание времени для любой
-будущей базы и не доказательство20GB capacity. Failed attempt сохраняется; повтор
+будущей базы и не доказательство текущего25GB capacity. Failed attempt сохраняется; повтор
 делается после исправления через новый validated artifact, без bypass/reset.
 
 ## Измерение ёмкости и конечное24h наблюдение
@@ -218,7 +218,7 @@ Status/каждый sample/baseline/final/result сохраняются atomical
 интервалу не присваивается устойчивый суточный темп. Interval report содержит physical
 DB/index/WAL deltas, logical namespace deltas и cumulative cleanup counters; отсутствие
 полного boundary ledger явно UNSET. Даже успешные24h и controlled-clock tests сами
-по себе не подтверждают population mix следующего года или20GB fit.
+по себе не подтверждают population mix следующего года или25GB fit.
 
 Каждый deep boundary имеет отдельный `baseline-attempt-NNNN.json` либо
 `final-attempt-NNNN.json`: PENDING до probe, полный snapshot/blockers и решение

@@ -20,7 +20,7 @@ Binding/activation/recovery — в [agent procedure](runbooks/agent-delivery.md)
 | Analytics / recovery | `outcomes.py`, `analytics.py`, `analytics_worker.py`, `analytics_recovery.py` | Frozen horizons/comparator versions, readonly calculations, CAS apply и referenced recovery |
 | Retention / summaries | `storage_lifecycle.py`, `quality_summary.py`, `expiry_index.py`, `quality_layout.py` | Bounded expiry, all-method numeric quality перед удалением details, finite service dependencies |
 | Storage control | `storage_meter.py`, `storage_model.py`, `storage_repack.py` | Cheap counters/samples, separated occupancy/retained-flow forecast, isolated quality scenarios и durable bounded lossless repack |
-| Capacity evidence | `capacity.py`, `scripts/observe_capacity.py`, `scripts/rehearse_retention.py` | Readonly boundary ledger/cardinality/pages, finite host observation после stability и offline full lifecycle; tests/CD отдельно от20GB proof |
+| Capacity evidence | `capacity.py`, `scripts/observe_capacity.py`, `scripts/rehearse_retention.py` | Readonly boundary ledger/cardinality/pages, finite host observation после stability и offline full lifecycle; tests/CD отдельно от25GB proof |
 | Agent consumer | `agent_contract.py`, `agent_delivery.py` | Полный public snapshot/hash, independent immutable outbox/retries/ack и owner diagnostics |
 | Digest / optional context | `digest.py`, `enrichment.py`, `enrichment_runtime.py` | Independent period delivery и qualified derivatives mapping/source freshness |
 | Market adapter / computation | `cryptowatcher/market.py` | Общий async HTTP client, bounded REST requests; closed-candle composite, gaps/invalid data diagnostics |
