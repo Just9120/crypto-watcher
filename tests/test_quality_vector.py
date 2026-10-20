@@ -30,6 +30,8 @@ def test_vectors_keep_order_duplicates_large_coordinates_and_unknown_metrics():
         [2, []],
         [1, [0]],
         [1, [4, -4]],
+        [1, [4, -4, 4]],
+        [1, [4, 2**65, -(2**65)]],
         [1, [True]],
         [0, [True]],
         [0, [4] * 4097],

@@ -266,9 +266,9 @@ def sequence(
 def metric_reference(value: Any, *, views: bool = False) -> None:
     if type(value) is int:
         if views:
-            from .numeric_pool import reference_id
+            from .numeric_pool import view_identity
 
-            reference_id({"mode": "numeric2", "id": value})
+            view_identity(value)
         else:
             positive(value)
     elif not isinstance(value, list) or len(value) != 1 or not isinstance(value[0], dict):

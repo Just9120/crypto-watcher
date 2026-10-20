@@ -52,6 +52,7 @@ def unpack(value: Any) -> list[Any]:
             previous += difference
             metric_reference(previous, views=True)
             result.append(previous)
+        return result
     for reference in result:
         metric_reference(reference, views=True)
     return result

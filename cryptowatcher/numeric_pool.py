@@ -276,6 +276,13 @@ def load(db: sqlite3.Connection, identity: int) -> dict[str, Any]:
     return load_many(db, {identity})[identity]
 
 
+def view_identity(coordinate: int) -> int:
+    """Validate a scalar numeric2 coordinate without a temporary descriptor."""
+    if type(coordinate) is not int or not 4 <= coordinate < 2**65:
+        raise ValueError("Invalid numeric metric view coordinate")
+    return coordinate // 4
+
+
 def reference_id(reference: dict[str, Any]) -> int:
     if not isinstance(reference, dict) or set(reference) != {"mode", "id"}:
         raise ValueError("Invalid numeric metric reference")
@@ -284,9 +291,7 @@ def reference_id(reference: dict[str, Any]) -> int:
     if mode not in ("numeric", "numeric2") or type(identity) is not int:
         raise ValueError("Invalid numeric metric reference")
     if mode == "numeric2":
-        if not 4 <= identity < 2**65:
-            raise ValueError("Invalid numeric metric view coordinate")
-        identity //= 4
+        identity = view_identity(identity)
     if not 0 < identity < 2**63:
         raise ValueError("Invalid numeric metric identity")
     return identity
