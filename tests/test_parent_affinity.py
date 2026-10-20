@@ -29,7 +29,18 @@ def prepare(store, *, install=True):
         affinity.install(store.db, store.cached_bytes)
 
 
-def parent(store, index, *, revision=1, cohort=None, current=True):
+def parent(
+    store,
+    index,
+    *,
+    revision=1,
+    cohort=None,
+    current=True,
+    family="composite",
+    direction="UP",
+    timeframe="1m",
+    settings_revision=2,
+):
     if not store.db.in_transaction:
         store.db.execute("BEGIN IMMEDIATE")
     if cohort is None:
@@ -53,10 +64,10 @@ def parent(store, index, *, revision=1, cohort=None, current=True):
             "schema": "cryptowatcher." + kind + ".v1",
             "market_type": "spot",
             "symbol": f"COIN{cohort}USDT",
-            "timeframe": "1m",
-            "detector_id": "composite",
-            "direction": "UP",
-            "settings_revision": 2,
+            "timeframe": timeframe,
+            "detector_id": family,
+            "direction": direction,
+            "settings_revision": settings_revision,
             "metrics": {"zero": -0.0, "integer": 0, "other": float(index)},
             "unknown": [True, None, "точно"],
             "shared": "same native family and immutable public context " * 6,
@@ -150,6 +161,182 @@ def test_hash_collision_cannot_substitute_for_actual_native_cohort(store, monkey
     ]
     assert set(owners) == {roots[index][0] for index in range(0, 27, 3)}
     assert all_values(store) == expected
+
+
+def test_source_group_includes_families_but_never_other_tf_settings_or_instrument(store):
+    from cryptowatcher.detector_config import FAMILIES
+
+    prepare(store)
+    with store.db:
+        roots = [
+            parent(
+                store, index, cohort=0, family=FAMILIES[index % 5], direction="DOWN" if index % 2 else "UP"
+            )
+            for index in range(12)
+        ]
+        foreign = [
+            parent(store, 20, cohort=0, timeframe="5m"),
+            parent(store, 21, cohort=0, settings_revision=3),
+            parent(store, 22, cohort=1),
+        ]
+    before = all_values(store)
+    seed = record_catalog.row(store.db, roots[0][1][0][0])[0]
+    with store.db:
+        store.db.execute("BEGIN IMMEDIATE")
+        assert catalogue_compaction.compact(store, seed) == (63, 0)
+    packet = record_catalog.row(store.db, roots[0][1][0][0])[0]
+    selected = {
+        row[0]
+        for row in store.db.execute("SELECT parent FROM market_record_owners WHERE packet=?", (packet,))
+    }
+    assert len(selected) == 9 and selected <= {root[0] for root in roots}
+    assert not selected.intersection(root[0] for root in foreign)
+    assert len({root[1][0][1]["detector_id"] for root in roots if root[0] in selected}) > 1
+    assert all_values(store) == before
+
+
+def episode(store, identity, revision, day=130):
+    if not store.db.in_transaction:
+        store.db.execute("BEGIN IMMEDIATE")
+    coordinate = record_blocks.Coordinate("episode", identity, revision)
+    value = {
+        "episode_id": identity,
+        "revision": revision,
+        "schema": "cryptowatcher.episode.v1",
+        "instrument": "spot/COIN0USDT",
+        "direction": "UP",
+        "conditions": ["same immutable history" * 15],
+        "at": revision,
+        "metrics": {"zero": -0.0},
+    }
+    record_catalog.append(
+        store.db,
+        [(coordinate, value, None)],
+        bucket=day,
+        owners={coordinate: None},
+        deadlines={coordinate: day * DAY},
+        current=[],
+    )
+    return coordinate
+
+
+@pytest.mark.parametrize("rollback", [False, True])
+def test_episode_revisions_beyond_neighbors_regroup_with_exact_days_and_rollback(
+    store, monkeypatch, rollback
+):
+    prepare(store)
+    identity = str(uuid.uuid4())
+    with store.db:
+        coordinates = []
+        for revision in range(1, 19):
+            coordinates.append(episode(store, identity, revision))
+            parent(store, revision)
+        other_day = episode(store, identity, 19, 131)
+    before = all_values(store)
+    before_sql = list(store.db.iterdump())
+    seed = record_catalog.row(store.db, coordinates[0])[0]
+    original = record_relocation.relocate
+
+    def fail(*args, **kwargs):
+        original(*args, **kwargs)
+        raise RuntimeError("after episode publication")
+
+    if rollback:
+        monkeypatch.setattr(record_relocation, "relocate", fail)
+        with pytest.raises(RuntimeError, match="episode publication"), store.db:
+            store.db.execute("BEGIN IMMEDIATE")
+            catalogue_compaction.compact(store, seed)
+        assert list(store.db.iterdump()) == before_sql
+    else:
+        with store.db:
+            store.db.execute("BEGIN IMMEDIATE")
+            assert catalogue_compaction.compact(store, seed)[0] >= 18
+        packets = {record_catalog.row(store.db, coordinate)[0] for coordinate in coordinates}
+        assert len(packets) == 1 and record_catalog.row(store.db, other_day)[0] not in packets
+    assert all_values(store) == before
+    assert not store.db.execute("PRAGMA foreign_key_check").fetchall()
+
+
+def test_episode_with_more_than64_revisions_uses_bounded_visible_fallback(store):
+    prepare(store)
+    identity = str(uuid.uuid4())
+    with store.db:
+        coordinates = [episode(store, identity, revision) for revision in range(1, 70)]
+    before = all_values(store)
+    seed = record_catalog.row(store.db, coordinates[0])[0]
+    with store.db:
+        store.db.execute("BEGIN IMMEDIATE")
+        moved, fallbacks = catalogue_compaction.compact(store, seed)
+    assert moved == 0 and fallbacks == 1
+    assert all_values(store) == before
+
+
+def test_episode_that_cannot_fit_remaining_packet_is_examined_only_once(store, monkeypatch):
+    prepare(store)
+    identity = str(uuid.uuid4())
+    with store.db:
+        _, entries = parent(store, 0)
+        # A complete valid episode is in the next packet, but cannot fit after
+        # the oldest seed. Repeatedly capturing it per slot would multiply the
+        # bounded64-record operation into thousands of reads in one transaction.
+        revisions = []
+        for revision in range(1, 61):
+            coordinate = record_blocks.Coordinate("episode", identity, revision)
+            revisions.append((coordinate, {"episode_id": identity, "revision": revision}, None))
+        record_catalog.append(
+            store.db,
+            revisions,
+            bucket=130,
+            owners={row[0]: None for row in revisions},
+            deadlines={row[0]: 130 * DAY for row in revisions},
+            current=[],
+        )
+    before = all_values(store)
+    calls = []
+    original = catalogue_compaction._episode
+
+    def examine(*args):
+        calls.append(args[1].coordinate.identity)
+        return original(*args)
+
+    monkeypatch.setattr(catalogue_compaction, "_episode", examine)
+    seed = record_catalog.row(store.db, entries[0][0])[0]
+    with store.db:
+        store.db.execute("BEGIN IMMEDIATE")
+        catalogue_compaction.compact(store, seed)
+    assert calls == [identity]
+    assert all_values(store) == before
+
+
+def test_episode_extension_with_event_owner_keeps_its_distinct_retention_authority(store):
+    prepare(store)
+    identity = str(uuid.uuid4())
+    with store.db:
+        first = episode(store, identity, 1)
+        owner, entries = parent(store, 0)
+        coordinate = record_blocks.Coordinate("episode", identity, 2)
+        value = {
+            "episode_id": identity,
+            "revision": 2,
+            "event_id": entries[0][0].identity,
+            "unknown_extension": "retained",
+        }
+        record_catalog.append(
+            store.db,
+            [(coordinate, value, None)],
+            bucket=130,
+            owners={coordinate: owner},
+            deadlines={coordinate: None},
+            current=[],
+        )
+    before = all_values(store)
+    seed = record_catalog.row(store.db, first)[0]
+    with store.db:
+        store.db.execute("BEGIN IMMEDIATE")
+        catalogue_compaction.compact(store, seed)
+    assert all_values(store) == before
+    assert record_catalog.row(store.db, first)[2] is None
+    assert record_catalog.row(store.db, coordinate)[2] == owner
 
 
 def test_fixed_packet_upper_prevents_new_peers_from_extending_original_work(store):

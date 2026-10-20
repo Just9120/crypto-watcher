@@ -230,8 +230,17 @@ Repack20 добавляет явный `parent_affinity=1`: native hint по UTC
 полному cohort ключу market/symbol/TF/detector/direction/settings revision.
 8byte fingerprint служит только ранжированию: actual private tuple, ownership,
 revisions, heads, source/numeric leases проверяет прежний relocation path.
-Oldest seed сохраняет приоритет; выбирается максимум32 peers, целый parent
-в пределах64 records/1MiB. Collision/unsupported shape не меняет исходные факты.
+Oldest seed сохраняет приоритет. Lookup объединяет максимум15 indexed prefixes
+пяти известных families/трёх directions при прежних market/symbol/TF/settings:
+до480 small metadata rows, затем максимум32 oldest peers. Перед переносом
+сверяются actual source tuple и целый parent в пределах64 records/1MiB;
+полный native fingerprint и его SQL guard остаются прежними. Collision или
+unsupported shape не меняет исходные факты. Standalone episode revisions
+читаются через прежний coordinate PK с LIMIT65 и группируются только внутри
+expiry day. Каждая episode identity рассматривается один раз за операцию,
+включая случай недостаточного остатка пакета; oversized истории остаются
+читаемыми с явным fallback. Допустимая event-owned extension revision остаётся
+в своём прежнем parent bundle. Сроки и source/numeric ownership прежние.
 Hint guards и native counters атомарны с publication/deletion; Store open только
 проверяет известный layout и регистрирует trigger UDF, без скрытого installation.
 Finite parent/packet ceilings сохраняются после restart; checked detail packets

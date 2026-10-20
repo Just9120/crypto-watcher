@@ -129,6 +129,33 @@ def _native(records: list[record_relocation.Record]) -> tuple[Any, ...] | None:
     return parent_affinity.native(min(events, key=lambda record: record.coordinate.revision).value)
 
 
+def _episode(store: Store, seed: _Seed, limit: int) -> list[record_relocation.Record] | None:
+    """Use the existing coordinate PK; never scan an unbounded episode history."""
+    rows = store.db.execute(
+        "SELECT revision FROM market_records WHERE kind=2 AND public_uuid=? ORDER BY revision LIMIT 65",
+        (record_catalog.binary(seed.coordinate.identity),),
+    ).fetchall()
+    if len(rows) > 64:
+        return None
+    selected = []
+    charge = 0
+    for (revision,) in rows:
+        captured = record_relocation.capture(
+            store, record_blocks.Coordinate("episode", seed.coordinate.identity, revision)
+        )
+        if captured.binding[2] is not None:
+            # A supported extension may bind this revision to an event. Its
+            # complete parent bundle retains that distinct expiry authority.
+            continue
+        if captured.expires // 86400000 != seed.expires // 86400000:
+            continue
+        charge += captured.charge
+        if charge > record_blocks.MAX_EXPANDED:
+            return None
+        selected.append(captured)
+    return [] if len(selected) > limit else selected
+
+
 def compact(store: Store, packet: int, *, upper: int = 2**63 - 1) -> tuple[int, int]:
     """Return moved records/fallbacks, preserving every unselected live slot."""
     with packet_store.atomic(store.db):
@@ -138,6 +165,8 @@ def compact(store: Store, packet: int, *, upper: int = 2**63 - 1) -> tuple[int, 
             return 0, 0
         expanded: list[record_relocation.Record] = []
         seen: set[int] = set()
+        standalone: set[record_blocks.Coordinate] = set()
+        episodes: set[str] = set()
         size = 0
         fallback = 0
         day = seed[0].expires // 86400000
@@ -156,6 +185,8 @@ def compact(store: Store, packet: int, *, upper: int = 2**63 - 1) -> tuple[int, 
                 break
             if record.expires // 86400000 != day:
                 continue
+            if record.coordinate in standalone:
+                continue
             parent = record.binding[2]
             if parent is not None:
                 if parent in seen:
@@ -170,7 +201,18 @@ def compact(store: Store, packet: int, *, upper: int = 2**63 - 1) -> tuple[int, 
                         if r.binding[2] == parent and r.binding[0] == record.binding[0]
                     ]
             else:
-                group = [record_relocation.capture(store, record.coordinate)]
+                if record.coordinate.kind == "episode":
+                    if record.coordinate.identity in episodes:
+                        continue
+                    episodes.add(record.coordinate.identity)
+                group = (
+                    _episode(store, record, record_blocks.MAX_RECORDS - len(expanded))
+                    if record.coordinate.kind == "episode"
+                    else [record_relocation.capture(store, record.coordinate)]
+                )
+                if group is None:
+                    fallback += 1
+                    group = [record_relocation.capture(store, record.coordinate)]
             charge = sum(r.charge for r in group)
             if (
                 all(r.expires // 86400000 == day for r in group)
@@ -178,6 +220,7 @@ def compact(store: Store, packet: int, *, upper: int = 2**63 - 1) -> tuple[int, 
                 and size + charge <= record_blocks.MAX_EXPANDED
             ):
                 expanded.extend(group)
+                standalone.update(r.coordinate for r in group if r.binding[2] is None)
                 size += charge
                 # Keep the original oldest seed first, then prefer complete
                 # peers from one bounded native index prefix. Hints never
@@ -191,7 +234,12 @@ def compact(store: Store, packet: int, *, upper: int = 2**63 - 1) -> tuple[int, 
                         if peer in seen:
                             continue
                         selected = _parent(store, peer, record_blocks.MAX_RECORDS - len(expanded))
-                        if not selected or _native(selected) != native:
+                        selected_native = _native(selected) if selected else None
+                        if (
+                            not selected
+                            or selected_native is None
+                            or parent_affinity.source(selected_native) != parent_affinity.source(native)
+                        ):
                             continue
                         cost = sum(value.charge for value in selected)
                         if size + cost <= record_blocks.MAX_EXPANDED and all(

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import heapq
 import sqlite3
 import time
 import uuid
@@ -40,6 +41,11 @@ def native(value: dict[str, Any]) -> tuple[Any, ...] | None:
 
 def fingerprint(fields: tuple[Any, ...]) -> bytes:
     return hashlib.sha256(encode(fields).encode()).digest()[:8]
+
+
+def source(fields: tuple[Any, ...]) -> tuple[Any, ...]:
+    """Grouping only; the stored hint still authenticates the full native key."""
+    return fields[:3] + fields[5:]
 
 
 def installed(db: sqlite3.Connection) -> bool:
@@ -187,12 +193,34 @@ def candidates(db: sqlite3.Connection, parent: int, upper: int) -> list[int]:
     ).fetchone()
     if hint is None:
         return []
-    rows = db.execute(
-        "SELECT parent FROM market_parent_affinity WHERE day=? AND fingerprint=? AND parent>? ORDER BY parent LIMIT 32",
-        (*hint, parent),
-    ).fetchall()
+    actual = _actual(db, parent)
+    if actual is None or actual[2] is None:
+        return []
+    fields = actual[2]
+    from .detector_config import FAMILIES
+
+    keys = {bytes(hint[1])}
+    if fields[3] in FAMILIES and fields[4] in ("UP", "DOWN", "NEUTRAL"):
+        keys.update(
+            fingerprint((*fields[:3], family, direction, fields[5]))
+            for family in FAMILIES
+            for direction in ("UP", "DOWN", "NEUTRAL")
+        )
+    # At most15 bounded native prefixes/480 small metadata rows. Capture only
+    # the oldest32 peers, preserving the previous whole-parent/memory bounds.
+    rows = heapq.nsmallest(
+        32,
+        {
+            row[0]
+            for key in keys
+            for row in db.execute(
+                "SELECT parent FROM market_parent_affinity WHERE day=? AND fingerprint=? AND parent>? ORDER BY parent LIMIT 32",
+                (hint[0], key, parent),
+            )
+        },
+    )
     result = []
-    for (identity,) in rows:
+    for identity in rows:
         owners = db.execute(
             "SELECT p.id,p.bundle_checked FROM market_record_owners o JOIN market_packets p ON p.id=o.packet "
             "WHERE o.parent=? ORDER BY o.packet LIMIT 65",
