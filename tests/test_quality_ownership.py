@@ -5,7 +5,7 @@ from contextlib import closing
 
 import pytest
 
-from cryptowatcher import quality_frames, quality_packets
+from cryptowatcher import compact_json, quality_frames, quality_packets
 from cryptowatcher.storage import Store
 from tests.test_quality_frames import numeric, public, setup, tick
 from tests.test_quality_packets import fact, save, save_v4
@@ -125,6 +125,85 @@ def test_cached_refs_authenticate_current_frame_and_mask(store, column):
         blob.seek(0)
         blob.write(bytes([original[0] ^ 1]))
     assert store.db.total_changes == before
+    with pytest.raises(sqlite3.Error):
+        sql_refs(store, raw)
+    store.db.rollback()
+    assert sql_refs(store, raw) == expected
+
+
+@pytest.mark.parametrize("framed", [False, True])
+def test_dictionary_shape_cache_reuses_only_the_pure_parse(store, framed, monkeypatch):
+    raw, _ = prepare(store, framed)
+    expected = quality_packets.ownership(store.db, raw)
+    rows, columns = quality_packets.packet(raw, store.db)
+    ids = {value[0] for value in rows} | ({columns} if columns is not None else set())
+    payloads = {
+        bytes(
+            store.db.execute(
+                "SELECT payload FROM market_quality_dictionary WHERE id=?", (identity,)
+            ).fetchone()[0]
+        )
+        for identity in ids
+    }
+    calls = {payload: 0 for payload in payloads}
+    original = compact_json.unpack
+
+    def counted(value, *args, **kwargs):
+        if value in calls:
+            calls[value] += 1
+        return original(value, *args, **kwargs)
+
+    store.reference_cache.clear()
+    store.reference_cache_bytes = 0
+    monkeypatch.setattr(compact_json, "unpack", counted)
+    for _ in range(5):
+        assert sql_refs(store, raw) == expected
+    assert set(calls.values()) == {1}
+    assert any(key[0] == "bytes/quality-dictionary-shape" for key in store.reference_cache)
+    assert store.reference_cache_bytes <= 1024 * 1024
+
+
+@pytest.mark.parametrize("framed,kind", [(False, "template2"), (False, "columns"), (True, "template2")])
+@pytest.mark.parametrize("column", ["kind", "parent", "depth", "checksum", "hash"])
+def test_cached_dictionary_shape_checks_current_row_binding(store, framed, kind, column):
+    raw, _ = prepare(store, framed)
+    expected = sql_refs(store, raw)
+    rows, columns = quality_packets.packet(raw, store.db)
+    identity = rows[0][0] if kind == "template2" else columns
+    assert identity is not None
+    previous = store.db.execute(
+        f"SELECT {column} FROM market_quality_dictionary WHERE id=?", (identity,)
+    ).fetchone()[0]
+    changed = {
+        "kind": "future-template",
+        "parent": identity,
+        "depth": 1,
+    }.get(column)
+    if column in ("checksum", "hash"):
+        changed = bytes([previous[0] ^ 1]) + previous[1:]
+    store.db.execute("BEGIN IMMEDIATE")
+    store.db.execute("DROP TRIGGER market_quality_dictionary_immutable")
+    store.db.execute(f"UPDATE market_quality_dictionary SET {column}=? WHERE id=?", (changed, identity))
+    with pytest.raises(sqlite3.Error):
+        sql_refs(store, raw)
+    store.db.rollback()
+    assert sql_refs(store, raw) == expected
+
+
+@pytest.mark.parametrize("framed", [False, True])
+def test_dictionary_cache_rechecks_a_changed_validly_checksummed_template_shape(store, framed):
+    raw, _ = prepare(store, framed)
+    expected = sql_refs(store, raw)
+    identity = quality_packets.packet(raw, store.db)[0][0][0]
+    value = quality_packets.row(store.db, identity, "template2")[0]
+    value[1] = [-1]
+    payload = quality_packets.packed(value)
+    store.db.execute("BEGIN IMMEDIATE")
+    store.db.execute("DROP TRIGGER market_quality_dictionary_immutable")
+    store.db.execute(
+        "UPDATE market_quality_dictionary SET payload=?,checksum=?,hash=? WHERE id=?",
+        (payload, quality_packets.signature(payload), quality_packets.signature(payload), identity),
+    )
     with pytest.raises(sqlite3.Error):
         sql_refs(store, raw)
     store.db.rollback()

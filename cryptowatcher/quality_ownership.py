@@ -9,10 +9,51 @@ responsibility, exactly as in the uncached extractor.
 from __future__ import annotations
 
 import sqlite3
+import struct
 from typing import Any
 
 from . import compact_json, indexed_frame, quality_vector
 from .record_codec import MAX_BYTES
+
+
+def _dictionary_count(db: sqlite3.Connection, identity: int, kind: str, binary_cache: Any) -> int:
+    from .quality_packets import MAXIMUM, _template_value, packed, positive, signature
+
+    found = db.execute(
+        "SELECT kind,checksum,payload,parent,depth,hash FROM market_quality_dictionary WHERE id=?",
+        (positive(identity),),
+    ).fetchone()
+    if found is None or found[0] != kind or found[3] is not None or found[4]:
+        raise ValueError("Missing or invalid quality dictionary binding")
+    raw = bytes(found[2])
+    if signature(raw) != bytes(found[1]):
+        raise ValueError("Corrupt quality dictionary bytes")
+
+    def describe() -> bytes:
+        value = compact_json.unpack(raw, MAXIMUM)
+        if kind == "columns":
+            if not isinstance(value, list):
+                raise ValueError("Invalid quality columns")
+            count = len(value)
+        else:
+            if (
+                kind != "template2"
+                or not isinstance(value, list)
+                or len(value) != 2
+                or not isinstance(value[1], list)
+            ):
+                raise ValueError("Invalid quality parameterized template")
+            count = len(value[1])
+            _template_value(value, None, 0, count)
+        return signature(packed(value)) + struct.pack(">Q", count)
+
+    # Only a pure validation result for these actual bytes is retained. Kind,
+    # parent, depth, checksum, canonical hash and existence are current on every
+    # call, including blob writes that do not alter Connection.total_changes.
+    encoded = binary_cache("quality-dictionary-shape", kind, raw, describe)
+    if not isinstance(encoded, bytes) or len(encoded) != 16 or encoded[:8] != bytes(found[5]):
+        raise ValueError("Quality dictionary content mismatch")
+    return struct.unpack(">Q", encoded[8:])[0]
 
 
 def _summary(rows: Any, columns: Any) -> dict[str, Any]:
@@ -52,7 +93,7 @@ def sql_ownership(db: sqlite3.Connection, raw: bytes, binary_cache: Any = None) 
     from .quality_frames import MAGIC as FRAME_MAGIC
     from .quality_frames import checked_entry, entry_bytes
     from .quality_packets import MAGIC as INLINE_MAGIC
-    from .quality_packets import _template_count, ownership, packet, row
+    from .quality_packets import ownership, packet
 
     if binary_cache is None or not raw.startswith((INLINE_MAGIC, FRAME_MAGIC)):
         return ownership(db, raw)
@@ -69,11 +110,11 @@ def sql_ownership(db: sqlite3.Connection, raw: bytes, binary_cache: Any = None) 
 
     encoded = binary_cache("quality-inline-owners", "QF1" if framed else "CQ5", source, extract)
     summary = compact_json.unpack(encoded, MAX_BYTES)
-    current: dict[Any, Any] = {}
     if summary["columns"] is not None:
-        values, parent, depth = row(db, summary["columns"], "columns", current)
-        if parent is not None or depth or not isinstance(values, list) or len(values) != summary["n"]:
+        count = _dictionary_count(db, summary["columns"], "columns", binary_cache)
+        if count != summary["n"]:
             raise ValueError("Invalid quality columns")
     for identity, count in summary["templates"]:
-        _template_count(db, identity, count, current)
+        if type(count) is not int or count != _dictionary_count(db, identity, "template2", binary_cache):
+            raise ValueError("Invalid quality parameterized template")
     return {"pool": summary["pool"], "numeric": summary["numeric"]}

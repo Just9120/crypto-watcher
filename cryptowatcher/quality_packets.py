@@ -370,6 +370,11 @@ def _template_count(
     db: sqlite3.Connection, identity: int, slot_count: int, cache: dict[Any, Any]
 ) -> dict[str, Any]:
     value, parent, depth = row(db, identity, "template2", cache)
+    return _template_value(value, parent, depth, slot_count)
+
+
+def _template_value(value: Any, parent: Any, depth: Any, slot_count: int) -> dict[str, Any]:
+    """Validate a decoded immutable template, independently of its DB binding."""
     if (
         parent is not None
         or depth
