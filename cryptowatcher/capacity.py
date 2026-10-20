@@ -353,7 +353,7 @@ def stable_reason(store: Store) -> list[str]:
     elif repack.get("initial_reclaim_complete") is not True:
         reasons.append("CATALOGUE_INITIAL_RECLAIM_PENDING")
     else:
-        from . import catalogue_repack, numeric_refs
+        from . import catalogue_repack, numeric_refs, quality_frames
         from .storage import StateError
 
         try:
@@ -363,6 +363,21 @@ def stable_reason(store: Store) -> list[str]:
                 reasons.append("NUMERIC_LEASE_INITIAL_INCOMPLETE")
         except (ValueError, StateError, sqlite3.Error):
             reasons.append("NUMERIC_LEASE_CHECKPOINT_UNKNOWN")
+        try:
+            frames = repack.get("quality_frames", {})
+            quality_frames.validate(frames)
+            if frames.get("initial_complete") is not True or not quality_frames.installed(store.db):
+                reasons.append("QUALITY_FRAME_INITIAL_INCOMPLETE")
+            elif repack.get("quality_frame_initial_reclaim_complete") is not True:
+                reasons.append("QUALITY_FRAME_INITIAL_RECLAIM_PENDING")
+            else:
+                frame_pending = quality_frames.status(store.db, int(time.time() * 1000))
+                if frame_pending["clock_unknown"]:
+                    reasons.append("QUALITY_FRAME_CLOCK_UNKNOWN")
+                elif frame_pending["oldest_age_ms"] is not None and frame_pending["oldest_age_ms"] > 60000:
+                    reasons.append("QUALITY_FRAME_BACKLOG")
+        except (ValueError, StateError, sqlite3.Error):
+            reasons.append("QUALITY_FRAME_CHECKPOINT_UNKNOWN")
         try:
             catalogue_repack.validate(store, repack, VERSION)
             pending = catalogue_repack.status(store, int(time.time() * 1000))
@@ -414,7 +429,7 @@ def explain_forecast(value: dict[str, Any], ledger: dict[str, Any]) -> dict[str,
         "kind": "EXPLANATION_OF_EXISTING_FLOW_MODEL_NOT_A_NEW_MEASUREMENT",
         "runtime_namespace_allocation": allocated,
         "allocation_formula": "details projected_logical_bytes * namespace current payload / current details payload",
-        "physical_formula": "SUM(projected logical excluding quality/quality_numeric/quality_components)*occupied-page/logical factor + MAX(whole-archive scenario physical, combined quality flow*factor) + WAL + SHM",
+        "physical_formula": "SUM(projected logical excluding quality_replaced_categories)*occupied-page/logical factor + MAX(whole-archive scenario physical, combined quality flow*factor) + WAL + SHM",
         "factor": factor,
         "categories": value.get("forecast"),
         "quality_scenarios": value.get("forecast_scenarios"),

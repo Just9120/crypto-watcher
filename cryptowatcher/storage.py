@@ -346,6 +346,10 @@ class Store:
                 from .numeric_refs import installed as validate_numeric_refs
 
                 validate_numeric_refs(self.db)
+            if self.db.execute("SELECT 1 FROM market_meta WHERE key='quality_frames'").fetchone():
+                from .quality_frames import installed as validate_quality_frames
+
+                validate_quality_frames(self.db)
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA busy_timeout=5000")
         if not readonly:

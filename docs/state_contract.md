@@ -198,14 +198,22 @@ CH1 — frozen template для inline projected heads с полным SHA256. Fi
 reference extraction; Python Unicode sizes учитываются через фактический размер
 objects, cache не заменяет проверку наличия внешних bodies.
 
-Candidate repack17 сохраняет DB1/DB2 catalogue adapters версии13. Переход через15:
+Candidate repack18 сохраняет DB1/DB2 catalogue adapters версии13. Переход через15:
 13→15 повторяет конечный CQ5 quality pass и добавляет NS1 qualification;14→15
 добавляет только NS1 qualification и physical reclaim. Initial catalogue geometry,
 queue ceiling, numeric IDs/frames/leases и source boundaries сохраняются.
 Upgrade15→17 добавляет bounded parent-bundle regrouping, NR2 pass и reclaim, сохраняя
 все завершённые source/numeric/quality/catalogue границы.
 Upgrade16→17 сохраняет также завершённый packet ceiling и добавляет только NR2
-pass/reclaim. Упаковка просматривает до4других pending packets внутри finite ceiling;
+pass/reclaim. Upgrade17→18 сохраняет эти qualified boundaries и body initial
+reclaim, добавляя QF1 initial tuple ceiling и live queue в прежний rotating worker.
+Global COMPLETE требует QF1 initial scan; отдельный frame initial reclaim ждёт
+dictionary GC и physical free-page reclaim. Observer проверяет обе границы,
+known clock и overdue frame/GC queue; будущий frontier tail остаётся current.
+Quality staging и shared frames учитываются один раз, со всеми индексами и
+working journals. Sample format7 сохраняет старые samples и event frequency;
+прежние CQ5 scenario coefficients явно не являются mature QF1 qualification.
+Упаковка просматривает до4других pending packets внутри finite ceiling;
 новые arrivals её не расширяют. Whole parent с cardinality сверх свободных slots
 пропускается до materialization, oversized whole parent сохраняет явный fallback.
 Explicit marker `packet_bundles=1` устанавливается только в upgrade, не при открытии Store.

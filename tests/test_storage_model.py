@@ -26,7 +26,12 @@ def test_forecast_replaces_all_archive_categories_once_and_preserves_annual_comp
     bounded(store)
     sample(store, NOW - DAY)
     with store.db:
-        for category, size in (("quality", 100), ("quality_numeric", 200), ("quality_components", 300)):
+        for category, size in (
+            ("quality", 100),
+            ("quality_numeric", 200),
+            ("quality_components", 300),
+            ("quality_frames", 400),
+        ):
             store.db.execute("INSERT INTO market_counts VALUES(?,1,?,?,0)", (category, size, size))
     # report must read prequalified coefficients, never build an isolated
     # database/population on an application or observer request.
@@ -35,17 +40,17 @@ def test_forecast_replaces_all_archive_categories_once_and_preserves_annual_comp
     rows = {r["category"]: r for r in value["forecast"]}
     assert all(rows[k]["retention_days_for_estimate"] == 366 for k in QUALITY_CATEGORIES)
     assert all(rows[k]["allocation_excluded"] for k in QUALITY_CATEGORIES - {"quality"})
-    assert rows["quality"]["projected_logical_bytes"] == 600 * 366
-    assert value["quality_physical_allocation_bytes"] == 600 * 366 * value["page_overhead_factor"]
+    assert rows["quality"]["projected_logical_bytes"] == 1000 * 366
+    assert value["quality_physical_allocation_bytes"] == 1000 * 366 * value["page_overhead_factor"]
     # Sampling also creates ordinary service records; they remain a separate
-    # allocation. Only the three archive categories are replaced together.
+    # allocation. All four archive categories are replaced together.
     other_logical = sum(
         r["projected_logical_bytes"] or 0 for k, r in rows.items() if k not in QUALITY_CATEGORIES
     )
     assert value["projected_working_bytes"] == pytest.approx(
         max(
             value["working_bytes"],
-            (600 * 366 + other_logical) * value["page_overhead_factor"]
+            (1000 * 366 + other_logical) * value["page_overhead_factor"]
             + value["files"]["wal"]
             + value["files"]["shm"],
         ),

@@ -325,13 +325,17 @@ def status(db: sqlite3.Connection, now: int) -> dict[str, Any]:
     gc = db.execute(
         "SELECT gc_since FROM market_quality_frames WHERE gc_since IS NOT NULL ORDER BY gc_since,id LIMIT 1"
     ).fetchone()
+    dictionary_gc = (
+        db.execute("SELECT 1 FROM market_quality_dictionary WHERE refs=0 LIMIT 1").fetchone() is not None
+    )
     stamps = ([pending[0]] if pending is not None and pending[0] <= now else []) + (
         [gc[0]] if gc is not None else []
     )
     oldest = min(stamps) if stamps else None
     return {
         "installed": True,
-        "pending_work": bool(stamps),
+        "pending_work": bool(stamps) or dictionary_gc,
+        "dictionary_gc_pending": dictionary_gc,
         "oldest_ms": oldest,
         "oldest_age_ms": max(0, now - oldest) if oldest is not None else None,
         "next_eligible_ms": pending[0] if pending is not None else None,

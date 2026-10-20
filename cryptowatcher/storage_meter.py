@@ -8,8 +8,8 @@ from typing import Any
 from .storage import Store
 
 BUDGET = 25_000_000_000
-QUALITY_CATEGORIES = frozenset({"quality", "quality_numeric", "quality_components"})
-SAMPLE_FORMAT = 6
+QUALITY_CATEGORIES = frozenset({"quality", "quality_numeric", "quality_components", "quality_frames"})
+SAMPLE_FORMAT = 7
 
 
 def create(db: Any) -> None:
@@ -124,6 +124,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "catalogue_overlap",
         "record_pending",
         "bundle_pending",
+        "quality_frame_pending",
     }
     if store.db.execute(
         "SELECT 1 FROM market_meta WHERE key='record_catalogue_runtime' AND value='1'"
@@ -132,6 +133,13 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         # again by retained catalogue packets/coordinates after transfer; annual
         # gross hot insertion flow would count those same records twice.
         occupancy.add("details")
+    from . import quality_frames
+
+    frame_layout = quality_frames.status(store.db, now_ms)
+    if frame_layout["installed"]:
+        # CQ5 becomes staging plus permanent13byte coordinates. Gross CQ5
+        # admissions are the same facts subsequently owned by QF1 containers.
+        occupancy.add("quality")
     for category, value in counts.items():
         previous = (base or {}).get("categories", {}).get(category, {"inserted_bytes": 0, "deleted_bytes": 0})
         inserted = max(0, value["inserted_bytes"] - previous.get("inserted_bytes", 0))
@@ -184,10 +192,12 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         if quality is None:
             quality = {"category": "quality", "gross_bytes_per_day": None, "retention_days_for_estimate": 366}
             forecast.append(quality)
+        quality["flow_projected_logical_bytes"] = quality.get("projected_logical_bytes")
+        quality["flow_basis"] = quality.get("basis")
         quality["projected_logical_bytes"] = max(quality_flow, quality_projection)
         quality["model_applied"] = True
         quality["basis"] = (
-            "WHOLE_ARCHIVE_MODEL_REPLACES_QUALITY_NUMERIC_AND_COMPONENTS; SPARSE_NO_COMPARATOR_SCENARIO"
+            "WHOLE_ARCHIVE_MODEL_REPLACES_ALL_QUALITY_CATEGORIES; SPARSE_NO_COMPARATOR_SCENARIO"
         )
         for item in forecast:
             if item["category"] in QUALITY_CATEGORIES - {"quality"}:
@@ -337,6 +347,8 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
     indexes = store.get_runtime(
         "storage_index_measurement", {"state": "PENDING", "reason": "No bounded exact measurement yet"}
     )
+    if frame_layout["installed"]:
+        source_tables |= {"market_quality_frames", "market_quality_frame_pending"}
     if (
         indexes.get("state") == "PASS"
         and store.db.execute("SELECT 1 FROM sqlite_master WHERE name='market_expiry'").fetchone()
@@ -366,6 +378,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "history_generation": store.get_runtime("history_generation", {}),
         "budget_bytes": BUDGET,
         "catalogue_layout": catalogue_layout,
+        "quality_frame_layout": frame_layout,
         "candle_dependency_retention_estimate": {
             "configured_minimum_days": settings.candle_retention_days,
             "detail_days": settings.detail_retention_days,
@@ -399,12 +412,13 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "observed_events_total": event_total,
         "observed_events_per_day_extrapolated": event_rate * 86400 if event_rate is not None else None,
         "quality_forecast_model": {
-            "kind": "ISOLATED_CURRENT_CODEC_ALL_QUALITY_POOLS_AND_INDEXES_EXTRAPOLATION",
+            "kind": "ISOLATED_CQ5_ALL_QUALITY_POOLS_AND_INDEXES_SCENARIOS",
             "encoded_bytes_per_event": quality_model_per_event,
             "scenarios": list(scenarios),
             "point_scenario": "SPARSE_NO_COMPARATOR_BASELINE",
             "not_a_bound": True,
             "actual_production_measurement": False,
+            "shared_frame_mature_model_qualified": False,
         },
         "forecast_scenarios": alternatives,
         "repack": repack,

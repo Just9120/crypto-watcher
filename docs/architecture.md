@@ -205,6 +205,15 @@ row IDs/shared dimensions/provenance не заменяют внешние event 
 уже заполненные local ranges без REST и coalesce overlapping work, сохраняя source
 conflict checks/owner expiry. Детали upgrade/rollback boundaries — в [state contract](state_contract.md#storage-extension3-совместимое-уплотнение).
 
+QF1 хранит logical CQ5 packets в shared IF1 containers с exact numeric leases.
+Тот же maintenance worker обслуживает конечную initial scan, live eligibility
+queue и partial-slot GC. Открытый expiry-frontier tail остаётся CQ5 до закрытия
+UTC дня; его факты уже доступны. Body initial reclaim сохраняется при upgrade,
+поэтому retention priority может работать параллельно с finite frame pass.
+Observer отдельно требует frame initial reclaim; overdue/unknown clock не
+становятся current из-за нового checkpoint. Capacity counters различают CQ5
+staging, retained QF1 и transient queue, включая новые physical indexes.
+
 Перед baseline finite capacity observer перепроверяет только единственный blocker
 ANALYTICS_RECOVERY_PENDING максимум3 раза с10s pause, quick read-only probes без
 deep scans. Это устраняет привязку одного5min sample к краткой current-candle queue.

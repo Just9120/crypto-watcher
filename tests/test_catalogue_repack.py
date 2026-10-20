@@ -68,7 +68,7 @@ def test_upgrade13_revisits_only_quality_and_preserves_initial_catalogue_geometr
     assert final["catalogue_queue_upper"] == initial["catalogue_queue_upper"]
     assert final["quality_rows_scanned"] == 1
     upgraded = bytes(store.db.execute("SELECT facts FROM market_quality").fetchone()[0])
-    assert upgraded.startswith(quality_packets.MAGIC)
+    assert upgraded.startswith(quality_packets.FRAME_MAGIC)
     assert encode(quality_packets.unpack(store.db, upgraded)) == encode([fact(7)])
     assert quality_packets.ownership(store.db, upgraded)["numeric"] == original_numeric
     assert work(store, NOW) == final
