@@ -60,6 +60,11 @@ def boundary_blockers(value: dict[str, Any]) -> list[str]:
         and value.get("runtime_ledger", {}).get("catalogue", {}).get("state") != "MEASURED"
     ):
         reasons.append("BOUNDARY_CATALOGUE_LEDGER_INCOMPLETE")
+    if (
+        value.get("storage", {}).get("numeric_layout", {}).get("frame_mode") is not None
+        and value.get("runtime_ledger", {}).get("numeric_frames", {}).get("state") != "MEASURED"
+    ):
+        reasons.append("BOUNDARY_NUMERIC_FRAME_LEDGER_INCOMPLETE")
     if not re.fullmatch(r"[0-9a-f]{40}", value.get("source_revision", "")):
         reasons.append("BOUNDARY_SOURCE_UNSET")
     generation = value.get("history_generation") or {}
@@ -100,6 +105,7 @@ def runtime_ledger(store: Store, seconds: float = 50) -> dict[str, Any]:
     cursor: int | None = None
     complete = measured is not None
     catalogue: dict[str, Any] = {"state": "NOT_MEASURED"}
+    numeric: dict[str, Any] = {"state": "NOT_MEASURED"}
     store.db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
     try:
         while not complete and time.monotonic() < deadline:
@@ -123,6 +129,9 @@ def runtime_ledger(store: Store, seconds: float = 50) -> dict[str, Any]:
             from .catalogue_accounting import measure as catalogue_ledger
 
             catalogue = catalogue_ledger(store, counts)
+            from .numeric_frame_work import measure as numeric_ledger
+
+            numeric = numeric_ledger(store.db, deadline, store.cached_bytes)
     except sqlite3.OperationalError as exc:
         if getattr(exc, "sqlite_errorcode", None) != sqlite3.SQLITE_INTERRUPT:
             raise
@@ -135,6 +144,7 @@ def runtime_ledger(store: Store, seconds: float = 50) -> dict[str, Any]:
     )
     return {
         "state": "MEASURED" if complete else "PARTIAL_BUDGET",
+        "numeric_frames": numeric,
         "method": "TRANSACTIONAL_NAMESPACE_COUNTERS_AFTER_COMPLETE_FINITE_SCAN"
         if measured is not None
         else "BOUNDED_EXPLICIT_ROWID_SCAN",
@@ -357,6 +367,8 @@ def stable_reason(store: Store) -> list[str]:
             catalogue_repack,
             context_tile_maintenance,
             context_tiles,
+            numeric_frame_work,
+            numeric_frames,
             numeric_refs,
             parent_affinity,
             quality_frames,
@@ -370,6 +382,29 @@ def stable_reason(store: Store) -> list[str]:
                 reasons.append("NUMERIC_LEASE_INITIAL_INCOMPLETE")
         except (ValueError, StateError, sqlite3.Error):
             reasons.append("NUMERIC_LEASE_CHECKPOINT_UNKNOWN")
+        try:
+            numeric = repack.get("numeric_frames", {})
+            numeric_frame_work.validate(numeric)
+            layout = numeric_frame_work.header(store.db)
+            numeric_frames.header(store.db)
+            if numeric.get("initial_complete") is not True or not numeric_frame_work.through(
+                store.db, numeric["queue_upper"]
+            ):
+                reasons.append("NUMERIC_FRAME_INITIAL_INCOMPLETE")
+            elif layout != "1":
+                reasons.append("NUMERIC_FRAME_COMPAT_UNQUALIFIED")
+            elif repack.get("numeric_frame_initial_reclaim_complete") is not True:
+                reasons.append("NUMERIC_FRAME_INITIAL_RECLAIM_PENDING")
+            else:
+                pending_numeric = numeric_frame_work.status(store.db, int(time.time() * 1000))
+                if pending_numeric["clock_unknown"]:
+                    reasons.append("NUMERIC_FRAME_CLOCK_UNKNOWN")
+                elif (
+                    pending_numeric["oldest_age_ms"] is not None and pending_numeric["oldest_age_ms"] > 60000
+                ):
+                    reasons.append("NUMERIC_FRAME_BACKLOG")
+        except (ValueError, StateError, sqlite3.Error):
+            reasons.append("NUMERIC_FRAME_CHECKPOINT_UNKNOWN")
         try:
             frames = repack.get("quality_frames", {})
             quality_frames.validate(frames)

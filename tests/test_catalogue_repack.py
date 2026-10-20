@@ -123,6 +123,72 @@ def test_upgrade16_adds_finite_numeric_lease_pass_without_reopening_old_geometry
         assert final.get(key) == previous.get(key)
 
 
+def test_upgrade20_adds_finite_numeric_frame_pass_without_reopening_qualified_boundaries(store):
+    import copy
+
+    bounded(store)
+    observe(store, OutcomeWorker(store))
+    initial = complete(store)
+    expected = [(key, encode(value)) for key, value in History(store).scan("")]
+    previous = copy.deepcopy(initial)
+    previous.update(version=20, next_phase=0, operator_note="preserve20")
+    for key in ("numeric_frames", "numeric_frame_initial_reclaim_complete", "numeric_frame_maintenance"):
+        previous.pop(key, None)
+    store.put_runtime("storage_repack", previous)
+    final = complete(store)
+    assert final["version"] == VERSION and final["previous_version"] == 20
+    assert final["numeric_frames"]["initial_complete"] and final["numeric_frame_initial_reclaim_complete"]
+    assert final["operator_note"] == "preserve20"
+    for key in (
+        "catalogue_transfer",
+        "catalogue_queue_upper",
+        "source_transfer_upper",
+        "numeric_transfer_upper",
+        "quality_rows_scanned",
+        "numeric_search_upper",
+        "numeric_refs",
+        "quality_frames",
+        "context_tiles",
+        "parent_affinity",
+        "initial_reclaim_complete",
+    ):
+        assert final.get(key) == previous.get(key)
+    assert [(key, encode(value)) for key, value in History(store).scan("")] == expected
+    assert store.db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    assert store.db.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+@pytest.mark.parametrize("marker", ["numeric_frames", "numeric_frame_queue"])
+def test_current_repack_cannot_reinstall_missing_numeric_frame_marker(store, marker):
+    bounded(store)
+    complete(store)
+    with store.db:
+        store.db.execute("DELETE FROM market_meta WHERE key=?", (marker,))
+    before = list(store.db.iterdump())
+    with pytest.raises(ValueError):
+        work(store, NOW)
+    assert list(store.db.iterdump()) == before
+    with patch("cryptowatcher.capacity.time.time", return_value=NOW / 1000):
+        assert "NUMERIC_FRAME_CHECKPOINT_UNKNOWN" in stable_reason(store)
+
+
+@pytest.mark.parametrize("fault", ["writer", "boundary"])
+def test_previous20_preserves_quality_frame_guards_before_installing_new_extensions(store, fault):
+    bounded(store)
+    previous = complete(store)
+    previous = {**previous, "version": 20, "next_phase": 0}
+    if fault == "writer":
+        with store.db:
+            store.db.execute("DELETE FROM market_meta WHERE key='quality_frames'")
+    else:
+        previous = {**previous, "quality_frames": {}}
+    store.put_runtime("storage_repack", previous)
+    before = list(store.db.iterdump())
+    with pytest.raises(ValueError, match="quality frame"):
+        work(store, NOW)
+    assert list(store.db.iterdump()) == before
+
+
 def test_current_repack_cannot_reinstall_missing_lease_marker_or_unknown_boundary(store):
     bounded(store)
     initial = complete(store)

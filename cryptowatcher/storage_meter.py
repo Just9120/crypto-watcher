@@ -11,7 +11,7 @@ BUDGET = 25_000_000_000
 QUALITY_CATEGORIES = frozenset(
     {"quality", "quality_numeric", "quality_components", "quality_frames", "quality_numeric_frames"}
 )
-SAMPLE_FORMAT = 9
+SAMPLE_FORMAT = 10
 
 
 def create(db: Any) -> None:
@@ -133,6 +133,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "record_pending",
         "bundle_pending",
         "quality_frame_pending",
+        "numeric_frame_pending",
     }
     if store.db.execute(
         "SELECT 1 FROM market_meta WHERE key='record_catalogue_runtime' AND value='1'"
@@ -299,6 +300,11 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
             numeric_frames.header(store.db)
         if numeric_frames.writing(store.db):
             source_tables.add("market_numeric_frames")
+        from . import numeric_frame_work
+
+        numeric_layout["frames"] = numeric_frame_work.status(store.db, now_ms)
+        if numeric_frame_work.mode(store.db) == "1":
+            source_tables.add("market_numeric_frame_pending")
     catalogue_layout: dict[str, Any] = {"state": "LEGACY_DOMAIN_ROWS"}
     catalogue = store.db.execute("SELECT value FROM market_meta WHERE key='record_catalog'").fetchone()
     if catalogue is not None:

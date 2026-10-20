@@ -203,3 +203,12 @@ def entry_bytes(raw: bytes, slot: int, cache: Any = None) -> bytes:
     begin, end = struct.unpack(">II", expanded[1 + slot * 4 : 1 + (slot + 2) * 4])
     offset = 1 + (expanded[0] + 1) * 4
     return expanded[offset + begin : offset + end]
+
+
+def raw_entries(raw: bytes, cache: Any = None) -> list[bytes]:
+    """One bounded decode for explicit owner/seal boundary reconciliation."""
+    expanded = data(raw, cache)
+    n = expanded[0]
+    offsets = struct.unpack(">" + "I" * (n + 1), expanded[1 : 1 + (n + 1) * 4])
+    offset = 1 + (n + 1) * 4
+    return [expanded[offset + offsets[i] : offset + offsets[i + 1]] for i in range(n)]

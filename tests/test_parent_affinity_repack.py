@@ -63,7 +63,7 @@ def test_current_hint_layout_or_checkpoint_fault_is_not_accepted_or_reinstalled(
             elif fault == "forged":
                 state["parent_affinity"] = {"version": 1}
             else:
-                state["next_phase"] = 19
+                state["next_phase"] = 20
             store.put_runtime("storage_repack", state)
     before = list(store.db.iterdump())
     with pytest.raises((StateError, ValueError)):

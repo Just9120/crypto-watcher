@@ -356,6 +356,10 @@ class Store:
                 from .numeric_frames import header as validate_numeric_frames
 
                 validate_numeric_frames(self.db)
+            if self.db.execute("SELECT 1 FROM market_meta WHERE key='numeric_frame_queue'").fetchone():
+                from .numeric_frame_work import header as validate_numeric_frame_queue
+
+                validate_numeric_frame_queue(self.db)
             if self.db.execute("SELECT 1 FROM market_meta WHERE key='quality_frames'").fetchone():
                 from .quality_frames import installed as validate_quality_frames
 
