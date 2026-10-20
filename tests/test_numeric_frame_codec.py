@@ -44,6 +44,23 @@ def row_body(entries):
     )
 
 
+@pytest.mark.parametrize("recipes", [False, True])
+def test_every_length_byte_obeys_the_original_nb1_nb2_wire_contract(recipes):
+    fixed = 7 if recipes else 26
+    for size in range(256):
+        lengths = bytes([size, fixed] + [0] * 62)
+        body = b"BR1\0" + b"\1" + struct.pack(">Q", 5) + bytes([recipes]) + lengths
+        body += bytes(size) + bytes(fixed)
+        raw = forged(body)
+        allowed = size == 0 or (6 <= size <= 34 if recipes else size in (26, 34))
+        if allowed:
+            entry = codec.raw_entries(raw)[0]
+            assert entry[9:73] == lengths and len(entry) == 73 + size + fixed
+        else:
+            with pytest.raises(ValueError, match="lengths"):
+                codec.raw_entries(raw)
+
+
 @pytest.mark.parametrize("count", [1, 2, 64])
 def test_all_exact_original_block_bytes_raw_recipes_ids_and_slots_survive(count, store):
     expected = values(count)

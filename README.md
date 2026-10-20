@@ -46,6 +46,12 @@ recovery выбирают native helper при наличии Linux artifact. О
 helper прекращает validation. Radar runtime extension не загружает. Native
 corruption/bounds/lifetime/deadline fixtures входят в required Linux suite.
 
+Эта же сборка создаёт `numeric_frame.so` для bounded BP1 byte transposition в
+runtime. Helper копирует байты, без SQL, I/O, allocations или float arithmetic;
+format/checksum/ownership/NS2 validation остаётся в Python. При отсутствии
+artifact работает portable decoder; повреждённый installed artifact прекращает
+чтение. Linux CI и image checks требуют корректный artifact и byte-exact parity.
+
 Конвертер также читает сохранённые gzip/Zstandard archives через bounded compressed
 image без дополнительной raw source copy. Explicit encoding/byte cap и полный набор
 source/candidate проверок описаны в [процедуре конвертации](docs/runbooks/delivery.md#изолированная-конвертация-legacy-history-backup).

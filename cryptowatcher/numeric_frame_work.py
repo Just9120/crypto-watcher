@@ -14,7 +14,14 @@ import time
 from typing import Any
 
 from . import numeric_block_codec as blocks
-from . import numeric_frame_codec, numeric_frames, numeric_refs, numeric_search, owner_slots
+from . import (
+    numeric_frame_codec,
+    numeric_frame_native,
+    numeric_frames,
+    numeric_refs,
+    numeric_search,
+    owner_slots,
+)
 from .packet_store import atomic
 
 CATEGORY = "numeric_frame_pending"
@@ -397,6 +404,7 @@ def measure(db: sqlite3.Connection, deadline: float, cache: Any = None) -> dict[
     result: dict[str, Any] = {
         "state": "PARTIAL_BUDGET",
         "mode": current,
+        "byte_transpose_backend": "C99" if numeric_frame_native.available() else "PYTHON",
         "upper": upper,
         "method": "FINITE_ACTUAL_CONTAINER_POINTER_OWNER_SEAL_AND_COUNTER_RECONCILIATION",
         "limitations": [
@@ -416,7 +424,8 @@ def measure(db: sqlite3.Connection, deadline: float, cache: Any = None) -> dict[
             if owner_slots.signature(3, identity, mask) != checksum:
                 raise ValueError("Conflicting actual numeric frame owner checksum")
             entries = numeric_frame_codec.raw_entries(payload, cache)
-            if owner_slots.bits(mask) >> len(entries):
+            bits = owner_slots.bits(mask)
+            if bits >> len(entries):
                 raise ValueError("Actual numeric frame mask exceeds container")
             ids = [struct.unpack(">Q", entry[:8])[0] for entry in entries]
             values = [identity for identity in ids if identity != numeric_frame_codec.DEAD]
@@ -437,7 +446,7 @@ def measure(db: sqlite3.Connection, deadline: float, cache: Any = None) -> dict[
                 found = bindings.get(block)
                 pointer = numeric_frames.pointer(identity, slot)
                 retained = found is not None and bytes(found[1]) == pointer
-                if retained != owner_slots.has(mask, slot):
+                if retained != bool(bits & (1 << slot)):
                     raise ValueError("Conflicting actual numeric frame owner binding")
                 if retained and found is not None:
                     if found[2] is None:

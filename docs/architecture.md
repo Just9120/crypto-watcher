@@ -4,6 +4,13 @@
 
 Один Python 3.11 процесс, один Compose service `crypto_watcher`, persistent SQLite physical schema2 в WAL mode; legacy schema1 поддерживается compatibility reader. Владелец один; settings/domain state не создаются для входящих чужих chats. Trading credentials и LLM отсутствуют.
 
+Bounded BP1 transpose может выполняться внутри этого же процесса C99 helper через
+ctypes. Он только копирует byte planes; semantic/checksum/owner/NS2 checks и общий
+pure cache1MiB остаются у Python adapters. Native helper не является SQLite
+extension и не владеет БД, сетью, jobs или persistent state. Canonical native build
+и Docker image собирают его из того же source revision; installed bad ABI/error
+не подменяется portable fallback.
+
 Advisory consumer boundary: `agent_contract.py` проецирует immutable history в typed v2;
 `agent_delivery.py` владеет отдельными preference/intents/frozen bytes/attempts/ack baseline.
 Event/episode/outcome admission выполняется атомарно с source history; отдельный job

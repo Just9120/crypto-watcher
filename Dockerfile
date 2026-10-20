@@ -6,6 +6,7 @@ RUN cd native/vendor/yyjson \
     && echo 'ac2e9bbb2e2d9149d90878d40506a1d624fa0b33c979a11b61075c54782c6d6a  yyjson.c' | sha256sum -c - \
     && gcc -std=c99 -O3 -fPIC -shared -I. yyjson.c ../../history_extract.c -lm -o /build/history.so
 RUN bash native/build_vfs.sh /build/compressed_vfs.so
+RUN gcc -std=c99 -O3 -fPIC -shared -Wall -Wextra -Werror -pedantic native/numeric_frame.c -o /build/numeric_frame.so
 
 FROM python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
 
@@ -24,6 +25,7 @@ RUN python -m pip install --no-cache-dir --upgrade --require-hashes --only-binar
 COPY cryptowatcher/ ./cryptowatcher/
 COPY --from=native-builder /build/history.so ./cryptowatcher/_native/history.so
 COPY --from=native-builder /build/compressed_vfs.so ./cryptowatcher/_native/compressed_vfs.so
+COPY --from=native-builder /build/numeric_frame.so ./cryptowatcher/_native/numeric_frame.so
 COPY --from=native-builder /build/native/vendor/yyjson/LICENSE ./cryptowatcher/_native/LICENSE.yyjson
 COPY --from=native-builder /build/native/vendor/zstd/LICENSE ./cryptowatcher/_native/LICENSE.zstd
 COPY --from=native-builder /build/native/vendor/sqlite/LICENSE ./cryptowatcher/_native/LICENSE.sqlite

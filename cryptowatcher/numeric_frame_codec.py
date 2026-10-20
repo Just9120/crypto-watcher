@@ -14,6 +14,7 @@ from typing import Any
 import zstandard
 
 from . import numeric_block_codec as blocks
+from . import numeric_frame_native
 
 MAGIC = b"BF1\x00"
 MAX_BLOCKS = 64
@@ -23,6 +24,10 @@ MAX_FRAME = MAX_RAW + 1024
 # The binding accepts at least1024KiB for this option. The actual declared
 # content/window are checked against MAX_RAW before creating the decompressor.
 MAX_WINDOW_KIB = max(1024, (MAX_RAW + 1023) // 1024)
+# C-backed translate/strip implements the same per-byte length predicate.
+# Zero denotes an allowed length; every disallowed length maps to one.
+_LITERAL_LENGTHS = bytes(0 if size in (0, 26, 34) else 1 for size in range(256))
+_RECIPE_LENGTHS = bytes(0 if size == 0 or 6 <= size <= 34 else 1 for size in range(256))
 
 
 def _parts(value: tuple[int, bytes] | None) -> tuple[int, int, list[bytes]]:
@@ -107,49 +112,49 @@ def _expanded(raw: bytes) -> bytes:
         valid_ids.append(identity)
         if flags[i] not in (0, 1) or not any(sizes):
             raise ValueError("Invalid numeric frame metric block")
-        if any(not (size == 0 or (6 <= size <= 34 if flags[i] else size in (26, 34))) for size in sizes):
+        if sizes.translate(_RECIPE_LENGTHS if flags[i] else _LITERAL_LENGTHS).strip(b"\0"):
             raise ValueError("Invalid numeric frame metric lengths")
         if identity == blocks.MAX_BLOCK and sizes[-1]:
             raise ValueError("Numeric frame exceeds ID ceiling")
     if not valid_ids or len(valid_ids) != len(set(valid_ids)):
         raise ValueError("Empty or duplicate numeric frame identities")
-    if body[:4] == b"BP1\x00":
-        # Every positive metric has at least six bytes. Transpose their common
-        # prefix in C-backed slices instead of testing every slot at every
-        # byte position, including empty slots and already-ended metrics.
-        positive_sizes = [size for size in lengths if size]
-        width = min(positive_sizes)
-        count = len(positive_sizes)
-        prefix = bytearray(count * width)
-        for index in range(width):
-            prefix[index::width] = body[position : position + count]
-            position += count
-        flat = [bytearray(prefix[start : start + width]) for start in range(0, len(prefix), width)]
-        active = [(frame, size) for frame, size in zip(flat, positive_sizes, strict=True) if size > width]
-        for index in range(width, max(positive_sizes)):
-            active = [(frame, size) for frame, size in active if size > index]
-            for frame, _ in active:
-                frame.append(body[position])
-                position += 1
-        remaining = iter(map(bytes, flat))
-        frames = [next(remaining) if size else b"" for size in lengths]
-    else:
-        frames = []
-        for size in lengths:
-            frames.append(body[position : position + size])
-            position += size
+    row_data = plane_rows(lengths, body[position:]) if body[:4] == b"BP1\x00" else body[position:]
     entries = []
+    position = 0
     for i, identity in enumerate(ids):
+        sizes = lengths[i * blocks.SLOTS : (i + 1) * blocks.SLOTS]
+        span = sum(sizes)
         entries.append(
-            struct.pack(">Q", identity)
-            + bytes([flags[i]])
-            + lengths[i * blocks.SLOTS : (i + 1) * blocks.SLOTS]
-            + b"".join(frames[i * blocks.SLOTS : (i + 1) * blocks.SLOTS])
+            struct.pack(">Q", identity) + bytes([flags[i]]) + sizes + row_data[position : position + span]
         )
+        position += span
     offsets = [0]
     for entry in entries:
         offsets.append(offsets[-1] + len(entry))
     return bytes([n]) + struct.pack(">" + "I" * (n + 1), *offsets) + b"".join(entries)
+
+
+def plane_rows(lengths: bytes, planes: bytes) -> bytes:
+    """Transpose already bounded/validated planes, retaining a portable path."""
+    native = numeric_frame_native.transpose(lengths, planes)
+    if native is not None:
+        return native
+    positive_sizes = [size for size in lengths if size]
+    width = min(positive_sizes)
+    count = len(positive_sizes)
+    prefix = bytearray(count * width)
+    position = 0
+    for index in range(width):
+        prefix[index::width] = planes[position : position + count]
+        position += count
+    flat = [bytearray(prefix[start : start + width]) for start in range(0, len(prefix), width)]
+    active = [(frame, size) for frame, size in zip(flat, positive_sizes, strict=True) if size > width]
+    for index in range(width, max(positive_sizes)):
+        active = [(frame, size) for frame, size in active if size > index]
+        for frame, _ in active:
+            frame.append(planes[position])
+            position += 1
+    return b"".join(flat)
 
 
 def data(raw: bytes, cache: Any = None) -> bytes:

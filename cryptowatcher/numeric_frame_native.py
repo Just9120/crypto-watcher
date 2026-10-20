@@ -1,0 +1,65 @@
+"""Optional bounded byte copy; Python retains all format and ownership checks.
+
+Absence selects the portable decoder. An installed but invalid artifact fails
+closed. The library has no Python API, allocation, I/O or persistent state.
+"""
+
+from __future__ import annotations
+
+import ctypes
+from functools import lru_cache
+from pathlib import Path
+from typing import Any
+
+MAX_SLOTS = 4096
+MAX_BYTES = MAX_SLOTS * 34
+
+
+def artifact() -> Path:
+    return Path(__file__).with_name("_native") / "numeric_frame.so"
+
+
+@lru_cache(maxsize=1)
+def load() -> Any:
+    path = artifact()
+    if not path.is_file():
+        return None
+    try:
+        library = ctypes.CDLL(str(path))
+        library.cw_nf_abi.argtypes = []
+        library.cw_nf_abi.restype = ctypes.c_uint32
+        if library.cw_nf_abi() != 1:
+            raise ValueError("Unknown numeric decoder ABI")
+        library.cw_nf_untranspose.argtypes = [
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+            ctypes.c_void_p,
+            ctypes.c_size_t,
+        ]
+        library.cw_nf_untranspose.restype = ctypes.c_int
+        return library
+    except (OSError, AttributeError) as error:
+        raise ValueError("Invalid installed numeric decoder artifact") from error
+
+
+def available() -> bool:
+    return load() is not None
+
+
+def transpose(lengths: bytes, planes: bytes) -> bytes | None:
+    if (
+        not isinstance(lengths, bytes)
+        or not 0 < len(lengths) <= MAX_SLOTS
+        or not isinstance(planes, bytes)
+        or not 0 < len(planes) <= MAX_BYTES
+    ):
+        raise ValueError("Numeric native transpose allocation bound")
+    library = load()
+    if library is None:
+        return None
+    output = ctypes.create_string_buffer(len(planes))
+    if library.cw_nf_untranspose(lengths, len(lengths), planes, len(planes), output, len(planes)) != 1:
+        raise ValueError("Numeric native transpose input bound")
+    return bytes(output.raw)

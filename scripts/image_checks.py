@@ -187,6 +187,8 @@ def main() -> None:
             "from pathlib import Path; from cryptowatcher.native_validation import available; "
             "from cryptowatcher.compressed_validation import Image,frozen_vfs,MAX_COMPRESSED_BYTES; "
             "import time; assert available(); "
+            "from cryptowatcher.numeric_frame_native import available as nf_available,transpose; "
+            "assert nf_available(); assert transpose(bytes([2,1,3]),b'acdbef')==b'abcdef'; "
             "i=Image(Path('/data/ram-restore.db'),limit=MAX_COMPRESSED_BYTES,deadline=time.monotonic()+30); "
             "v=frozen_vfs(i,Path('/tmp/native-sentinel.sqlite3')); "
             "assert v.stats()['vfs_backend']=='native'; v.unregister()",

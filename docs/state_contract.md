@@ -150,6 +150,23 @@ validates установленный mode. Новые container bytes учиты
 Эти primitives включаются явно; их наличие не подтверждает runtime queue,
 полные capacity boundaries, native service или25GB qualification.
 
+Runtime21 добавляет finite numeric block upper и отдельный admission watermark:
+позднее закрытие старого block ID не открывает законченную initial boundary.
+Live inbox сохраняет первоначальный queued clock;64closed blocks готовы сразу,
+малая группа ждёт5min, оставаясь полностью доступной для analytics из NB.
+Работа и GC входят в прежний rotating maintenance deadline. Counter/guard/clock
+неизвестного состояния не считается пустой очередью; NB_COMPAT не qualified
+для clean capacity baseline. Explicit boundary проверяет current owners,
+NS2 values, NR headers и actual byte counters; partial budget не становится PASS.
+
+Optional ABI1 `numeric_frame.so` выполняет только bounded BP1 transpose:
+до4096length bytes/139264operand bytes, fixed16KiB stack и caller-owned output.
+Он не выполняет allocations, I/O, SQL или float arithmetic. Checksummed Zstd,
+ID/type/length/offset bounds и NS2/owner/NR validation остаются в Python.
+Отсутствующий artifact выбирает portable path; installed corrupt/unknown ABI
+прекращает чтение. Ledger указывает actual byte_transpose_backend. Linux native
+и image checks обязательны; локальный Windows C99 PASS не заменяет их.
+
 Архивный CQ5 packet сохраняет прежний public fact JSON. Общие templates,
 strength/noise columns и точные ordered comparator lists не меняют методику,
 N, ограничения и population_size. Comparator coordinates хранятся внутри packet
