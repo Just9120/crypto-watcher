@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from itertools import islice
 
-from . import catalogue_lifecycle, catalogue_reader, record_blocks, record_catalog
+from . import catalogue_aliases, catalogue_lifecycle, catalogue_reader, record_blocks, record_catalog
 from .events import PREFIX
 from .storage import StateError, Store, json_payload
 
@@ -19,8 +19,11 @@ class EventBatch:
 
 
 def due_events(store: Store, now: int, cutoff: int, batch: int) -> EventBatch:
+    from .catalogue_store import hot_rows
     from .expiry_index import expires
 
+    if type(batch) is not int or not 0 <= batch < 2**63:
+        raise ValueError("Invalid mixed runtime scan bounds")
     prefix = PREFIX + "history:"
     ceiling = prefix + f"{max(0, cutoff):016d}"
     checkpoint = store.db.execute(
@@ -31,7 +34,13 @@ def due_events(store: Store, now: int, cutoff: int, batch: int) -> EventBatch:
         raise StateError("Invalid bounded retention cursor; data preserved")
     if cursor >= ceiling:
         cursor = ""
-    scanned = list(store.scan_runtime(prefix, after=cursor or None, before=ceiling, limit=batch))
+    hot = hot_rows(store.db, prefix, False, batch, cursor or None, ceiling)
+    try:
+        # Cold parents have their own native expiry range below. Do not read
+        # every cold history alias again merely to discard its future lease.
+        scanned = [(key, catalogue_aliases.lookup(store.db, key, value)) for key, value, _ in hot]
+    finally:
+        hot.close()
     found = {}
     for key, value in scanned:
         lease = expires(store.db, key)
@@ -45,7 +54,12 @@ def due_events(store: Store, now: int, cutoff: int, batch: int) -> EventBatch:
         ):
             event = str(uuid.UUID(bytes=bytes(identity)))
             found[prefix + f"{observed:016d}:" + event] = {"event_id": event}
-    return EventBatch(sorted(found.items())[:batch], scanned[-1][0] if len(scanned) == batch else "")
+    selected = sorted(found.items())[:batch]
+    next_cursor = scanned[-1][0] if scanned and len(scanned) == batch else ""
+    if next_cursor and selected:
+        # The merged admission limit may leave later hot rows unselected.
+        next_cursor = min(next_cursor, selected[-1][0])
+    return EventBatch(selected, next_cursor)
 
 
 def remove_event(store: Store, event_id: str, terminal: Callable[[str, str], None]) -> int:

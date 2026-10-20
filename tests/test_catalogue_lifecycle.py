@@ -86,6 +86,56 @@ def retained(store, number, observed, expiry):
     return coordinate, body
 
 
+def test_expiry_selects_cold_native_leases_without_reading_unselected_future_bindings(store, monkeypatch):
+    from cryptowatcher.catalogue_retention import due_events
+
+    prepare(store)
+    store.bounded = True
+    store.clock_ms = lambda: 50 * DAY
+    prefix = PREFIX + "history:"
+    hot_id = str(uuid.UUID(int=3))
+    with store.db:
+        due, _ = retained(store, 1, 10 * DAY, 40 * DAY)
+        future, _ = retained(store, 2, 11 * DAY, 80 * DAY)
+        duplicate, _ = retained(store, 3, 12 * DAY, 45 * DAY)
+        for coordinate, observed in ((due, 10 * DAY), (future, 11 * DAY), (duplicate, 12 * DAY)):
+            key = prefix + f"{observed:016d}:" + coordinate.identity
+            assert aliases.publish(store.db, key, {"event_id": coordinate.identity})
+        hot_key = prefix + f"{12 * DAY:016d}:" + hot_id
+        store.db.execute(RUNTIME_UPSERT, (hot_key, encode({"event_id": hot_id})))
+        store.db.execute(
+            "INSERT INTO market_lifetimes VALUES(?,?,?,?)", (hot_key, 45 * DAY, "history", hot_id)
+        )
+        store.db.execute("INSERT INTO market_meta VALUES('record_catalogue_runtime','1')")
+    original = aliases.lookup
+
+    def selected_binding(db, key, *args):
+        if key.endswith(future.identity):
+            raise RuntimeError("Future cold binding is outside the selected native expiry range")
+        return original(db, key, *args)
+
+    monkeypatch.setattr(aliases, "lookup", selected_binding)
+    before = list(store.db.iterdump())
+    selected = due_events(store, 50 * DAY, 20 * DAY, 200)
+    assert [value["event_id"] for _, value in selected.rows] == [due.identity, hot_id]
+    one = due_events(store, 50 * DAY, 20 * DAY, 1)
+    assert [value["event_id"] for _, value in one.rows] == [due.identity]
+    assert one.cursor < hot_key
+    assert list(store.db.iterdump()) == before
+    from cryptowatcher import catalogue_store
+
+    decoder = catalogue_store.json_payload
+
+    def conflicting_hot(raw):
+        value = decoder(raw)
+        return {"event_id": future.identity} if value == {"event_id": hot_id} else value
+
+    monkeypatch.setattr(catalogue_store, "json_payload", conflicting_hot)
+    with pytest.raises(StateError, match="Conflicting mixed immutable history binding"):
+        due_events(store, 50 * DAY, 20 * DAY, 200)
+    assert list(store.db.iterdump()) == before
+
+
 def test_late_service_and_new_head_keep_frozen_parent_deadline_without_a_cold_current_head(store):
     prepare(store)
     store.bounded = True
