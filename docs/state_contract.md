@@ -186,6 +186,22 @@ Contexts2 сохраняет полный SHA256 один раз у referenced `
 SHA256; body/timing/coordinates и установленный digest неизменяемы. Unreferenced
 rows не конвертируются; сроки/leases прежние, public context bytes неизменны.
 Digest counters и detail ref conversion атомарны с writer transaction.
+
+Isolated candidate `context_tile_codec` пока не выбирается runtime writer и не
+устанавливает tables/markers при открытии Store. Он квалифицирует до64points
+одного stream/kind/UTC-day: IF1 хранит exact stable body/timing/coordinates,
+NR2 — два64-slot вектора anchor/purge, OW1 — frozen mask, связанный с stream и
+tile ID. Перед упаковкой проверяется каждый прежний frozen SHA256; его точное
+восстановление затем опирается на immutable IF1 с полным SHA256. Неустановленный
+digest остаётся неустановленным, а поздний freeze требует ожидаемый полный hash.
+Renewal только повышает anchor/purge, не переписывая immutable point frame.
+Partial expiry пересчитывает актуальные сроки и сохраняет прочие points/digests;
+повторная упаковка сохраняет stream/kind/time coordinates. Admission JSON и
+typed expansion ограничены1MiB, pure decompression использует прежний общий
+Store cache1MiB. DB publication/renewal authority/retention/compatibility view,
+native validation, worker/observer/meter integration и capacity proof пока
+не реализованы этим standalone core.
+
 Byte-flow samples после завершения новой версии repack имеют отдельный epoch:
 backfill pools/digests не выдаётся за последующий ежедневный прирост. Старые
 samples и event-frequency observations сохраняются.
