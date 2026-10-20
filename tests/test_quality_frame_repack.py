@@ -102,6 +102,69 @@ def test_future_tail_is_readable_current_then_blocks_baseline_when_due_and_resum
             assert not any(reason.startswith("QUALITY_FRAME_") for reason in stable_reason(reopened))
 
 
+def test_retention_pressure_keeps_packing_pending_and_reopen_resumes_all_optional_phases(store):
+    from cryptowatcher import catalogue_compaction, context_tile_maintenance, parent_affinity
+    from cryptowatcher.market_storage import save_context
+    from tests.test_context_tiles import values
+
+    setup(store, 0)
+    complete(store)
+    with store.db:
+        save(store, [fact(8)], day=NOW // DAY - store.snapshot().settings.detail_retention_days)
+        for index in range(8):
+            save_context(store.db, "ticker", "spot/BTCUSDT", values(index))
+    expected, numbers, settings = public(store), numeric(store), store.snapshot()
+    now = (NOW // DAY + 1) * DAY + 60001
+    targets = (catalogue_compaction, quality_frames, context_tile_maintenance, parent_affinity)
+    for reopened in (store, Store(store.path, store.owner_id)):
+        try:
+            with (
+                patch.object(targets[0], "advance", wraps=targets[0].advance) as catalogue,
+                patch.object(targets[1], "advance", wraps=targets[1].advance) as frames,
+                patch.object(targets[2], "advance", wraps=targets[2].advance) as contexts,
+                patch.object(targets[3], "advance", wraps=targets[3].advance) as affinity,
+            ):
+                state = work(reopened, now, seconds=1, defer_compaction=True)
+            assert not any(call.call_count for call in (catalogue, frames, contexts, affinity))
+            assert state["quality_frame_maintenance"]["pending_work"]
+            assert state["context_tile_maintenance"]["pending_work"]
+            assert catalogue_repack.busy(state)
+            assert public(reopened) == expected and numeric(reopened) == numbers
+        finally:
+            if reopened is not store:
+                reopened.close()
+    with closing(Store(store.path, store.owner_id)) as reopened:
+        with (
+            patch.object(targets[0], "advance", wraps=targets[0].advance) as catalogue,
+            patch.object(targets[1], "advance", wraps=targets[1].advance) as frames,
+            patch.object(targets[2], "advance", wraps=targets[2].advance) as contexts,
+            patch.object(targets[3], "advance", wraps=targets[3].advance) as affinity,
+        ):
+            final = complete(reopened, now)
+        assert all(call.call_count for call in (catalogue, frames, contexts, affinity))
+        assert not catalogue_repack.busy(final)
+        assert public(reopened) == expected and numeric(reopened) == numbers
+        assert reopened.snapshot() == settings
+        assert not reopened.db.execute("PRAGMA foreign_key_check").fetchall()
+
+
+def test_retention_deferral_does_not_skip_initial_packing_or_claim_its_boundary(store):
+    setup(store)
+    state = {}
+    for _ in range(500):
+        state = work(store, NOW, batch=7, defer_compaction=True)
+        if state.get("initial_reclaim_complete"):
+            break
+    else:
+        pytest.fail("Initial reclaim did not finish under retention pressure")
+    # The optional phases may still be pending; ordinary work must finish them.
+    final = complete(store)
+    assert final["quality_frames"]["initial_complete"]
+    assert final["context_tiles"]["initial_complete"]
+    assert final["parent_affinity"]["initial_complete"]
+    assert not catalogue_repack.busy(final)
+
+
 def test_frame_transfer_forecast_counts_staging_once_and_marks_old_index_measurement_stale(store):
     setup(store)
     sample(store, NOW - DAY)

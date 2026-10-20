@@ -3,10 +3,13 @@
 import pytest
 
 from cryptowatcher import context_tile_codec, context_tiles, source_context
-from cryptowatcher.market_storage import DAY, context_window, enable
+from cryptowatcher.events import History, identity
+from cryptowatcher.market_storage import DAY, context_window, enable, stream_id
 from cryptowatcher.storage import encode
 from cryptowatcher.storage_lifecycle import BoundedRetention
-from tests.test_outcomes import NOW
+from cryptowatcher.storage_meter import report, sample
+from tests.test_bounded_storage import bounded
+from tests.test_outcomes import NOW, OutcomeWorker, observe
 
 START = NOW // DAY * DAY
 KINDS = ("ticker", "instrument")
@@ -33,7 +36,8 @@ def prepare(store, *, gap=False, cold=False, exceptions=False):
         for day in range(80):
             cutoff = START + day * DAY + DAY - 1
             selected = source_context.context(store, INSTRUMENT, cutoff)
-            # This is the production direction: observation <= selector cutoff.
+            # Event snapshots only. Comparator samples use older cutoffs but
+            # retain dependencies against the newer parent event anchor.
             context_window(store.db, INSTRUMENT + "/1m", selected, cutoff - 20_000)
         if exceptions:
             # Older supplied snapshots are a valid compatibility surface. A
@@ -99,3 +103,73 @@ def test_older_legacy_dependencies_remain_additional_to_latest_selector_model(st
         assert set(extra) == {START, START + DAY}
         for day in (0, 1):
             assert encode(retained[kind][START + day * DAY]) == encode(originals[day][kind])
+
+
+@pytest.mark.parametrize("cold", [False, True])
+@pytest.mark.parametrize("lookback_days", [20, 28])
+def test_normal_comparison_keeps_historical_context_beyond_raw35_days(store, cold, lookback_days):
+    bounded(store)
+    observe(store, OutcomeWorker(store))
+    settings = store.snapshot()
+    history = History(store)
+    event = history.events(1)[0]
+    anchor = event["market_observation_ms"]
+    old_at = anchor - lookback_days * DAY
+    sample(store, anchor - DAY)
+    old = {
+        "available_at_ms": old_at,
+        "market_observation_ms": old_at,
+        "values": {"turnover24h": "1234567.890123456789", "zero": -0.0},
+    }
+    instrument = event["market_type"] + "/" + event["symbol"]
+    with store.db:
+        source_context.save(store, "ticker", instrument, old)
+        source_context.save(
+            store, "ticker", instrument, {**old, "available_at_ms": anchor, "market_observation_ms": anchor}
+        )
+    historical = source_context.context(store, instrument, old_at)
+    assert historical["ticker"] == old
+    comparison = {
+        "schema": "cryptowatcher.comparison.v1",
+        "comparison_id": identity(f"comparison/{event['event_id']}/1"),
+        "event_id": event["event_id"],
+        "event_revision": event["revision"],
+        "methodology_version": 1,
+        "revision": 1,
+        "available_at_ms": anchor,
+        "state": "COMPLETE_LIMITED",
+        "sample_size": 1,
+        "limitations": ["LOW_N"],
+        "samples": [{"reference_time_ms": old_at, "source_context": historical}],
+    }
+    with store.db:
+        history.version("comparison", comparison)
+    key = (stream_id(store.db, instrument), "ticker", old_at)
+    lease = store.db.execute(
+        "SELECT needed_anchor,purge_after,integrity FROM market_context WHERE stream=? AND kind=? AND at=?",
+        key,
+    ).fetchone()
+    assert lease[0] == anchor and lease[1] == anchor + 30 * DAY and lease[2] is not None
+    assert lease[1] - old_at == (lookback_days + 30) * DAY
+    if cold:
+        context_tiles.install(store.db)
+        with store.db:
+            context_tiles.publish(store.db, [key])
+    now = old_at + 36 * DAY
+    assert now < anchor + 30 * DAY  # Parent event is still within its detail retention.
+    BoundedRetention(store).work(now)
+    expected = encode(comparison)
+    assert encode(history.get(f"comparison:{comparison['comparison_id']}:0000000001")) == expected
+    assert encode(source_context.context(store, instrument, old_at)["ticker"]) == encode(old)
+    before = store.db.total_changes
+    measured = report(store, now)
+    assert store.db.total_changes == before and store.snapshot() == settings
+    context_rows = [
+        row
+        for row in measured["forecast"]
+        if row["category"] in ("context", "context_bodies", "context_integrity", "context_tiles")
+    ]
+    assert context_rows and all(row["retention_days_for_estimate"] == 58 for row in context_rows)
+    assert measured["context_dependency_retention_estimate"]["days_for_estimate"] == 58
+    assert measured["context_dependency_retention_estimate"]["limitations"]
+    assert not store.db.execute("PRAGMA foreign_key_check").fetchall()

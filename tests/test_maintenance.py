@@ -563,6 +563,33 @@ def steady_repack(store, infrastructure, monkeypatch):
     return controller, radar, wall
 
 
+@pytest.mark.parametrize(
+    "remaining,deferred", [(0, False), (None, False), (-1, False), (True, False), ("1", False), (1, True)]
+)
+async def test_successful_expiry_only_defers_packing_for_a_real_remaining_due_batch(
+    store, infrastructure, monkeypatch, remaining, deferred
+):
+    controller, radar, _ = steady_repack(store, infrastructure, monkeypatch)
+    store.put_runtime("storage_repack", {"initial_reclaim_complete": True})
+    store.put_runtime(
+        "market_retention",
+        {"state": "OK", "at_ms": radar.server_now(), "expired_events": 1, "remaining_due_batch": remaining},
+    )
+    assert controller.retention_backlog_current()
+    assert controller.retention_pressure_current() is deferred
+    with (
+        patch.object(controller, "retention_priority", new=AsyncMock(return_value=0)),
+        patch(
+            "cryptowatcher.storage_repack.async_work", new=AsyncMock(return_value={"state": "COMPLETE"})
+        ) as repack,
+    ):
+        await controller.repack_job(None)
+    assert repack.await_args.kwargs == (
+        {"slices": 1, "defer_compaction": True} if deferred else {"slices": 1}
+    )
+    await radar.close()
+
+
 @pytest.mark.parametrize("stop,expected", [("burst", 4), ("deadline", 3), ("empty", 1), ("live", 1)])
 async def test_existing_maintenance_prioritizes_expiry_yields_and_keeps_other_work_bounded(
     store, infrastructure, monkeypatch, stop, expected

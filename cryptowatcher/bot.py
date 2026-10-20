@@ -783,7 +783,7 @@ class Controller:
             try:
                 retention_slices = await self.retention_priority()
                 defer_compaction = (
-                    self.retention_backlog_current()
+                    self.retention_pressure_current()
                     and self.store.get_runtime("storage_repack", {}).get("initial_reclaim_complete") is True
                 )
                 slices = 1 if defer_compaction else 4 if self.repack_boost_ready() else 1
@@ -847,6 +847,12 @@ class Controller:
                 for key in ("expired_events", "remaining_due_batch")
             )
         )
+
+    def retention_pressure_current(self) -> bool:
+        """Only an outstanding due batch may delay otherwise useful packing."""
+        value = self.store.get_runtime("market_retention", {})
+        remaining = value.get("remaining_due_batch")
+        return self.retention_backlog_current() and type(remaining) is int and remaining > 0
 
     async def retention_priority(self) -> int:
         """Borrow the existing maintenance turn for proven expiry work, yielding per call."""

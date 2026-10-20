@@ -110,6 +110,10 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         settings.candle_retention_days,
         settings.detail_retention_days + COMPARATOR_LOOKBACK_DAYS + native_days,
     )
+    context_dependency_days = max(
+        settings.candle_retention_days,
+        settings.detail_retention_days + COMPARATOR_LOOKBACK_DAYS,
+    )
     occupancy = {
         "services",
         "service_indexes",
@@ -152,7 +156,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         days = (
             candle_dependency_days
             if category in ("candles", "source_blocks", "source_block_indexes")
-            else settings.candle_retention_days
+            else context_dependency_days
             if category in ("context", "context_bodies", "context_integrity", "context_tiles")
             else 366
             if category in QUALITY_CATEGORIES
@@ -403,6 +407,17 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
             "basis": "CURRENT_ADMITTED_INPUT_BOUND_AND_EXISTING_DETAIL_LEASES; NOT_A_POLICY_CHANGE",
             "limitations": [
                 "Historical configurations outside current input bounds require observed lease qualification"
+            ],
+        },
+        "context_dependency_retention_estimate": {
+            "configured_minimum_days": settings.candle_retention_days,
+            "detail_days": settings.detail_retention_days,
+            "comparator_prior_days": COMPARATOR_LOOKBACK_DAYS,
+            "days_for_estimate": context_dependency_days,
+            "basis": "CURRENT_COMPARATOR_CUTOFF_AND_PARENT_DETAIL_LEASES; NOT_A_POLICY_CHANGE",
+            "limitations": [
+                "An older selector predecessor per stream/kind and supplied historical dependencies may exceed this span",
+                "Actual frozen leases, population churn and native allocation still require qualification",
             ],
         },
         "working_bytes": actual,

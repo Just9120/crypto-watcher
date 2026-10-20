@@ -644,6 +644,10 @@ def work(
                 break
             phase = (first + offset) % 19
             state["next_phase"] = (phase + 1) % 19
+            if phase in (14, 16, 17, 18) and defer_compaction and state.get("initial_reclaim_complete"):
+                # Keep all queues/checkpoints pending; resume their bounded
+                # passes once the due retention batch drains.
+                continue
             if (
                 phase == 0
                 and state.get("source_transfer_complete")
@@ -743,7 +747,6 @@ def work(
                 phase == 14
                 and all(state.get(k) for k in (*catalogue_repack.PREREQUISITES, "catalogue_complete"))
                 and state.get("parent_affinity", {}).get("initial_complete")
-                and not (defer_compaction and state.get("initial_reclaim_complete"))
             ):
                 catalogue_compaction.advance(
                     store, state.setdefault("packet_bundles", {}), min(batch, 256), deadline

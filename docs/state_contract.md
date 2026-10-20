@@ -231,6 +231,19 @@ SAVEPOINT/CAS, сверяет cold readback и изменяет body refs/counte
 уменьшение leases/frozen bits и преждевременное удаление. Partial/final expiry
 повторно учитывает текущую policy и MAX dependency; GC не сокращает сроков.
 
+Исторический comparator выбирает context на sample cutoff до28дней раньше
+parent event. Срок используемой точки равен MAX(raw35d, parent anchor+detail30d)
+и в обычном сценарии достигает58дней от точки. Forecast учитывает detail+lookback,
+не меняя expiry; более старый selector predecessor и supplied/frozen dependencies
+отмечаются отдельным ограничением модели. Native плотность включает IF1/NR2/OW1;
+повторно добавлять32байта за каждую frozen point нельзя.
+
+При свежем положительном remaining_due_batch существующий maintenance worker
+после initial body/reclaim boundary откладывает packing phases14/16/17/18.
+Успешное удаление без остатка batch не откладывает упаковку. Очереди, cursors и
+pending diagnostics сохраняются через reopen; обычные bounded passes возобновляются
+после разгрузки retention. Начальные boundaries не объявляются готовыми заранее.
+
 В существующем rotating worker добавлена конечная initial граница
 stream/kind/time и отдельная persistent live очередь с первым queued_at.
 Full64-point chunks доступны сразу; tails8..63 — после закрытия UTC дня,
