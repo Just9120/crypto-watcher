@@ -123,16 +123,6 @@ metric bytes; при materialization guards временно сняты толь
 не подтверждает независимую рыночную entropy, ёмкость всей БД или live SLO;
 operating-system file cache не очищается.
 
-Для изменений backup/native/build inputs отдельный required CI job выполняет
-`python scripts/qualify_backup_io.py cryptowatcher:local` на собранном Linux image.
-Он создаёт временную базу больше6GiB и сравнивает четыре полных baseline/optimized
-backup в CPU1/4GiB/no-swap/no-network container. Baseline использует обычный source
-и отдельные raw/encoded scans; candidate — bounded native read-ahead и один полный
-independent raw/encoded scan. Все строки, настройки, оба SHA
-и стандартное ZSTD restore проверяются; данные и helper удаляются, ограниченный
-receipt остаётся в `.cache-g1/backup-io-qualification.json`. Это сравнение cache
-policy на generated данных, не VPS нагрузка, mature capacity или live SLO.
-
 `capacity` читает counters/files и статус стабилизации без полного обхода данных.
 Explicit flags выполняют ограниченные разовые ledger/cohort/index измерения;
 logical bytes не складываются с physical pages. Автоматический finite24h observer

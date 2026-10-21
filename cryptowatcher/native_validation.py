@@ -22,17 +22,6 @@ def available() -> bool:
     return sys.platform == "linux" and ctypes.sizeof(ctypes.c_void_p) == 8 and LIBRARY.is_file()
 
 
-def load_library() -> Any:
-    library = ctypes.CDLL(str(LIBRARY))
-    with closing(apsw.Connection(":memory:")) as bootstrap:
-        bootstrap.enable_load_extension(True)
-        try:
-            bootstrap.load_extension(str(LIBRARY), "sqlite3_cwcvfs_init")
-        finally:
-            bootstrap.enable_load_extension(False)
-    return library
-
-
 class NativeVFS:
     """Own borrowed arena storage until every SQLite handle has closed."""
 
@@ -47,7 +36,14 @@ class NativeVFS:
         self.name = "cw-native-validation-" + uuid.uuid4().hex
         self.pointer: int | None = None
         try:
-            self.lib = load_library()
+            self.lib = ctypes.CDLL(str(LIBRARY))
+            # Load only the pinned local helper into an ephemeral database.
+            with closing(apsw.Connection(":memory:")) as bootstrap:
+                bootstrap.enable_load_extension(True)
+                try:
+                    bootstrap.load_extension(str(LIBRARY), "sqlite3_cwcvfs_init")
+                finally:
+                    bootstrap.enable_load_extension(False)
             create = self.lib.cwcvfs_create
             create.argtypes = [
                 ctypes.c_char_p,

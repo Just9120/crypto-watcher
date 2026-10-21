@@ -29,6 +29,34 @@ Target: Contabo167.86.68.98, `/opt/crypto_watcher`, Compose project/service `cry
 
 ## Routine schema2 backup/CD
 
+### Повторная очистка тестового накопления по разрешению22Oct2026
+
+Владелец явно разрешил удалить текущую рабочую test market history вместо её
+сохранения. Исключение касается только working DB и её sidecars; private settings,
+остальные backups и файлы прежних замеров сохраняются. Это `EXPLICITLY_GATED`
+операция, а не startup behavior или переиспользование consumed reset permit.
+
+После required CI/self-review exact PR head оператор использует проверенный
+[fresh_measurement.py](../../scripts/fresh_measurement.py) с
+`--expected-source LIVE_SOURCE_SHA --expected-generation LIVE_GENERATION_ID
+--approve-fresh-database --discard-test-history --reset-helper REVIEWED_HELPER_PATH
+--reset-helper-sha256 EXACT_HELPER_SHA256`. Helper — точный
+[reset_history.py](../../cryptowatcher/reset_history.py) из того же reviewed head,
+root-owned0644, без secrets; operator root0600. На работающем старом image helper
+выполняется через read-only file mount и штатные private/storage APIs этого image.
+Перед исполнением сверяются hashes/head/CI и совместимость этих APIs. Canonical
+target/host/account/image/generation/config/lock/reserves/deadlines сохраняются.
+
+Старой удаляемой истории не приписывается integrity/restore proof и не создаётся
+новый полный архив. Проверяются точный predecessor и независимый private restore,
+полная integrity/reopen малой fresh schema2, закрытый candidate и его hash.
+После остановки одного writer exact working files временно переименовываются;
+durable operation record сохраняется до первого rename. Лишь после exact image,
+health, generation/config и полного private readback удаляются staged old files
+по повторным identity/no-handles checks. До staging failure возвращает тот же
+writer на прежнюю БД; после начала staging — exact record/paths и forward recovery,
+без blind retry. Private recovery/receipts остаются. Замер автоматически не стартует.
+
 ### Чистая БД для нового замера с сохранением всей истории
 
 Отдельное поручение владельца17Oct2026 разрешает новую working DB, но требует

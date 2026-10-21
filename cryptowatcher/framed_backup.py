@@ -19,9 +19,8 @@ from .compressed_validation import (
     snapshot_image,
 )
 from .config import OwnerSettings
-from .source_validation import SourceVFS, open_source
 from .storage import IntegrityError, encode
-from .validation import scratch_space
+from .validation import fingerprint, scratch_space
 from .validation_archive import (
     BLOCK,
     ENTRY,
@@ -32,35 +31,6 @@ from .validation_archive import (
     TAIL,
     ArchiveArena,
 )
-
-
-def independent_fingerprints(image: Image, arena: ArchiveArena) -> tuple[str, tuple[str, int]]:
-    """Hash every encoded and decoded byte of the same independently opened file."""
-    if image.blocks is not arena or image.mutable or not arena.sealed or arena.file.mode != "rb":
-        raise QualificationError("FROZEN_IMAGE_REQUIRED")
-    encoded = hashlib.sha256()
-    count = 0
-
-    def consume(value: bytes) -> None:
-        nonlocal count
-        encoded.update(value)
-        count += len(value)
-
-    raw = image.reconstructed_hash(encoded=consume)
-    arena.assert_unchanged()
-    if count != arena.identity.st_size:
-        raise QualificationError("BYTE_IDENTITY_MISMATCH")
-    return raw, (encoded.hexdigest(), count)
-
-
-def confirm_fingerprint(arena: ArchiveArena, digest: tuple[str, int]) -> tuple[str, int]:
-    # The complete encoded SHA was computed alongside the independent raw
-    # scan, including all padding and the checked index/footer. Re-reading a
-    # larger-than-cache archive adds I/O, not another byte-identity guarantee.
-    arena.assert_unchanged()
-    if digest[1] != arena.identity.st_size:
-        raise QualificationError("BYTE_IDENTITY_MISMATCH")
-    return digest
 
 
 def source_facts(database: apsw.Connection, owner: int) -> dict[str, Any]:
@@ -109,14 +79,14 @@ def backup(
 
     arena: ArchiveArena | None = None
     reader: apsw.Connection | None = None
-    source_vfs: SourceVFS | None = None
-    encoded_digest: tuple[str, int] | None = None
     try:
         with classified_errors(deadline):
             scratch_space(directory, 0)
             if source.resolve() != source or destination.resolve() != destination or source == destination:
                 raise QualificationError("UNSAFE_VALIDATION_PATH")
-            reader, source_vfs = open_source(source, deadline)
+            reader = apsw.Connection(
+                source.as_uri() + "?mode=ro", flags=apsw.SQLITE_OPEN_READONLY | apsw.SQLITE_OPEN_URI
+            )
             reader.execute("BEGIN")
             row = reader.execute("SELECT owner_id FROM owner_settings").fetchone()
             pages = reader.execute("PRAGMA page_count").fetchone()
@@ -139,7 +109,7 @@ def backup(
             )
 
             def persisted_identity() -> str:
-                nonlocal arena, encoded_digest
+                nonlocal arena
                 if arena is None:
                     raise QualificationError("FROZEN_IMAGE_REQUIRED")
                 expected = arena.raw_sha256
@@ -152,7 +122,7 @@ def backup(
                 )
                 if arena.raw_bytes != raw_size or arena.raw_sha256 != expected:
                     raise QualificationError("BYTE_IDENTITY_MISMATCH")
-                actual, encoded_digest = independent_fingerprints(Image.from_archive_store(arena), arena)
+                actual = Image.from_archive_store(arena).reconstructed_hash()
                 arena.assert_unchanged()
                 return actual
 
@@ -177,9 +147,7 @@ def backup(
                 raise QualificationError("FROZEN_IMAGE_REQUIRED")
             arena.assert_unchanged()
             stage("ARCHIVE_FINGERPRINT")
-            if encoded_digest is None:
-                raise QualificationError("BYTE_IDENTITY_MISMATCH")
-            digest, archive_bytes = confirm_fingerprint(arena, encoded_digest)
+            digest, archive_bytes = fingerprint(destination, deadline)
             arena.assert_unchanged()
             facts["snapshot_sha256"] = expected
             stage("COMPLETE")
@@ -198,10 +166,6 @@ def backup(
                 "integrity_basis": "FULL_VALIDATED_CAPTURE_AND_INDEPENDENT_EQUAL_RAW_SHA256",
                 "elapsed_seconds": round(time.monotonic() - started, 3),
                 "phase_seconds": {key: round(value, 3) for key, value in timings.items()},
-                "source_io": image.source_io,
-                "source_reader": {"vfs_backend": "sqlite-default"}
-                if source_vfs is None
-                else source_vfs.stats(),
             }
     except IntegrityError as error:
         error.backup_metrics = {
@@ -213,7 +177,5 @@ def backup(
     finally:
         if reader is not None:
             reader.close()
-        if source_vfs is not None:
-            source_vfs.unregister()
         if arena is not None:
             arena.close()

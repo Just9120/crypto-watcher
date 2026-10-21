@@ -96,9 +96,9 @@ def test_one_closed_file_digest_checks_capture_identity_without_a_duplicate_scan
     original = framed_backup.Image.reconstructed_hash
     readers = []
 
-    def observed(image, **kwargs):
+    def observed(image):
         readers.append(image.blocks)
-        return original(image, **kwargs)
+        return original(image)
 
     monkeypatch.setattr(framed_backup.Image, "reconstructed_hash", observed)
     proof = framed_backup.backup(
@@ -119,7 +119,7 @@ def test_independent_digest_mismatch_never_transfers_source_integrity(store, tmp
 
     def mismatched(arena):
         image = original(arena)
-        image.reconstructed_hash = lambda **kwargs: digest
+        image.reconstructed_hash = lambda: digest
         return image
 
     monkeypatch.setattr(framed_backup.Image, "from_archive_store", mismatched)
@@ -149,87 +149,19 @@ def test_archive_mutation_during_final_fingerprint_cannot_inherit_source_integri
     store, tmp_path, monkeypatch
 ):
     scratch, destination = environment(tmp_path, monkeypatch)
-    original = framed_backup.confirm_fingerprint
+    original = framed_backup.fingerprint
 
-    def changed(arena, digest):
-        with arena.path.open("ab") as output:
+    def changed(path, deadline):
+        with path.open("ab") as output:
             output.write(b"x")
-        return original(arena, digest)
+        return original(path, deadline)
 
-    monkeypatch.setattr(framed_backup, "confirm_fingerprint", changed)
+    monkeypatch.setattr(framed_backup, "fingerprint", changed)
     with pytest.raises(QualificationError, match="SOURCE_CHANGED") as result:
         framed_backup.backup(
             store.path, destination, scratch, owner=store.owner_id, deadline=time.monotonic() + 20
         )
     assert result.value.backup_metrics["phase"] == "ARCHIVE_FINGERPRINT"
-
-
-@pytest.mark.parametrize("rows", [0, 97])
-def test_one_closed_file_pass_hashes_all_encoded_padding_frames_and_footer(
-    store, tmp_path, monkeypatch, rows
-):
-    from cryptowatcher.validation_archive import PREFIX_BYTES, ArchiveArena
-
-    if rows:
-        store.db.execute("CREATE TABLE encoded_probe(value BLOB NOT NULL)")
-        with store.db:
-            store.db.executemany(
-                "INSERT INTO encoded_probe VALUES(?)",
-                [(hashlib.shake_256(str(i).encode()).digest(4096),) for i in range(rows)],
-            )
-    scratch, destination = environment(tmp_path, monkeypatch)
-    proof = framed_backup.backup(
-        store.path, destination, scratch, owner=store.owner_id, deadline=time.monotonic() + 20
-    )
-
-    def pair():
-        arena = ArchiveArena.open(
-            destination,
-            max_raw_bytes=proof["bytes"],
-            max_archive_bytes=proof["archive_limit_bytes"],
-            deadline=time.monotonic() + 20,
-        )
-        try:
-            raw, encoded = framed_backup.independent_fingerprints(
-                framed_backup.Image.from_archive_store(arena), arena
-            )
-            assert encoded == (
-                hashlib.sha256(destination.read_bytes()).hexdigest(),
-                destination.stat().st_size,
-            )
-            assert raw == proof["sha256"]
-            return encoded[0], arena.lengths[0] + 8
-        finally:
-            arena.close()
-
-    original, padding = pair()
-    assert padding < PREFIX_BYTES
-    # A skippable padding byte leaves every restored SQLite byte unchanged;
-    # the encoded hash must still cover it and distinguish the changed file.
-    with destination.open("r+b") as target:
-        target.seek(padding)
-        target.write(b"x")
-    changed, _ = pair()
-    assert changed != original
-
-
-def test_fingerprint_transfer_refuses_a_raw_hash_stub_that_did_not_consume_all_bytes(
-    store, tmp_path, monkeypatch
-):
-    scratch, destination = environment(tmp_path, monkeypatch)
-    original = framed_backup.Image.from_archive_store
-
-    def no_encoded_read(arena):
-        image = original(arena)
-        image.reconstructed_hash = lambda **kwargs: arena.raw_sha256
-        return image
-
-    monkeypatch.setattr(framed_backup.Image, "from_archive_store", no_encoded_read)
-    with pytest.raises(QualificationError, match="BYTE_IDENTITY_MISMATCH") as error:
-        framed_backup.backup(
-            store.path, destination, scratch, owner=store.owner_id, deadline=time.monotonic() + 20
-        )
-    assert error.value.backup_metrics["phase"] == "INDEPENDENT_PERSISTED_READBACK"
     assert destination.exists()
 
 

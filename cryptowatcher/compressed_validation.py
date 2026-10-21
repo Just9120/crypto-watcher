@@ -15,7 +15,7 @@ import uuid
 from array import array
 from collections import OrderedDict
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from pathlib import Path
 from typing import IO, Any, BinaryIO, Literal, cast
 
@@ -23,9 +23,8 @@ import apsw
 import zstandard
 
 from .storage import IntegrityError
-from .validation_archive import PREFIX_BYTES, ArchiveArena
+from .validation_archive import ArchiveArena
 from .validation_codes import DETAIL_CODES
-from .validation_io import source_scan
 
 BLOCK = 65536
 CACHE_PAGES = 512
@@ -131,7 +130,6 @@ class Image:
         self.mutable = False
         self.cache: OrderedDict[int, bytes] = OrderedDict()
         self.write_cache: OrderedDict[int, bytearray] = OrderedDict()
-        self.source_io: dict[str, Any] = {"policy": "DEFAULT", "reason": "NOT_ARCHIVE"}
         self.compressor = zstandard.ZstdCompressor(level=COMPRESSION_LEVEL, write_checksum=True, threads=0)
         self.decompressor = zstandard.ZstdDecompressor()
         self.page_decompressor = zstandard.ZstdDecompressor(max_window_size=BLOCK)
@@ -356,31 +354,18 @@ class Image:
             pos += n
         return b"".join(pieces)
 
-    def reconstructed_hash(self, *, encoded: Callable[[bytes], None] | None = None) -> str:
+    def reconstructed_hash(self) -> str:
         result = hashlib.sha256()
-        for value in self.iter_bytes(encoded=encoded):
+        for value in self.iter_bytes():
             result.update(value)
         return result.hexdigest()
 
-    def iter_bytes(self, *, encoded: Callable[[bytes], None] | None = None) -> Iterator[bytes]:
+    def iter_bytes(self) -> Iterator[bytes]:
         if self.mutable:
             raise QualificationError("FROZEN_IMAGE_REQUIRED")
-        archive = self.blocks if isinstance(self.blocks, ArchiveArena) else None
-        physical_cursor = PREFIX_BYTES
-        if encoded is not None:
-            if archive is None or not archive.sealed or archive.data is None:
-                raise QualificationError("FROZEN_IMAGE_REQUIRED")
-            archive.assert_unchanged()
-            encoded(archive.data[:PREFIX_BYTES])
         self.cache.clear()
         for index, blob in enumerate(self.blocks):
             budget(self.deadline)
-            if encoded is not None and index:
-                assert archive is not None
-                if archive.offsets[index] != physical_cursor:
-                    raise QualificationError("BYTE_IDENTITY_MISMATCH")
-                encoded(blob)
-                physical_cursor += len(blob)
             value = self.unpack_block(blob)
             expected = min(BLOCK, self.size - index * BLOCK)
             if len(value) not in (expected, BLOCK) or (
@@ -388,13 +373,6 @@ class Image:
             ):
                 raise QualificationError("BYTE_IDENTITY_MISMATCH")
             yield value[:expected]
-        if encoded is not None:
-            assert archive is not None and archive.data is not None
-            if not PREFIX_BYTES <= physical_cursor <= len(archive.data):
-                raise QualificationError("BYTE_IDENTITY_MISMATCH")
-            budget(self.deadline)
-            encoded(archive.data[physical_cursor:])
-            archive.assert_unchanged()
 
 
 class File(apsw.VFSFile):
@@ -654,14 +632,10 @@ def snapshot_image(
                     raise QualificationError("ARCHIVE_SIZE_LIMIT")
             if progress is not None:
                 progress("SOURCE_COPY")
-            with (
-                source_scan(source, path) if archive_store is not None else nullcontext(image.source_io)
-            ) as source_io:
-                image.source_io = source_io
-                with destination.backup("main", source, "main") as backup:
-                    while not backup.done:
-                        budget(deadline)
-                        backup.step(256)
+            with destination.backup("main", source, "main") as backup:
+                while not backup.done:
+                    budget(deadline)
+                    backup.step(256)
             source.close()
             source = None
             destination.close()

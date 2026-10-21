@@ -5,6 +5,8 @@ import subprocess
 import sys
 import time
 from contextlib import closing
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -79,6 +81,279 @@ def test_fresh_measurement_rejects_unknown_archive_or_automatic_repeat(tmp_path,
     with pytest.raises(StateError):
         prepare(source, fresh, recovery, OWNER, **options)
     assert source.read_bytes() == raw and not fresh.exists() and not recovery.exists()
+
+
+def test_explicit_repeat_discard_keeps_private_state_without_claiming_an_archive(tmp_path, archived):
+    source, raw, _, preserved = archived
+    fresh, recovery = (tmp_path / "fresh.sqlite3").resolve(), (tmp_path / "private.json").resolve()
+    proof = prepare(source, fresh, recovery, OWNER, expected_generation=GENERATION, discard_test_history=True)
+    assert source.read_bytes() == raw  # Candidate preparation never deletes its source.
+    assert proof["private_source_sha256"] == signature(preserved)
+    assert proof["discard_test_history"] is True and "preserved_archive_sha256" not in proof
+    with closing(Store(fresh, OWNER, readonly=True)) as current:
+        assert private_state(current) == preserved
+        assert current.get_runtime("market-old") is None
+        assert (
+            current.get_runtime("history_generation")["previous_market_history"]
+            == "DISCARDED_BY_OWNER_DECISION"
+        )
+        assert (
+            current.get_runtime("history_generation")["reason"]
+            == "OWNER_AUTHORIZED_TEST_HISTORY_DISCARD_20261022"
+        )
+    assert proof["integrity"] == proof["private_restore"] == "PASS"
+
+
+@pytest.mark.parametrize(
+    "generation,digest", [(None, None), ("unknown", None), ("b" * 32, None), (GENERATION, "0" * 64)]
+)
+def test_discard_requires_exact_existing_generation_and_no_archive_claim(
+    tmp_path, archived, generation, digest
+):
+    source, raw, _, _ = archived
+    fresh, recovery = (tmp_path / "fresh.sqlite3").resolve(), (tmp_path / "private.json").resolve()
+    with pytest.raises(StateError):
+        prepare(
+            source,
+            fresh,
+            recovery,
+            OWNER,
+            expected_generation=generation,
+            preserved_archive_sha256=digest,
+            discard_test_history=True,
+        )
+    assert source.read_bytes() == raw and not fresh.exists() and not recovery.exists()
+
+
+def test_discard_stages_only_working_files_then_removes_them_after_fresh_reopen(
+    tmp_path, archived, monkeypatch
+):
+    old, raw, _, preserved = archived
+    source = (tmp_path / "cryptowatcher.sqlite3").resolve()
+    old.rename(source)
+    folder = (tmp_path / "previous-working").resolve()
+    folder.mkdir()
+    keep = tmp_path / "other-backup.sqlite3"
+    keep.write_bytes(b"keep previous measurement")
+    fresh = (tmp_path / "fresh.sqlite3").resolve()
+    prepare(
+        source,
+        fresh,
+        (tmp_path / "private.json").resolve(),
+        OWNER,
+        expected_generation=GENERATION,
+        discard_test_history=True,
+    )
+    monkeypatch.setattr(operation, "require_no_handles", lambda path: None)
+    monkeypatch.setattr(operation, "sync_directory", lambda path: None)
+    plan = operation.test_discard_plan(source, folder)
+    operation.stage_test_discard(plan, source, folder)
+    assert (folder / source.name).read_bytes() == raw
+    fresh.rename(source)
+    with closing(Store(source, OWNER, readonly=True)) as current:
+        assert private_state(current) == preserved
+    operation.remove_staged_test_history(plan, source, folder)
+    assert source.exists() and keep.read_bytes() == b"keep previous measurement"
+    assert not any(folder.iterdir())
+
+
+@pytest.mark.parametrize("tamper", ["foreign", "changed", "duplicate", "open"])
+def test_discard_rejects_changed_or_unrelated_files_before_any_deletion(tmp_path, monkeypatch, tamper):
+    source = (tmp_path / "cryptowatcher.sqlite3").resolve()
+    source.write_bytes(b"old test database")
+    sidecar = Path(str(source) + "-wal")
+    sidecar.write_bytes(b"wal")
+    folder = (tmp_path / "previous-working").resolve()
+    folder.mkdir()
+    monkeypatch.setattr(operation, "require_no_handles", lambda path: None)
+    monkeypatch.setattr(operation, "sync_directory", lambda path: None)
+    plan = operation.test_discard_plan(source, folder)
+    operation.stage_test_discard(plan, source, folder)
+    keep = (tmp_path / "keep.sqlite3").resolve()
+    keep.write_bytes(b"unrelated archive")
+    if tamper == "foreign":
+        plan[0]["path"] = str(keep)
+    elif tamper == "changed":
+        (folder / source.name).write_bytes(b"unexpected changed database")
+    elif tamper == "duplicate":
+        plan.append(plan[0])
+    else:
+
+        def still_open(path):
+            raise RuntimeError("Working source still has open handles")
+
+        monkeypatch.setattr(operation, "require_no_handles", still_open)
+    with pytest.raises(RuntimeError):
+        operation.remove_staged_test_history(plan, source, folder)
+    assert keep.read_bytes() == b"unrelated archive"
+    assert (folder / source.name).exists() and (folder / sidecar.name).exists()
+
+
+def test_discard_policy_conflict_is_rejected_before_host_or_data_access():
+    with pytest.raises(RuntimeError, match="Conflicting"):
+        operation.execute("a" * 40, "b" * 32, approved=True, archive_original=True, discard_test_history=True)
+    with pytest.raises(RuntimeError, match="Reviewed reset helper"):
+        operation.execute("a" * 40, "b" * 32, approved=True, discard_test_history=True)
+
+
+@pytest.mark.parametrize("postcheck_ok", [True, False])
+def test_full_discard_operator_deletes_only_after_successful_private_runtime_readback(
+    tmp_path, archived, monkeypatch, postcheck_ok
+):
+    from cryptowatcher.reset_history import verify_private
+
+    source_old, _, _, preserved = archived
+    app = (tmp_path / "app").resolve()
+    database = app / "data/sqlite/cryptowatcher.sqlite3"
+    database.parent.mkdir(parents=True)
+    source_old.rename(database)
+    (app / ".deploy.lock").touch()
+    (app / ".env").write_bytes(b"retained private configuration")
+    helper = app / "reset_history.py"
+    helper.write_bytes(b"reviewed helper fixture")
+    revision, image = "a" * 40, "sha256:" + "b" * 64
+    delivery = app / "releases" / (revision + "-artifact")
+    delivery.mkdir(parents=True)
+    (delivery / "deployment.json").write_text(json.dumps({"state": "PASS", "image_id": image}))
+    keep = database.parent / "backups/keep.sqlite3"
+    keep.parent.mkdir()
+    keep.write_bytes(b"previous measurement archive")
+    monkeypatch.setattr(operation, "APP", app)
+    monkeypatch.setattr(operation.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(operation.os, "chown", lambda *args: None, raising=False)
+    if os.name == "nt":
+        monkeypatch.setattr(operation.os, "fchmod", lambda *args: None, raising=False)
+    monkeypatch.setattr(operation.socket, "gethostname", lambda: "vmi3224957")
+    monkeypatch.setattr(
+        operation.os, "statvfs", lambda path: SimpleNamespace(f_bavail=10**9, f_frsize=4096), raising=False
+    )
+    monkeypatch.setattr(operation, "require_no_handles", lambda path: None)
+    monkeypatch.setattr(operation, "sync_directory", lambda path: None)
+    if os.name == "nt":
+        monkeypatch.setitem(
+            sys.modules, "fcntl", SimpleNamespace(flock=lambda *a: None, LOCK_EX=2, LOCK_NB=4)
+        )
+    original_stat, original_read = Path.stat, Path.read_text
+
+    class Metadata:
+        def __init__(self, path, actual):
+            self.path, self.actual = path, actual
+
+        @property
+        def st_uid(self):
+            return 0 if self.path in (helper, app / ".env") else 10001
+
+        @property
+        def st_mode(self):
+            if self.path in (helper, app / ".env"):
+                return 0o100644 if self.path == helper else 0o100600
+            return self.actual.st_mode
+
+        def __getattr__(self, name):
+            return getattr(self.actual, name)
+
+    monkeypatch.setattr(Path, "stat", lambda path, *a, **kw: Metadata(path, original_stat(path, *a, **kw)))
+    monkeypatch.setattr(
+        Path,
+        "read_text",
+        lambda path, *a, **kw: (
+            "MemAvailable: 10000000 kB\n"
+            if path.as_posix() == "/proc/meminfo"
+            else original_read(path, *a, **kw)
+        ),
+    )
+    running = True
+    actions = []
+
+    def inspect():
+        return [
+            {
+                "Id": "container-id",
+                "Image": image,
+                "Config": {
+                    "Labels": {
+                        "org.opencontainers.image.revision": revision,
+                        "com.docker.compose.project": "crypto_watcher",
+                    }
+                },
+                "State": {"Running": running, "Health": {"Status": "healthy"}, "StartedAt": "controlled"},
+                "Mounts": [{"Source": str(app / "data"), "Destination": "/data"}],
+            }
+        ]
+
+    def host_path(value):
+        return (
+            app / value.removeprefix("/data/")
+            if not value.startswith("/data/")
+            else app / "data" / value.removeprefix("/data/")
+        )
+
+    def command(args, **kwargs):
+        nonlocal running
+        if args[0] == "systemctl":
+            return ""
+        verb = args[3]
+        if verb == "inspect":
+            return json.dumps(inspect())
+        if verb in ("stop", "start"):
+            running = verb == "start"
+            actions.append(verb)
+            return "container-id"
+        assert verb == "run"
+        words = args[args.index("-B") + 1 :]
+        if "--discard-test-history" in words:
+
+            def arg(name):
+                return words[words.index(name) + 1]
+
+            proof = prepare(
+                host_path(arg("--source")),
+                host_path(arg("--candidate")),
+                host_path(arg("--private-recovery")),
+                OWNER,
+                expected_generation=arg("--expected-generation"),
+                discard_test_history=True,
+            )
+            host_path(arg("--receipt")).write_text(json.dumps(proof))
+            return json.dumps(proof)
+        if "private_sha256" in words[1]:
+            with closing(Store(database, OWNER, readonly=True)) as current:
+                return json.dumps(
+                    {
+                        "private_sha256": signature(private_state(current)),
+                        "generation": current.get_runtime("history_generation"),
+                    }
+                )
+        assert "verify_private" in words[1]
+        assert list(database.parent.glob("fresh-measurement-*/previous-working/cryptowatcher.sqlite3"))
+        recovery = next(database.parent.glob("fresh-measurement-*/private.json"))
+        verified = verify_private(database, recovery, OWNER)
+        return json.dumps(verified if postcheck_ok else {"state": "FAIL"})
+
+    monkeypatch.setattr(operation.subprocess, "check_output", command)
+    options = dict(
+        approved=True,
+        discard_test_history=True,
+        reset_helper=helper,
+        reset_helper_sha256=operation.fingerprint(helper),
+    )
+    if postcheck_ok:
+        result = operation.execute(revision, GENERATION, **options)
+        assert result["state"] == "PASS" and result["old_working_files_removed"] >= 1
+        assert result["all_original_data_retained"] is False
+        assert result["archive_backup"]["old_history_integrity"] == "NOT_CLAIMED"
+        assert not list(database.parent.glob("fresh-measurement-*/previous-working/cryptowatcher.sqlite3"))
+    else:
+        with pytest.raises(RuntimeError, match="Private readback failed"):
+            operation.execute(revision, GENERATION, **options)
+        assert list(database.parent.glob("fresh-measurement-*/previous-working/cryptowatcher.sqlite3"))
+        receipt = json.loads(next(database.parent.glob("fresh-measurement-*/operation.json")).read_text())
+        assert receipt["state"] == "FAILED" and receipt["promoted"] is True
+    with closing(Store(database, OWNER, readonly=True)) as current:
+        assert private_state(current) == preserved
+    assert keep.read_bytes() == b"previous measurement archive"
+    assert (app / ".env").read_bytes() == b"retained private configuration"
+    assert actions == ["stop", "start"]
 
 
 def test_original_files_and_unrelated_backups_survive_archive_cutover(tmp_path, monkeypatch):

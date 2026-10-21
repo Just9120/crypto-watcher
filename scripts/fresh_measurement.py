@@ -1,4 +1,4 @@
-"""Explicit owner-approved fresh accumulation, retaining every previous database file.
+"""Explicit owner-approved fresh accumulation with an optional test-history discard.
 
 Run the reviewed script on the identified host only after ordinary successful CD.
 It does not re-arm the consumed reset permit or install deployment policy.
@@ -115,7 +115,72 @@ def original_archive_proof(source: Path, validation: dict[str, Any]) -> dict[str
     }
 
 
-def offline_command(image: str, database: str, args: list[str]) -> list[str]:
+def discard_identity(path: Path) -> list[int]:
+    meta = path.stat()
+    return [meta.st_dev, meta.st_ino, meta.st_size, meta.st_mtime_ns]
+
+
+def test_discard_plan(source: Path, directory: Path) -> list[dict[str, Any]]:
+    """Plan only the stopped working files; never inspect or qualify their contents."""
+    require(source.name == "cryptowatcher.sqlite3" and source.resolve() == source, "Unsafe discard source")
+    require(directory.resolve() == directory and directory.is_dir(), "Unsafe discard directory")
+    files = []
+    for suffix in SUFFIXES:
+        original, staged = Path(str(source) + suffix), directory / (source.name + suffix)
+        require(not original.is_symlink() and not staged.is_symlink(), "Symlink discard file")
+        require(not staged.exists(), "Discard staging collision")
+        if original.exists():
+            require(original.is_file() and original.stat().st_nlink == 1, "Unsafe working file")
+            files.append(
+                {"source": str(original), "path": str(staged), "identity": discard_identity(original)}
+            )
+    require(any(item["source"] == str(source) for item in files), "Discard source missing")
+    return files
+
+
+def stage_test_discard(files: list[dict[str, Any]], source: Path, directory: Path) -> None:
+    require(files == test_discard_plan(source, directory), "Discard plan changed")
+    for item in files:
+        require_no_handles(Path(item["source"]))
+    for item in files:
+        Path(item["source"]).rename(item["path"])
+    sync_directory(source.parent)
+    sync_directory(directory)
+
+
+def remove_staged_test_history(files: list[dict[str, Any]], source: Path, directory: Path) -> None:
+    require(directory.resolve() == directory and directory.is_dir(), "Unsafe discard directory")
+    allowed = {str(directory / (source.name + suffix)) for suffix in SUFFIXES}
+    require(
+        1 <= len(files) <= 4
+        and len({item["path"] for item in files}) == len(files)
+        and str(directory / source.name) in {item["path"] for item in files},
+        "Invalid discard file set",
+    )
+    for item in files:
+        path = Path(item["path"])
+        require(
+            item["path"] in allowed
+            and item["source"] == str(source) + path.name.removeprefix(source.name)
+            and not path.is_symlink()
+            and path.is_file()
+            and path.stat().st_nlink == 1
+            and discard_identity(path) == item["identity"],
+            "Staged discard file changed",
+        )
+        require_no_handles(path)
+    for item in files:
+        path = Path(item["path"])
+        require(
+            discard_identity(path) == item["identity"] and not path.is_symlink(), "Discard identity changed"
+        )
+        path.unlink()
+    sync_directory(directory)
+
+
+def offline_command(
+    image: str, database: str, args: list[str], *, reset_helper: Path | None = None
+) -> list[str]:
     return [
         *DOCKER,
         "run",
@@ -140,6 +205,11 @@ def offline_command(image: str, database: str, args: list[str]) -> list[str]:
         "--mount",
         f"type=bind,src={APP}/data,dst=/data",
         "--entrypoint=python",
+        *(
+            ["--mount", f"type=bind,src={reset_helper},dst=/operator/reset_history.py,readonly"]
+            if reset_helper is not None
+            else []
+        ),
         image,
         "-B",
         *args,
@@ -168,9 +238,39 @@ def failure_details(exc: Exception) -> dict[str, Any]:
 
 
 def execute(
-    expected_source: str, expected_generation: str, *, approved: bool, archive_original: bool = False
+    expected_source: str,
+    expected_generation: str,
+    *,
+    approved: bool,
+    archive_original: bool = False,
+    discard_test_history: bool = False,
+    reset_helper: Path | None = None,
+    reset_helper_sha256: str | None = None,
 ) -> dict[str, Any]:
     require(approved, "Explicit --approve-fresh-database is required")
+    require(not (discard_test_history and archive_original), "Conflicting archive/discard policies")
+    if discard_test_history:
+        require(
+            reset_helper is not None and reset_helper_sha256 is not None, "Reviewed reset helper required"
+        )
+        assert reset_helper is not None and reset_helper_sha256 is not None
+        require(
+            reset_helper.is_absolute()
+            and reset_helper.resolve() == reset_helper
+            and not any(p.is_symlink() for p in (reset_helper, *reset_helper.parents))
+            and reset_helper.is_file()
+            and re.fullmatch("[0-9a-f]{64}", reset_helper_sha256)
+            and fingerprint(reset_helper) == reset_helper_sha256,
+            "Reset helper identity mismatch",
+        )
+        require(
+            reset_helper.stat().st_uid == 0 and reset_helper.stat().st_mode & 0o777 == 0o644,
+            "Unsafe reset helper ownership",
+        )
+    else:
+        require(
+            reset_helper is None and reset_helper_sha256 is None, "Helper only allowed for explicit discard"
+        )
     require(os.geteuid() == 0 and socket.gethostname() == "vmi3224957", "Wrong host/account")
     import fcntl
 
@@ -225,7 +325,7 @@ def execute(
         require(len(records) == 1, "No unique successful exact-image delivery")
         require(
             os.statvfs(source.parent).f_bavail * os.statvfs(source.parent).f_frsize
-            > (0 if archive_original else 2 * source.stat().st_size) + 1536 * 1024**2,
+            > (0 if archive_original or discard_test_history else 2 * source.stat().st_size) + 1536 * 1024**2,
             "Insufficient archive reserve",
         )
         env = APP / ".env"
@@ -253,8 +353,13 @@ def execute(
             "delivery_record": records[0],
             "env_sha256": env_hash,
             "scheduled_tasks": False,
-            "archive_method": "RETAIN_ORIGINAL" if archive_original else "FULL_COPY",
+            "archive_method": "OWNER_APPROVED_TEST_HISTORY_DISCARD"
+            if discard_test_history
+            else "RETAIN_ORIGINAL"
+            if archive_original
+            else "FULL_COPY",
             "operator_sha256": fingerprint(Path(__file__).resolve()),
+            "reset_helper_sha256": reset_helper_sha256,
         }
         receipt = folder / "operation.json"
 
@@ -295,10 +400,22 @@ def execute(
                 memory.get("MemAvailable", 0) >= 4 * 1024**3 + 1536 * 1024**2,
                 "Insufficient validation memory reserve",
             )
-            phase("FULL_ARCHIVE_INTEGRITY" if archive_original else "FULL_ARCHIVE_BACKUP")
+            phase(
+                "DISCARD_AUTHORIZED"
+                if discard_test_history
+                else "FULL_ARCHIVE_INTEGRITY"
+                if archive_original
+                else "FULL_ARCHIVE_BACKUP"
+            )
             budget = min(630, int(deadline - time.monotonic() - 180))
             require(budget >= 60, "Insufficient full archive budget")
-            if archive_original:
+            if discard_test_history:
+                proof = {
+                    "method": "OWNER_APPROVED_TEST_HISTORY_DISCARD",
+                    "old_history_integrity": "NOT_CLAIMED",
+                }
+                archive_input = "/data/sqlite/cryptowatcher.sqlite3"
+            elif archive_original:
                 validation = json.loads(
                     offline(
                         "/data/sqlite/cryptowatcher.sqlite3",
@@ -334,30 +451,48 @@ def execute(
                 preserved_archive = folder / "archive.sqlite3"
             record["archive_backup"] = proof
             phase("PREPARE_FRESH")
-            candidate = json.loads(
-                offline(
+            candidate_args = [
+                "--source",
+                archive_input,
+                "--candidate",
+                relative + "/fresh.sqlite3",
+                "--private-recovery",
+                relative + "/private.json",
+                "--owner-id",
+                "233382575",
+                "--receipt",
+                relative + "/candidate.json",
+                "--expected-generation",
+                expected_generation,
+            ]
+            if discard_test_history:
+                loader = "import importlib.util;spec=importlib.util.spec_from_file_location('cryptowatcher.reset_history','/operator/reset_history.py');mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod);raise SystemExit(mod.main())"
+                require(
+                    reset_helper is not None and fingerprint(reset_helper) == reset_helper_sha256,
+                    "Reset helper changed",
+                )
+                candidate_output = run(
+                    offline_command(
+                        c["Image"],
+                        archive_input,
+                        ["-c", loader, *candidate_args, "--discard-test-history"],
+                        reset_helper=reset_helper,
+                    ),
+                    timeout=135,
+                )
+            else:
+                candidate_output = offline(
                     archive_input,
                     [
                         "-m",
                         "cryptowatcher.reset_history",
-                        "--source",
-                        archive_input,
-                        "--candidate",
-                        relative + "/fresh.sqlite3",
-                        "--private-recovery",
-                        relative + "/private.json",
-                        "--owner-id",
-                        "233382575",
-                        "--receipt",
-                        relative + "/candidate.json",
-                        "--expected-generation",
-                        expected_generation,
+                        *candidate_args,
                         "--preserved-archive-sha256",
                         proof["sha256"],
                     ],
                     135,
                 )
-            )
+            candidate = json.loads(candidate_output)
             require(candidate["private_source_sha256"] == before["private_sha256"], "Owner state changed")
             require(
                 candidate["private_restore"] == candidate["integrity"] == "PASS", "Fresh candidate failed"
@@ -369,8 +504,30 @@ def execute(
                     if file["path"].endswith("-shm"):
                         continue  # SQLite readers may advance lock metadata, never database/WAL data.
                     require(fingerprint(Path(file["path"])) == file["sha256"], "Qualified original changed")
-            phase("PRESERVE_ORIGINAL")
-            record["original_files"] = preserve_original(source, raw_folder)
+            if discard_test_history:
+                fresh_path = folder / "fresh.sqlite3"
+                require(
+                    fresh_path.is_file()
+                    and not fresh_path.is_symlink()
+                    and fresh_path.stat().st_size <= 32 * 1024**2,
+                    "Invalid fresh candidate",
+                )
+                require(
+                    all(not Path(str(fresh_path) + suffix).exists() for suffix in SUFFIXES[:-1]),
+                    "Fresh candidate not closed",
+                )
+                record["candidate_sha256"] = fingerprint(fresh_path)
+                record["original_files"] = test_discard_plan(source, raw_folder)
+                require(
+                    all(Path(item["source"]).stat().st_uid == 10001 for item in record["original_files"]),
+                    "Unexpected working data owner",
+                )
+                phase("STAGE_TEST_HISTORY")
+                stage_test_discard(record["original_files"], source, raw_folder)
+                require(fingerprint(fresh_path) == record["candidate_sha256"], "Fresh candidate changed")
+            else:
+                phase("PRESERVE_ORIGINAL")
+                record["original_files"] = preserve_original(source, raw_folder)
             phase("PROMOTING")
             (folder / "fresh.sqlite3").rename(source)
             sync_directory(source.parent)
@@ -392,24 +549,33 @@ def execute(
                     break
                 time.sleep(3)
             require(actual["State"].get("Health", {}).get("Status") == "healthy", "Fresh runtime not healthy")
+            require(
+                actual["Id"] == c["Id"] and actual["Image"] == c["Image"] and actual["State"]["Running"],
+                "Fresh runtime identity changed",
+            )
             after = json.loads(offline("/data/sqlite/cryptowatcher.sqlite3", ["-c", private_code], 30))
             require(after["generation"] == candidate["generation"], "Fresh generation mismatch")
             require(fingerprint(env) == env_hash, "Infrastructure config changed")
-            require(fingerprint(preserved_archive) == proof["sha256"], "Preserved archive changed")
-            record["archive_path"] = str(preserved_archive)
-            for original in record["original_files"]:
-                preserved = Path(original["path"])
-                require(
-                    identity(preserved) == original["identity"]
-                    and fingerprint(preserved) == original["sha256"],
-                    "Preserved original changed",
-                )
+            if discard_test_history:
+                phase("REMOVE_STAGED_TEST_HISTORY")
+                remove_staged_test_history(record["original_files"], source, raw_folder)
+                record["old_working_files_removed"] = len(record["original_files"])
+            else:
+                require(fingerprint(preserved_archive) == proof["sha256"], "Preserved archive changed")
+                record["archive_path"] = str(preserved_archive)
+                for original in record["original_files"]:
+                    preserved = Path(original["path"])
+                    require(
+                        identity(preserved) == original["identity"]
+                        and fingerprint(preserved) == original["sha256"],
+                        "Preserved original changed",
+                    )
             record.update(
                 state="PASS",
                 elapsed_seconds=round(time.monotonic() - started, 3),
                 container_started_at=actual["State"]["StartedAt"],
                 generation=after["generation"],
-                all_original_data_retained=True,
+                all_original_data_retained=not discard_test_history,
                 disk_available_bytes=os.statvfs(source.parent).f_bavail * os.statvfs(source.parent).f_frsize,
             )
             phase("COMPLETE")
@@ -422,7 +588,13 @@ def execute(
             phase("FAILED_" + failed_phase)
             if (
                 failed_phase
-                in ("STOP_WRITER", "FULL_ARCHIVE_BACKUP", "FULL_ARCHIVE_INTEGRITY", "PREPARE_FRESH")
+                in (
+                    "STOP_WRITER",
+                    "DISCARD_AUTHORIZED",
+                    "FULL_ARCHIVE_BACKUP",
+                    "FULL_ARCHIVE_INTEGRITY",
+                    "PREPARE_FRESH",
+                )
                 and source.is_file()
             ):
                 run([*DOCKER, "start", c["Id"]], timeout=30, recovery=True)
@@ -435,6 +607,9 @@ def main() -> None:
     parser.add_argument("--expected-generation", required=True)
     parser.add_argument("--approve-fresh-database", action="store_true")
     parser.add_argument("--archive-original", action="store_true")
+    parser.add_argument("--discard-test-history", action="store_true")
+    parser.add_argument("--reset-helper", type=Path)
+    parser.add_argument("--reset-helper-sha256")
     args = parser.parse_args()
     print(
         json.dumps(
@@ -443,6 +618,9 @@ def main() -> None:
                 args.expected_generation,
                 approved=args.approve_fresh_database,
                 archive_original=args.archive_original,
+                discard_test_history=args.discard_test_history,
+                reset_helper=args.reset_helper,
+                reset_helper_sha256=args.reset_helper_sha256,
             ),
             sort_keys=True,
         )
