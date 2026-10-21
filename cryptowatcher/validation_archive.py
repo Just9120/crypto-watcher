@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Iterator, Never
 
 BLOCK = 65536
-PAGE_BYTES = 4096
+PAGE_BYTES = BLOCK
 PREFIX_BYTES = 2 * BLOCK
 RESERVE_BYTES = 1536 * 1024**2
 SKIP = 0x184D2A50

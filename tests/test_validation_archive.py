@@ -82,16 +82,18 @@ def test_framed_tail_cannot_hide_extra_standard_restore_bytes(tmp_path):
         reopened.close()
 
 
-def test_independent_page_packets_consume_every_frame_and_refuse_hidden_tail(tmp_path):
+@pytest.mark.parametrize("page_bytes", [4096, 8192, 16384, 65536])
+def test_independent_page_packets_consume_every_frame_and_refuse_hidden_tail(tmp_path, page_bytes):
     from cryptowatcher.compressed_validation import Image
 
     target = arena(tmp_path / "pages.zst", raw=BLOCK)
+    target.page_bytes = page_bytes
     image = Image(None, limit=target.limit, deadline=target.deadline, archive_store=target)
     raw = b"".join(bytes([page]) * 4096 for page in range(16))
     try:
         image.set_block(0, raw)
         packet = target[0]
-        assert zstandard.frame_content_size(packet) == 4096
+        assert zstandard.frame_content_size(packet) == page_bytes
         assert image.unpack_block(packet) == raw
         with pytest.raises(QualificationError, match="BYTE_IDENTITY_MISMATCH"):
             image.unpack_block(packet + image.compressor.compress(b"hidden"))

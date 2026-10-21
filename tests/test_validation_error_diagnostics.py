@@ -43,7 +43,11 @@ def test_receiver_primary_record_and_actions_keep_detail_without_secret(tmp_path
         "failure_detail_code": "COMPRESSED_MEMORY_LIMIT",
         "reason": "never-export-secret",
         "environment": "never-export-secret",
-        "backup": {"phase": "FULL_INTEGRITY"},
+        "backup": {
+            "phase": "FULL_INTEGRITY",
+            "completed_source_copy_seconds": 42.5,
+            "reason": "never-export-secret",
+        },
     }
     completed = subprocess.CompletedProcess([], 7, stdout="never-export-secret", stderr=json.dumps(body))
     monkeypatch.setattr(deploy_receiver.subprocess, "run", Mock(return_value=completed))
@@ -54,6 +58,7 @@ def test_receiver_primary_record_and_actions_keep_detail_without_secret(tmp_path
     assert primary["state"] == "FAILED_PRE_SWITCH" and primary["failure_code"] == "DATABASE_ERROR"
     assert primary["failure_detail_code"] == "COMPRESSED_MEMORY_LIMIT"
     assert primary["failure_validation_phase"] == "FULL_INTEGRITY"
+    assert primary["failure_validation_metrics"] == {"completed_source_copy_seconds": 42.5}
     response = subprocess.CompletedProcess(
         [],
         1,
@@ -115,6 +120,50 @@ def test_receiver_ignores_contradictory_or_unknown_failure_fields(monkeypatch, b
         subprocess.CompletedProcess([], exit_status, stderr=json.dumps(body)),
     )
     assert "failure_detail_code" not in record
+
+
+@pytest.mark.parametrize(
+    "invalid", [True, -1, 901, 2**1024, float("nan"), float("inf"), "never-export-secret"]
+)
+def test_receiver_keeps_only_fixed_finite_phase_durations(monkeypatch, invalid):
+    record = {}
+    monkeypatch.setattr(deploy_receiver, "ACTIVE_RECORD", record)
+    body = {
+        "status": "blocked",
+        "failure_code": "TIME_BUDGET_EXCEEDED",
+        "backup": {
+            "phase": "SNAPSHOT_SEAL",
+            "elapsed_seconds": 100.0,
+            "completed_source_copy_seconds": 80.0,
+            "completed_full_integrity_seconds": invalid,
+            "unknown": 1,
+            "reason": "never-export-secret",
+        },
+    }
+    deploy_receiver.capture_validation_failure(
+        ["docker", "run", "backup"],
+        subprocess.CompletedProcess([], 3, stderr=json.dumps(body)),
+    )
+    assert record["failure_validation_metrics"] == {
+        "elapsed_seconds": 100.0,
+        "completed_source_copy_seconds": 80.0,
+    }
+    assert "secret" not in json.dumps(record)
+
+
+def test_later_validation_failure_cannot_attach_different_cause_metrics(monkeypatch):
+    record = {"failure_code": "DATABASE_ERROR", "failure_detail_code": "COMPRESSED_MEMORY_LIMIT"}
+    monkeypatch.setattr(deploy_receiver, "ACTIVE_RECORD", record)
+    body = {
+        "status": "blocked",
+        "failure_code": "TIME_BUDGET_EXCEEDED",
+        "backup": {"phase": "SNAPSHOT_SEAL", "elapsed_seconds": 100.0},
+    }
+    deploy_receiver.capture_validation_failure(
+        ["docker", "run", "backup"],
+        subprocess.CompletedProcess([], 3, stderr=json.dumps(body)),
+    )
+    assert record == {"failure_code": "DATABASE_ERROR", "failure_detail_code": "COMPRESSED_MEMORY_LIMIT"}
 
 
 def test_receiver_ignores_oversize_invalid_and_nonvalidation_output(monkeypatch):

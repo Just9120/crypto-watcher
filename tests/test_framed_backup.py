@@ -38,7 +38,7 @@ def test_schema2_full_source_and_independent_persisted_backup_equal_every_table(
     assert proof["source_validation"]["schema"] == 2
     assert proof["source_validation"]["snapshot_sha256"] == proof["sha256"]
     assert proof["archive_sha256"] == hashlib.sha256(destination.read_bytes()).hexdigest()
-    assert proof["sqlite_cache_kib"] == 1024 * 1024
+    assert proof["sqlite_cache_kib"] == 2 * 1024 * 1024
     from cryptowatcher.compressed_validation import validate_closed
 
     compatible = validate_closed(
@@ -87,6 +87,48 @@ def test_existing_archive_is_never_overwritten_after_repeated_request(store, tmp
             store.path, destination, scratch, owner=store.owner_id, deadline=time.monotonic() + 20
         )
     assert destination.read_bytes() == original
+
+
+def test_one_closed_file_digest_checks_capture_identity_without_a_duplicate_scan(
+    store, tmp_path, monkeypatch
+):
+    scratch, destination = environment(tmp_path, monkeypatch)
+    original = framed_backup.Image.reconstructed_hash
+    readers = []
+
+    def observed(image):
+        readers.append(image.blocks)
+        return original(image)
+
+    monkeypatch.setattr(framed_backup.Image, "reconstructed_hash", observed)
+    proof = framed_backup.backup(
+        store.path, destination, scratch, owner=store.owner_id, deadline=time.monotonic() + 20
+    )
+    assert proof["phase"] == "COMPLETE"
+    # The captured digest and a distinct, closed-file persisted reader must
+    # match; a third complete scan of the same frozen bytes adds no evidence.
+    assert len(readers) == 2 and readers[0] is not readers[1]
+    assert all(arena.file.closed for arena in readers)
+
+
+@pytest.mark.parametrize("digest", [None, "0" * 64])
+def test_independent_digest_mismatch_never_transfers_source_integrity(store, tmp_path, monkeypatch, digest):
+    scratch, destination = environment(tmp_path, monkeypatch)
+    original = framed_backup.Image.from_archive_store
+    snapshot = store.snapshot()
+
+    def mismatched(arena):
+        image = original(arena)
+        image.reconstructed_hash = lambda: digest
+        return image
+
+    monkeypatch.setattr(framed_backup.Image, "from_archive_store", mismatched)
+    with pytest.raises(QualificationError, match="BYTE_IDENTITY_MISMATCH") as failure:
+        framed_backup.backup(
+            store.path, destination, scratch, owner=store.owner_id, deadline=time.monotonic() + 20
+        )
+    assert failure.value.backup_metrics["phase"] == "INDEPENDENT_PERSISTED_READBACK"
+    assert store.snapshot() == snapshot and destination.exists()
 
 
 def test_corrupt_source_never_has_a_complete_backup_proof(store, tmp_path, monkeypatch):

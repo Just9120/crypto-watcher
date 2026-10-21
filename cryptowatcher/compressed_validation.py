@@ -36,6 +36,7 @@ MAX_COMPRESSED_BYTES = 3 * 1024**3
 VALIDATION_MEMORY_BYTES = 4 * 1024**3
 VALIDATION_OVERHEAD_BYTES = 512 * 1024**2
 MAX_SQLITE_CACHE_BYTES = 1024**3
+FRAMED_SQLITE_CACHE_BYTES = 2 * 1024**3
 
 
 class QualificationError(IntegrityError):
@@ -458,7 +459,7 @@ def configure_cache(db: apsw.Connection, image: Image) -> int:
         # File pages remain reclaimable by the unchanged4GiB cgroup limit.
         # Reallocate cache inside the same hard4GiB cgroup. The file mapping is
         # reclaimable; keeping hot index pages avoids repeated frame decoding.
-        cache_kib = MAX_SQLITE_CACHE_BYTES // 1024
+        cache_kib = FRAMED_SQLITE_CACHE_BYTES // 1024
         db.execute(f"PRAGMA cache_size=-{cache_kib}")
         return cache_kib
     image_bytes = image.retained + sys.getsizeof(image.blocks)
@@ -584,6 +585,7 @@ def snapshot_image(
     archive_store: ArchiveArena | None = None,
     source_snapshot: apsw.Connection | None = None,
     progress: Callable[[str], None] | None = None,
+    identity_reader: Callable[[], str] | None = None,
 ) -> Iterator[tuple[apsw.Connection, Image]]:
     """Full pinned snapshot validation; ownership of a supplied reader is transferred."""
     image = Image(
@@ -663,7 +665,13 @@ def snapshot_image(
             destination = None
             if progress is not None:
                 progress("FULL_BYTE_IDENTITY")
-            if image.reconstructed_hash() != original:
+            # Release native mmap borrows before a caller closes and independently
+            # reopens the persisted archive. Its complete digest is still compared
+            # against the exact captured bytes; no identity gate is optional.
+            vfs.unregister()
+            actual = image.reconstructed_hash() if identity_reader is None else identity_reader()
+            budget(deadline)
+            if actual != original:
                 raise QualificationError("BYTE_IDENTITY_MISMATCH")
         finally:
             if source is not None:

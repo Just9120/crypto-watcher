@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -241,6 +242,8 @@ def capture_validation_failure(args: list[str], result: Any) -> None:
     if not isinstance(code, str) or statuses.get(code) != result.returncode:
         return
     ACTIVE_RECORD.setdefault("failure_code", code)
+    if ACTIVE_RECORD["failure_code"] != code:
+        return
     detail = value.get("failure_detail_code")
     if (
         isinstance(detail, str)
@@ -253,6 +256,16 @@ def capture_validation_failure(args: list[str], result: Any) -> None:
     inner_phase = metrics.get("phase") if isinstance(metrics, dict) else None
     if isinstance(inner_phase, str) and inner_phase in VALIDATION_INNER_PHASES:
         ACTIVE_RECORD.setdefault("failure_validation_phase", inner_phase)
+        allowed = {"elapsed_seconds"} | {
+            "completed_" + phase.lower() + "_seconds" for phase in VALIDATION_INNER_PHASES
+        }
+        durations = {
+            key: value
+            for key, value in metrics.items()
+            if key in allowed and type(value) in (int, float) and 0 <= value <= 900 and math.isfinite(value)
+        }
+        if durations:
+            ACTIVE_RECORD.setdefault("failure_validation_metrics", durations)
 
 
 def archive_image_identity(path: Path, manifest: dict[str, Any]) -> dict[str, Any]:
@@ -1028,7 +1041,7 @@ def framed_backup_preflight(
         )
         and proof["archive_bytes"] <= proof["archive_limit_bytes"]
         and proof["disk_reserve_bytes"] >= reserve
-        and proof["sqlite_cache_kib"] == 1024 * 1024,
+        and proof["sqlite_cache_kib"] == 2 * 1024 * 1024,
         "Full persistent framed backup identity missing",
     )
     require(time.monotonic() < deadline, "Insufficient full backup budget")

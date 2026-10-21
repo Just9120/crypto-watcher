@@ -15,7 +15,8 @@ from cryptowatcher.validation_archive import BLOCK, ArchiveArena
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Required native Linux helper")
 
 
-def test_actual_native_snapshot_decodes_pages_and_checks_all_bytes(store, tmp_path, monkeypatch):
+@pytest.mark.parametrize("page_bytes", [4096, 8192, 16384, 65536])
+def test_actual_native_snapshot_decodes_pages_and_checks_all_bytes(store, tmp_path, monkeypatch, page_bytes):
     assert available()
     store.db.execute("CREATE TABLE page_probe(payload BLOB)")
     with store.db:
@@ -29,6 +30,7 @@ def test_actual_native_snapshot_decodes_pages_and_checks_all_bytes(store, tmp_pa
         max_archive_bytes=size + 2 * 1024**2,
         deadline=time.monotonic() + 20,
     )
+    target.page_bytes = page_bytes
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     contexts = []
@@ -49,8 +51,7 @@ def test_actual_native_snapshot_decodes_pages_and_checks_all_bytes(store, tmp_pa
                 256 * 4096,
             )
             assert image.reconstructed_hash() == target.raw_sha256
-            # A64KiB-only decoder would visit about1/16 as many frames here.
-            assert contexts[0].stats()["decodes"] >= math.ceil(size / 4096)
+            assert contexts[0].stats()["decodes"] >= math.ceil(size / page_bytes)
     finally:
         target.close()
     assert store.snapshot() == snapshot
