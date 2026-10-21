@@ -88,6 +88,7 @@ class NativeVFS:
         if self.pointer is None:
             if hasattr(self, "borrow"):
                 del self.borrow
+            budget(image.deadline)
             raise QualificationError("NATIVE_VFS_REGISTRATION_REFUSED")
 
     def unregister(self) -> None:

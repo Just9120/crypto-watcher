@@ -82,6 +82,40 @@ def test_framed_tail_cannot_hide_extra_standard_restore_bytes(tmp_path):
         reopened.close()
 
 
+def test_independent_page_packets_consume_every_frame_and_refuse_hidden_tail(tmp_path):
+    from cryptowatcher.compressed_validation import Image
+
+    target = arena(tmp_path / "pages.zst", raw=BLOCK)
+    image = Image(None, limit=target.limit, deadline=target.deadline, archive_store=target)
+    raw = b"".join(bytes([page]) * 4096 for page in range(16))
+    try:
+        image.set_block(0, raw)
+        packet = target[0]
+        assert zstandard.frame_content_size(packet) == 4096
+        assert image.unpack_block(packet) == raw
+        with pytest.raises(QualificationError, match="BYTE_IDENTITY_MISMATCH"):
+            image.unpack_block(packet + image.compressor.compress(b"hidden"))
+        damaged = packet[:-1] + bytes([packet[-1] ^ 1])
+        with pytest.raises(zstandard.ZstdError):
+            image.unpack_block(damaged)
+    finally:
+        target.close()
+
+
+def test_page_decoder_refuses_an_oversized_stream_window(tmp_path):
+    from cryptowatcher.compressed_validation import Image
+
+    target = arena(tmp_path / "bounded-window.zst", raw=BLOCK)
+    image = Image(None, limit=target.limit, deadline=target.deadline, archive_store=target)
+    oversized = zstandard.ZstdCompressor(write_content_size=False).compress(bytes(2 * BLOCK))
+    assert zstandard.get_frame_parameters(oversized).window_size > BLOCK
+    try:
+        with pytest.raises(zstandard.ZstdError):
+            image.unpack_block(oversized)
+    finally:
+        target.close()
+
+
 def test_nonsequential_change_refuses_before_write_and_identical_retry_is_safe(tmp_path):
     target = arena(tmp_path / "snapshot.zst")
     try:

@@ -11,11 +11,26 @@ from typing import Any
 
 import apsw
 
-from .compressed_validation import Image, QualificationError, classified_errors, snapshot_image
+from .compressed_validation import (
+    MAX_SQLITE_CACHE_BYTES,
+    Image,
+    QualificationError,
+    classified_errors,
+    snapshot_image,
+)
 from .config import OwnerSettings
 from .storage import IntegrityError, encode
 from .validation import fingerprint, scratch_space
-from .validation_archive import BLOCK, ENTRY, HEADER, PREFIX_BYTES, RESERVE_BYTES, TAIL, ArchiveArena
+from .validation_archive import (
+    BLOCK,
+    ENTRY,
+    HEADER,
+    PAGE_BYTES,
+    PREFIX_BYTES,
+    RESERVE_BYTES,
+    TAIL,
+    ArchiveArena,
+)
 
 
 def source_facts(database: apsw.Connection, owner: int) -> dict[str, Any]:
@@ -82,7 +97,10 @@ def backup(
             if type(raw_size) is not int or raw_size <= 0:
                 raise QualificationError("INVALID_ARCHIVE_BOUND")
             count = (raw_size + BLOCK - 1) // BLOCK
-            overhead = PREFIX_BYTES + 8 + HEADER.size + ENTRY.size * count + 32 + TAIL.size + count * 128
+            page_frames = (raw_size + PAGE_BYTES - 1) // PAGE_BYTES
+            overhead = (
+                PREFIX_BYTES + 8 + HEADER.size + ENTRY.size * count + 32 + TAIL.size + page_frames * 128
+            )
             # The original1.5GiB free-disk reserve remains mandatory at every write.
             # Incompressible snapshots exceeding the admitted archive fail closed.
             capacity = min(raw_size + overhead, shutil.disk_usage(destination.parent).free - RESERVE_BYTES)
@@ -98,6 +116,10 @@ def backup(
                 progress=stage,
             ) as (database, image):
                 facts = source_facts(database, owner)
+                cache_row = database.execute("PRAGMA cache_size").fetchone()
+                if cache_row is None or cache_row[0] != -(MAX_SQLITE_CACHE_BYTES // 1024):
+                    raise QualificationError("SQLITE_VALIDATION_ERROR")
+                cache_kib = -cache_row[0]
                 expected = arena.raw_sha256
                 if image.size != raw_size:
                     raise QualificationError("BYTE_IDENTITY_MISMATCH")
@@ -132,7 +154,7 @@ def backup(
                 "archive_sha256": digest,
                 "archive_limit_bytes": capacity,
                 "disk_reserve_bytes": RESERVE_BYTES,
-                "sqlite_cache_kib": 128 * 1024,
+                "sqlite_cache_kib": cache_kib,
                 "integrity_basis": "FULL_VALIDATED_CAPTURE_AND_INDEPENDENT_EQUAL_RAW_SHA256",
                 "elapsed_seconds": round(time.monotonic() - started, 3),
                 "phase_seconds": {key: round(value, 3) for key, value in timings.items()},

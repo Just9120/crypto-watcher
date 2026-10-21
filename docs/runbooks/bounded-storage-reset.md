@@ -136,14 +136,20 @@ zero data writes; это snapshot текущего размера, не обещ
 Для schema2 выше3GiB routine receiver выбирает один дисковый frozen capture через
 `backup --archive-backup --framed-archive-validation --validation-directory`.
 Source transaction фиксирует точные page_count/page_size и закрывается после copy.
-Постоянный стандартный ZSTD stream содержит64KiB frames, reserved header и checked
-index в skippable frames. Полный CHECK/index/freelist/current-head scan проверяет
+Постоянный стандартный ZSTD stream содержит независимые4KiB frames, сгруппированные
+в прежние64KiB index records, reserved header и checked index в skippable frames.
+Native reader проверяет границы/размер каждой страницы до регистрации; прежние
+single-frame64KiB records читаются тем же API. Python reader ограничивает окно
+декодера64KiB и проверяет каждый frame/CRC и весь output без скрытых trailing bytes.
+Обычный stream reader объединяет короткие чтения перед созданием64KiB records. Полный CHECK/index/freelist/current-head scan проверяет
 все bytes этого согласованного snapshot. Независимый closed-file reopen проверяет
 index, каждый decoded byte/raw SHA256 и encoded archive SHA256. Source/backup proof
 ссылаются на один неизменный raw SHA; повторного live capture нет. Обычный ZSTD
 restore возвращает точно исходные SQLite bytes, включая последний partial block.
-Режим FRAMED_DISK использует128MiB SQLite cache и reclaimable file mapping внутри
-прежнего4GiB cap/CPU1/no swap. Archive bound — min(raw size+format overhead,
+Режим FRAMED_DISK перераспределяет SQLite cache до1GiB внутри прежнего жёсткого
+4GiB cgroup cap/CPU1/no swap; file mapping остаётся reclaimable. Runtime cache бота,
+малый disk path и прежний RAM path этим не меняются. Proof читает фактический
+PRAGMA cache_size; receiver/Actions требуют точный1GiB setting и прежние resources. Archive bound — min(raw size+format overhead,
 free bytes−1536MiB); резерв проверяется при записи, файл и parent fsync обязательны.
 Всё укладывается в один остаток prep budget с прежним резервом210s на
 switch/recovery/post-checks внутри900s. Неизвестный порядок snapshot writes,
@@ -153,7 +159,9 @@ schema1 — прежний RAM path с cap3GiB, без автоматическ�
 Метод/resources сохраняются до запуска; фиксированные failure_detail_code
 различают memory/size/reserve/index и другие отказы, сырые stderr/body не пишутся.
 Cleanup timeout не заменяет первую причину. TimeoutExpired остаётся
-TIME_BUDGET_EXCEEDED.
+TIME_BUDGET_EXCEEDED. После PRAGMA integrity_check/current-head query deadline
+перепроверяется до verdict: native read failure после deadline может вернуться
+как integrity rows и не является доказательством corruption.
 Выбор метода не является доказательством его времени на произвольной базе;
 actual ordinary CD и полный backup остаются обязательны.
 

@@ -64,6 +64,33 @@ def test_disk_check_interrupts_full_query_when_shared_budget_expires(store, monk
     assert store.snapshot().revision == 1
 
 
+@pytest.mark.parametrize("stage", ["integrity", "heads"])
+def test_late_invalid_disk_results_are_timeouts_not_corruption(store, monkeypatch, stage):
+    from cryptowatcher import record_catalog
+
+    now = [0.0]
+    original = apsw.Connection
+
+    class LateConnection(original):
+        def execute(self, sql, *args, **kwargs):
+            if sql == "PRAGMA integrity_check" and stage == "integrity":
+                now[0] = 2.0
+                return [("late read failure",)]
+            return super().execute(sql, *args, **kwargs)
+
+    def late_heads(db):
+        now[0] = 2.0
+        return False
+
+    monkeypatch.setattr(disk_validation.apsw, "Connection", LateConnection)
+    monkeypatch.setattr(disk_validation.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(record_catalog, "valid_heads", late_heads)
+    with pytest.raises(IntegrityError) as failure, validated_disk(store.path, deadline=1):
+        pytest.fail("A late invalid result cannot qualify or diagnose corruption")
+    assert failure.value.code == "TIME_BUDGET_EXCEEDED"
+    assert store.snapshot().revision == 1
+
+
 @pytest.mark.parametrize(
     "error,code",
     [
