@@ -166,6 +166,7 @@ def backup(
                 "integrity_basis": "FULL_VALIDATED_CAPTURE_AND_INDEPENDENT_EQUAL_RAW_SHA256",
                 "elapsed_seconds": round(time.monotonic() - started, 3),
                 "phase_seconds": {key: round(value, 3) for key, value in timings.items()},
+                "source_io": image.source_io,
             }
     except IntegrityError as error:
         error.backup_metrics = {

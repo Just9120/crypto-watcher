@@ -15,7 +15,7 @@ import uuid
 from array import array
 from collections import OrderedDict
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import IO, Any, BinaryIO, Literal, cast
 
@@ -25,6 +25,7 @@ import zstandard
 from .storage import IntegrityError
 from .validation_archive import ArchiveArena
 from .validation_codes import DETAIL_CODES
+from .validation_io import source_scan
 
 BLOCK = 65536
 CACHE_PAGES = 512
@@ -130,6 +131,7 @@ class Image:
         self.mutable = False
         self.cache: OrderedDict[int, bytes] = OrderedDict()
         self.write_cache: OrderedDict[int, bytearray] = OrderedDict()
+        self.source_io: dict[str, Any] = {"policy": "DEFAULT", "reason": "NOT_ARCHIVE"}
         self.compressor = zstandard.ZstdCompressor(level=COMPRESSION_LEVEL, write_checksum=True, threads=0)
         self.decompressor = zstandard.ZstdDecompressor()
         self.page_decompressor = zstandard.ZstdDecompressor(max_window_size=BLOCK)
@@ -632,10 +634,14 @@ def snapshot_image(
                     raise QualificationError("ARCHIVE_SIZE_LIMIT")
             if progress is not None:
                 progress("SOURCE_COPY")
-            with destination.backup("main", source, "main") as backup:
-                while not backup.done:
-                    budget(deadline)
-                    backup.step(256)
+            with (
+                source_scan(source, path) if archive_store is not None else nullcontext(image.source_io)
+            ) as source_io:
+                image.source_io = source_io
+                with destination.backup("main", source, "main") as backup:
+                    while not backup.done:
+                        budget(deadline)
+                        backup.step(256)
             source.close()
             source = None
             destination.close()
