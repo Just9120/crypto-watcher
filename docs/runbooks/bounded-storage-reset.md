@@ -133,16 +133,27 @@ zero data writes; это snapshot текущего размера, не обещ
 будущей базы и не доказательство текущего25GB capacity. Failed attempt сохраняется; повтор
 делается после исправления через новый validated artifact, без bypass/reset.
 
-Для schema2 выше3GiB routine receiver выбирает существующий frozen compressed
-image, ограниченный3GiB compressed bytes внутри прежнего4GiB процесса/CPU1.
-Полные CHECK/index/freelist/current-head integrity и отдельная полная проверка
-постоянного `.sqlite3.zst` backup/raw SHA256 сохраняются; восстановление возвращает
-те же SQLite bytes. Capture освобождает live WAL snapshot до проверки frozen
-image. Две стадии используют один остаток prep budget с прежним резервом210s
-на switch/recovery/post-checks внутри общего900s. Incompressible/bound/timeout
-останавливает поставку до switch; не запускается более слабый fallback. Schema2
-до3GiB сохраняет disk path. Метод/resources сохраняются до запуска проверки,
-TimeoutExpired даёт безопасный TIME_BUDGET_EXCEEDED без raw stderr/exception body.
+Для schema2 выше3GiB routine receiver выбирает один дисковый frozen capture через
+`backup --archive-backup --framed-archive-validation --validation-directory`.
+Source transaction фиксирует точные page_count/page_size и закрывается после copy.
+Постоянный стандартный ZSTD stream содержит64KiB frames, reserved header и checked
+index в skippable frames. Полный CHECK/index/freelist/current-head scan проверяет
+все bytes этого согласованного snapshot. Независимый closed-file reopen проверяет
+index, каждый decoded byte/raw SHA256 и encoded archive SHA256. Source/backup proof
+ссылаются на один неизменный raw SHA; повторного live capture нет. Обычный ZSTD
+restore возвращает точно исходные SQLite bytes, включая последний partial block.
+Режим FRAMED_DISK использует128MiB SQLite cache и reclaimable file mapping внутри
+прежнего4GiB cap/CPU1/no swap. Archive bound — min(raw size+format overhead,
+free bytes−1536MiB); резерв проверяется при записи, файл и parent fsync обязательны.
+Всё укладывается в один остаток prep budget с прежним резервом210s на
+switch/recovery/post-checks внутри900s. Неизвестный порядок snapshot writes,
+нехватка места/времени, повреждение или неполное доказательство запрещают switch;
+partial archive сохраняется unqualified. Schema2 до3GiB сохраняет disk path,
+schema1 — прежний RAM path с cap3GiB, без автоматического fallback.
+Метод/resources сохраняются до запуска; фиксированные failure_detail_code
+различают memory/size/reserve/index и другие отказы, сырые stderr/body не пишутся.
+Cleanup timeout не заменяет первую причину. TimeoutExpired остаётся
+TIME_BUDGET_EXCEEDED.
 Выбор метода не является доказательством его времени на произвольной базе;
 actual ordinary CD и полный backup остаются обязательны.
 

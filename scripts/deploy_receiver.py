@@ -37,9 +37,19 @@ ACTIVE_RECORD: dict[str, Any] | None = None
 ACTIVE_PATH: Path | None = None
 OPERATION_DEADLINE: float | None = None
 HARD_DEADLINE: float | None = None
-# Above the pinned disk validator's mmap range, use the existing bounded
-# frozen image; its3GiB compressed cap and4GiB process cap fail closed.
+# Large schema2 uses one durable disk-backed frozen capture. Legacy RAM mode
+# retains its3GiB cap; every validation container retains the4GiB process cap.
 SCHEMA2_DISK_MAX_BYTES = 3 * 1024**3
+
+# Duplicated fixed vocabulary: this root-owned script is deployed standalone.
+VALIDATION_DETAIL_CODES = frozenset(
+    "ARCHIVE_DISK_RESERVE ARCHIVE_READ_INCOMPLETE ARCHIVE_SIZE_LIMIT ARCHIVE_WRITE_INCOMPLETE BYTE_IDENTITY_MISMATCH CLOSED_FILE_REQUIRED COMPRESSED_MEMORY_LIMIT DATABASE_CORRUPT FROZEN_IMAGE_REQUIRED INVALID_ARCHIVE_BOUND INVALID_ARCHIVE_FINALIZATION INVALID_ARCHIVE_HEADER INVALID_ARCHIVE_INDEX INVALID_ARCHIVE_TRUNCATE INVALID_ARCHIVE_WRITE INVALID_PAGE_SIZE INVALID_READ INVALID_TRUNCATE INVALID_WRITE NATIVE_VFS_CONTEXT_CLOSED NATIVE_VFS_HANDLES_OPEN NATIVE_VFS_LOAD_FAILED NATIVE_VFS_REGISTRATION_REFUSED NONSEQUENTIAL_SNAPSHOT_WRITE PINNED_SOURCE_REQUIRED REGULAR_CLOSED_FILE_REQUIRED SOURCE_CHANGED SQLITE_VALIDATION_ERROR TIME_BUDGET_EXCEEDED UNKNOWN_VALIDATED_SCHEMA UNSAFE_VALIDATION_PATH VALIDATED_OWNER_MISMATCH VALIDATION_IO_ERROR".split()
+)
+
+
+VALIDATION_INNER_PHASES = frozenset(
+    "PIN_SOURCE SOURCE_COPY SNAPSHOT_SEAL FULL_INTEGRITY SOURCE_METADATA FULL_BYTE_IDENTITY INDEPENDENT_PERSISTED_READBACK ARCHIVE_FINGERPRINT COMPLETE".split()
+)
 
 
 class DeploymentError(RuntimeError):
@@ -194,11 +204,55 @@ def run(args: list[str], *, env: dict[str, str] | None = None, timeout: int = 12
         )
     except subprocess.TimeoutExpired as exc:
         if ACTIVE_RECORD is not None:
-            ACTIVE_RECORD["failure_code"] = "TIME_BUDGET_EXCEEDED"
+            ACTIVE_RECORD.setdefault("failure_code", "TIME_BUDGET_EXCEEDED")
         raise DeploymentError("Operation time budget exceeded") from exc
     # Never echo subprocess stderr or env-file/config contents into Actions logs.
+    if result.returncode != 0:
+        capture_validation_failure(args, result)
     require(result.returncode == 0, f"Operation failed: {args[0]} exit {result.returncode}")
     return result.stdout.strip()
+
+
+def capture_validation_failure(args: list[str], result: Any) -> None:
+    """Retain only fixed CLI codes whose category agrees with the actual exit."""
+    if (
+        ACTIVE_RECORD is None
+        or not args
+        or args[0] != "docker"
+        or not any(command in args for command in ("state-check", "backup"))
+        or not isinstance(result.stderr, (str, bytes))
+        or len(result.stderr) > 65536
+    ):
+        return
+    try:
+        value = json.loads(result.stderr)
+    except (ValueError, TypeError):
+        return
+    if not isinstance(value, dict) or value.get("status") != "blocked":
+        return
+    code = value.get("failure_code")
+    statuses = {
+        "TIME_BUDGET_EXCEEDED": 3,
+        "DATABASE_CORRUPT": 4,
+        "INTERRUPTED": 5,
+        "IO_ERROR": 6,
+        "DATABASE_ERROR": 7,
+    }
+    if not isinstance(code, str) or statuses.get(code) != result.returncode:
+        return
+    ACTIVE_RECORD.setdefault("failure_code", code)
+    detail = value.get("failure_detail_code")
+    if (
+        isinstance(detail, str)
+        and detail in VALIDATION_DETAIL_CODES
+        and code == (detail if detail in ("TIME_BUDGET_EXCEEDED", "DATABASE_CORRUPT") else "DATABASE_ERROR")
+        and ACTIVE_RECORD["failure_code"] == code
+    ):
+        ACTIVE_RECORD.setdefault("failure_detail_code", detail)
+    metrics = value.get("backup")
+    inner_phase = metrics.get("phase") if isinstance(metrics, dict) else None
+    if isinstance(inner_phase, str) and inner_phase in VALIDATION_INNER_PHASES:
+        ACTIVE_RECORD.setdefault("failure_validation_phase", inner_phase)
 
 
 def archive_image_identity(path: Path, manifest: dict[str, Any]) -> dict[str, Any]:
@@ -709,8 +763,12 @@ def deploy(revision: str, digest: str, size: int, deadline_epoch: int | None = N
             ACTIVE_RECORD.update(state="POST_CHECK_FAILED")
             raise DeploymentError("Health post-check failed; forward-fix or reviewed recovery required")
         require(diagnostics["heartbeat"].get("revision") == revision, "Running source mismatch")
+        minimum_configuration = before["configuration_revision"]
+        source_state = ACTIVE_RECORD.get("state_validation", {})
+        if source_state.get("validation_mode") == "FRAMED_DISK":
+            minimum_configuration = max(minimum_configuration, source_state["configuration_revision"])
         require(
-            diagnostics["configuration_revision"] >= before["configuration_revision"],
+            diagnostics["configuration_revision"] >= minimum_configuration,
             "Settings revision regressed",
         )
         if permit is not None:
@@ -789,6 +847,8 @@ def full_backup_preflight(
     require(type(schema) is int and schema in (1, 2), "Unknown database schema")
     if schema == 2 and snapshot_bytes <= SCHEMA2_DISK_MAX_BYTES:
         return disk_backup_preflight(container_args, before, revision, budget)
+    if schema == 2:
+        return framed_backup_preflight(container_args, before, revision, budget)
     deadline = min(
         time.monotonic() + min(budget, 900),
         OPERATION_DEADLINE - 210 if OPERATION_DEADLINE is not None else time.monotonic() + 900,
@@ -881,6 +941,101 @@ def full_backup_preflight(
     ACTIVE_RECORD["backup_validation"] = proof
     record_phase("BACKUP_AND_VALIDATE")
     return backup_name, proof
+
+
+def framed_backup_preflight(
+    container_args: list[str], before: dict[str, Any], revision: str, budget: int
+) -> tuple[str, dict[str, Any]]:
+    deadline = min(
+        time.monotonic() + min(budget, 900),
+        OPERATION_DEADLINE - 210 if OPERATION_DEADLINE is not None else time.monotonic() + 900,
+    )
+    timeout = int(deadline - time.monotonic())
+    require(timeout >= 20, "Insufficient full backup budget")
+    reserve = 1536 * 1024**2
+    require(shutil.disk_usage(APP).free > reserve, "Insufficient backup disk")
+    require((APP / "data/sqlite/backups").is_dir(), "Reviewed backup directory missing")
+    allocation = validation_resources(before["database"]["snapshot_bytes"], memory_available())
+    name = f"pre-{revision}-{int(time.time())}.sqlite3.zst"
+    ACTIVE_RECORD.update(
+        backup=name,
+        state_validation_method="FRAMED_DISK",
+        state_validation_resources=allocation,
+        backup_validation_resources=allocation,
+    )
+    record_phase("BACKUP_AND_VALIDATE")
+    timeout = int(deadline - time.monotonic())
+    require(timeout >= 20, "Insufficient full backup budget")
+    result = json.loads(
+        run(
+            [
+                *validation_args(container_args, allocation),
+                "python",
+                "-m",
+                "cryptowatcher",
+                "backup",
+                "--timeout-seconds",
+                str(timeout - 15),
+                "--destination",
+                f"/data/sqlite/backups/{name}",
+                "--validation-directory",
+                "/validation",
+                "--framed-archive-validation",
+                "--archive-backup",
+            ],
+            timeout=timeout,
+        )
+    )
+    require(isinstance(result, dict), "Full framed backup response missing")
+    proof = result.get("backup", {})
+    require(isinstance(proof, dict), "Full framed backup proof missing")
+    state = proof.get("source_validation", {})
+    require(isinstance(state, dict), "Full framed source proof missing")
+    receipt = json.loads((APP / "data/sqlite/.g1-migration.json").read_text())
+    revision_before = before.get("configuration_revision")
+    require(
+        type(revision_before) is int
+        and type(state.get("configuration_revision")) is int
+        and state["configuration_revision"] >= revision_before
+        and type(state.get("owner_id")) is int
+        and state["owner_id"] > 0
+        and type(state.get("schema")) is int
+        and state["schema"] == 2
+        and state.get("status") == "integrity_ok"
+        and state.get("validation_mode") == "FRAMED_DISK"
+        and state.get("legacy_sha256") == receipt["legacy_sha256"]
+        and bool(re.fullmatch(r"[0-9a-f]{64}", str(state.get("settings_sha256")))),
+        "Full framed source identity missing",
+    )
+    require(
+        result.get("status") == "backup_integrity_ok"
+        and proof.get("phase") == "COMPLETE"
+        and proof.get("validation_mode") == "FRAMED_DISK"
+        and proof.get("integrity_basis") == "FULL_VALIDATED_CAPTURE_AND_INDEPENDENT_EQUAL_RAW_SHA256"
+        and proof.get("sha256") == state.get("snapshot_sha256")
+        and bool(re.fullmatch(r"[0-9a-f]{64}", str(proof.get("sha256"))))
+        and proof.get("archive_encoding") == "ZSTD"
+        and bool(re.fullmatch(r"[0-9a-f]{64}", str(proof.get("archive_sha256"))))
+        and all(
+            type(proof.get(field)) is int and proof[field] > 0
+            for field in (
+                "bytes",
+                "archive_bytes",
+                "archive_limit_bytes",
+                "disk_reserve_bytes",
+                "sqlite_cache_kib",
+            )
+        )
+        and proof["archive_bytes"] <= proof["archive_limit_bytes"]
+        and proof["disk_reserve_bytes"] >= reserve
+        and proof["sqlite_cache_kib"] == 128 * 1024,
+        "Full persistent framed backup identity missing",
+    )
+    require(time.monotonic() < deadline, "Insufficient full backup budget")
+    require(shutil.disk_usage(APP).free >= reserve, "Insufficient backup disk")
+    ACTIVE_RECORD.update(state_validation=state, backup_validation=proof)
+    record_phase("BACKUP_AND_VALIDATE")
+    return name, proof
 
 
 def disk_backup_preflight(
@@ -1004,6 +1159,20 @@ def main() -> int:
                     "failure_phase": ACTIVE_RECORD.get("failure_phase", "UNSET")
                     if ACTIVE_RECORD
                     else "UNSET",
+                    **(
+                        {"failure_detail_code": ACTIVE_RECORD["failure_detail_code"]}
+                        if ACTIVE_RECORD
+                        and isinstance(ACTIVE_RECORD.get("failure_detail_code"), str)
+                        and ACTIVE_RECORD["failure_detail_code"] in VALIDATION_DETAIL_CODES
+                        else {}
+                    ),
+                    **(
+                        {"failure_validation_phase": ACTIVE_RECORD["failure_validation_phase"]}
+                        if ACTIVE_RECORD
+                        and isinstance(ACTIVE_RECORD.get("failure_validation_phase"), str)
+                        and ACTIVE_RECORD["failure_validation_phase"] in VALIDATION_INNER_PHASES
+                        else {}
+                    ),
                 }
             ),
             file=sys.stderr,

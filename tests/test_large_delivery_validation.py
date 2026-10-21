@@ -20,7 +20,7 @@ from scripts.deliver_release import delivery_result
 from tests.test_outcomes import NOW, future, observe
 
 
-def environment(tmp_path, monkeypatch, *, state_mode="COMPRESSED_RAM", state_schema=2):
+def environment(tmp_path, monkeypatch, *, state_mode="COMPRESSED_RAM", state_schema=1, schema=1):
     folder = tmp_path / "data/sqlite"
     folder.mkdir(parents=True)
     (folder / "backups").mkdir()
@@ -33,7 +33,7 @@ def environment(tmp_path, monkeypatch, *, state_mode="COMPRESSED_RAM", state_sch
     monkeypatch.setattr(receiver, "time", SimpleNamespace(monotonic=lambda: now[0], time=lambda: 1000))
     monkeypatch.setattr(receiver, "memory_available", lambda: 8 * 1024**3)
     monkeypatch.setattr(receiver.shutil, "disk_usage", lambda path: SimpleNamespace(free=10 * 1024**3))
-    before = {"database": {"schema": 2, "snapshot_bytes": 11_000_119_296}}
+    before = {"database": {"schema": schema, "snapshot_bytes": 11_000_119_296}, "configuration_revision": 5}
     proof = {
         "phase": "COMPLETE",
         "validation_mode": "COMPRESSED_RAM",
@@ -69,7 +69,7 @@ def environment(tmp_path, monkeypatch, *, state_mode="COMPRESSED_RAM", state_sch
     return before, proof, calls
 
 
-def test_large_schema2_full_source_and_archived_backup_share_prep_budget_and_fixed_caps(
+def test_legacy_schema1_full_source_and_archived_backup_share_prep_budget_and_fixed_caps(
     tmp_path, monkeypatch
 ):
     before, proof, calls = environment(tmp_path, monkeypatch)
@@ -78,13 +78,13 @@ def test_large_schema2_full_source_and_archived_backup_share_prep_budget_and_fix
     operations = [(args, timeout) for args, timeout in calls if "diagnostics" not in args]
     assert [timeout for _, timeout in operations] == [690, 490]
     assert [int(args[args.index("--timeout-seconds") + 1]) for args, _ in operations] == [675, 475]
-    assert receiver.ACTIVE_RECORD["state_validation"]["schema"] == 2
+    assert receiver.ACTIVE_RECORD["state_validation"]["schema"] == 1
     assert receiver.ACTIVE_RECORD["backup_validation"] == proof
 
 
 @pytest.mark.parametrize("size", [4096, 3 * 1024**3])
 def test_small_schema2_retains_existing_disk_validation(tmp_path, monkeypatch, size):
-    before, _, _ = environment(tmp_path, monkeypatch)
+    before, _, _ = environment(tmp_path, monkeypatch, schema=2)
     before["database"]["snapshot_bytes"] = size
     disk = Mock(return_value=("disk.sqlite3", {"phase": "COMPLETE"}))
     monkeypatch.setattr(receiver, "disk_backup_preflight", disk)
@@ -92,7 +92,7 @@ def test_small_schema2_retains_existing_disk_validation(tmp_path, monkeypatch, s
     disk.assert_called_once()
 
 
-@pytest.mark.parametrize("mode,schema", [("DISK", 2), ("COMPRESSED_RAM", 1)])
+@pytest.mark.parametrize("mode,schema", [("DISK", 1), ("COMPRESSED_RAM", 2)])
 def test_wrong_full_source_proof_cannot_admit_backup_or_fallback(tmp_path, monkeypatch, mode, schema):
     before, _, calls = environment(tmp_path, monkeypatch, state_mode=mode, state_schema=schema)
     with pytest.raises(receiver.DeploymentError):

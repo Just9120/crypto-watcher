@@ -53,6 +53,15 @@ def backup(
     """
     started = time.monotonic()
     phase = "PIN_SOURCE"
+    phase_started = started
+    timings: dict[str, float] = {}
+
+    def stage(value: str) -> None:
+        nonlocal phase, phase_started
+        now = time.monotonic()
+        timings[phase] = timings.get(phase, 0) + max(0.0, now - phase_started)
+        phase, phase_started = value, now
+
     arena: ArchiveArena | None = None
     reader: apsw.Connection | None = None
     try:
@@ -80,9 +89,13 @@ def backup(
             arena = ArchiveArena(
                 destination, max_raw_bytes=raw_size, max_archive_bytes=capacity, deadline=deadline
             )
-            phase = "CAPTURE_AND_FULL_INTEGRITY"
             with snapshot_image(
-                source, directory, deadline=deadline, archive_store=arena, source_snapshot=reader
+                source,
+                directory,
+                deadline=deadline,
+                archive_store=arena,
+                source_snapshot=reader,
+                progress=stage,
             ) as (database, image):
                 facts = source_facts(database, owner)
                 expected = arena.raw_sha256
@@ -91,7 +104,7 @@ def backup(
             arena.assert_unchanged()
             arena.close()
             arena = None
-            phase = "INDEPENDENT_PERSISTED_READBACK"
+            stage("INDEPENDENT_PERSISTED_READBACK")
             arena = ArchiveArena.open(
                 destination, max_raw_bytes=raw_size, max_archive_bytes=capacity, deadline=deadline
             )
@@ -103,9 +116,11 @@ def backup(
             ):
                 raise QualificationError("BYTE_IDENTITY_MISMATCH")
             arena.assert_unchanged()
+            stage("ARCHIVE_FINGERPRINT")
             digest, archive_bytes = fingerprint(destination, deadline)
             arena.assert_unchanged()
             facts["snapshot_sha256"] = expected
+            stage("COMPLETE")
             return {
                 "phase": "COMPLETE",
                 "validation_mode": "FRAMED_DISK",
@@ -120,9 +135,14 @@ def backup(
                 "sqlite_cache_kib": 128 * 1024,
                 "integrity_basis": "FULL_VALIDATED_CAPTURE_AND_INDEPENDENT_EQUAL_RAW_SHA256",
                 "elapsed_seconds": round(time.monotonic() - started, 3),
+                "phase_seconds": {key: round(value, 3) for key, value in timings.items()},
             }
     except IntegrityError as error:
-        error.backup_metrics = {"phase": phase, "elapsed_seconds": round(time.monotonic() - started, 3)}
+        error.backup_metrics = {
+            "phase": phase,
+            **{"completed_" + key.lower() + "_seconds": round(value, 3) for key, value in timings.items()},
+            "elapsed_seconds": round(time.monotonic() - started, 3),
+        }
         raise
     finally:
         if reader is not None:

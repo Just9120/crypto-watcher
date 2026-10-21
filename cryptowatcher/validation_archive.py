@@ -194,6 +194,12 @@ class ArchiveArena:
         self.end += len(footer)
         self.file.flush()
         os.fsync(self.file.fileno())
+        if os.name != "nt":
+            handle = os.open(self.path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(handle)
+            finally:
+                os.close(handle)
         self.sealed = True
         self.data = mmap.mmap(self.file.fileno(), 0, access=mmap.ACCESS_COPY)
         self.raw_bytes, self.raw_sha256 = raw_bytes, raw_sha256
@@ -222,10 +228,16 @@ class ArchiveArena:
         instance.data = None
         try:
             opened = os.fstat(instance.file.fileno())
-            if (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino):
+            if any(
+                getattr(before, key) != getattr(opened, key)
+                for key in ("st_dev", "st_ino", "st_size", "st_mtime_ns")
+            ):
                 refused("SOURCE_CHANGED")
             instance.file.seek(-TAIL.size, os.SEEK_END)
-            size, marker = TAIL.unpack(instance.file.read(TAIL.size))
+            tail = instance.file.read(TAIL.size)
+            if len(tail) != TAIL.size:
+                refused("INVALID_ARCHIVE_INDEX")
+            size, marker = TAIL.unpack(tail)
             max_count = (max_raw_bytes + BLOCK - 1) // BLOCK
             if (
                 marker != TAIL_MAGIC
@@ -241,6 +253,8 @@ class ArchiveArena:
             if instance.file.read(8) != struct.pack("<II", SKIP, size):
                 refused("INVALID_ARCHIVE_INDEX")
             payload = instance.file.read(size)
+            if len(payload) != size:
+                refused("INVALID_ARCHIVE_INDEX")
             body, checksum = payload[: -32 - TAIL.size], payload[-32 - TAIL.size : -TAIL.size]
             if hashlib.sha256(body).digest() != checksum:
                 refused("INVALID_ARCHIVE_INDEX")

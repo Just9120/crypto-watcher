@@ -294,6 +294,11 @@ def main() -> int:
         failure: dict[str, object] = {"status": "blocked", "reason": message}
         if isinstance(exc, IntegrityError):
             failure["failure_code"] = exc.code
+            from .validation_codes import DETAIL_CODES
+
+            detail = getattr(exc, "detail_code", None)
+            if isinstance(detail, str) and detail in DETAIL_CODES:
+                failure["failure_detail_code"] = detail
             if exc.backup_metrics is not None:
                 failure["backup"] = exc.backup_metrics
         print(json.dumps(failure), file=sys.stderr)

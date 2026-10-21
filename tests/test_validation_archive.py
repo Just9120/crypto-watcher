@@ -58,6 +58,30 @@ def test_reserved_header_delayed_frames_last_partial_standard_restore_and_reopen
     assert path.read_bytes() == original
 
 
+def test_framed_tail_cannot_hide_extra_standard_restore_bytes(tmp_path):
+    from cryptowatcher.compressed_validation import Image
+
+    path = tmp_path / "padded-tail.zst"
+    target = arena(path, raw=BLOCK)
+    try:
+        target.append(zstandard.ZstdCompressor().compress(bytes(BLOCK)))
+        # A forged index claims one byte although a standard restore emits64KiB.
+        target.finish(1, hashlib.sha256(bytes(1)).hexdigest())
+    finally:
+        target.close()
+    reopened = ArchiveArena.open(
+        path, max_raw_bytes=BLOCK, max_archive_bytes=8 * BLOCK, deadline=time.monotonic() + 20
+    )
+    try:
+        image = Image.from_archive_store(reopened)
+        with pytest.raises(QualificationError, match="BYTE_IDENTITY_MISMATCH"):
+            image.reconstructed_hash()
+        with pytest.raises(QualificationError, match="BYTE_IDENTITY_MISMATCH"):
+            image.read(1, 0)
+    finally:
+        reopened.close()
+
+
 def test_nonsequential_change_refuses_before_write_and_identical_retry_is_safe(tmp_path):
     target = arena(tmp_path / "snapshot.zst")
     try:

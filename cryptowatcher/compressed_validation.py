@@ -13,7 +13,7 @@ import time
 import uuid
 from array import array
 from collections import OrderedDict
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import IO, Any, BinaryIO, Literal, cast
@@ -23,6 +23,7 @@ import zstandard
 
 from .storage import IntegrityError
 from .validation_archive import ArchiveArena
+from .validation_codes import DETAIL_CODES
 
 BLOCK = 65536
 CACHE_PAGES = 512
@@ -38,8 +39,9 @@ MAX_SQLITE_CACHE_BYTES = 1024**3
 
 class QualificationError(IntegrityError):
     def __init__(self, code: str) -> None:
+        self.detail_code = code if code in DETAIL_CODES else None
         category = code if code in ("TIME_BUDGET_EXCEEDED", "DATABASE_CORRUPT") else "DATABASE_ERROR"
-        super().__init__(category, "Compressed validation refused: " + code)
+        super().__init__(category, "Compressed validation refused: " + (self.detail_code or "UNCLASSIFIED"))
 
 
 def budget(deadline: float) -> None:
@@ -290,7 +292,9 @@ class Image:
         if value is None:
             value = self.decompressor.decompress(self.blocks[index], max_output_size=BLOCK)
             expected = min(BLOCK, self.size - index * BLOCK)
-            if len(value) not in (expected, BLOCK):
+            if len(value) not in (expected, BLOCK) or (
+                isinstance(self.blocks, ArchiveArena) and len(value) != expected
+            ):
                 raise QualificationError("BYTE_IDENTITY_MISMATCH")
             value = value[:expected]
         self.cache[index] = value
@@ -331,7 +335,9 @@ class Image:
             budget(self.deadline)
             value = self.decompressor.decompress(blob, max_output_size=BLOCK)
             expected = min(BLOCK, self.size - index * BLOCK)
-            if len(value) not in (expected, BLOCK):
+            if len(value) not in (expected, BLOCK) or (
+                isinstance(self.blocks, ArchiveArena) and len(value) != expected
+            ):
                 raise QualificationError("BYTE_IDENTITY_MISMATCH")
             yield value[:expected]
 
@@ -538,6 +544,7 @@ def snapshot_image(
     deadline: float,
     archive_store: ArchiveArena | None = None,
     source_snapshot: apsw.Connection | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> Iterator[tuple[apsw.Connection, Image]]:
     """Full pinned snapshot validation; ownership of a supplied reader is transferred."""
     image = Image(
@@ -582,6 +589,8 @@ def snapshot_image(
                 size = pages[0] * page_size[0]
                 if size > archive_store.max_raw_bytes:
                     raise QualificationError("ARCHIVE_SIZE_LIMIT")
+            if progress is not None:
+                progress("SOURCE_COPY")
             with destination.backup("main", source, "main") as backup:
                 while not backup.done:
                     budget(deadline)
@@ -590,6 +599,8 @@ def snapshot_image(
             source = None
             destination.close()
             destination = None
+            if progress is not None:
+                progress("SNAPSHOT_SEAL")
             image.freeze()
             original = (
                 image.blocks.raw_sha256
@@ -603,10 +614,16 @@ def snapshot_image(
             )
             configure_cache(destination, image)
             destination.execute("PRAGMA query_only=ON")
+            if progress is not None:
+                progress("FULL_INTEGRITY")
             full_check(destination, deadline)
+            if progress is not None:
+                progress("SOURCE_METADATA")
             yield destination, image
             destination.close()
             destination = None
+            if progress is not None:
+                progress("FULL_BYTE_IDENTITY")
             if image.reconstructed_hash() != original:
                 raise QualificationError("BYTE_IDENTITY_MISMATCH")
         finally:

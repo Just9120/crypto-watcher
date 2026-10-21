@@ -79,7 +79,7 @@ def test_corrupt_source_never_has_a_complete_backup_proof(store, tmp_path, monke
         framed_backup.backup(
             store.path, destination, scratch, owner=store.owner_id, deadline=time.monotonic() + 20
         )
-    assert result.value.backup_metrics["phase"] == "CAPTURE_AND_FULL_INTEGRITY"
+    assert result.value.backup_metrics["phase"] == "FULL_INTEGRITY"
     assert destination.exists() and list(store.db.iterdump()) == original
 
 
@@ -99,7 +99,7 @@ def test_archive_mutation_during_final_fingerprint_cannot_inherit_source_integri
         framed_backup.backup(
             store.path, destination, scratch, owner=store.owner_id, deadline=time.monotonic() + 20
         )
-    assert result.value.backup_metrics["phase"] == "INDEPENDENT_PERSISTED_READBACK"
+    assert result.value.backup_metrics["phase"] == "ARCHIVE_FINGERPRINT"
     assert destination.exists()
 
 
