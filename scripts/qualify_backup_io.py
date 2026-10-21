@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import statistics
 import subprocess
 import sys
@@ -35,6 +36,19 @@ def worker(directory: Path) -> dict:
     quota, period = map(int, Path("/sys/fs/cgroup/cpu.max").read_text().split())
     assert quota == period
     assert not any(directory.iterdir())
+    progress = {
+        "state": "RUNNING",
+        "phase": "GENERATED_SOURCE",
+        "kernel": os.uname().release,
+        "free_bytes": shutil.disk_usage(directory).free,
+        "temporary_free_bytes": shutil.disk_usage("/tmp").free,
+    }
+
+    def save_progress(phase: str) -> None:
+        progress["phase"] = phase
+        (directory / "result.json").write_text(json.dumps(progress, indent=2) + "\n")
+
+    save_progress("GENERATED_SOURCE")
     source = directory / "owned.sqlite3"
     deadline = time.monotonic() + 1050
     owner = 233382575
@@ -42,6 +56,10 @@ def worker(directory: Path) -> dict:
     store.initialize(OwnerSettings())
     private = list(store.db.execute("SELECT * FROM owner_settings"))
     store.db.execute("PRAGMA journal_mode=DELETE")
+    # Index sorting belongs to the generated fixture, not the 16 MiB CLI /tmp.
+    # Its bounded ~50 MiB sort stays inside the unchanged 4 GiB cgroup cap.
+    store.db.execute("PRAGMA temp_store=MEMORY")
+    store.db.execute("PRAGMA cache_size=-8192")
     store.db.execute("CREATE TABLE fixture(id INTEGER PRIMARY KEY, key BLOB, payload BLOB)")
     expected = hashlib.sha256()
     # About 6.5 GiB: half varying entropy and half repeated bytes. The archive
@@ -57,6 +75,12 @@ def worker(directory: Path) -> dict:
                 expected.update(seed + key + value)
                 rows.append((index, key, value))
             store.db.executemany("INSERT INTO fixture VALUES(?,?,?)", rows)
+    progress.update(
+        source_bytes=source.stat().st_size,
+        free_after_rows=shutil.disk_usage(directory).free,
+        sort_store="MEMORY_WITHIN_SAME_4GIB_CAP",
+    )
+    save_progress("GENERATED_INDEX")
     store.db.execute("CREATE INDEX fixture_key ON fixture(key)")
     store.close()
     assert source.stat().st_size > 6 * 1024**3
@@ -76,6 +100,7 @@ def worker(directory: Path) -> dict:
 
     for enabled in (False, True, True, False):
         assert time.monotonic() < deadline
+        save_progress("COMPLETE_BACKUP_ADVISED" if enabled else "COMPLETE_BACKUP_DEFAULT")
         # Only the generated fixture's clean cache is discarded, never a host
         # global cache. Every run starts from the same owned, closed source.
         with source.open("rb") as handle:
@@ -173,6 +198,8 @@ def worker(directory: Path) -> dict:
             }
         )
         print(json.dumps({"qualification_run": len(results), **results[-1]}), flush=True)
+        progress["completed_runs"] = results
+        save_progress("VERIFIED_RUN")
         # This exact fixture archive is owned by this finite qualification;
         # its identity and all rows have been verified before removal.
         archive.unlink()
@@ -220,7 +247,14 @@ def main() -> None:
     parser.add_argument("--worker", type=Path)
     args = parser.parse_args()
     if args.worker is not None:
-        result = worker(args.worker)
+        try:
+            result = worker(args.worker)
+        except BaseException as error:
+            receipt = args.worker / "result.json"
+            result = json.loads(receipt.read_text()) if receipt.exists() else {}
+            result.update(state="FAILED", error_class=type(error).__name__)
+            receipt.write_text(json.dumps(result, indent=2) + "\n")
+            raise
         (args.worker / "result.json").write_text(json.dumps(result, indent=2) + "\n")
         print(json.dumps(result))
         return
@@ -235,7 +269,7 @@ def main() -> None:
         directory.chmod(0o777)
         container = "cw-backup-io-" + uuid.uuid4().hex
         try:
-            subprocess.run(
+            process = subprocess.run(
                 [
                     "docker",
                     "run",
@@ -262,7 +296,7 @@ def main() -> None:
                     "--worker",
                     "/qualification",
                 ],
-                check=True,
+                check=False,
                 timeout=1100,
             )
         finally:
@@ -271,6 +305,10 @@ def main() -> None:
             subprocess.run(
                 ["docker", "rm", "--force", container], capture_output=True, timeout=15, check=False
             )
+            partial = directory / "result.json"
+            if partial.exists():
+                receipt.write_bytes(partial.read_bytes())
+        assert process.returncode == 0, "Generated qualification failed; bounded phase receipt retained"
         result = json.loads((directory / "result.json").read_text())
         receipt.write_text(json.dumps(result, indent=2) + "\n")
         assert result["state"] == "EXACT_BACKUP_AND_STANDARD_RESTORE_PASS"

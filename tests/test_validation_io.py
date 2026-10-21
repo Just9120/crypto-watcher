@@ -14,9 +14,14 @@ from cryptowatcher import validation_io as vio
 
 def fake_advice(monkeypatch):
     calls = []
+    original_fstat = os.fstat
     monkeypatch.setattr(vio, "_supported", lambda: True)
-    monkeypatch.setattr(vio, "_readonly_handle", lambda path: (51, (9, 7)))
-    monkeypatch.setattr(vio.os, "fstat", lambda fd: type("Stat", (), {"st_dev": 9, "st_ino": 7})())
+    monkeypatch.setattr(vio, "_readonly_handle", lambda path: (987654321, (9, 7)))
+    monkeypatch.setattr(
+        vio.os,
+        "fstat",
+        lambda fd: type("Stat", (), {"st_dev": 9, "st_ino": 7})() if fd == 987654321 else original_fstat(fd),
+    )
     for name, value in (("NORMAL", 0), ("SEQUENTIAL", 2), ("NOREUSE", 5)):
         monkeypatch.setattr(vio.os, "POSIX_FADV_" + name, value, raising=False)
     monkeypatch.setattr(vio.os, "posix_fadvise", lambda *args: calls.append(args), raising=False)
@@ -45,7 +50,7 @@ def test_restores_before_source_close_and_preserves_first_backup_error(store, mo
                     raise RuntimeError("original-backup-failure")
         except RuntimeError as error:
             assert failed and str(error) == "original-backup-failure"
-        assert calls == [(51, 0, 0, 2), (51, 0, 0, 5), (51, 0, 0, 0)]
+        assert calls == [(987654321, 0, 0, 2), (987654321, 0, 0, 5), (987654321, 0, 0, 0)]
         assert status["restored"] is True
         assert list(reader.execute("SELECT * FROM owner_settings")) == original
 
@@ -110,6 +115,17 @@ def test_expensive_qualification_selected_only_for_its_inputs():
     assert not backup_io_required(["docs/open_issues.md", "cryptowatcher/bot.py"])
 
 
+@pytest.mark.parametrize(
+    "release,expected", [("6.2.0", False), ("6.3.1", True), ("6.8.0-147-generic", True), ("unknown", False)]
+)
+def test_noreuse_requires_a_kernel_where_it_is_effective(monkeypatch, release, expected):
+    monkeypatch.setattr(vio.sys, "platform", "linux")
+    monkeypatch.setattr(vio.platform, "release", lambda: release)
+    for name in ("posix_fadvise", "POSIX_FADV_NORMAL", "POSIX_FADV_SEQUENTIAL", "POSIX_FADV_NOREUSE"):
+        monkeypatch.setattr(vio.os, name, 0, raising=False)
+    assert vio._supported() is expected
+
+
 @pytest.mark.skipif(os.name != "posix", reason="Linux kernel descriptor/advice integration")
 def test_real_linux_readonly_handle_and_pinned_wal_with_concurrent_writer(store):
     if not vio._supported():
@@ -142,7 +158,7 @@ def test_framed_backup_restores_hint_before_seal_and_keeps_full_exact_restore(st
     original = cv.Image.freeze
 
     def freeze(image):
-        assert calls[-1] == (51, 0, 0, 0)
+        assert calls[-1] == (987654321, 0, 0, 0)
         return original(image)
 
     monkeypatch.setattr(cv.Image, "freeze", freeze)
@@ -150,7 +166,7 @@ def test_framed_backup_restores_hint_before_seal_and_keeps_full_exact_restore(st
     monkeypatch.setattr(
         vio.os,
         "fstat",
-        lambda fd: type("Stat", (), {"st_dev": 9, "st_ino": 7})() if fd == 51 else real_fstat(fd),
+        lambda fd: type("Stat", (), {"st_dev": 9, "st_ino": 7})() if fd == 987654321 else real_fstat(fd),
     )
     scratch, destination = environment(tmp_path, monkeypatch)
     result = framed_backup.backup(
