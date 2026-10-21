@@ -503,6 +503,45 @@ s.close()
         assert measurement["events"] == 200 and measurement["all_outcomes_complete"]
         assert measurement["analytics_equality"] == "PASS" and measurement["indexes"]["state"] == "PASS"
         print(json.dumps({"image_storage_measurement": measurement}, sort_keys=True))
+        archived_schema2 = json.loads(
+            run(
+                args.image,
+                directory,
+                "-m",
+                "cryptowatcher",
+                "backup",
+                "--database",
+                "/data/measured.db",
+                "--destination",
+                "/data/measured.sqlite3.zst",
+                "--validation-directory",
+                "/validation",
+                "--compressed-validation",
+                "--archive-backup",
+                validation=True,
+            )
+        )["backup"]
+        assert archived_schema2["phase"] == "COMPLETE"
+        assert archived_schema2["validation_mode"] == "COMPRESSED_RAM"
+        assert archived_schema2["archive_encoding"] == "ZSTD"
+        run(
+            args.image,
+            directory,
+            "-c",
+            "import hashlib,zstandard; from pathlib import Path; "
+            "from contextlib import closing; from cryptowatcher.storage import Store; "
+            "source=Path('/data/measured.sqlite3.zst'); restored=Path('/data/measured-restored.db'); "
+            "with_source=source.open('rb'); with_target=restored.open('xb'); "
+            "zstandard.ZstdDecompressor().copy_stream(with_source,with_target); "
+            "with_source.close(); with_target.close(); "
+            f"assert hashlib.sha256(source.read_bytes()).hexdigest()=={archived_schema2['archive_sha256']!r}; "
+            f"assert hashlib.sha256(restored.read_bytes()).hexdigest()=={archived_schema2['sha256']!r}; "
+            "a=Store(Path('/data/measured.db'),233382575,readonly=True); "
+            "b=Store(restored,233382575,readonly=True); "
+            "assert a.db.execute('PRAGMA user_version').fetchone()[0]==2; "
+            "assert list(a.db.iterdump())==list(b.db.iterdump()); "
+            "assert a.snapshot()==b.snapshot(); a.close(); b.close()",
+        )
         # Qualify the actual old layout/CW2 -> mixed views/CW3 transition with
         # product Python/SQLite, full disk backup and restart. No API requests.
         run(

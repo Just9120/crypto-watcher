@@ -37,6 +37,9 @@ ACTIVE_RECORD: dict[str, Any] | None = None
 ACTIVE_PATH: Path | None = None
 OPERATION_DEADLINE: float | None = None
 HARD_DEADLINE: float | None = None
+# Above the pinned disk validator's mmap range, use the existing bounded
+# frozen image; its3GiB compressed cap and4GiB process cap fail closed.
+SCHEMA2_DISK_MAX_BYTES = 3 * 1024**3
 
 
 class DeploymentError(RuntimeError):
@@ -185,7 +188,14 @@ def run(args: list[str], *, env: dict[str, str] | None = None, timeout: int = 12
         require(remaining > 0, "Deployment900s budget exhausted")
         timeout = min(timeout, max(1, int(remaining)))
     command = [args[0], "--host", "unix:///var/run/docker.sock", *args[1:]] if args[0] == "docker" else args
-    result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=timeout, check=False)
+    try:
+        result = subprocess.run(
+            command, env=env, capture_output=True, text=True, timeout=timeout, check=False
+        )
+    except subprocess.TimeoutExpired as exc:
+        if ACTIVE_RECORD is not None:
+            ACTIVE_RECORD["failure_code"] = "TIME_BUDGET_EXCEEDED"
+        raise DeploymentError("Operation time budget exceeded") from exc
     # Never echo subprocess stderr or env-file/config contents into Actions logs.
     require(result.returncode == 0, f"Operation failed: {args[0]} exit {result.returncode}")
     return result.stdout.strip()
@@ -773,13 +783,29 @@ def deploy(revision: str, digest: str, size: int, deadline_epoch: int | None = N
 def full_backup_preflight(
     container_args: list[str], before: dict[str, Any], revision: str, budget: int
 ) -> tuple[str, dict[str, Any]]:
-    if before.get("database", {}).get("schema") == 2:
+    snapshot_bytes = before.get("database", {}).get("snapshot_bytes")
+    require(type(snapshot_bytes) is int and snapshot_bytes > 0, "Validated snapshot size unavailable")
+    schema = before.get("database", {}).get("schema")
+    require(type(schema) is int and schema in (1, 2), "Unknown database schema")
+    if schema == 2 and snapshot_bytes <= SCHEMA2_DISK_MAX_BYTES:
         return disk_backup_preflight(container_args, before, revision, budget)
+    deadline = min(
+        time.monotonic() + min(budget, 900),
+        OPERATION_DEADLINE - 210 if OPERATION_DEADLINE is not None else time.monotonic() + 900,
+    )
+
+    def remaining() -> int:
+        value = int(deadline - time.monotonic())
+        require(value >= 20, "Insufficient full backup budget")
+        return value
+
     record_phase("CHECK_STATE_INTEGRITY")
     allocation = validation_resources(before.get("database", {}).get("snapshot_bytes"), memory_available())
     ACTIVE_RECORD["state_validation_resources"] = allocation
+    ACTIVE_RECORD["state_validation_method"] = "COMPRESSED_RAM"
     record_phase("CHECK_STATE_INTEGRITY")
     checks = validation_args(container_args, allocation)
+    timeout = remaining()
     state = json.loads(
         run(
             [
@@ -789,17 +815,20 @@ def full_backup_preflight(
                 "cryptowatcher",
                 "state-check",
                 "--timeout-seconds",
-                str(budget - 15),
+                str(timeout - 15),
                 "--validation-directory",
                 "/validation",
                 "--compressed-validation",
             ],
-            timeout=budget,
+            timeout=timeout,
         )
     )
     receipt = json.loads((APP / "data/sqlite/.g1-migration.json").read_text(encoding="utf-8"))
     require(state["legacy_sha256"] == receipt["legacy_sha256"], "Migration identity mismatch")
+    require(state.get("schema") == before.get("database", {}).get("schema"), "Database schema changed")
     require(state.get("validation_mode") == "COMPRESSED_RAM", "Full compressed state validation missing")
+    ACTIVE_RECORD["state_validation"] = state
+    remaining()
     backups = APP / "data/sqlite/backups"
     require(backups.is_dir(), "Reviewed backup directory missing")
     backup_name = f"pre-{revision}-{int(time.time())}.sqlite3.zst"
@@ -809,9 +838,11 @@ def full_backup_preflight(
     ACTIVE_RECORD.update(backup=backup_name)
     record_phase("BACKUP_AND_VALIDATE")
     refreshed = json.loads(run([*container_args, "python", "-m", "cryptowatcher", "diagnostics"]))
+    require(refreshed.get("database", {}).get("schema") == schema, "Database schema changed")
     allocation = validation_resources(refreshed.get("database", {}).get("snapshot_bytes"), memory_available())
     ACTIVE_RECORD["backup_validation_resources"] = allocation
     record_phase("BACKUP_AND_VALIDATE")
+    timeout = remaining()
     backup = json.loads(
         run(
             [
@@ -821,7 +852,7 @@ def full_backup_preflight(
                 "cryptowatcher",
                 "backup",
                 "--timeout-seconds",
-                str(budget - 15),
+                str(timeout - 15),
                 "--destination",
                 f"/data/sqlite/backups/{backup_name}",
                 "--validation-directory",
@@ -829,7 +860,7 @@ def full_backup_preflight(
                 "--compressed-validation",
                 "--archive-backup",
             ],
-            timeout=budget,
+            timeout=timeout,
         )
     )
     proof = backup.get("backup", {})
@@ -875,6 +906,12 @@ def disk_backup_preflight(
         "1",
         container_args[-1],
     ]
+    ACTIVE_RECORD["state_validation_resources"] = {
+        "memory_limit_bytes": 4 * 1024**3,
+        "cpus": 1,
+        "validation_mode": "DISK_STREAMING",
+    }
+    ACTIVE_RECORD["state_validation_method"] = "DISK_STREAMING"
     record_phase("CHECK_STATE_INTEGRITY_DISK")
     timeout = remaining()
     state = json.loads(

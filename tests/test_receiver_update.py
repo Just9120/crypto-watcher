@@ -65,9 +65,83 @@ def test_operator_preflight_and_exact_update_preserve_runtime_target_and_origina
     assert target.read_text() == "{}"
     assert not report["runtime_restarted"] and not report["database_changed"] and not report["ssh_changed"]
     assert Path(report["backup_path"]).read_bytes() == original
-    assert all(call.args[0] == ["docker", "inspect", "crypto-watcher"] for call in docker.call_args_list)
+    assert all(
+        call.args[0] == ["docker", "--host", "unix:///var/run/docker.sock", "inspect", "crypto-watcher"]
+        for call in docker.call_args_list
+    )
     with pytest.raises(RuntimeError, match="Receiver changed"):
         update.install("a" * 40, "b" * 40, 29, update.digest(candidate), execute=True)
+
+
+def test_explicit_current_profile_binds_exact_runtime_and_receiver_without_new_write_permit(
+    tmp_path, monkeypatch
+):
+    script, _, candidate, docker = setup(tmp_path, monkeypatch)
+    old = script.read_bytes()
+    live = json.loads(docker.return_value.stdout)
+    current = "541c41e90d10a958f46df03b18f66a36998c79d3"
+    live[0]["Config"]["Labels"]["org.opencontainers.image.revision"] = current
+    docker.return_value.stdout = json.dumps(live)
+    with pytest.raises(RuntimeError, match="Running revision changed"):
+        update.install("a" * 40, "b" * 40, 65, update.digest(candidate), execute=True)
+    assert script.read_bytes() == old
+    report = update.install(
+        "a" * 40,
+        "b" * 40,
+        65,
+        update.digest(candidate),
+        execute=True,
+        expected_receiver_sha256=update.digest(old),
+        expected_runtime_revision=current,
+    )
+    assert report["state"] == "PASS" and report["running_revision"] == current
+    assert report["receiver_before"] == update.digest(old)
+    assert Path(report["backup_path"]).read_bytes() == old and script.read_bytes() == candidate
+    assert "new_write_permit" not in report
+
+
+def test_current_profile_rejects_partial_or_stale_identities_before_writing(tmp_path, monkeypatch):
+    script, _, candidate, docker = setup(tmp_path, monkeypatch)
+    old = script.read_bytes()
+    with pytest.raises(RuntimeError, match="together"):
+        update.install(
+            "a" * 40,
+            "b" * 40,
+            65,
+            update.digest(candidate),
+            execute=True,
+            expected_receiver_sha256=update.digest(old),
+        )
+    docker.assert_not_called()
+    with pytest.raises(RuntimeError, match="Receiver changed"):
+        update.install(
+            "a" * 40,
+            "b" * 40,
+            65,
+            update.digest(candidate),
+            execute=True,
+            expected_receiver_sha256="f" * 64,
+            expected_runtime_revision="a" * 40,
+        )
+    assert script.read_bytes() == old
+
+
+@pytest.mark.parametrize("receiver_hash,runtime", [("", "a" * 40), ("f" * 64, ""), ("F" * 64, "a" * 40)])
+def test_current_profile_rejects_malformed_explicit_identity(tmp_path, monkeypatch, receiver_hash, runtime):
+    script, _, candidate, docker = setup(tmp_path, monkeypatch)
+    old = script.read_bytes()
+    with pytest.raises(RuntimeError, match="Invalid current receiver/runtime identity"):
+        update.install(
+            "a" * 40,
+            "b" * 40,
+            65,
+            update.digest(candidate),
+            execute=True,
+            expected_receiver_sha256=receiver_hash,
+            expected_runtime_revision=runtime,
+        )
+    docker.assert_not_called()
+    assert script.read_bytes() == old
 
 
 def test_unknown_receiver_or_failed_gate_prevents_update(tmp_path, monkeypatch):
