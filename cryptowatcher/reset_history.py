@@ -87,6 +87,7 @@ def prepare(
     now_ms: int | None = None,
     expected_generation: str | None = None,
     preserved_archive_sha256: str | None = None,
+    discard_test_history: bool = False,
 ) -> dict[str, Any]:
     if any(
         not p.is_absolute() or p.resolve() != p or any(q.is_symlink() for q in (p, *p.parents))
@@ -97,7 +98,15 @@ def prepare(
         raise StateError("Reset destination already exists")
     started = time.monotonic()
     deadline = started + 120
-    measurement = expected_generation is not None or preserved_archive_sha256 is not None
+    if discard_test_history and (
+        expected_generation is None
+        or re.fullmatch("[0-9a-f]{32}", expected_generation) is None
+        or preserved_archive_sha256 is not None
+    ):
+        raise StateError("Explicit discard needs exact generation and no preserved archive claim")
+    measurement = not discard_test_history and (
+        expected_generation is not None or preserved_archive_sha256 is not None
+    )
     if measurement:
         if (
             not expected_generation
@@ -116,7 +125,7 @@ def prepare(
     with closing(Store(source, owner, readonly=True)) as old:
         old.db.execute("BEGIN")
         previous_generation = old.get_runtime("history_generation")
-        if measurement:
+        if measurement or discard_test_history:
             if not previous_generation or previous_generation.get("id") != expected_generation:
                 raise StateError("Fresh measurement predecessor generation mismatch")
         elif previous_generation is not None:
@@ -143,7 +152,9 @@ def prepare(
             "schema": "cryptowatcher.history-generation.v1",
             "id": uuid.uuid4().hex,
             "started_ms": start,
-            "reason": (
+            "reason": "OWNER_AUTHORIZED_TEST_HISTORY_DISCARD_20261022"
+            if discard_test_history
+            else (
                 "OWNER_AUTHORIZED_FRESH_MEASUREMENT_20261017"
                 if measurement
                 else "OWNER_AUTHORIZED_TEST_HISTORY_RESET_20261016"
@@ -202,6 +213,8 @@ def prepare(
                 preserved_archive_sha256=preserved_archive_sha256,
                 archive_source=str(source),
             )
+        if discard_test_history:
+            receipt.update(previous_generation_id=expected_generation, discard_test_history=True)
     with closing(Store(destination, owner)) as reopened:
         if (
             signature(private_state(reopened)) != receipt["private_fresh_sha256"]
@@ -234,6 +247,7 @@ def main() -> int:
     parser.add_argument("--receipt", type=Path, required=True)
     parser.add_argument("--expected-generation")
     parser.add_argument("--preserved-archive-sha256")
+    parser.add_argument("--discard-test-history", action="store_true")
     args = parser.parse_args()
     receipt = prepare(
         args.source,
@@ -242,6 +256,7 @@ def main() -> int:
         args.owner_id,
         expected_generation=args.expected_generation,
         preserved_archive_sha256=args.preserved_archive_sha256,
+        discard_test_history=args.discard_test_history,
     )
     write_new(args.receipt, encode(receipt).encode())
     print(encode(receipt))
