@@ -160,7 +160,7 @@ Live inbox сохраняет первоначальный queued clock;64closed
 NS2 values, NR headers и actual byte counters; partial budget не становится PASS.
 
 Optional ABI1 `numeric_frame.so` выполняет только bounded BP1 transpose:
-до4096length bytes/139264operand bytes, fixed16KiB stack и caller-owned output.
+до4096length bytes/139264operand bytes, fixed4097uint32 scratch и caller-owned output.
 Он не выполняет allocations, I/O, SQL или float arithmetic. Checksummed Zstd,
 ID/type/length/offset bounds и NS2/owner/NR validation остаются в Python.
 Отсутствующий artifact выбирает portable path; installed corrupt/unknown ABI

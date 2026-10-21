@@ -74,6 +74,12 @@ shared settings и compact immutable revisions/identity-checked heads.
 summaries сохраняют recorded methodology и settings после истечения подробностей;
 ссылки на raw windows не продлевают подробную историю бессрочно.
 
+Context tile publication проверяет duplicate hot/cold ownership через один
+декодированный список времени и indexed point lookups. `CROSS JOIN` фиксирует
+порядок обхода: существующий hot prefix не запускает повторный decode пакета.
+Explicit installer атомарно заменяет только известный прежний trigger; неизвестный
+trigger сохраняется и блокирует upgrade. Открытие Store не меняет schema/guards.
+
 Image: pinned Python base digest, hash-locked dependencies, UID/GID10001, read-only
 root, no capabilities. `/data/sqlite` и backups принадлежат приложению; исходный
 JSON migration archive сохраняется. Health проверяет recent heartbeat, а market

@@ -20,6 +20,45 @@ FIELDS = "id,stream,kind,day,payload,leases,frozen,seal"
 META = "n,first_at,last_at,due"
 
 
+def publication_guard(*, ordered: bool) -> str:
+    new = ",".join("NEW." + field for field in FIELDS.split(","))
+    join = "CROSS JOIN" if ordered else "JOIN"
+    return f"""CREATE TRIGGER market_context_tile_validate_insert BEFORE INSERT ON market_context_tiles BEGIN
+                SELECT CASE WHEN cw_context_tile_valid({new},NEW.n,NEW.first_at,NEW.last_at,NEW.due)<>1
+                    THEN RAISE(ABORT,'Invalid context tile metadata') END;
+                SELECT CASE WHEN COALESCE((SELECT last_at FROM market_context_tiles WHERE stream=NEW.stream
+                    AND kind=NEW.kind AND first_at<=NEW.last_at ORDER BY first_at DESC LIMIT 1),-1)>=NEW.first_at
+                    THEN RAISE(ABORT,'Overlapping context tile') END;
+                SELECT CASE WHEN EXISTS(SELECT 1 FROM json_each(cw_context_tile_times(NEW.payload)) p
+                    {join} market_context c ON c.stream=NEW.stream AND c.kind=NEW.kind AND c.at=p.value)
+                    THEN RAISE(ABORT,'Duplicate hot/cold context ownership') END;
+            END"""
+
+
+def _upgrade_publication_guard(db: sqlite3.Connection) -> None:
+    def canonical(sql: str) -> str:
+        return " ".join(sql.split()).rstrip(";")
+
+    desired = publication_guard(ordered=True)
+    row = db.execute(
+        "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='market_context_tile_validate_insert'"
+    ).fetchone()
+    if row is not None and canonical(row[0]) == canonical(desired):
+        return
+    if row is None or canonical(row[0]) != canonical(publication_guard(ordered=False)):
+        raise StateError("Unknown context publication guard; database preserved")
+    if db.in_transaction:
+        raise StateError("Context publication guard upgrade requires an outer boundary")
+    with _atomic(db):
+        current = db.execute(
+            "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='market_context_tile_validate_insert'"
+        ).fetchone()
+        if current is None or current[0] != row[0]:
+            raise StateError("Stale context publication guard; database preserved")
+        db.execute("DROP TRIGGER market_context_tile_validate_insert")
+        db.execute(desired)
+
+
 def installed(db: sqlite3.Connection) -> bool:
     marker = db.execute("SELECT value FROM market_meta WHERE key='context_tiles'").fetchone()
     names = {
@@ -130,6 +169,7 @@ def install_functions(db: sqlite3.Connection) -> None:
 
 def install(db: sqlite3.Connection) -> None:
     if installed(db):
+        _upgrade_publication_guard(db)
         return
     marker = db.execute("SELECT value FROM market_meta WHERE key='context_integrity'").fetchone()
     if db.in_transaction or marker is None or marker[0] != "1":
@@ -164,16 +204,7 @@ def install(db: sqlite3.Connection) -> None:
                 WHERE eligible_at IS NOT NULL;
             CREATE INDEX market_context_tile_blocked ON market_context_tile_pending(stream,kind,day) WHERE blocked=1;
             CREATE INDEX market_context_tile_clock ON market_context_tile_pending(queued_at);
-            CREATE TRIGGER market_context_tile_validate_insert BEFORE INSERT ON market_context_tiles BEGIN
-                SELECT CASE WHEN cw_context_tile_valid({new},NEW.n,NEW.first_at,NEW.last_at,NEW.due)<>1
-                    THEN RAISE(ABORT,'Invalid context tile metadata') END;
-                SELECT CASE WHEN COALESCE((SELECT last_at FROM market_context_tiles WHERE stream=NEW.stream
-                    AND kind=NEW.kind AND first_at<=NEW.last_at ORDER BY first_at DESC LIMIT 1),-1)>=NEW.first_at
-                    THEN RAISE(ABORT,'Overlapping context tile') END;
-                SELECT CASE WHEN EXISTS(SELECT 1 FROM json_each(cw_context_tile_times(NEW.payload)) p
-                    JOIN market_context c ON c.stream=NEW.stream AND c.kind=NEW.kind AND c.at=p.value)
-                    THEN RAISE(ABORT,'Duplicate hot/cold context ownership') END;
-            END;
+            {publication_guard(ordered=True)};
             CREATE TRIGGER market_context_tile_validate_update BEFORE UPDATE ON market_context_tiles BEGIN
                 SELECT CASE WHEN cw_context_tile_valid({new},NEW.n,NEW.first_at,NEW.last_at,NEW.due)<>1
                     OR cw_context_tile_change({old},{new})<>1
