@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import struct
+from itertools import accumulate
 from typing import Any
 
 import zstandard
@@ -99,38 +100,48 @@ def _expanded(raw: bytes) -> bytes:
     position += n
     lengths = body[position : position + n * blocks.SLOTS]
     position += n * blocks.SLOTS
-    if position + sum(lengths) != len(body):
+    sizes_by_block = [lengths[i * blocks.SLOTS : (i + 1) * blocks.SLOTS] for i in range(n)]
+    spans = list(map(sum, sizes_by_block))
+    if position + sum(spans) != len(body):
         raise ValueError("Invalid numeric frame expanded size")
+    uniform_lengths = (
+        _LITERAL_LENGTHS if not flags.strip(b"\0") else _RECIPE_LENGTHS if not flags.strip(b"\1") else None
+    )
     valid_ids = []
     for i, identity in enumerate(ids):
-        sizes = lengths[i * blocks.SLOTS : (i + 1) * blocks.SLOTS]
+        sizes = sizes_by_block[i]
         if identity == DEAD:
-            if flags[i] or any(sizes):
+            if flags[i] or spans[i]:
                 raise ValueError("Invalid empty numeric frame slot")
             continue
-        blocks.block_number(identity)
         valid_ids.append(identity)
-        if flags[i] not in (0, 1) or not any(sizes):
+        if flags[i] not in (0, 1) or not spans[i]:
             raise ValueError("Invalid numeric frame metric block")
-        if sizes.translate(_RECIPE_LENGTHS if flags[i] else _LITERAL_LENGTHS).strip(b"\0"):
+        if uniform_lengths is None and sizes.translate(
+            _RECIPE_LENGTHS if flags[i] else _LITERAL_LENGTHS
+        ).strip(b"\0"):
             raise ValueError("Invalid numeric frame metric lengths")
         if identity == blocks.MAX_BLOCK and sizes[-1]:
             raise ValueError("Numeric frame exceeds ID ceiling")
+    if uniform_lengths is not None and lengths.translate(uniform_lengths).strip(b"\0"):
+        raise ValueError("Invalid numeric frame metric lengths")
+    # struct.unpack('Q') already supplies nonnegative plain integers. Check
+    # their shared ceiling in C once, retaining DEAD's separate slot rules.
+    if valid_ids and max(valid_ids) > blocks.MAX_BLOCK:
+        raise ValueError("Invalid numeric block identity")
     if not valid_ids or len(valid_ids) != len(set(valid_ids)):
         raise ValueError("Empty or duplicate numeric frame identities")
     row_data = plane_rows(lengths, body[position:]) if body[:4] == b"BP1\x00" else body[position:]
     entries = []
     position = 0
     for i, identity in enumerate(ids):
-        sizes = lengths[i * blocks.SLOTS : (i + 1) * blocks.SLOTS]
-        span = sum(sizes)
+        sizes = sizes_by_block[i]
+        span = spans[i]
         entries.append(
-            struct.pack(">Q", identity) + bytes([flags[i]]) + sizes + row_data[position : position + span]
+            struct.pack(">Q", identity) + flags[i : i + 1] + sizes + row_data[position : position + span]
         )
         position += span
-    offsets = [0]
-    for entry in entries:
-        offsets.append(offsets[-1] + len(entry))
+    offsets = list(accumulate(map(len, entries), initial=0))
     return bytes([n]) + struct.pack(">" + "I" * (n + 1), *offsets) + b"".join(entries)
 
 

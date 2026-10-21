@@ -272,7 +272,7 @@ def test_explicit_structural_boundary_reconciles_actual_owners_seals_bytes_and_p
     assert "BOUNDARY_NUMERIC_FRAME_LEDGER_INCOMPLETE" in boundary_blockers(value)
 
 
-@pytest.mark.parametrize("fault", ["counter", "seal", "mask"])
+@pytest.mark.parametrize("fault", ["counter", "seal", "mask", "value"])
 def test_structural_boundary_cannot_report_measured_with_corrupt_metadata(store, fault):
     setup(store)
     assert advance(store, {})
@@ -284,6 +284,27 @@ def test_structural_boundary_cannot_report_measured_with_corrupt_metadata(store,
                 "UPDATE market_counts SET logical_bytes=logical_bytes+1 WHERE category=?",
                 (numeric_frames.CATEGORY,),
             )
+    elif fault == "value":
+        from cryptowatcher import metric_codec, numeric_block_codec, numeric_frame_codec
+
+        identity, raw = store.db.execute("SELECT id,payload FROM market_numeric_frames LIMIT 1").fetchone()
+        entries = numeric_frame_codec.all_values(bytes(raw))
+        block, payload = entries[0]
+        values = numeric_block_codec.unpack(payload, block)
+        slot = next(i for i, value in enumerate(values) if value)
+        values[slot] = metric_codec.pack(metric(987654))
+        entries[0] = (block, numeric_block_codec.pack(block, values, recipes=True))
+        replacement = numeric_frame_codec.pack(entries)
+        guard = store.db.execute(
+            "SELECT sql FROM sqlite_master WHERE name='market_nframe_payload'"
+        ).fetchone()[0]
+        # Represent external corruption using a fully validly checksummed body.
+        # Restore the exact guard before measuring; only stale NS2 can catch it.
+        with store.db:
+            store.db.execute("BEGIN")
+            store.db.execute("DROP TRIGGER market_nframe_payload")
+            store.db.execute("UPDATE market_numeric_frames SET payload=? WHERE id=?", (replacement, identity))
+            store.db.execute(guard)
     else:
         table, column = (
             ("market_numeric_block_refs", "search_seal")

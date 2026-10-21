@@ -27,6 +27,7 @@ from .packet_store import atomic
 CATEGORY = "numeric_frame_pending"
 DELAY_MS = 300_000
 MAX_CLOCK = 2**63 - 1 - DELAY_MS
+_SLOT_BYTES = tuple(bytes([slot]) for slot in range(64))
 
 
 def eligible(b: str = "b", r: str = "r") -> str:
@@ -424,6 +425,9 @@ def measure(db: sqlite3.Connection, deadline: float, cache: Any = None) -> dict[
             if owner_slots.signature(3, identity, mask) != checksum:
                 raise ValueError("Conflicting actual numeric frame owner checksum")
             entries = numeric_frame_codec.raw_entries(payload, cache)
+            # One validated container identity; enumerated slots are already
+            # bounded by the authenticated BF1 decoder's <=64 cardinality.
+            pointer_prefix = numeric_frames.pointer(identity, 0)[:-1]
             bits = owner_slots.bits(mask)
             if bits >> len(entries):
                 raise ValueError("Actual numeric frame mask exceeds container")
@@ -444,7 +448,7 @@ def measure(db: sqlite3.Connection, deadline: float, cache: Any = None) -> dict[
             )
             for slot, (block, entry) in enumerate(zip(ids, entries, strict=True)):
                 found = bindings.get(block)
-                pointer = numeric_frames.pointer(identity, slot)
+                pointer = pointer_prefix + _SLOT_BYTES[slot]
                 retained = found is not None and bytes(found[1]) == pointer
                 if retained != bool(bits & (1 << slot)):
                     raise ValueError("Conflicting actual numeric frame owner binding")
@@ -457,9 +461,19 @@ def measure(db: sqlite3.Connection, deadline: float, cache: Any = None) -> dict[
                     # The caller owns one read snapshot; validate its fixed
                     # writer mode once, while still authenticating every row.
                     body = blocks.lease_header(counts)
-                    if struct.unpack(">Q", body[:8])[0] != block:
+                    if body[:8] != entry[:8]:
                         raise ValueError("Conflicting actual numeric frame lease identity")
-                    if not numeric_search.checked(block, pointer, counts, found[3], found[4], binding=entry):
+                    # BF1 already authenticated this scalar ID/entry, and the
+                    # NR header above matches the same tag. Retain every NS2
+                    # check without revalidating/repacking that ID per owner.
+                    seal = found[4]
+                    if (
+                        type(found[3]) is not int
+                        or found[3] != 0
+                        or not isinstance(seal, bytes)
+                        or len(seal) != 32
+                        or seal != numeric_search._frame_signature(entry[:8], pointer, entry, counts)
+                    ):
                         raise ValueError("Missing actual numeric frame value seal")
                     owned += 1
             frames += 1

@@ -13,6 +13,8 @@ import struct
 import time
 from typing import Any
 
+from .numeric_block_codec import block_number
+
 INDEXES = {
     "market_numeric_search_unknown": "CREATE INDEX market_numeric_search_unknown ON market_numeric_block_refs(id) WHERE detail_slots=-1",
     "market_numeric_search_due": "CREATE INDEX market_numeric_search_due ON market_numeric_block_refs(id) WHERE detail_slots=0 AND search_seal IS NULL AND unused=0",
@@ -38,14 +40,17 @@ def installed(db: sqlite3.Connection) -> bool:
     return row is not None and row[0] == "3"
 
 
-def signature(block: int, payload: bytes, counts: bytes, *, binding: bytes | None = None) -> bytes:
-    from .numeric_block_codec import block_number
+def _frame_signature(block_tag: bytes, payload: bytes, binding: bytes, counts: bytes) -> bytes:
+    """Pure NS2 digest; callers validate the tag and authenticated entry first."""
+    return hashlib.sha256(b"".join((b"NS2\x00", block_tag, payload, binding, counts))).digest()
 
+
+def signature(block: int, payload: bytes, counts: bytes, *, binding: bytes | None = None) -> bytes:
     block_number(block)
     if payload.startswith(b"NF1\x00"):
         if not isinstance(binding, bytes) or len(binding) < 73:
             raise ValueError("Missing numeric frame value binding")
-        return hashlib.sha256(b"NS2\x00" + struct.pack(">Q", block) + payload + binding + counts).digest()
+        return _frame_signature(struct.pack(">Q", block), payload, binding, counts)
     if binding is not None:
         raise ValueError("Unexpected numeric frame value binding")
     return hashlib.sha256(b"NS1\x00" + struct.pack(">Q", block) + payload + counts).digest()

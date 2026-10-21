@@ -105,6 +105,15 @@ def test_valid_literal_only_nb2_and_alternate_compressed_source_preserve_exact_m
     assert blocks.unpack(actual[1], actual[0]) == frames
 
 
+def test_mixed_literal_and_recipe_blocks_keep_distinct_length_rules():
+    recipe = values(1)[0]
+    literal = (1, blocks.pack(1, [metric_codec.pack(metric(11))] * 64))
+    expected = [recipe, literal]
+    raw = codec.pack(expected)
+    assert [entry[8] for entry in codec.raw_entries(raw)] == [1, 0]
+    assert codec.all_values(raw) == expected
+
+
 @pytest.mark.parametrize("slot", [-1, 1, 64, True, 0.0])
 def test_selected_slot_is_a_bounded_integer(slot):
     with pytest.raises(ValueError, match="slot"):
@@ -120,7 +129,7 @@ def test_checksum_authentication_precedes_the_pure_cache_even_after_a_warm_read(
     assert codec.selected(raw, 0, store.cached_bytes) == expected
 
 
-@pytest.mark.parametrize("kind", ["duplicate", "unknown", "size", "flag", "dead", "length"])
+@pytest.mark.parametrize("kind", ["duplicate", "unknown", "size", "flag", "dead", "length", "identity"])
 def test_validly_checksummed_invalid_shapes_never_reach_a_public_metric(kind, store):
     body = bytearray(row_body(values(2)))
     if kind == "duplicate":
@@ -133,6 +142,8 @@ def test_validly_checksummed_invalid_shapes_never_reach_a_public_metric(kind, st
         body[21] = 2
     elif kind == "dead":
         body[5:13] = struct.pack(">Q", codec.DEAD)
+    elif kind == "identity":
+        body[5:13] = struct.pack(">Q", blocks.MAX_BLOCK + 1)
     else:
         body[23 + 1] = 255
     with pytest.raises(ValueError):
