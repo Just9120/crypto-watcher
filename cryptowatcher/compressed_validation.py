@@ -13,7 +13,7 @@ import time
 import uuid
 from array import array
 from collections import OrderedDict
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import IO, Any, BinaryIO, Literal, cast
@@ -22,6 +22,8 @@ import apsw
 import zstandard
 
 from .storage import IntegrityError
+from .validation_archive import ArchiveArena
+from .validation_codes import DETAIL_CODES
 
 BLOCK = 65536
 CACHE_PAGES = 512
@@ -37,8 +39,9 @@ MAX_SQLITE_CACHE_BYTES = 1024**3
 
 class QualificationError(IntegrityError):
     def __init__(self, code: str) -> None:
+        self.detail_code = code if code in DETAIL_CODES else None
         category = code if code in ("TIME_BUDGET_EXCEEDED", "DATABASE_CORRUPT") else "DATABASE_ERROR"
-        super().__init__(category, "Compressed validation refused: " + code)
+        super().__init__(category, "Compressed validation refused: " + (self.detail_code or "UNCLASSIFIED"))
 
 
 def budget(deadline: float) -> None:
@@ -113,8 +116,11 @@ class Image:
         deadline: float,
         progress: Any = lambda **kw: None,
         archive_encoding: Literal["GZIP", "ZSTD"] | None = None,
+        archive_store: ArchiveArena | None = None,
     ) -> None:
-        self.blocks = _FrameArena(limit)
+        if archive_store is not None and (path is not None or limit != archive_store.limit):
+            raise QualificationError("INVALID_ARCHIVE_BOUND")
+        self.blocks = _FrameArena(limit) if archive_store is None else archive_store
         self.size = 0
         self.retained = 0
         self.deadline = deadline
@@ -155,6 +161,20 @@ class Image:
         self.sha256 = self.hash.hexdigest()
         if self.reconstructed_hash() != self.sha256:
             raise QualificationError("BYTE_IDENTITY_MISMATCH")
+
+    @classmethod
+    def from_archive_store(cls, store: ArchiveArena) -> Image:
+        """Reopen a sealed, checked disk frame index without allocating a RAM image."""
+        if not store.sealed or store.data is None:
+            raise QualificationError("FROZEN_IMAGE_REQUIRED")
+        store.assert_unchanged()
+        image = cls(None, limit=store.limit, deadline=store.deadline, archive_store=store)
+        image.path, image.before = store.path, store.identity
+        image.size, image.sha256 = store.raw_bytes, store.raw_sha256
+        image.retained = sum(store.lengths)
+        image.mutable = False
+        image.archive_encoding = "ZSTD"
+        return image
 
     @contextmanager
     def source_reader(self) -> Iterator[BinaryIO | gzip.GzipFile | zstandard.ZstdDecompressionReader]:
@@ -225,7 +245,13 @@ class Image:
         for index, value in self.write_cache.items():
             self.set_block(index, bytes(value))
         self.write_cache.clear()
+        if isinstance(self.blocks, ArchiveArena) and self.size % BLOCK:
+            index, tail = divmod(self.size, BLOCK)
+            raw = self.decompressor.decompress(self.blocks[index], max_output_size=BLOCK)
+            self.set_block(index, raw[:tail])
         self.mutable = False
+        if isinstance(self.blocks, ArchiveArena):
+            self.blocks.finish(self.size, self.reconstructed_hash())
 
     def truncate(self, size: int) -> None:
         budget(self.deadline)
@@ -266,7 +292,9 @@ class Image:
         if value is None:
             value = self.decompressor.decompress(self.blocks[index], max_output_size=BLOCK)
             expected = min(BLOCK, self.size - index * BLOCK)
-            if len(value) not in (expected, BLOCK):
+            if len(value) not in (expected, BLOCK) or (
+                isinstance(self.blocks, ArchiveArena) and len(value) != expected
+            ):
                 raise QualificationError("BYTE_IDENTITY_MISMATCH")
             value = value[:expected]
         self.cache[index] = value
@@ -307,7 +335,9 @@ class Image:
             budget(self.deadline)
             value = self.decompressor.decompress(blob, max_output_size=BLOCK)
             expected = min(BLOCK, self.size - index * BLOCK)
-            if len(value) not in (expected, BLOCK):
+            if len(value) not in (expected, BLOCK) or (
+                isinstance(self.blocks, ArchiveArena) and len(value) != expected
+            ):
                 raise QualificationError("BYTE_IDENTITY_MISMATCH")
             yield value[:expected]
 
@@ -390,6 +420,14 @@ def configure_cache(db: apsw.Connection, image: Image) -> int:
     budget(image.deadline)
     if image.mutable:
         raise QualificationError("FROZEN_IMAGE_REQUIRED")
+    if isinstance(image.blocks, ArchiveArena):
+        if not image.blocks.sealed:
+            raise QualificationError("FROZEN_IMAGE_REQUIRED")
+        # File pages remain reclaimable by the unchanged4GiB cgroup limit.
+        # Keep the same128MiB SQLite cache as the ordinary disk validator.
+        cache_kib = 128 * 1024
+        db.execute(f"PRAGMA cache_size=-{cache_kib}")
+        return cache_kib
     image_bytes = image.retained + sys.getsizeof(image.blocks)
     cache_bytes = min(
         MAX_SQLITE_CACHE_BYTES, VALIDATION_MEMORY_BYTES - image_bytes - VALIDATION_OVERHEAD_BYTES
@@ -500,10 +538,21 @@ def classified_errors(deadline: float) -> Iterator[None]:
 
 @contextmanager
 def snapshot_image(
-    path: Path, directory: Path, *, deadline: float
+    path: Path,
+    directory: Path,
+    *,
+    deadline: float,
+    archive_store: ArchiveArena | None = None,
+    source_snapshot: apsw.Connection | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> Iterator[tuple[apsw.Connection, Image]]:
-    """Pinned online backup, full writable validation, then metadata from that same image."""
-    image = Image(None, limit=MAX_COMPRESSED_BYTES, deadline=deadline)
+    """Full pinned snapshot validation; ownership of a supplied reader is transferred."""
+    image = Image(
+        None,
+        limit=MAX_COMPRESSED_BYTES if archive_store is None else archive_store.limit,
+        deadline=deadline,
+        archive_store=archive_store,
+    )
     with (
         classified_errors(deadline),
         tempfile.TemporaryDirectory(prefix="cw-cvfs-live-", dir=directory) as work,
@@ -512,18 +561,36 @@ def snapshot_image(
         sentinel.touch(mode=0o600)
         vfs = VFS(image, sentinel)
         destination: apsw.Connection | None = None
-        source: apsw.Connection | None = None
+        source: apsw.Connection | None = source_snapshot
         try:
             destination = apsw.Connection(
                 str(sentinel.resolve()), flags=apsw.SQLITE_OPEN_READWRITE, vfs=vfs.name
             )
             destination.execute("PRAGMA journal_mode=MEMORY")
             destination.execute("PRAGMA mmap_size=0")
-            source = apsw.Connection(
-                path.resolve().as_uri() + "?mode=ro", flags=apsw.SQLITE_OPEN_READONLY | apsw.SQLITE_OPEN_URI
-            )
-            source.execute("BEGIN")
-            source.execute("SELECT owner_id FROM owner_settings").fetchone()
+            if source is None:
+                source = apsw.Connection(
+                    path.resolve().as_uri() + "?mode=ro",
+                    flags=apsw.SQLITE_OPEN_READONLY | apsw.SQLITE_OPEN_URI,
+                )
+                source.execute("BEGIN")
+                source.execute("SELECT owner_id FROM owner_settings").fetchone()
+            elif (
+                not source.readonly("main")
+                or source.db_filename("main") != str(path.resolve())
+                or source.txn_state("main") != apsw.SQLITE_TXN_READ
+            ):
+                raise QualificationError("PINNED_SOURCE_REQUIRED")
+            if archive_store is not None:
+                pages = source.execute("PRAGMA page_count").fetchone()
+                page_size = source.execute("PRAGMA page_size").fetchone()
+                if pages is None or page_size is None:
+                    raise QualificationError("ARCHIVE_SIZE_LIMIT")
+                size = pages[0] * page_size[0]
+                if size > archive_store.max_raw_bytes:
+                    raise QualificationError("ARCHIVE_SIZE_LIMIT")
+            if progress is not None:
+                progress("SOURCE_COPY")
             with destination.backup("main", source, "main") as backup:
                 while not backup.done:
                     budget(deadline)
@@ -532,8 +599,14 @@ def snapshot_image(
             source = None
             destination.close()
             destination = None
+            if progress is not None:
+                progress("SNAPSHOT_SEAL")
             image.freeze()
-            original = image.reconstructed_hash()
+            original = (
+                image.blocks.raw_sha256
+                if isinstance(image.blocks, ArchiveArena)
+                else image.reconstructed_hash()
+            )
             vfs.unregister()
             vfs = frozen_vfs(image, sentinel)
             destination = apsw.Connection(
@@ -541,10 +614,16 @@ def snapshot_image(
             )
             configure_cache(destination, image)
             destination.execute("PRAGMA query_only=ON")
+            if progress is not None:
+                progress("FULL_INTEGRITY")
             full_check(destination, deadline)
+            if progress is not None:
+                progress("SOURCE_METADATA")
             yield destination, image
             destination.close()
             destination = None
+            if progress is not None:
+                progress("FULL_BYTE_IDENTITY")
             if image.reconstructed_hash() != original:
                 raise QualificationError("BYTE_IDENTITY_MISMATCH")
         finally:

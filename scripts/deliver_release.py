@@ -10,6 +10,15 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+VALIDATION_DETAIL_CODES = frozenset(
+    "ARCHIVE_DISK_RESERVE ARCHIVE_READ_INCOMPLETE ARCHIVE_SIZE_LIMIT ARCHIVE_WRITE_INCOMPLETE BYTE_IDENTITY_MISMATCH CLOSED_FILE_REQUIRED COMPRESSED_MEMORY_LIMIT DATABASE_CORRUPT FROZEN_IMAGE_REQUIRED INVALID_ARCHIVE_BOUND INVALID_ARCHIVE_FINALIZATION INVALID_ARCHIVE_HEADER INVALID_ARCHIVE_INDEX INVALID_ARCHIVE_TRUNCATE INVALID_ARCHIVE_WRITE INVALID_PAGE_SIZE INVALID_READ INVALID_TRUNCATE INVALID_WRITE NATIVE_VFS_CONTEXT_CLOSED NATIVE_VFS_HANDLES_OPEN NATIVE_VFS_LOAD_FAILED NATIVE_VFS_REGISTRATION_REFUSED NONSEQUENTIAL_SNAPSHOT_WRITE PINNED_SOURCE_REQUIRED REGULAR_CLOSED_FILE_REQUIRED SOURCE_CHANGED SQLITE_VALIDATION_ERROR TIME_BUDGET_EXCEEDED UNKNOWN_VALIDATED_SCHEMA UNSAFE_VALIDATION_PATH VALIDATED_OWNER_MISMATCH VALIDATION_IO_ERROR".split()
+)
+
+VALIDATION_INNER_PHASES = frozenset(
+    "PIN_SOURCE SOURCE_COPY SNAPSHOT_SEAL FULL_INTEGRITY SOURCE_METADATA FULL_BYTE_IDENTITY INDEPENDENT_PERSISTED_READBACK ARCHIVE_FINGERPRINT COMPLETE".split()
+)
+
+
 PHASES = {
     "RECEIVE_ARTIFACT",
     "VERIFY_ARTIFACT",
@@ -115,6 +124,44 @@ def delivery_result(result, *, revision: str, digest: str, build_run: int) -> tu
         and state_proof.get("status") == "integrity_ok"
         and state_proof.get("schema") == 2
     )
+    framed_backup = (
+        proof.get("phase") == "COMPLETE"
+        and proof.get("validation_mode") == "FRAMED_DISK"
+        and proof.get("archive_encoding") == "ZSTD"
+        and proof.get("integrity_basis") == "FULL_VALIDATED_CAPTURE_AND_INDEPENDENT_EQUAL_RAW_SHA256"
+        and proof.get("source_validation") == state_proof
+        and state_proof.get("status") == "integrity_ok"
+        and type(state_proof.get("schema")) is int
+        and state_proof["schema"] == 2
+        and state_proof.get("validation_mode") == "FRAMED_DISK"
+        and type(state_proof.get("owner_id")) is int
+        and state_proof["owner_id"] > 0
+        and type(state_proof.get("configuration_revision")) is int
+        and state_proof["configuration_revision"] > 0
+        and proof.get("sha256") == state_proof.get("snapshot_sha256")
+        and all(
+            re.fullmatch(r"[0-9a-f]{64}", str(value))
+            for value in (
+                proof.get("sha256"),
+                proof.get("archive_sha256"),
+                state_proof.get("settings_sha256"),
+                state_proof.get("legacy_sha256"),
+            )
+        )
+        and all(
+            type(proof.get(key)) is int and proof[key] > 0
+            for key in (
+                "bytes",
+                "archive_bytes",
+                "archive_limit_bytes",
+                "disk_reserve_bytes",
+                "sqlite_cache_kib",
+            )
+        )
+        and proof["archive_bytes"] <= proof["archive_limit_bytes"]
+        and proof["disk_reserve_bytes"] >= 1536 * 1024**2
+        and proof["sqlite_cache_kib"] == 128 * 1024
+    )
     reset_proof = success.get("reset_proof", {})
     reset = (
         success.get("delivery_policy") == "OWNER_APPROVED_TEST_HISTORY_RESET_20261016_V1"
@@ -148,7 +195,7 @@ def delivery_result(result, *, revision: str, digest: str, build_run: int) -> tu
         and success.get("image_id")
         in (success.get("image_config_digest"), success.get("image_manifest_digest"))
         and re.fullmatch(r"sha256:[0-9a-f]{64}", str(success.get("image_id")))
-        and (full_backup or additive or disk_backup or reset)
+        and (full_backup or additive or disk_backup or framed_backup or reset)
     ):
         record = {key: value for key, value in success.items() if key in SUCCESS_FIELDS}
         if reset:
@@ -211,12 +258,46 @@ def delivery_result(result, *, revision: str, digest: str, build_run: int) -> tu
             return record, 0
         record["backup_validation"] = {
             "phase": "COMPLETE",
-            "validation_mode": "COMPRESSED_RAM",
+            "validation_mode": proof["validation_mode"],
             "sha256": proof["sha256"],
             "archive_encoding": "ZSTD",
             "archive_bytes": proof["archive_bytes"],
             "archive_sha256": proof["archive_sha256"],
         }
+        if framed_backup:
+            record["state_validation"] = {
+                key: value
+                for key, value in state_proof.items()
+                if key
+                in (
+                    "status",
+                    "schema",
+                    "owner_id",
+                    "configuration_revision",
+                    "settings_sha256",
+                    "legacy_sha256",
+                    "validation_mode",
+                    "snapshot_sha256",
+                )
+            }
+            record["backup_validation"].update(
+                {
+                    key: proof[key]
+                    for key in (
+                        "integrity_basis",
+                        "archive_limit_bytes",
+                        "disk_reserve_bytes",
+                        "sqlite_cache_kib",
+                    )
+                }
+            )
+            timings = proof.get("phase_seconds")
+            if isinstance(timings, dict):
+                record["backup_validation"]["phase_seconds"] = {
+                    key: value
+                    for key, value in timings.items()
+                    if key in VALIDATION_INNER_PHASES and type(value) in (int, float) and 0 <= value <= 900
+                }
         for key in ("bytes", "compressed_bytes"):
             if type(proof.get(key)) is int and proof[key] > 0:
                 record["backup_validation"][key] = proof[key]
@@ -265,6 +346,23 @@ def delivery_result(result, *, revision: str, digest: str, build_run: int) -> tu
         }.get(remote_exit[1], "REMOTE_OPERATION_FAILED")
     else:
         code = "DELIVERY_UNCONFIRMED"
+    detail = failure.get("failure_detail_code")
+    safe_detail = (
+        {"failure_detail_code": detail}
+        if isinstance(detail, str)
+        and detail in VALIDATION_DETAIL_CODES
+        and remote_exit is not None
+        and code == (detail if detail in ("TIME_BUDGET_EXCEEDED", "DATABASE_CORRUPT") else "DATABASE_ERROR")
+        else {}
+    )
+    inner_phase = failure.get("failure_validation_phase")
+    safe_stage = (
+        {"failure_validation_phase": inner_phase}
+        if isinstance(inner_phase, str)
+        and inner_phase in VALIDATION_INNER_PHASES
+        and code in ("TIME_BUDGET_EXCEEDED", "DATABASE_CORRUPT", "INTERRUPTED", "IO_ERROR", "DATABASE_ERROR")
+        else {}
+    )
     return {
         "state": "BLOCKED",
         "attempted_source_sha": revision,
@@ -272,6 +370,8 @@ def delivery_result(result, *, revision: str, digest: str, build_run: int) -> tu
         "build_run": build_run,
         "failure_phase": phase,
         "failure_code": code,
+        **safe_detail,
+        **safe_stage,
         "ssh_exit_status": result.returncode,
         "runtime_state": "UNCONFIRMED",
         "at_utc": datetime.now(timezone.utc).isoformat(),

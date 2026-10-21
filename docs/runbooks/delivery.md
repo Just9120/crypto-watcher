@@ -118,6 +118,14 @@ deployment record сохраняются для readback; повтор посл�
 ### Полная проверка многогигабайтной SQLite
 
 Source и persistent backup остаются обязательными full integrity gates до switch.
+Текущий large-schema2 path описан в [bounded-storage-reset](bounded-storage-reset.md):
+один standard ZSTD disk-backed snapshot, полный scan и независимое readback/raw+archive
+SHA доказательство тех же неизменных bytes; CPU1/RAM4GiB/900s и1536MiB disk reserve
+сохраняются. Explicit flag `--framed-archive-validation` применяется только к
+`backup --archive-backup` с private validation directory. Format и обычное ZSTD
+восстановление совместимы; рабочая DB/settings/generation этим CLI не меняются.
+Режим FRAMED_DISK не удерживает весь encoded snapshot в anonymous RAM.
+Ниже описан сохранённый RAM path schema1; schema2 до3GiB использует disk validation.
 Проверочные контейнеры имеют отдельный private tmpfs `/validation`, UID/GID10001,
 read-only root, network none, cap-drop ALL, CPU1 и memory-swap=memory (без swap).
 Бот и другие service units эти limits не получают. CD использует cap4GiB/no swap;
@@ -134,7 +142,7 @@ pre-switch stage; fallback на более слабую проверку отс�
 
 CLI [validation.py](../../cryptowatcher/validation.py) принимает explicit
 `--validation-directory /validation` только для `state-check` и `backup`.
-Directory — отдельный tmpfs текущего UID/mode700, без symlinks. CD добавляет
+Directory — отдельный tmpfs текущего UID/mode700, без symlinks. RAM path CD добавляет
 `--compressed-validation`, mandatory mode `COMPRESSED_RAM`.
 [Compressed validation](../../cryptowatcher/compressed_validation.py) использует
 hash-locked APSW3.53.4.0/SQLite3.53.4 только в isolated validation connections;
@@ -160,7 +168,7 @@ CD создаёт новый persistent `pre-<revision>-<time>.sqlite3.zst` expl
 его страницы. После освобождения первой image архив независимо читается заново:
 full writable integrity и decoded SHA256/size должны совпасть с snapshot;
 encoded archive SHA256/size также сверяются с записанными bytes.
-Новый архив ограничен3GiB; disk preflight требует этот предел плюс512MiB.
+Архив RAM path ограничен3GiB; его disk preflight требует этот предел плюс512MiB.
 Default CLI backup без archive flag по-прежнему создаёт обычную SQLite.
 Только owned workspace проверки удаляется; incomplete persistent archive сохраняется
 и не получает COMPLETE. DB/schema/settings/history и остальные backups не меняются.
