@@ -20,7 +20,7 @@ struct Ctx {
     sqlite3_vfs vfs; sqlite3_vfs *parent;
     char name[100]; const unsigned char *data;
     char path[4096];
-    size_t extent, count; uint64_t size, clock, reads, decodes;
+    size_t extent, count, block_size; uint64_t size, clock, reads, decodes;
     double deadline; int opens;
     Frame *frames; int *map; Slot slots[SLOTS];
     unsigned char *cache; ZSTD_DCtx *decoder;
@@ -37,7 +37,7 @@ static int read_file(sqlite3_file *p, void *out, int n, sqlite3_int64 offset) {
     c->reads++;
     uint64_t pos=(uint64_t)offset; int left=n;
     while(left>0 && pos<c->size) {
-        size_t index=(size_t)(pos/BLOCK), start=(size_t)(pos%BLOCK);
+        size_t index=(size_t)(pos/c->block_size), start=(size_t)(pos%c->block_size);
         if(index>=c->count) return SQLITE_IOERR_READ;
         int slot=c->map[index];
         if(slot<0) {
@@ -47,16 +47,16 @@ static int read_file(sqlite3_file *p, void *out, int n, sqlite3_int64 offset) {
             if(c->slots[slot].block!=UINT64_MAX) c->map[c->slots[slot].block]=-1;
             c->slots[slot].block=UINT64_MAX;c->slots[slot].age=0;
             Frame f=c->frames[index];
-            size_t decoded=ZSTD_decompressDCtx(c->decoder,c->cache+(size_t)slot*BLOCK,BLOCK,c->data+f.off,f.len);
-            size_t expected=(size_t)((c->size-(uint64_t)index*BLOCK)<BLOCK?c->size-(uint64_t)index*BLOCK:BLOCK);
-            if(ZSTD_isError(decoded) || (decoded!=expected && decoded!=BLOCK)) return SQLITE_IOERR_READ;
+            size_t decoded=ZSTD_decompressDCtx(c->decoder,c->cache+(size_t)slot*c->block_size,c->block_size,c->data+f.off,f.len);
+            size_t expected=(size_t)((c->size-(uint64_t)index*c->block_size)<c->block_size?c->size-(uint64_t)index*c->block_size:c->block_size);
+            if(ZSTD_isError(decoded) || (decoded!=expected && decoded!=c->block_size)) return SQLITE_IOERR_READ;
             c->slots[slot].block=index; c->map[index]=slot; c->decodes++;
         }
         c->slots[slot].age=++c->clock;
-        size_t take=BLOCK-start;
+        size_t take=c->block_size-start;
         if(take>(size_t)left) take=(size_t)left;
         if(take>c->size-pos) take=(size_t)(c->size-pos);
-        memcpy(target,c->cache+(size_t)slot*BLOCK+start,take);
+        memcpy(target,c->cache+(size_t)slot*c->block_size+start,take);
         target+=take; pos+=take; left-=(int)take;
     }
     if(left) { memset(target,0,(size_t)left); return SQLITE_IOERR_SHORT_READ; }
@@ -114,17 +114,50 @@ static int current_time(sqlite3_vfs *v,double *out) { Ctx *c=v->pAppData;return 
 static void release(Ctx *c) {
     if(!c)return;ZSTD_freeDCtx(c->decoder);free(c->frames);free(c->map);free(c->cache);free(c);
 }
+/* Public offsets still describe64KiB records. Multipart records contain
+   independent page frames, so an indexed4KiB read need not decode64KiB.
+   Old single-frame records retain their exact decoder and size semantics. */
 void *cwcvfs_create(const char *name,const void *data,size_t extent,const uint64_t *offsets,const uint64_t *lengths,size_t count,uint64_t size,double deadline) {
     if(!sqlite3_api || !name || strlen(name)>=100 || !data || (count && (!offsets || !lengths)) || !isfinite(deadline) || size>INT64_MAX || count!=(size/BLOCK+(size%BLOCK!=0)) || count>SIZE_MAX/sizeof(Frame) || count>SIZE_MAX/sizeof(int) || sqlite3_vfs_find(name)) return NULL;
-    Ctx *c=calloc(1,sizeof(*c));if(!c)return NULL;
-    c->data=data;c->extent=extent;c->size=size;c->count=count;c->deadline=deadline;
-    c->frames=malloc((count?count:1)*sizeof(Frame));c->map=malloc((count?count:1)*sizeof(int));
-    c->cache=malloc((size_t)BLOCK*SLOTS);c->decoder=ZSTD_createDCtx();
-    if(!c->frames || !c->map || !c->cache || !c->decoder) { release(c);return NULL; }
-    for(size_t i=0;i<count;i++) {
-        if(offsets[i]>extent || !lengths[i] || lengths[i]>extent-offsets[i]) { release(c);return NULL; }
-        c->frames[i]=(Frame){offsets[i],lengths[i]};c->map[i]=-1;
+    const unsigned char *bytes=data;
+    size_t page=BLOCK;
+    if(count) {
+        if(offsets[0]>extent || !lengths[0] || lengths[0]>extent-offsets[0]) return NULL;
+        size_t first=ZSTD_findFrameCompressedSize(bytes+offsets[0],lengths[0]);
+        if(!ZSTD_isError(first) && first<lengths[0]) {
+            unsigned long long raw=ZSTD_getFrameContentSize(bytes+offsets[0],first);
+            if(raw!=4096 && raw!=8192 && raw!=16384) return NULL;
+            page=(size_t)raw;
+        }
     }
+    uint64_t entries=size/page+(size%page!=0);
+    if(entries>SIZE_MAX/sizeof(Frame) || entries>SIZE_MAX/sizeof(int)) return NULL;
+    Ctx *c=calloc(1,sizeof(*c));if(!c)return NULL;
+    c->data=data;c->extent=extent;c->size=size;c->count=(size_t)entries;c->block_size=page;c->deadline=deadline;
+    c->frames=malloc((entries?entries:1)*sizeof(Frame));c->map=malloc((entries?entries:1)*sizeof(int));
+    c->cache=malloc(page*SLOTS);c->decoder=ZSTD_createDCtx();
+    if(!c->frames || !c->map || !c->cache || !c->decoder) { release(c);return NULL; }
+    size_t output=0;uint64_t raw_position=0;
+    for(size_t i=0;i<count;i++) {
+        if(offsets[i]>extent || !lengths[i] || lengths[i]>extent-offsets[i] || (!(i%1024) && expired(c))) { release(c);return NULL; }
+        uint64_t need=size-raw_position;if(need>BLOCK)need=BLOCK;
+        raw_position+=need;
+        if(page==BLOCK) {
+            c->frames[output]=(Frame){offsets[i],lengths[i]};c->map[output++]=-1;continue;
+        }
+        uint64_t offset=offsets[i],end=offset+lengths[i];
+        while(offset<end) {
+            size_t length=ZSTD_findFrameCompressedSize(bytes+offset,(size_t)(end-offset));
+            if(ZSTD_isError(length) || !length || output>=c->count || !need) { release(c);return NULL; }
+            unsigned long long decoded=ZSTD_getFrameContentSize(bytes+offset,length);
+            uint64_t expected=need<page?need:page;
+            if(decoded!=expected) { release(c);return NULL; }
+            c->frames[output]=(Frame){offset,length};c->map[output++]=-1;
+            offset+=length;need-=expected;
+        }
+        if(need) { release(c);return NULL; }
+    }
+    if(output!=c->count) { release(c);return NULL; }
     for(unsigned i=0;i<SLOTS;i++) c->slots[i].block=UINT64_MAX;
     strcpy(c->name,name);c->parent=sqlite3_vfs_find(NULL);
     if(!c->parent) { release(c);return NULL; }

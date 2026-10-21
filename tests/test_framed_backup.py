@@ -38,6 +38,7 @@ def test_schema2_full_source_and_independent_persisted_backup_equal_every_table(
     assert proof["source_validation"]["schema"] == 2
     assert proof["source_validation"]["snapshot_sha256"] == proof["sha256"]
     assert proof["archive_sha256"] == hashlib.sha256(destination.read_bytes()).hexdigest()
+    assert proof["sqlite_cache_kib"] == 1024 * 1024
     from cryptowatcher.compressed_validation import validate_closed
 
     compatible = validate_closed(
@@ -54,6 +55,25 @@ def test_schema2_full_source_and_independent_persisted_backup_equal_every_table(
     with closing(sqlite3.connect(restored)) as reader:
         assert reader.execute("PRAGMA foreign_key_check").fetchall() == []
     assert list(store.db.iterdump()) == original and list(scratch.iterdir()) == []
+
+
+def test_framed_backup_records_actual_configured_cache_and_refuses_mismatch(store, tmp_path, monkeypatch):
+    from cryptowatcher import compressed_validation as cv
+
+    scratch, destination = environment(tmp_path, monkeypatch)
+    snapshot = store.snapshot()
+
+    def wrong_cache(database, image):
+        database.execute("PRAGMA cache_size=-8192")
+        return 8192
+
+    monkeypatch.setattr(cv, "configure_cache", wrong_cache)
+    with pytest.raises(QualificationError, match="SQLITE_VALIDATION_ERROR") as failure:
+        framed_backup.backup(
+            store.path, destination, scratch, owner=store.owner_id, deadline=time.monotonic() + 20
+        )
+    assert failure.value.backup_metrics["phase"] == "SOURCE_METADATA"
+    assert store.snapshot() == snapshot and destination.is_file()
 
 
 def test_existing_archive_is_never_overwritten_after_repeated_request(store, tmp_path, monkeypatch):

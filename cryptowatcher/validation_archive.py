@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Iterator, Never
 
 BLOCK = 65536
+PAGE_BYTES = 4096
 PREFIX_BYTES = 2 * BLOCK
 RESERVE_BYTES = 1536 * 1024**2
 SKIP = 0x184D2A50
@@ -49,6 +50,7 @@ class ArchiveArena:
         ):
             refused("INVALID_ARCHIVE_BOUND")
         self.path = path
+        self.page_bytes = PAGE_BYTES
         self.max_raw_bytes = max_raw_bytes
         self.limit = max_archive_bytes
         self.deadline = deadline
@@ -289,6 +291,7 @@ class ArchiveArena:
             if expected != extent:
                 refused("INVALID_ARCHIVE_INDEX")
             instance.path, instance.offsets, instance.lengths = path, offsets, lengths
+            instance.page_bytes = BLOCK  # Encoding is detected from existing frames when reading.
             instance.max_raw_bytes, instance.limit, instance.deadline = (
                 max_raw_bytes,
                 max_archive_bytes,

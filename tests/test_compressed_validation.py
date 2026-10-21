@@ -544,3 +544,17 @@ def test_late_sqlite_results_never_become_corruption_or_success(monkeypatch, sta
     monkeypatch.setattr(record_catalog, "valid_heads", heads)
     with pytest.raises(QualificationError, match="TIME_BUDGET_EXCEEDED"):
         cv.full_check(Database(), 1.0)
+
+
+def test_standard_page_stream_coalesces_short_reads_before_indexing(tmp_path):
+    raw = b"a" * 4096 + b"b" * 4096 + b"last partial"
+    compressor = zstandard.ZstdCompressor(write_checksum=True)
+    encoded = b"".join(compressor.compress(raw[i : i + 4096]) for i in range(0, len(raw), 4096))
+    path = tmp_path / "independent-pages.zst"
+    path.write_bytes(encoded)
+    image = Image(path, limit=1024**2, deadline=time.monotonic() + 10, archive_encoding="ZSTD")
+    try:
+        assert image.size == len(raw) and len(image.blocks) == 1
+        assert image.reconstructed_hash() == hashlib.sha256(raw).hexdigest()
+    finally:
+        image.blocks.data.close()

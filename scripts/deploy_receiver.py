@@ -1028,7 +1028,7 @@ def framed_backup_preflight(
         )
         and proof["archive_bytes"] <= proof["archive_limit_bytes"]
         and proof["disk_reserve_bytes"] >= reserve
-        and proof["sqlite_cache_kib"] == 128 * 1024,
+        and proof["sqlite_cache_kib"] == 1024 * 1024,
         "Full persistent framed backup identity missing",
     )
     require(time.monotonic() < deadline, "Insufficient full backup budget")

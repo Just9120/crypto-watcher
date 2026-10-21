@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import io
 import mmap
 import os
 import stat
@@ -130,6 +131,7 @@ class Image:
         self.write_cache: OrderedDict[int, bytearray] = OrderedDict()
         self.compressor = zstandard.ZstdCompressor(level=COMPRESSION_LEVEL, write_checksum=True, threads=0)
         self.decompressor = zstandard.ZstdDecompressor()
+        self.page_decompressor = zstandard.ZstdDecompressor(max_window_size=BLOCK)
         self.archive_encoding = archive_encoding
         if path is None:
             self.mutable = True
@@ -147,6 +149,12 @@ class Image:
                 data = source.read(BLOCK)
                 if not data:
                     break
+                while len(data) < BLOCK:
+                    budget(deadline)
+                    more = source.read(BLOCK - len(data))
+                    if not more:
+                        break
+                    data += more
                 blob = self.compressor.compress(data)
                 self.retained += sys.getsizeof(blob)
                 if self.retained + sys.getsizeof(self.blocks) + BLOCK + 128 > limit:
@@ -188,7 +196,9 @@ class Image:
                 with gzip.GzipFile(fileobj=source, mode="rb") as decoded:
                     yield decoded
             elif self.archive_encoding == "ZSTD":
-                with self.decompressor.stream_reader(source, closefd=False) as reader:
+                with self.decompressor.stream_reader(
+                    source, closefd=False, read_across_frames=True
+                ) as reader:
                     yield reader
             else:
                 yield source
@@ -197,7 +207,14 @@ class Image:
         budget(self.deadline)
         if len(value) > BLOCK:
             raise QualificationError("INVALID_PAGE_SIZE")
-        blob = self.compressor.compress(value)
+        page = self.blocks.page_bytes if isinstance(self.blocks, ArchiveArena) else BLOCK
+        blob = (
+            b"".join(
+                self.compressor.compress(value[start : start + page]) for start in range(0, len(value), page)
+            )
+            if value
+            else self.compressor.compress(value)
+        )
         previous = self.blocks[index] if index < len(self.blocks) else None
         new = self.retained + sys.getsizeof(blob) - (sys.getsizeof(previous) if previous is not None else 0)
         if new + sys.getsizeof(self.blocks) + BLOCK + 128 > self.limit:
@@ -208,6 +225,21 @@ class Image:
             self.blocks[index] = blob
         self.retained = new
         self.cache.pop(index, None)
+
+    def unpack_block(self, blob: bytes) -> bytes:
+        if not isinstance(self.blocks, ArchiveArena):
+            return self.decompressor.decompress(blob, max_output_size=BLOCK, allow_extra_data=False)
+        # Bound both output and the decoder's window while consuming every
+        # independent page frame, including checksum/trailing-data validation.
+        parts: list[bytes] = []
+        total = 0
+        with self.page_decompressor.stream_reader(io.BytesIO(blob), read_across_frames=True) as reader:
+            while value := reader.read(BLOCK + 1 - total):
+                total += len(value)
+                if total > BLOCK:
+                    raise QualificationError("BYTE_IDENTITY_MISMATCH")
+                parts.append(value)
+        return b"".join(parts)
 
     def write(self, data: bytes, offset: int) -> None:
         budget(self.deadline)
@@ -230,7 +262,7 @@ class Image:
                     self.retained += sys.getsizeof(b"")
                     value = bytearray(BLOCK)
                 else:
-                    value = bytearray(self.decompressor.decompress(self.blocks[index], max_output_size=BLOCK))
+                    value = bytearray(self.unpack_block(self.blocks[index]))
             if len(value) < BLOCK:
                 value.extend(bytes(BLOCK - len(value)))
             value[start : start + n] = data[pos - offset : pos - offset + n]
@@ -247,7 +279,7 @@ class Image:
         self.write_cache.clear()
         if isinstance(self.blocks, ArchiveArena) and self.size % BLOCK:
             index, tail = divmod(self.size, BLOCK)
-            raw = self.decompressor.decompress(self.blocks[index], max_output_size=BLOCK)
+            raw = self.unpack_block(self.blocks[index])
             self.set_block(index, raw[:tail])
         self.mutable = False
         if isinstance(self.blocks, ArchiveArena):
@@ -290,7 +322,7 @@ class Image:
             return bytes(self.write_cache[index])[: min(BLOCK, self.size - index * BLOCK)]
         value = self.cache.pop(index, None)
         if value is None:
-            value = self.decompressor.decompress(self.blocks[index], max_output_size=BLOCK)
+            value = self.unpack_block(self.blocks[index])
             expected = min(BLOCK, self.size - index * BLOCK)
             if len(value) not in (expected, BLOCK) or (
                 isinstance(self.blocks, ArchiveArena) and len(value) != expected
@@ -333,7 +365,7 @@ class Image:
         self.cache.clear()
         for index, blob in enumerate(self.blocks):
             budget(self.deadline)
-            value = self.decompressor.decompress(blob, max_output_size=BLOCK)
+            value = self.unpack_block(blob)
             expected = min(BLOCK, self.size - index * BLOCK)
             if len(value) not in (expected, BLOCK) or (
                 isinstance(self.blocks, ArchiveArena) and len(value) != expected
@@ -424,8 +456,9 @@ def configure_cache(db: apsw.Connection, image: Image) -> int:
         if not image.blocks.sealed:
             raise QualificationError("FROZEN_IMAGE_REQUIRED")
         # File pages remain reclaimable by the unchanged4GiB cgroup limit.
-        # Keep the same128MiB SQLite cache as the ordinary disk validator.
-        cache_kib = 128 * 1024
+        # Reallocate cache inside the same hard4GiB cgroup. The file mapping is
+        # reclaimable; keeping hot index pages avoids repeated frame decoding.
+        cache_kib = MAX_SQLITE_CACHE_BYTES // 1024
         db.execute(f"PRAGMA cache_size=-{cache_kib}")
         return cache_kib
     image_bytes = image.retained + sys.getsizeof(image.blocks)
