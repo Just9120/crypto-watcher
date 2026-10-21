@@ -95,7 +95,11 @@ def test_retention_keeps_exact_cohorts_and_method_settings_after_detail_expiry(s
     retention = Retention(store)
     retention.work(NOW + 30 * DAY - 1)
     assert History(store).events(20)
-    retention.work(NOW + 30 * DAY + 1)
+    # One bounded timer slice need not retire every eligible parent.
+    for _ in range(100):
+        retention.work(NOW + 30 * DAY + 1)
+        if not History(store).events(1):
+            break
     assert not History(store).events(20)
     after = cohorts(store)
     assert after["cohorts"] == before["cohorts"]
@@ -612,7 +616,12 @@ def test_retention_keeps_all_comparator_versions_and_original_pending_method(sto
             },
         )
     before = list(cohort_rows(store))
-    Retention(store).work(NOW + 31 * DAY)
+    # Drain this finite population without assuming one machine's slice speed.
+    for _ in range(100):
+        Retention(store).work(NOW + 31 * DAY)
+        if not h.events(1):
+            break
+    assert not h.events(1)
     assert list(cohort_rows(store)) == before
     rows = store.db.execute("SELECT dimensions,provenance,facts FROM market_quality").fetchall()
     assert any(

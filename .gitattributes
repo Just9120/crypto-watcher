@@ -2,3 +2,4 @@
 native/** text eol=lf
 native/vendor/sqlite/** -text
 native/vendor/zstd/** -text
+tests/fixtures/numeric_boundary_seed.json text eol=lf

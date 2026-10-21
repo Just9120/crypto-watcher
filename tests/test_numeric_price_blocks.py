@@ -157,7 +157,14 @@ def test_actual_nb2_bytes_and_feature_marker_are_rechecked_after_warm_cache(stor
     assert numeric_pool.load(store.db, ids[0]) == values[0]
     with store.db:
         store.db.execute("DROP TRIGGER market_numeric_block_guard")
-        store.db.execute("UPDATE market_numeric_blocks SET payload=zeroblob(length(payload)) WHERE id=0")
+        payload = bytes(
+            store.db.execute("SELECT payload FROM market_numeric_blocks WHERE id=0").fetchone()[0]
+        )
+        # Retain the SQL format envelope so the warmed reader must detect
+        # changed authenticated content rather than failing the table CHECK.
+        store.db.execute(
+            "UPDATE market_numeric_blocks SET payload=? WHERE id=0", (payload[:4] + bytes(len(payload) - 4),)
+        )
     with pytest.raises(ValueError):
         numeric_pool.load(store.db, ids[0])
     assert store.reference_cache_bytes <= 1024 * 1024

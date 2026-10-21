@@ -77,7 +77,7 @@ def test_snapshot_advance_matches_original_bits_gaps_and_cutoffs(store, width):
                 assert bits(actual) == bits(original(source, start, reference, needed))
             assert calls[:2] == [(4 * step, 500 * step), (500 * step, 502 * step)]
             assert calls[4] == (44 * step, 540 * step)  # Backwards cutoff requires a full read.
-            assert calls[5] == (344 * step, 840 * step)  # Large jump also keeps the original path.
+            assert calls[5] == (540 * step, 840 * step)  # A large overlapping jump reads only its new tail.
 
 
 @pytest.mark.parametrize("bounded", [False, True])

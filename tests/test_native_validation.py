@@ -40,6 +40,11 @@ def test_native_full_catalogue_checks_owner_masks_and_head_uniqueness(store, tmp
                 + ("checksum=zeroblob(32)" if damage == "overlap_checksum" else "n=n+1")
             )
     assert store.db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0
+    expected_owners = [
+        tuple(row)
+        for row in store.db.execute("SELECT slots,checksum FROM market_record_owners ORDER BY parent,packet")
+    ]
+    store.close()
     original = store.path.read_bytes()
     image = cv.Image(store.path, limit=cv.MAX_COMPRESSED_BYTES, deadline=time.monotonic() + 30)
     sentinel = tmp_path / "catalogue-native.sqlite3"
@@ -50,14 +55,10 @@ def test_native_full_catalogue_checks_owner_masks_and_head_uniqueness(store, tmp
             cv.configure_cache(db, image)
             if damage is None:
                 cv.full_check(db, image.deadline)
-                assert list(
-                    db.execute("SELECT slots,checksum FROM market_record_owners ORDER BY parent,packet")
-                ) == [
-                    tuple(row)
-                    for row in store.db.execute(
-                        "SELECT slots,checksum FROM market_record_owners ORDER BY parent,packet"
-                    )
-                ]
+                assert (
+                    list(db.execute("SELECT slots,checksum FROM market_record_owners ORDER BY parent,packet"))
+                    == expected_owners
+                )
             else:
                 with pytest.raises(cv.QualificationError, match="DATABASE_CORRUPT"):
                     cv.full_check(db, image.deadline)
@@ -100,6 +101,25 @@ def test_native_full_validation_includes_source_tiles_cells_and_their_counters(s
     assert accepted > 0
     wanted = {i: metric_codec.pack(v) for i, v in zip(metric_ids, metric_values, strict=True)}
     store.db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
+    tables = (
+        "market_candle_blocks",
+        "market_candle_block_totals",
+        "market_candle_fallbacks",
+        "market_candle_gc",
+        "market_numeric_blocks",
+        "market_numeric_block_refs",
+        "market_numeric_block_lookup",
+        "market_numeric_totals",
+        "market_numeric_transfer",
+        "market_numeric_gc",
+        "market_counts",
+        "runtime",
+    )
+    expected_tables = {
+        table: [tuple(row) for row in store.db.execute(f"SELECT * FROM {table} ORDER BY 1,2")]
+        for table in tables
+    }
+    store.close()
     original = store.path.read_bytes()
     image = cv.Image(store.path, limit=cv.MAX_COMPRESSED_BYTES, deadline=time.monotonic() + 30)
     sentinel = tmp_path / "source-tiles-native.sqlite3"
@@ -116,23 +136,9 @@ def test_native_full_validation_includes_source_tiles_cells_and_their_counters(s
                     if identity_value in wanted:
                         actual_metrics[identity_value] = metric_price_codec.frame(frame)
             assert actual_metrics == wanted
-            for table in (
-                "market_candle_blocks",
-                "market_candle_block_totals",
-                "market_candle_fallbacks",
-                "market_candle_gc",
-                "market_numeric_blocks",
-                "market_numeric_block_refs",
-                "market_numeric_block_lookup",
-                "market_numeric_totals",
-                "market_numeric_transfer",
-                "market_numeric_gc",
-                "market_counts",
-                "runtime",
-            ):
+            for table in tables:
                 actual = list(db.execute(f"SELECT * FROM {table} ORDER BY 1,2"))
-                expected = [tuple(row) for row in store.db.execute(f"SELECT * FROM {table} ORDER BY 1,2")]
-                assert actual == expected
+                assert actual == expected_tables[table]
     finally:
         vfs.unregister()
     assert image.reconstructed_hash() == image.sha256

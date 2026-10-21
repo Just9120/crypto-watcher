@@ -48,7 +48,7 @@ from cryptowatcher.storage import Store  # noqa: E402
 from cryptowatcher.storage_repack import work  # noqa: E402
 
 SEED = ROOT / "tests/fixtures/numeric_boundary_seed.json"
-SEED_SHA256 = "9d716f721575b8711f035a173633b2fd9159ade056160fb0ea17c74455e0b229"
+SEED_SHA256 = "dde144b2bbfb42d20ae138580b635296b91c55d9ff38ca7d10470fb44502aa4b"
 FRAME_COUNT = 129_572
 READ_SECONDS = 50
 
