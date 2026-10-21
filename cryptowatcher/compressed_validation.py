@@ -591,7 +591,11 @@ def snapshot_image(
             destination.close()
             destination = None
             image.freeze()
-            original = image.reconstructed_hash()
+            original = (
+                image.blocks.raw_sha256
+                if isinstance(image.blocks, ArchiveArena)
+                else image.reconstructed_hash()
+            )
             vfs.unregister()
             vfs = frozen_vfs(image, sentinel)
             destination = apsw.Connection(

@@ -62,7 +62,9 @@ class ArchiveArena:
         self.sealed = False
         self.data: mmap.mmap | None = None
         self.end = PREFIX_BYTES
-        self._admit(PREFIX_BYTES)
+        self._admit(0)
+        if shutil.disk_usage(self.path.parent).free < RESERVE_BYTES + PREFIX_BYTES:
+            refused("ARCHIVE_DISK_RESERVE")
         handle = os.open(path, os.O_CREAT | os.O_EXCL | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
         self.file = os.fdopen(handle, "r+b", buffering=0)
         self.file.truncate(PREFIX_BYTES)
