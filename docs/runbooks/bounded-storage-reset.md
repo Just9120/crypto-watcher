@@ -133,6 +133,19 @@ zero data writes; это snapshot текущего размера, не обещ
 будущей базы и не доказательство текущего25GB capacity. Failed attempt сохраняется; повтор
 делается после исправления через новый validated artifact, без bypass/reset.
 
+Для schema2 выше3GiB routine receiver выбирает существующий frozen compressed
+image, ограниченный3GiB compressed bytes внутри прежнего4GiB процесса/CPU1.
+Полные CHECK/index/freelist/current-head integrity и отдельная полная проверка
+постоянного `.sqlite3.zst` backup/raw SHA256 сохраняются; восстановление возвращает
+те же SQLite bytes. Capture освобождает live WAL snapshot до проверки frozen
+image. Две стадии используют один остаток prep budget с прежним резервом210s
+на switch/recovery/post-checks внутри общего900s. Incompressible/bound/timeout
+останавливает поставку до switch; не запускается более слабый fallback. Schema2
+до3GiB сохраняет disk path. Метод/resources сохраняются до запуска проверки,
+TimeoutExpired даёт безопасный TIME_BUDGET_EXCEEDED без raw stderr/exception body.
+Выбор метода не является доказательством его времени на произвольной базе;
+actual ordinary CD и полный backup остаются обязательны.
+
 ## Измерение ёмкости и конечное24h наблюдение
 
 Canonical команды из root, existing env/owner binding:

@@ -72,6 +72,8 @@ def install(
     *,
     execute: bool = False,
     approve_new_writes_only: bool = False,
+    expected_receiver_sha256: str | None = None,
+    expected_runtime_revision: str | None = None,
 ) -> dict[str, Any]:
     import fcntl
 
@@ -82,12 +84,31 @@ def install(
     )
     require(bool(re.fullmatch(r"[0-9a-f]{64}", expected)) and number > 0, "Invalid update identity")
     require(
+        (expected_receiver_sha256 is None) == (expected_runtime_revision is None),
+        "Current receiver/runtime identities must be supplied together",
+    )
+    old_hash = OLD_HASH if expected_receiver_sha256 is None else expected_receiver_sha256
+    runtime_revision = (
+        "afd10770aa3a330e6c5a28e3ea85a676060e6c29"
+        if expected_runtime_revision is None
+        else expected_runtime_revision
+    )
+    require(
+        bool(re.fullmatch(r"[0-9a-f]{64}", old_hash))
+        and bool(re.fullmatch(r"[0-9a-f]{40}", runtime_revision)),
+        "Invalid current receiver/runtime identity",
+    )
+    require(
+        not approve_new_writes_only or expected_receiver_sha256 is None,
+        "New-write permit requires the original reviewed legacy profile",
+    )
+    require(
         APP.resolve() == APP and RECEIVER.resolve() == RECEIVER and TARGET.resolve() == TARGET,
         "Unexpected symlink target",
     )
     require(digest(TARGET.read_bytes()) == TARGET_HASH, "Deployment target changed")
     old = RECEIVER.read_bytes()
-    require(digest(old) == OLD_HASH, "Receiver changed; inspect before retry")
+    require(digest(old) == old_hash, "Receiver changed; inspect before retry")
     meta = RECEIVER.stat()
     require(meta.st_uid == 0 and meta.st_mode & 0o022 == 0, "Unsafe receiver permissions")
     candidate = read_url(f"https://raw.githubusercontent.com/{REPO}/{head}/scripts/deploy_receiver.py")
@@ -97,7 +118,11 @@ def install(
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         gate(base, head, number)
         result = subprocess.run(
-            ["docker", "inspect", "crypto-watcher"], capture_output=True, text=True, timeout=15, check=True
+            ["docker", "--host", "unix:///var/run/docker.sock", "inspect", "crypto-watcher"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=True,
         )
         live = json.loads(result.stdout)[0]
         labels = live["Config"].get("Labels") or {}
@@ -111,7 +136,7 @@ def install(
             "Wrong deployment unit",
         )
         require(
-            labels.get("org.opencontainers.image.revision") == "afd10770aa3a330e6c5a28e3ea85a676060e6c29",
+            labels.get("org.opencontainers.image.revision") == runtime_revision,
             "Running revision changed; inspect before update",
         )
         report = {
@@ -120,7 +145,7 @@ def install(
             "base": base,
             "candidate": head,
             "pr": number,
-            "receiver_before": OLD_HASH,
+            "receiver_before": old_hash,
             "receiver_after": expected,
             "running_revision": labels["org.opencontainers.image.revision"],
             "running_container": live["Id"],
@@ -167,7 +192,7 @@ def install(
         with backup.open("xb") as output:
             output.write(old)
         backup.chmod(0o600)
-        require(digest(backup.read_bytes()) == OLD_HASH, "Backup verification failed")
+        require(digest(backup.read_bytes()) == old_hash, "Backup verification failed")
         with tempfile.NamedTemporaryFile(dir=RECEIVER.parent, delete=False) as output:
             output.write(candidate)
             output.flush()
@@ -197,6 +222,8 @@ def main() -> int:
     parser.add_argument("--receiver-sha256", required=True)
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--approve-new-writes-only", action="store_true")
+    parser.add_argument("--expected-receiver-sha256")
+    parser.add_argument("--expected-runtime-revision")
     args = parser.parse_args()
     try:
         print(
@@ -208,6 +235,8 @@ def main() -> int:
                     args.receiver_sha256,
                     execute=args.execute,
                     approve_new_writes_only=args.approve_new_writes_only,
+                    expected_receiver_sha256=args.expected_receiver_sha256,
+                    expected_runtime_revision=args.expected_runtime_revision,
                 )
             )
         )

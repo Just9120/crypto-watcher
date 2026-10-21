@@ -247,17 +247,24 @@ def delivery_result(result, *, revision: str, digest: str, build_run: int) -> tu
     phase = failure.get("failure_phase", "UNSET")
     phase = phase if isinstance(phase, str) and phase in PHASES else "UNSET"
     remote_exit = re.fullmatch(r"Operation failed: docker exit ([0-9]{1,3})", str(failure.get("reason")))
-    code = (
-        {
+    if failure.get("reason") in (
+        "Operation time budget exceeded",
+        "Deployment900s budget exhausted",
+        "Deployment wall-clock budget exhausted",
+        "Insufficient full backup budget",
+        "Insufficient disk backup budget",
+    ):
+        code = "TIME_BUDGET_EXCEEDED"
+    elif remote_exit:
+        code = {
             "3": "TIME_BUDGET_EXCEEDED",
             "4": "DATABASE_CORRUPT",
             "5": "INTERRUPTED",
             "6": "IO_ERROR",
             "7": "DATABASE_ERROR",
         }.get(remote_exit[1], "REMOTE_OPERATION_FAILED")
-        if remote_exit
-        else "DELIVERY_UNCONFIRMED"
-    )
+    else:
+        code = "DELIVERY_UNCONFIRMED"
     return {
         "state": "BLOCKED",
         "attempted_source_sha": revision,
