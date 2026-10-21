@@ -117,6 +117,21 @@ def test_expensive_qualification_selected_only_for_its_inputs():
     assert not backup_io_required(["docs/open_issues.md", "cryptowatcher/bot.py"])
 
 
+def test_qualification_compares_values_across_both_real_sql_drivers_and_detects_change(store):
+    from scripts.qualify_backup_io import private_rows
+
+    expected = private_rows(store.db)
+    with closing(
+        apsw.Connection(
+            store.path.resolve().as_uri() + "?mode=ro", flags=apsw.SQLITE_OPEN_URI | apsw.SQLITE_OPEN_READONLY
+        )
+    ) as reader:
+        assert private_rows(reader) == expected
+        with store.db:
+            store.db.execute("UPDATE owner_settings SET revision=revision+1")
+        assert private_rows(reader) != expected
+
+
 @pytest.mark.parametrize(
     "release,expected", [("6.2.0", False), ("6.3.1", True), ("6.8.0-147-generic", True), ("unknown", False)]
 )
@@ -220,6 +235,8 @@ def test_cli_releases_metadata_connection_before_pinned_framed_capture(
             str(scratch),
             "--archive-backup",
             "--framed-archive-validation",
+            "--timeout-seconds",
+            "20",
         )
         == 0
     )

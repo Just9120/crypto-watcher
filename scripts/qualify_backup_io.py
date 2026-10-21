@@ -21,6 +21,11 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 
+def private_rows(database) -> list[tuple]:
+    """Compare SQL values across sqlite3.Row and APSW tuple representations."""
+    return [tuple(row) for row in database.execute("SELECT * FROM owner_settings")]
+
+
 def worker(directory: Path) -> dict:
     import apsw
     import zstandard
@@ -60,7 +65,7 @@ def worker(directory: Path) -> dict:
     owner = 233382575
     store = Store(source, owner)
     store.initialize(OwnerSettings())
-    private = list(store.db.execute("SELECT * FROM owner_settings"))
+    private = private_rows(store.db)
     store.db.execute("PRAGMA journal_mode=DELETE")
     # Index sorting belongs to the generated fixture, not the 16 MiB CLI /tmp.
     # Its bounded ~50 MiB sort stays inside the unchanged 4 GiB cgroup cap.
@@ -174,6 +179,18 @@ def worker(directory: Path) -> dict:
         if raw_hash is None:
             raw_hash = proof["sha256"]
         assert proof["sha256"] == raw_hash
+        progress["pending_run"] = {
+            "advised": enabled,
+            "wall_seconds": round(elapsed, 3),
+            "cpu_seconds": round(cpu_used, 3),
+            "physical_read_bytes": read_bytes,
+            "physical_reads_by_phase": reads_by_phase,
+            "archive_bytes": proof["archive_bytes"],
+            "raw_sha256": proof["sha256"],
+            "phases": proof["phase_seconds"],
+            "source_io": proof["source_io"],
+        }
+        save_progress("STANDARD_ZSTD_RESTORE")
         # A generic standard ZSTD decoder independently restores every byte.
         digest, size = hashlib.sha256(), 0
         with (
@@ -184,6 +201,7 @@ def worker(directory: Path) -> dict:
                 digest.update(chunk)
                 size += len(chunk)
         assert digest.hexdigest() == raw_hash and size == proof["bytes"]
+        save_progress("ALL_ORIGINAL_ROWS_AND_PRIVATE")
         arena = ArchiveArena.open(
             archive,
             max_raw_bytes=proof["bytes"],
@@ -199,7 +217,7 @@ def worker(directory: Path) -> dict:
             ) as reader:
                 reader.execute("PRAGMA query_only=ON")
                 reader.execute("PRAGMA cache_size=-8192")
-                assert list(reader.execute("SELECT * FROM owner_settings")) == private
+                assert private_rows(reader) == private
                 actual = hashlib.sha256()
                 rows_read = 0
                 for index, key, value in reader.execute("SELECT * FROM fixture ORDER BY id"):
@@ -225,6 +243,7 @@ def worker(directory: Path) -> dict:
         )
         print(json.dumps({"qualification_run": len(results), **results[-1]}), flush=True)
         progress["completed_runs"] = results
+        progress.pop("pending_run", None)
         save_progress("VERIFIED_RUN")
         # This exact fixture archive is owned by this finite qualification;
         # its identity and all rows have been verified before removal.
