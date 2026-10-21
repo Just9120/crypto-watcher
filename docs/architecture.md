@@ -4,12 +4,17 @@
 
 Один Python 3.11 процесс, один Compose service `crypto_watcher`, persistent SQLite physical schema2 в WAL mode; legacy schema1 поддерживается compatibility reader. Владелец один; settings/domain state не создаются для входящих чужих chats. Trading credentials и LLM отсутствуют.
 
-Bounded BP1 transpose может выполняться внутри этого же процесса C99 helper через
-ctypes. Он только копирует byte planes; semantic/checksum/owner/NS2 checks и общий
-pure cache1MiB остаются у Python adapters. Native helper не является SQLite
-extension и не владеет БД, сетью, jobs или persistent state. Canonical native build
-и Docker image собирают его из того же source revision; installed bad ABI/error
-не подменяется portable fallback.
+Bounded BP1 transpose выполняется C99 helper через ctypes при наличии artifact.
+ABI2 также предоставляет read-only SQLite scalar для structural NF/NR/NS2 proof:
+Python сначала аутентифицирует BF1 bytes/shape и OW mask, затем native вызов
+читает до64 current parent/ref rows и сверяет неизменные pointer/NR/NS2 значения.
+SHA256 использует opaque EVP API уже загруженного Python OpenSSL; NR2 header —
+pinned Zstd API. Собственной crypto implementation нет. SQL scalar DIRECTONLY,
+extension loading отключается сразу после установки exact trusted artifact;
+каждый вызов освобождает statement/EVP context, не оставляет DB pointers/cache
+и не выполняет writes. Общий pure cache1MiB и50s boundary budget сохранены.
+Canonical native build и Docker image собирают helper из той же source revision;
+installed bad ABI/error не подменяется portable fallback.
 
 Advisory consumer boundary: `agent_contract.py` проецирует immutable history в typed v2;
 `agent_delivery.py` владеет отдельными preference/intents/frozen bytes/attempts/ack baseline.

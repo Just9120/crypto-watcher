@@ -1,7 +1,8 @@
-"""Optional bounded byte copy; Python retains all format and ownership checks.
+"""Optional bounded byte copy and read-only NF proof artifact.
 
 Absence selects the portable decoder. An installed but invalid artifact fails
-closed. The library has no Python API, allocation, I/O or persistent state.
+closed. Byte transposition has no allocation or I/O. The optional SQL proof
+uses current rows and Python's OpenSSL; it retains no persistent state.
 """
 
 from __future__ import annotations
@@ -28,8 +29,10 @@ def load() -> Any:
         library = ctypes.CDLL(str(path))
         library.cw_nf_abi.argtypes = []
         library.cw_nf_abi.restype = ctypes.c_uint32
-        if library.cw_nf_abi() != 1:
+        if library.cw_nf_abi() != 2:
             raise ValueError("Unknown numeric decoder ABI")
+        for name in ("cw_nf_crypto", "cw_nf_digest", "sqlite3_extension_init"):
+            getattr(library, name)
         library.cw_nf_untranspose.argtypes = [
             ctypes.c_char_p,
             ctypes.c_size_t,

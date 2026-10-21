@@ -43,14 +43,19 @@ SQLite extension API, физически запрещает запись source 
 deadline/CPU1/RAM4GiB. Mutable capture использует Python VFS; frozen source и
 recovery выбирают native helper при наличии Linux artifact. Отсутствующий helper
 оставляет portable Python path; повреждённый или несовместимый установленный
-helper прекращает validation. Radar runtime extension не загружает. Native
+helper прекращает validation. Frozen-image extension отделён от runtime БД. Native
 corruption/bounds/lifetime/deadline fixtures входят в required Linux suite.
 
-Эта же сборка создаёт `numeric_frame.so` для bounded BP1 byte transposition в
-runtime. Helper копирует байты, без SQL, I/O, allocations или float arithmetic;
-format/checksum/ownership/NS2 validation остаётся в Python. При отсутствии
-artifact работает portable decoder; повреждённый installed artifact прекращает
-чтение. Linux CI и image checks требуют корректный artifact и byte-exact parity.
+Эта же сборка создаёт `numeric_frame.so` ABI2 для bounded BP1 byte transposition
+и read-only NF/NR/NS2 proof. Transpose только копирует байты без allocations или
+float arithmetic. Python проверяет BF1/checksum/shape и OW mask, а native proof
+читает до64 current parent/ref rows, проверяет прежние NR/NS2 preimages через
+OpenSSL из Python и NR2 header через pinned Zstd. Extension не пишет данные,
+не сохраняет connection/statement/cache; загрузка разрешена только на время
+установки exact artifact. Прежний shared pure cache остаётся1MiB. При отсутствии
+artifact работает portable path; повреждённый installed artifact прекращает
+чтение. Linux CI и image checks требуют корректный artifact, byte-exact parity
+и полный finite structural read в прежнем50s budget.
 
 Конвертер также читает сохранённые gzip/Zstandard archives через bounded compressed
 image без дополнительной raw source copy. Explicit encoding/byte cap и полный набор

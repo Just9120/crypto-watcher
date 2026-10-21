@@ -17,6 +17,7 @@ from . import numeric_block_codec as blocks
 from . import (
     numeric_frame_codec,
     numeric_frame_native,
+    numeric_frame_proof,
     numeric_frames,
     numeric_refs,
     numeric_search,
@@ -399,6 +400,7 @@ def measure(db: sqlite3.Connection, deadline: float, cache: Any = None) -> dict[
     header(db)
     numeric_frames.header(db)
     compressed_leases = numeric_refs.writing(db)
+    native_owners = numeric_frame_proof.install(db)
     cursor = frames = payload_bytes = owned = 0
     last = db.execute("SELECT id FROM market_numeric_frames ORDER BY id DESC LIMIT 1").fetchone()
     upper = last[0] if last else 0
@@ -406,6 +408,7 @@ def measure(db: sqlite3.Connection, deadline: float, cache: Any = None) -> dict[
         "state": "PARTIAL_BUDGET",
         "mode": current,
         "byte_transpose_backend": "C99" if numeric_frame_native.available() else "PYTHON",
+        "owner_proof_backend": "SQLITE_OPENSSL" if native_owners else "PYTHON",
         "upper": upper,
         "method": "FINITE_ACTUAL_CONTAINER_POINTER_OWNER_SEAL_AND_COUNTER_RECONCILIATION",
         "limitations": [
@@ -424,6 +427,13 @@ def measure(db: sqlite3.Connection, deadline: float, cache: Any = None) -> dict[
             identity, payload, mask, checksum = row[0], bytes(row[1]), bytes(row[2]), bytes(row[3])
             if owner_slots.signature(3, identity, mask) != checksum:
                 raise ValueError("Conflicting actual numeric frame owner checksum")
+            if native_owners:
+                flat = numeric_frame_codec.data(payload, cache)
+                owned += numeric_frame_proof.owners(db, identity, flat, mask, compressed_leases)
+                frames += 1
+                payload_bytes += len(payload)
+                cursor = identity
+                continue
             entries = numeric_frame_codec.raw_entries(payload, cache)
             # One validated container identity; enumerated slots are already
             # bounded by the authenticated BF1 decoder's <=64 cardinality.

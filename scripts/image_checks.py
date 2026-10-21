@@ -194,6 +194,29 @@ def main() -> None:
             "assert v.stats()['vfs_backend']=='native'; v.unregister()",
             temporary_size="64m",
         )
+        # Exercise the ABI2 SQL/OpenSSL bridge in the actual runtime image,
+        # whose Python/OpenSSL/SQLite differ from the CI build environment.
+        run(
+            args.image,
+            directory,
+            "-c",
+            "import sqlite3,struct; "
+            "from cryptowatcher import numeric_frame_proof as p,numeric_frames as f; "
+            "from cryptowatcher.numeric_block_codec import counts; "
+            "from cryptowatcher.numeric_search import signature; "
+            "db=sqlite3.connect(':memory:'); assert p.install(db); "
+            "db.execute('CREATE TABLE market_numeric_blocks(id INTEGER PRIMARY KEY,payload BLOB)'); "
+            "db.execute('CREATE TABLE market_numeric_block_refs(id INTEGER PRIMARY KEY,counts BLOB,detail_slots INTEGER,search_seal BLOB)'); "
+            "entry=struct.pack('>Q',7)+bytes([0,26])+bytes(63+26); "
+            "flat=bytes([1])+struct.pack('>II',0,len(entry))+entry; "
+            "pointer=f.pointer(1,0); nr=counts(7,[0]*64,[1]+[0]*63); "
+            "db.execute('INSERT INTO market_numeric_blocks VALUES(?,?)',(7,pointer)); "
+            "db.execute('INSERT INTO market_numeric_block_refs VALUES(?,?,?,?)',"
+            "(7,nr,0,signature(7,pointer,nr,binding=entry))); "
+            "before=db.total_changes; "
+            "assert p.owners(db,1,flat,bytes(7)+bytes([1]),False)==1; "
+            "assert db.total_changes==before; db.close()",
+        )
         for command in ("state-check", "backup"):
             extra = ["--destination", "/data/compressed-restore.db"] if command == "backup" else []
             compressed = json.loads(

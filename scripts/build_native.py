@@ -1,4 +1,4 @@
-"""Build the history, frozen-VFS and bounded numeric byte helpers."""
+"""Build history, frozen-VFS and bounded numeric byte/owner proof helpers."""
 
 import argparse
 import hashlib
@@ -41,20 +41,7 @@ def main() -> None:
     build_vfs(args.compiler, args.output.with_name("compressed_vfs.so"))
     numeric = args.output.with_name("numeric_frame.so")
     subprocess.run(
-        [
-            args.compiler,
-            "-std=c99",
-            "-O3",
-            "-fPIC",
-            "-shared",
-            "-Wall",
-            "-Wextra",
-            "-Werror",
-            "-pedantic",
-            str(ROOT / "native/numeric_frame.c"),
-            "-o",
-            str(numeric),
-        ],
+        ["bash", str(ROOT / "native/build_numeric.sh"), str(numeric.resolve()), args.compiler],
         check=True,
     )
     subprocess.run(

@@ -35,7 +35,7 @@ def test_unknown_installed_abi_is_rejected_before_using_any_decoder(tmp_path, mo
     class Unknown:
         @staticmethod
         def cw_nf_abi():
-            return 2
+            return 99
 
     monkeypatch.setattr(numeric_frame_native.ctypes, "CDLL", lambda path: Unknown())
     with pytest.raises(ValueError, match="Unknown numeric decoder ABI"):

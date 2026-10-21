@@ -1,14 +1,19 @@
 /* Bounded BP1 byte transposition. No allocation, I/O, Python API or floats. */
 #include <stddef.h>
 #include <stdint.h>
+#ifdef _WIN32
+#define CW_EXPORT __declspec(dllexport)
+#else
+#define CW_EXPORT __attribute__((visibility("default")))
+#endif
 
 #define CW_NF_SLOTS 4096u
 #define CW_NF_WIDTH 34u
 #define CW_NF_BYTES (CW_NF_SLOTS * CW_NF_WIDTH)
 
-uint32_t cw_nf_abi(void) { return 1u; }
+CW_EXPORT uint32_t cw_nf_abi(void) { return 2u; }
 
-int cw_nf_untranspose(const unsigned char *lengths, size_t count,
+CW_EXPORT int cw_nf_untranspose(const unsigned char *lengths, size_t count,
                       const unsigned char *planes, size_t plane_size,
                       unsigned char *output, size_t output_size) {
     uint32_t offsets[CW_NF_SLOTS + 1u];
