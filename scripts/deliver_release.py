@@ -160,7 +160,7 @@ def delivery_result(result, *, revision: str, digest: str, build_run: int) -> tu
         )
         and proof["archive_bytes"] <= proof["archive_limit_bytes"]
         and proof["disk_reserve_bytes"] >= 1536 * 1024**2
-        and proof["sqlite_cache_kib"] == 1024 * 1024
+        and proof["sqlite_cache_kib"] == 2 * 1024 * 1024
     )
     reset_proof = success.get("reset_proof", {})
     reset = (

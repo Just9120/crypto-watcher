@@ -33,7 +33,7 @@ def framed(tmp_path, monkeypatch):
         "archive_sha256": "c" * 64,
         "archive_limit_bytes": 11_000_119_296,
         "disk_reserve_bytes": 1536 * 1024**2,
-        "sqlite_cache_kib": 1024 * 1024,
+        "sqlite_cache_kib": 2 * 1024 * 1024,
         "integrity_basis": "FULL_VALIDATED_CAPTURE_AND_INDEPENDENT_EQUAL_RAW_SHA256",
     }
     response = {"status": "backup_integrity_ok", "backup": proof}
@@ -82,7 +82,7 @@ def test_one_large_source_capture_and_persisted_proof_keep_fixed_resources_and_r
         ("proof", "archive_bytes", True),
         ("proof", "archive_limit_bytes", 1),
         ("proof", "disk_reserve_bytes", 512),
-        ("proof", "sqlite_cache_kib", 128 * 1024),
+        ("proof", "sqlite_cache_kib", 1024 * 1024),
         ("proof", "integrity_basis", "quick_check"),
         ("proof", "archive_encoding", "GZIP"),
         ("proof", "archive_sha256", None),

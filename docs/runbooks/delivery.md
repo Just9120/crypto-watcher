@@ -125,11 +125,14 @@ SHA доказательство тех же неизменных bytes; CPU1/RA
 `backup --archive-backup` с private validation directory. Format и обычное ZSTD
 восстановление совместимы; рабочая DB/settings/generation этим CLI не меняются.
 Режим FRAMED_DISK не удерживает весь encoded snapshot в anonymous RAM. Его64KiB
-index records содержат независимые4KiB frames; single-frame64KiB archives остаются
-readable. SQLite cache1GiB и page decoder используют прежний общий4GiB hard cap,
+index records содержат64KiB frames; прежние multipart4/8/16KiB archives остаются
+readable. SQLite cache2GiB и decoder используют прежний общий4GiB hard cap,
 а не дополнительную память. Full source/CHECK/index/freelist/heads и оба SHA gates
 сохранены. Поздний результат integrity сначала проверяется на deadline, затем на
-corruption. Proof содержит фактический cache setting; смена строгого receiver
+corruption. Fresh closed-file readback выполняет и обязательный exit SHA gate: полный
+digest сравнивается с captured digest после full SQL; повторный проход по тем же
+frozen bytes объединён с этим независимым чтением. RAM path сохраняет exit scan.
+Proof содержит фактический cache setting; смена строгого receiver
 требует existing exact reviewed pre-merge operator procedure.
 Ниже описан сохранённый RAM path schema1; schema2 до3GiB использует disk validation.
 Проверочные контейнеры имеют отдельный private tmpfs `/validation`, UID/GID10001,

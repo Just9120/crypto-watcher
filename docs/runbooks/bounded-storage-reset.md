@@ -136,20 +136,23 @@ zero data writes; это snapshot текущего размера, не обещ
 Для schema2 выше3GiB routine receiver выбирает один дисковый frozen capture через
 `backup --archive-backup --framed-archive-validation --validation-directory`.
 Source transaction фиксирует точные page_count/page_size и закрывается после copy.
-Постоянный стандартный ZSTD stream содержит независимые4KiB frames, сгруппированные
-в прежние64KiB index records, reserved header и checked index в skippable frames.
-Native reader проверяет границы/размер каждой страницы до регистрации; прежние
-single-frame64KiB records читаются тем же API. Python reader ограничивает окно
+Постоянный стандартный ZSTD stream содержит64KiB frames, reserved header и checked
+index в skippable frames. Native reader тем же API также читает прежние64KiB records
+с независимыми4/8/16KiB subframes, проверяя границы/размер до регистрации. Python reader ограничивает окно
 декодера64KiB и проверяет каждый frame/CRC и весь output без скрытых trailing bytes.
 Обычный stream reader объединяет короткие чтения перед созданием64KiB records. Полный CHECK/index/freelist/current-head scan проверяет
 все bytes этого согласованного snapshot. Независимый closed-file reopen проверяет
-index, каждый decoded byte/raw SHA256 и encoded archive SHA256. Source/backup proof
+index, каждый decoded byte/raw SHA256 и encoded archive SHA256. Этот fresh reader
+выполняет также обязательный exit byte-identity check snapshot: его полный digest
+сравнивается с captured digest после full SQL и освобождения native borrows.
+Повторный digest тех же frozen bytes не нужен; default RAM path сохраняет свой
+exit scan. Source/backup proof
 ссылаются на один неизменный raw SHA; повторного live capture нет. Обычный ZSTD
 restore возвращает точно исходные SQLite bytes, включая последний partial block.
-Режим FRAMED_DISK перераспределяет SQLite cache до1GiB внутри прежнего жёсткого
+Режим FRAMED_DISK перераспределяет SQLite cache до2GiB внутри прежнего жёсткого
 4GiB cgroup cap/CPU1/no swap; file mapping остаётся reclaimable. Runtime cache бота,
 малый disk path и прежний RAM path этим не меняются. Proof читает фактический
-PRAGMA cache_size; receiver/Actions требуют точный1GiB setting и прежние resources. Archive bound — min(raw size+format overhead,
+PRAGMA cache_size; receiver/Actions требуют точный2GiB setting и прежние resources. Archive bound — min(raw size+format overhead,
 free bytes−1536MiB); резерв проверяется при записи, файл и parent fsync обязательны.
 Всё укладывается в один остаток prep budget с прежним резервом210s на
 switch/recovery/post-checks внутри900s. Неизвестный порядок snapshot writes,

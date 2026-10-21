@@ -12,7 +12,7 @@ from typing import Any
 import apsw
 
 from .compressed_validation import (
-    MAX_SQLITE_CACHE_BYTES,
+    FRAMED_SQLITE_CACHE_BYTES,
     Image,
     QualificationError,
     classified_errors,
@@ -107,6 +107,25 @@ def backup(
             arena = ArchiveArena(
                 destination, max_raw_bytes=raw_size, max_archive_bytes=capacity, deadline=deadline
             )
+
+            def persisted_identity() -> str:
+                nonlocal arena
+                if arena is None:
+                    raise QualificationError("FROZEN_IMAGE_REQUIRED")
+                expected = arena.raw_sha256
+                arena.assert_unchanged()
+                arena.close()
+                arena = None
+                stage("INDEPENDENT_PERSISTED_READBACK")
+                arena = ArchiveArena.open(
+                    destination, max_raw_bytes=raw_size, max_archive_bytes=capacity, deadline=deadline
+                )
+                if arena.raw_bytes != raw_size or arena.raw_sha256 != expected:
+                    raise QualificationError("BYTE_IDENTITY_MISMATCH")
+                actual = Image.from_archive_store(arena).reconstructed_hash()
+                arena.assert_unchanged()
+                return actual
+
             with snapshot_image(
                 source,
                 directory,
@@ -114,29 +133,18 @@ def backup(
                 archive_store=arena,
                 source_snapshot=reader,
                 progress=stage,
+                identity_reader=persisted_identity,
             ) as (database, image):
                 facts = source_facts(database, owner)
                 cache_row = database.execute("PRAGMA cache_size").fetchone()
-                if cache_row is None or cache_row[0] != -(MAX_SQLITE_CACHE_BYTES // 1024):
+                if cache_row is None or cache_row[0] != -(FRAMED_SQLITE_CACHE_BYTES // 1024):
                     raise QualificationError("SQLITE_VALIDATION_ERROR")
                 cache_kib = -cache_row[0]
                 expected = arena.raw_sha256
                 if image.size != raw_size:
                     raise QualificationError("BYTE_IDENTITY_MISMATCH")
-            arena.assert_unchanged()
-            arena.close()
-            arena = None
-            stage("INDEPENDENT_PERSISTED_READBACK")
-            arena = ArchiveArena.open(
-                destination, max_raw_bytes=raw_size, max_archive_bytes=capacity, deadline=deadline
-            )
-            reopened = Image.from_archive_store(arena)
-            if (
-                arena.raw_bytes != raw_size
-                or arena.raw_sha256 != expected
-                or reopened.reconstructed_hash() != expected
-            ):
-                raise QualificationError("BYTE_IDENTITY_MISMATCH")
+            if arena is None:
+                raise QualificationError("FROZEN_IMAGE_REQUIRED")
             arena.assert_unchanged()
             stage("ARCHIVE_FINGERPRINT")
             digest, archive_bytes = fingerprint(destination, deadline)
