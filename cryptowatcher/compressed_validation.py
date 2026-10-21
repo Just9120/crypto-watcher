@@ -160,6 +160,20 @@ class Image:
         if self.reconstructed_hash() != self.sha256:
             raise QualificationError("BYTE_IDENTITY_MISMATCH")
 
+    @classmethod
+    def from_archive_store(cls, store: ArchiveArena) -> Image:
+        """Reopen a sealed, checked disk frame index without allocating a RAM image."""
+        if not store.sealed or store.data is None:
+            raise QualificationError("FROZEN_IMAGE_REQUIRED")
+        store.assert_unchanged()
+        image = cls(None, limit=store.limit, deadline=store.deadline, archive_store=store)
+        image.path, image.before = store.path, store.identity
+        image.size, image.sha256 = store.raw_bytes, store.raw_sha256
+        image.retained = sum(store.lengths)
+        image.mutable = False
+        image.archive_encoding = "ZSTD"
+        return image
+
     @contextmanager
     def source_reader(self) -> Iterator[BinaryIO | gzip.GzipFile | zstandard.ZstdDecompressionReader]:
         with os.fdopen(
@@ -518,9 +532,14 @@ def classified_errors(deadline: float) -> Iterator[None]:
 
 @contextmanager
 def snapshot_image(
-    path: Path, directory: Path, *, deadline: float, archive_store: ArchiveArena | None = None
+    path: Path,
+    directory: Path,
+    *,
+    deadline: float,
+    archive_store: ArchiveArena | None = None,
+    source_snapshot: apsw.Connection | None = None,
 ) -> Iterator[tuple[apsw.Connection, Image]]:
-    """Pinned online backup, full writable validation, then metadata from that same image."""
+    """Full pinned snapshot validation; ownership of a supplied reader is transferred."""
     image = Image(
         None,
         limit=MAX_COMPRESSED_BYTES if archive_store is None else archive_store.limit,
@@ -535,18 +554,34 @@ def snapshot_image(
         sentinel.touch(mode=0o600)
         vfs = VFS(image, sentinel)
         destination: apsw.Connection | None = None
-        source: apsw.Connection | None = None
+        source: apsw.Connection | None = source_snapshot
         try:
             destination = apsw.Connection(
                 str(sentinel.resolve()), flags=apsw.SQLITE_OPEN_READWRITE, vfs=vfs.name
             )
             destination.execute("PRAGMA journal_mode=MEMORY")
             destination.execute("PRAGMA mmap_size=0")
-            source = apsw.Connection(
-                path.resolve().as_uri() + "?mode=ro", flags=apsw.SQLITE_OPEN_READONLY | apsw.SQLITE_OPEN_URI
-            )
-            source.execute("BEGIN")
-            source.execute("SELECT owner_id FROM owner_settings").fetchone()
+            if source is None:
+                source = apsw.Connection(
+                    path.resolve().as_uri() + "?mode=ro",
+                    flags=apsw.SQLITE_OPEN_READONLY | apsw.SQLITE_OPEN_URI,
+                )
+                source.execute("BEGIN")
+                source.execute("SELECT owner_id FROM owner_settings").fetchone()
+            elif (
+                not source.readonly("main")
+                or source.db_filename("main") != str(path.resolve())
+                or source.txn_state("main") != apsw.SQLITE_TXN_READ
+            ):
+                raise QualificationError("PINNED_SOURCE_REQUIRED")
+            if archive_store is not None:
+                pages = source.execute("PRAGMA page_count").fetchone()
+                page_size = source.execute("PRAGMA page_size").fetchone()
+                if pages is None or page_size is None:
+                    raise QualificationError("ARCHIVE_SIZE_LIMIT")
+                size = pages[0] * page_size[0]
+                if size > archive_store.max_raw_bytes:
+                    raise QualificationError("ARCHIVE_SIZE_LIMIT")
             with destination.backup("main", source, "main") as backup:
                 while not backup.done:
                     budget(deadline)

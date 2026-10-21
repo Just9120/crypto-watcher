@@ -48,6 +48,10 @@ def test_reserved_header_delayed_frames_last_partial_standard_restore_and_reopen
         assert b"".join(zstandard.ZstdDecompressor().decompress(value) for value in reopened) == joined
         assert reopened.raw_sha256 == digest
         assert reopened.raw_bytes == len(joined)
+        from cryptowatcher.compressed_validation import Image
+
+        image = Image.from_archive_store(reopened)
+        assert image.reconstructed_hash() == digest and not image.mutable
         reopened.assert_unchanged()
     finally:
         reopened.close()
@@ -153,6 +157,8 @@ def test_actual_live_sqlite_snapshot_is_standard_archive_with_exact_rows_and_pri
     import sqlite3
     from contextlib import closing
 
+    import apsw
+
     from cryptowatcher.compressed_validation import snapshot_image
     from cryptowatcher.reset_history import private_state, signature
 
@@ -167,14 +173,24 @@ def test_actual_live_sqlite_snapshot_is_standard_archive_with_exact_rows_and_pri
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     target = arena(path, raw=size)
+    pinned = apsw.Connection(
+        store.path.resolve().as_uri() + "?mode=ro",
+        flags=apsw.SQLITE_OPEN_READONLY | apsw.SQLITE_OPEN_URI,
+    )
+    pinned.execute("BEGIN")
+    pinned.execute("SELECT owner_id FROM owner_settings").fetchone()
     try:
-        with snapshot_image(store.path, scratch, deadline=time.monotonic() + 20, archive_store=target) as (
+        with snapshot_image(
+            store.path, scratch, deadline=time.monotonic() + 20, archive_store=target, source_snapshot=pinned
+        ) as (
             database,
             image,
         ):
             assert database.execute("SELECT owner_id FROM owner_settings").fetchone()[0] == store.owner_id
             assert image.reconstructed_hash() == target.raw_sha256
             assert target.raw_bytes == image.size
+            with pytest.raises(apsw.ConnectionClosedError):
+                pinned.txn_state()
     finally:
         target.close()
     restored = tmp_path / "restored.db"
@@ -186,6 +202,55 @@ def test_actual_live_sqlite_snapshot_is_standard_archive_with_exact_rows_and_pri
         assert reader.execute("PRAGMA foreign_key_check").fetchall() == []
     assert signature(private_state(store)) == private
     assert list(store.db.iterdump()) == original and list(scratch.iterdir()) == []
+
+
+@pytest.mark.parametrize("invalid", ["not_pinned", "writable", "wrong_source", "too_small"])
+def test_snapshot_requires_exact_readonly_pinned_source_and_admitted_size(store, tmp_path, invalid):
+    import sqlite3
+    from contextlib import closing
+
+    import apsw
+
+    from cryptowatcher.compressed_validation import snapshot_image
+
+    original = list(store.db.iterdump())
+    source = store.path
+    if invalid == "wrong_source":
+        source = tmp_path / "other.db"
+        with closing(sqlite3.connect(source)) as other:
+            other.execute("CREATE TABLE other(value)")
+    flags = apsw.SQLITE_OPEN_READWRITE if invalid == "writable" else apsw.SQLITE_OPEN_READONLY
+    reader = apsw.Connection(
+        source.resolve().as_uri() + "?mode=" + ("rw" if invalid == "writable" else "ro"),
+        flags=flags | apsw.SQLITE_OPEN_URI,
+    )
+    if invalid != "not_pinned":
+        reader.execute("BEGIN")
+        reader.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
+    size = (
+        store.db.execute("PRAGMA page_count").fetchone()[0]
+        * store.db.execute("PRAGMA page_size").fetchone()[0]
+    )
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    target = arena(tmp_path / "unqualified.zst", raw=size - 1 if invalid == "too_small" else size)
+    try:
+        expected = "ARCHIVE_SIZE_LIMIT" if invalid == "too_small" else "PINNED_SOURCE_REQUIRED"
+        with pytest.raises(QualificationError, match=expected):
+            with snapshot_image(
+                store.path,
+                scratch,
+                deadline=time.monotonic() + 20,
+                archive_store=target,
+                source_snapshot=reader,
+            ):
+                raise AssertionError("An invalid snapshot was admitted")
+        assert not target.sealed
+        with pytest.raises(apsw.ConnectionClosedError):
+            reader.txn_state()
+    finally:
+        target.close()
+    assert list(store.db.iterdump()) == original
 
 
 def test_full_check_constraints_still_reject_corrupt_captured_source(store, tmp_path):
