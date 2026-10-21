@@ -2,7 +2,7 @@ import asyncio
 import json
 import sqlite3
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -210,13 +210,18 @@ async def test_independent_diagnostics_expose_finished_component_and_discovery_a
     task = asyncio.create_task(asyncio.sleep(0))
     await task
     radar._tasks = [task]
-    radar.persist_diagnostics()
+    # Fixture refresh stamps are1. Age must not depend on runner uptime;
+    # freeze only this synchronous snapshot, restoring before any await.
+    with patch.object(ingestion.time, "monotonic", return_value=1000):
+        radar.persist_diagnostics()
     value = radar.store.get_runtime("ingestion")
     assert value["components_healthy"] is False
     assert value["components"][0]["state"] == "FINISHED"
     for market in ("spot", "linear"):
         assert value["discovery"][market]["metadata_age_seconds"] > 600
         assert value["discovery"][market]["ticker_age_seconds"] > 300
+        assert value["discovery"][market]["metadata_age_seconds"] == 999
+        assert value["discovery"][market]["ticker_age_seconds"] == 999
     await radar.close()
 
 

@@ -106,9 +106,9 @@ python scripts/checks.py all
 python -m ruff format .
 ```
 
-`quality` проверяет canonical doc links/fences, Ruff lint/format и mypy. `test` запускает meaningful regression suite; `all` используется в CI. Во время разработки допустим точечный pytest по затронутому риску. Coverage target не задан. Основной merge gate — GitHub `ci-required` на актуальной PR test merge revision; local PASS его не заменяет.
+`quality` проверяет canonical doc links/fences, Ruff lint/format и mypy. `test` запускает meaningful regression suite; `all` объединяет оба этапа. PR CI исполняет оба с конечной numeric qualification между ними; trusted release проверяет `all`. Во время разработки допустим точечный pytest по затронутому риску. Coverage target не задан. Основной merge gate — GitHub `ci-required` на актуальной PR test merge revision; local PASS его не заменяет.
 
-После native build и suite Linux CI выполняет `python scripts/qualify_numeric_boundary.py`:
+После native build и quality Linux PR CI выполняет `python scripts/qualify_numeric_boundary.py`:
 конечная временная SQLite с129572frames/8292608owners проверяется новым текущим reader
 за прежние50s на одном CPU при address-space limit4GiB. Pinned seed содержит публичные
 metric bytes; при materialization guards временно сняты только в этой owned fixture

@@ -115,10 +115,13 @@ def test_native_full_validation_includes_source_tiles_cells_and_their_counters(s
         "market_counts",
         "runtime",
     )
-    expected_tables = {
-        table: [tuple(row) for row in store.db.execute(f"SELECT * FROM {table} ORDER BY 1,2")]
-        for table in tables
-    }
+    queries = {}
+    for table in tables:
+        columns = list(store.db.execute(f"PRAGMA table_info({table})"))
+        assert columns
+        order = ",".join(str(i + 1) for i in range(len(columns)))
+        queries[table] = f"SELECT * FROM {table} ORDER BY {order}"
+    expected_tables = {table: [tuple(row) for row in store.db.execute(queries[table])] for table in tables}
     store.close()
     original = store.path.read_bytes()
     image = cv.Image(store.path, limit=cv.MAX_COMPRESSED_BYTES, deadline=time.monotonic() + 30)
@@ -137,7 +140,7 @@ def test_native_full_validation_includes_source_tiles_cells_and_their_counters(s
                         actual_metrics[identity_value] = metric_price_codec.frame(frame)
             assert actual_metrics == wanted
             for table in tables:
-                actual = list(db.execute(f"SELECT * FROM {table} ORDER BY 1,2"))
+                actual = list(db.execute(queries[table]))
                 assert actual == expected_tables[table]
     finally:
         vfs.unregister()
