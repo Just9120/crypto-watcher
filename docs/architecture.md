@@ -129,10 +129,11 @@ Restart восстанавливает episodes, per-direction conditions и pen
 
 В одном readonly transaction comparison worker держит одну prior population.
 Для того же stream/шага/warmup/data version при движении обоих bounds вперёд
-не более чем на256native bars он сохраняет пересекающуюся часть и читает только
-новый tail. Range остаётся прежним28day window с warmup; ATR/quantiles вычисляются
-заново в прежнем порядке над точными свечами этого range. Обратный cutoff, большой
-скачок или смена cache identity требуют полного чтения. Writer не использует эту
+он сохраняет любую пересекающуюся часть и читает только новый tail, в том числе
+для редких admissions дальше256native bars. Tail является подмножеством прежнего
+разрешённого range, размер28day window с warmup не меняется. ATR/quantiles вычисляются
+заново в прежнем порядке над точными свечами этого range. Обратный cutoff, отсутствие
+пересечения или смена cache identity требуют полного чтения. Writer не использует эту
 population; новый snapshot видит committed recovery через data version. Размеры
 byte/range caches, CAS apply, methods и deadlines не меняются.
 

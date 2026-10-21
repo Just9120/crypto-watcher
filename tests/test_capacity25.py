@@ -65,6 +65,73 @@ def test_population_cache_is_one_entry_and_only_in_own_read_snapshot(store):
         assert read.call_count == 5
 
 
+@pytest.mark.parametrize("step", (60000, 180000, 300000, 900000))
+def test_sparse_population_overlap_keeps_original_bits_and_only_reads_new_tail(store, step):
+    # Sparse arrivals may move more than256 bars while most28day history still
+    # overlaps. Gaps near either boundary must keep the exact original ATR sum.
+    candles = [
+        Candle.parse(
+            [i * step, 100, 102 + math.sin(i), 98 - math.cos(i), 100 + math.sin(i / 7), 1, 100],
+            str(step // 60000) + "m",
+            "fixture",
+            (i + 1) * step,
+            (i + 1) * step,
+        )
+        for i in range(4500)
+        if i not in (700, 701, 1190, 1191, 1999, 2398, 2399, 2700, 2701)
+    ]
+    calls = []
+
+    def read(_store, _stream, lower, reference):
+        calls.append((lower, reference))
+        return [c for c in candles if lower <= c.start < reference]
+
+    with closing(Store(store.path, store.owner_id, readonly=True)) as reader:
+        reader.db.execute("BEGIN")
+        with patch("cryptowatcher.analytics.read_candles", side_effect=read):
+            for n, reference_bar in enumerate((2000, 2400, 2700, 2700, 2650, 4500)):
+                reference = reference_bar * step
+                start = reference - 1200 * step
+                lower = start - 256 * step
+                actual_candles, points, population = prior_population(
+                    reader, "spot/BTCUSDT/" + str(step // 60000) + "m", start, reference, 21, step
+                )
+                complete = [c for c in candles if lower <= c.start < reference]
+                expected = []
+                for i, c in enumerate(complete):
+                    if not start <= c.end < reference:
+                        continue
+                    try:
+                        value = 100 * atr14(complete[max(0, i - 20) : i + 1]) / c.close
+                    except DetectorUnavailable:
+                        continue
+                    expected.append((c.start, i, struct.pack(">d", value)))
+                assert actual_candles == complete
+                assert [(c.start, i, struct.pack(">d", value)) for c, i, value in points] == expected
+                assert population == sorted(value for _, _, value in points)
+                if n in (1, 2):
+                    assert calls[-1] == ((2000 if n == 1 else 2400) * step, reference)
+                elif n == 3:
+                    assert len(calls) == 3
+                else:
+                    assert calls[-1] == (lower, reference)  # first/backward/disjoint
+                assert calls[-1][1] - calls[-1][0] <= 1456 * step
+
+
+def test_population_overlap_reloads_after_source_commit_between_read_snapshots(store):
+    with closing(Store(store.path, store.owner_id, readonly=True)) as reader:
+        reader.db.execute("BEGIN")
+        with patch("cryptowatcher.analytics.read_candles", return_value=[]) as read:
+            prior_population(reader, "spot/BTCUSDT/1m", 0, 1000 * 60000, 16, 60000)
+            reader.db.rollback()
+            with store.db:
+                store.put_runtime("population-new-source-commit", {"generation": 2})
+            reader.db.execute("BEGIN")
+            prior_population(reader, "spot/BTCUSDT/1m", 400 * 60000, 1400 * 60000, 16, 60000)
+            assert read.call_args.args[2:] == ((400 - 256) * 60000, 1400 * 60000)
+            assert read.call_count == 2
+
+
 def test_effective_settings_rejection_preserves_revision_and_old_settings_readable(store):
     before = store.snapshot()
     bad = before.settings.changed(watchlist=("spot/BTCUSDT",), watchlist_multiplier=0.25)

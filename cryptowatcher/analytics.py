@@ -82,12 +82,14 @@ def prior_population(
             old[0] == native
             and old[3:] == key[3:]
             and old[1] <= start
-            and old[2] < reference <= old[2] + 256 * step
+            and old[2] < reference
             and lower < old[2]
         ):
             # The same read transaction cannot acquire recovered/changed bars.
             # Source ranges select starts in [lower, reference), including gaps.
-            # Keep one bounded window and validate only its newly exposed tail.
+            # Reuse any overlap, including sparse admissions >256 bars apart.
+            # The new tail is a subset of the original permitted source range;
+            # no read, retained population or cache bound is increased.
             candles = [c for c in value[0] if c.start >= lower]
             candles.extend(read_candles(store, native, max(lower, old[2]), reference))
     if candles is None:
