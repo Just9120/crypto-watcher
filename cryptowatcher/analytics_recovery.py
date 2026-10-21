@@ -66,6 +66,9 @@ class AnalyticsRecovery:
                     },
                 )
                 self.history.put(pending, {"id": key})
+                from .queue_health import arrival
+
+                arrival(self.store, "analytics-gap")
                 if self.store.bounded:
                     self.history.put("recovery-ranges:" + stream, (recent + [key])[-32:])
         return "REFERENCED_RECOVERY_PENDING"
@@ -283,6 +286,8 @@ class AnalyticsRecovery:
                         )
                         self.history.put(job["pending_key"], binding)
                     self.history.put("analytics-gap:" + job["id"], job)
+                    if job["state"] == "COMPLETE":
+                        self.record_completion(job, max(now, self.market.server_now()))
 
             except (MarketError, KeyError, TypeError, ValueError, OverflowError) as exc:
                 if self.history.get("analytics-gap:" + job["id"]) != job:
@@ -309,6 +314,12 @@ class AnalyticsRecovery:
             # No consumer refers to the job bytes. Keep a one-day terminal
             # receipt for duplicate requests; actual source revisions stay intact.
             self.history.put("analytics-gap:" + job["id"], job)
+            self.record_completion(job, now)
+
+    def record_completion(self, job: dict[str, Any], now: int) -> None:
+        from .queue_health import completed_batch
+
+        completed_batch(self.store, "analytics-gap", now, [max(0, now - job["end"])], 0)
 
     def finish_unowned(self, job: dict[str, Any], pending: str, now: int) -> None:
         # No retained consumer requires this work. Do not decode old candle

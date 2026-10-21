@@ -1,4 +1,4 @@
-"""Build the source-pinned isolated history conversion helper."""
+"""Build history, frozen-VFS and bounded numeric byte/owner proof helpers."""
 
 import argparse
 import hashlib
@@ -39,6 +39,11 @@ def main() -> None:
             raise RuntimeError("Native upstream content differs from pinned source")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     build_vfs(args.compiler, args.output.with_name("compressed_vfs.so"))
+    numeric = args.output.with_name("numeric_frame.so")
+    subprocess.run(
+        ["bash", str(ROOT / "native/build_numeric.sh"), str(numeric.resolve()), args.compiler],
+        check=True,
+    )
     subprocess.run(
         [
             args.compiler,
@@ -62,6 +67,7 @@ def main() -> None:
                 "native_build": "PASS",
                 "upstream": metadata["revision"],
                 "artifact_sha256": hashlib.sha256(args.output.read_bytes()).hexdigest(),
+                "numeric_frame_sha256": hashlib.sha256(numeric.read_bytes()).hexdigest(),
             }
         )
     )

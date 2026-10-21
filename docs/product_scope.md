@@ -237,7 +237,7 @@ Requirement `REQ-E13`; трассировка: S01 / DATA И DIAGNOSTICS / ХР�
 | AC-13-03 — Качество detectors 12 месяцев | Сводные результаты сохраняются 12 календарных месяцев от даты events с methodology/settings/version/market/TF и остальными согласованными grouping dimensions, N/completeness/noise/comparator limitations. Старые детали явно недоступны; новые settings не меняют прежние результаты. Проверка: одинаковые cohorts до/после удаления details в доступной гранулярности, границы срока и выбранного периода, export/Telegram; policy Q07. UTC-day summaries не обещают восстановление минутной детализации. |
 | AC-13-04 — Укрупненный context | Если такой context используется, хранится90d, для выбранных Spot до180d; минутная история не продлевается до этого срока. Новые источники не добавляются. Проверка: inventory используемого context и controlled-clock fixtures; отсутствие необязательного context явно указано. |
 | AC-13-05 — Конечные служебные зависимости | Completed jobs/queues сокращаются до необходимого состояния; retry/restart/dedup сохранены. Pending расчет/доставка при истечении допустимого ожидания получает явный terminal status и освобождает зависимости; service cursors не удерживают архив бессрочно. Проверка: fault/retry/restart/expiry и replay fixtures. |
-| AC-13-06 — Контроль 20 GB | Автоматически доступны category counts/bytes, indexes/journals, net growth и прогноз по выбранным срокам. DB/index/WAL target20,000,000,000bytes проверяется измерением; backups/experiments отдельно. Actual/estimate и ограничения видны, превышение объясняется без silent сокращения scope/retention. Routine control bounded, без постоянного full scan. Проверка: счетчики/измерения против fixture, рост/очистка/предупреждение/measurement budget и конечный стабилизированный замер D25. Наличие счетчиков, successful tests/CD или short-window model не заменяет оценку заполненной базы и ее допущений; превышение target требует расчета причин и вариантов без скрытых сокращений. |
+| AC-13-06 — Контроль 25 GB | Автоматически доступны category counts/bytes, indexes/journals, net growth и прогноз по выбранным срокам. DB/index/WAL target25,000,000,000bytes проверяется измерением; backups/experiments отдельно. Actual/estimate и ограничения видны, превышение объясняется без silent сокращения scope/retention. Routine control bounded, без постоянного full scan. Проверка: счетчики/измерения против fixture, рост/очистка/предупреждение/measurement budget и конечный стабилизированный замер D25. Наличие счетчиков, successful tests/CD или short-window model не заменяет оценку заполненной базы и ее допущений; превышение target требует расчета причин и вариантов без скрытых сокращений. |
 | AC-13-07 — Разовый reset | После REQUIRED checks отдельная exact-target процедура сбрасывает только прежнюю тестовую market history CW и ее queues/cursors; проверенный owner settings/watchlist/thresholds/notifications/mutes и credentials/infra сохранены. Новый generation/start виден, restart/deploy не повторяет reset, backfill не отправляет прошлое как live и ограничен потребностями расчетов. Backups/experiments не удаляются. Проверка: private-state equality/restore, отказ при неверном target, reset/restart/no-old-alerts fixtures, actual source/image/health/ingestion/outcome/Telegram и применимые integration post-checks. |
 
 ## Решения по исходным вопросам и зависимости
@@ -250,7 +250,7 @@ Requirement `REQ-E13`; трассировка: S01 / DATA И DIAGNOSTICS / ХР�
 | Q04 | Horizons, neutral outcomes, no-signal comparator и export определены D16; сроки хранения изменены D22. | Прежние raw90days/indefinite details отменены; expiry не меняет записанные методики/settings/results. |
 | Q05 | Target — Contabo167.86.68.98, /opt/crypto_watcher, Compose project crypto_watcher/service crypto_watcher, один production Environment. | Точный runtime, approvals, artifact/backup/recovery и post-checks — в действующей процедуре delivery и Evidence плана. |
 | Q06 | CMC/reset callbacks deprecated с понятным ответом; startup wrapper и legacy migration compatibility сохраняются. | D04; неподтвержденные внешние consumers private helpers не дают основания для нового удаления. F24 в плане. |
-| Q07 | При запросе части UTC-дня после expiry details точная intraday выборка из day summaries недоступна. Нужна единая явная policy CSV/NDJSON/cohorts. | Выбор поведения UNSET: отклонить неподдерживаемые границы либо явно нормализовать период до UTC-дней с фактическим охватом. Это уточнение исходного period/limitations requirement, а не разрешение хранить полные старые events или менять точность numeric facts. F48; решение при выбранной implementation Goal. |
+| Q07 | При запросе части UTC-дня после expiry details точная intraday выборка из day summaries недоступна. Нужна единая явная policy CSV/NDJSON/cohorts. | Выбрано D27: явно нормализовать архивную часть периода до UTC-дней с requested/effective bounds и фактическим охватом. Это уточнение исходного period/limitations requirement, а не разрешение хранить полные старые events или менять точность numeric facts. F48; решение при выбранной implementation Goal. |
 
 Текущий согласованный scope содержит **65 AC**: исходные58 сохранены, E13 добавляет7 критериев обновленного S01/S05. Статусы и аудиторские оценки находятся только в плане. Новые business rules, сокращение analytics/retention и изменение формул требуют решения владельца; конкретизация проверок понятного требования scope не меняет.
 
@@ -284,7 +284,7 @@ Export filter относится к selected event observation time `[start,end)
 
 S01 обновлен и S05 явно заменяют D12: подробные events/revisions/episodes/outcomes30d; raw small-TF35d плюс только использованные inputs еще сохраняемых подробных расчетов. Сроки настраиваются, lookback/horizons должны укладываться в поддерживаемые окна. Quality summaries12 календарных месяцев от event date, без полных raw arrays; старые подробности не подменяются агрегатами. Используемый coarse context90d/selected Spot до180d условен и не требует новых источников или минутной детализации180d. После сохранения агрегатов automatic bounded cleanup освобождает ссылки и service dependencies. Ожидание не бесконечно: истечение подробного срока дает явный terminal incomplete/expired status.
 
-Working DB+indexes+journals target20GB — проверяемая цель. Факты и extrapolation разделены; причина превышения и варианты решения видны владельцу. Постоянный full scan не является механизмом контроля. Не сокращать события/detectors/markets/TF/аналитику/retention скрытно.
+Working DB+indexes+journals target25GB по решению D27 — проверяемая цель. Факты и extrapolation разделены; причина превышения и варианты решения видны владельцу. Постоянный full scan не является механизмом контроля. Не сокращать события/detectors/markets/TF/аналитику/retention скрытно.
 
 Прежняя тестовая market history подлежит разовому reset после исправлений/tests; ее перенос, сжатие, полная конвертация и qualification исключены из текущей задачи. Owner settings/watchlist/thresholds/notification preferences/mutes/user config и secrets/infra сохраняются и проверяются. Reset имеет exact перечень, generation boundary и совместимые queues/cursors; не выполняется при обычном startup/deploy. Удаление backups/experiments не разрешено этим reset. Обычные backup/CD остаются<=900s, RAM не увеличивается; последующее наблюдение отделено от закрытия исправлений/reset.
 
@@ -376,3 +376,26 @@ Owner settings/preferences/mutes/legacy identity и credentials/infra сохра
 full archive integrity/hash/private restore и post-checks. Scheduled tasks не
 создаются. Запуск нового24h подтверждается фактическим OBSERVING/baseline;
 ожидание завершения суток не входит в исправление и поставку.
+
+## D27 — Единая CAPACITY25 Goal (18 октября 2026)
+
+Владелец утвердил и поручил полную реализацию backlog/observer/lossless storage,
+прежних findings, ordinary delivery и чистого конечного24h замера. Жёсткий предел
+AC-13-06 теперь25,000,000,000bytes для DB/indexes/free pages/WAL/SHM/journal;
+исторические20GB оценки остаются snapshots прежнего решения. Backups/experiments
+учитываются отдельно. Рынки/TF/detectors/retention/точность/полнота аналитики,
+existing data/generation/archives/settings сохраняются. Новый reset, scheduled
+tasks и повышение RAM/900s gates в эту Goal не входят.
+
+Q07: архивная часть intraday selection явно нормализуется до UTC-дней с requested
+и effective bounds/resolution во всех CSV/NDJSON/cohort views; точные retained
+details фильтруются точно. Это не восстановление выдуманной intraday точности.
+Digest activity — число сохранённых event observations по instrument/market
+в запрошенном периоде; strongest/ongoing остаются самостоятельными разделами.
+
+Observer различает future horizons, текущую работу и overdue backlog; state OK
+не заменяет измерение возраста outcomes/comparisons и arrival/service flow.
+Каждая попытка/error сохраняется. Partial ledger/cohorts/indexes не являются
+полным boundary или capacity PASS. Сначала measured mature-population capacity
+при прежней policy, затем clean24h на fixed source/config/generation; обе проверки
+обязательны. Отклонённые/прерванные прежние замеры и их факты сохраняются.

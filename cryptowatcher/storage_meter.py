@@ -7,7 +7,11 @@ from typing import Any
 
 from .storage import Store
 
-BUDGET = 20_000_000_000
+BUDGET = 25_000_000_000
+QUALITY_CATEGORIES = frozenset(
+    {"quality", "quality_numeric", "quality_components", "quality_frames", "quality_numeric_frames"}
+)
+SAMPLE_FORMAT = 11
 
 
 def create(db: Any) -> None:
@@ -75,8 +79,14 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         for r in store.db.execute("SELECT * FROM market_counts")
     }
     samples = store.get_runtime("storage_samples", [])
-    current = [s for s in samples if s.get("format_version") == 3]
-    base = current[0] if current else samples[0] if samples else None
+    repack = store.get_runtime("storage_repack", {})
+    completed_repack = repack.get("version") if repack.get("state") == "COMPLETE" else None
+    current = [
+        s
+        for s in samples
+        if s.get("format_version") == SAMPLE_FORMAT and s.get("completed_repack_version") == completed_repack
+    ]
+    base = current[0] if current else None
     frequency_base = samples[0] if samples else None
     elapsed = (now_ms - base["at_ms"]) / 1000 if base else 0
     frequency_elapsed = (now_ms - frequency_base["at_ms"]) / 1000 if frequency_base else 0
@@ -88,10 +98,58 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         if frequency_base and frequency_elapsed > 0
         else None
     )
-    repack = store.get_runtime("storage_repack", {})
     saved = repack.get("saved_categories", {})
     forecast = []
-    occupancy = {"services", "service_indexes", "pending_holds", "context", "context_bodies"}
+    from .analytics import COMPARATOR_LOOKBACK_DAYS
+    from .config import TIMEFRAMES
+    from .sources import WINDOW_SIZE
+
+    # A used comparator input can precede its event by28days plus the frozen
+    # native detector window. Its existing lease then lasts detail_retention.
+    # This estimates current admitted bounds; it does not change any expiry.
+    native_days = (WINDOW_SIZE * max(int(tf[:-1]) for tf in TIMEFRAMES) + 1439) // 1440
+    candle_dependency_days = max(
+        settings.candle_retention_days,
+        settings.detail_retention_days + COMPARATOR_LOOKBACK_DAYS + native_days,
+    )
+    context_dependency_days = max(
+        settings.candle_retention_days,
+        settings.detail_retention_days + COMPARATOR_LOOKBACK_DAYS,
+    )
+    occupancy = {
+        "services",
+        "service_indexes",
+        "pending_holds",
+        "context",
+        "context_bodies",
+        "context_integrity",
+        "context_tiles",
+        "context_tile_pending",
+        "source_windows",
+        "prospective_indexes",
+        "source_blocks",
+        "source_block_indexes",
+        "catalogue_overlap",
+        "record_pending",
+        "bundle_pending",
+        "quality_frame_pending",
+        "numeric_frame_pending",
+    }
+    if store.db.execute(
+        "SELECT 1 FROM market_meta WHERE key='record_catalogue_runtime' AND value='1'"
+    ).fetchone():
+        # Hot details become transient staging. Their admissions are represented
+        # again by retained catalogue packets/coordinates after transfer; annual
+        # gross hot insertion flow would count those same records twice.
+        occupancy.add("details")
+    from . import quality_frames
+
+    frame_layout = quality_frames.status(store.db, now_ms)
+    frame_layout["writer"] = "IF1_OR_QC1_MIN" if quality_frames.column_writing(store.db) else "IF1_COMPAT"
+    if frame_layout["installed"]:
+        # CQ5 becomes staging plus permanent13byte coordinates. Gross CQ5
+        # admissions are the same facts subsequently owned by QF1 containers.
+        occupancy.add("quality")
     for category, value in counts.items():
         previous = (base or {}).get("categories", {}).get(category, {"inserted_bytes": 0, "deleted_bytes": 0})
         inserted = max(0, value["inserted_bytes"] - previous.get("inserted_bytes", 0))
@@ -100,10 +158,12 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         rate = inserted / elapsed if elapsed > 0 else None
         net = (inserted - deleted + repack_savings) / elapsed if elapsed > 0 else None
         days = (
-            settings.candle_retention_days
-            if category in ("candles", "context", "context_bodies")
+            candle_dependency_days
+            if category in ("candles", "source_blocks", "source_block_indexes")
+            else context_dependency_days
+            if category in ("context", "context_bodies", "context_integrity", "context_tiles")
             else 366
-            if category == "quality"
+            if category in QUALITY_CATEGORIES
             else settings.detail_retention_days
         )
         projected = None
@@ -130,6 +190,9 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
     from .storage_model import quality_scenarios
 
     scenarios = quality_scenarios()
+    quality_flow = sum(
+        item["projected_logical_bytes"] or 0 for item in forecast if item["category"] in QUALITY_CATEGORIES
+    )
     quality_model_per_event = scenarios[0]["encoded_bytes_per_fact"] * len(settings.outcome_horizons)
     quality_projection = (
         event_rate * 86400 * 366 * quality_model_per_event if event_rate is not None else None
@@ -139,17 +202,23 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         if quality is None:
             quality = {"category": "quality", "gross_bytes_per_day": None, "retention_days_for_estimate": 366}
             forecast.append(quality)
-        quality["projected_logical_bytes"] = max(
-            quality.get("projected_logical_bytes") or 0, quality_projection
-        )
+        quality["flow_projected_logical_bytes"] = quality.get("projected_logical_bytes")
+        quality["flow_basis"] = quality.get("basis")
+        quality["projected_logical_bytes"] = max(quality_flow, quality_projection)
         quality["model_applied"] = True
-        quality["basis"] = "ISOLATED_SPARSE_NO_COMPARATOR_BASELINE; SEE_DENSITY_AND_COMPARATOR_SCENARIOS"
+        quality["basis"] = (
+            "WHOLE_ARCHIVE_MODEL_REPLACES_ALL_QUALITY_CATEGORIES; SPARSE_NO_COMPARATOR_SCENARIO"
+        )
+        for item in forecast:
+            if item["category"] in QUALITY_CATEGORIES - {"quality"}:
+                item["allocation_excluded"] = "ALREADY_INCLUDED_IN_WHOLE_ARCHIVE_MODEL"
     logical = sum(v["logical_bytes"] for v in counts.values())
     # Current measured page utilization calibrates an explicit estimate; it is
     # neither a guaranteed steady-state size nor a replacement for measured files.
     factor = max(1, (pages - free) * page / max(1, logical))
     projected_without_quality = (
-        sum(v["projected_logical_bytes"] or 0 for v in forecast if v["category"] != "quality") * factor
+        sum(v["projected_logical_bytes"] or 0 for v in forecast if v["category"] not in QUALITY_CATEGORIES)
+        * factor
         + files["wal"]
         + files["shm"]
     )
@@ -158,8 +227,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         if event_rate is not None
         else 0
     )
-    if quality is not None and quality.get("projected_logical_bytes") is not None:
-        quality_physical = max(quality_physical, quality["projected_logical_bytes"] or 0)
+    quality_physical = max(quality_physical, quality_flow * factor)
     projected = (
         max(sum(files.values()), projected_without_quality + quality_physical) if elapsed > 0 else None
     )
@@ -168,11 +236,14 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
             {
                 **scenario,
                 "projected_working_bytes": projected_without_quality
-                + event_rate
-                * 86400
-                * 366
-                * scenario["physical_bytes_per_fact"]
-                * len(settings.outcome_horizons),
+                + max(
+                    quality_flow * factor,
+                    event_rate
+                    * 86400
+                    * 366
+                    * scenario["physical_bytes_per_fact"]
+                    * len(settings.outcome_horizons),
+                ),
             }
             for scenario in scenarios
         ]
@@ -180,13 +251,150 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         else []
     )
     actual = sum(files.values())
+    source_layout: dict[str, Any] = {
+        "state": "LEGACY_NORMALIZED",
+        "legacy_versions": counts.get("candles", {}).get("records", 0),
+    }
+    from .candle_access import installed as source_tiles_installed
+
+    source_tables: set[str] = set()
+    if source_tiles_installed(store.db):
+        from .candle_blocks import summary as source_summary
+
+        source_layout.update(state="MIXED_SOURCE_TILES", **source_summary(store.db))
+        source_layout["total_versions"] = source_layout["legacy_versions"] + source_layout["versions"]
+        source_tables = {
+            "market_candle_blocks",
+            "market_candle_block_totals",
+            "market_candle_fallbacks",
+            "market_candle_gc",
+        }
+    from .numeric_blocks import installed as numeric_blocks_installed
+
+    numeric_layout: dict[str, Any] = {"state": "LEGACY_METRIC_ROWS"}
+    if numeric_blocks_installed(store.db):
+        from .numeric_blocks import summary as numeric_summary
+
+        numeric_layout.update(state="MIXED_NUMERIC_BLOCKS", **numeric_summary(store.db))
+        from .numeric_refs import installed as numeric_refs_installed
+        from .numeric_refs import writing as numeric_refs_writing
+
+        numeric_layout["lease_format"] = (
+            "NR2"
+            if numeric_refs_writing(store.db)
+            else "NR1_COMPAT"
+            if numeric_refs_installed(store.db)
+            else "NR1"
+        )
+        source_tables |= {
+            "market_numeric_blocks",
+            "market_numeric_block_refs",
+            "market_numeric_block_lookup",
+            "market_numeric_totals",
+            "market_numeric_transfer",
+            "market_numeric_gc",
+        }
+        from . import numeric_frames
+
+        numeric_layout["frame_mode"] = numeric_frames.mode(store.db)
+        if numeric_layout["frame_mode"] is not None:
+            numeric_frames.header(store.db)
+        if numeric_frames.writing(store.db):
+            source_tables.add("market_numeric_frames")
+        from . import numeric_frame_work
+
+        numeric_layout["frames"] = numeric_frame_work.status(store.db, now_ms)
+        if numeric_frame_work.mode(store.db) == "1":
+            source_tables.add("market_numeric_frame_pending")
+    catalogue_layout: dict[str, Any] = {"state": "LEGACY_DOMAIN_ROWS"}
+    catalogue = store.db.execute("SELECT value FROM market_meta WHERE key='record_catalog'").fetchone()
+    if catalogue is not None:
+        from . import catalogue_reader, record_catalog, record_masks
+
+        version = record_catalog.layout(store.db)
+        catalogue_layout = {
+            "state": "MIXED_DOMAIN_CATALOGUE"
+            if catalogue_reader.reading(store.db)
+            else "INACTIVE_DOMAIN_CATALOGUE",
+            "version": version,
+        }
+        source_tables |= {
+            "market_packet_arenas",
+            "market_packet_space",
+            "market_packet_empty",
+            "market_packets",
+            "market_record_parents",
+            "market_records",
+            "market_record_members",
+            "market_record_bodies",
+            "market_catalogue_counts",
+            "market_cold_cohort_scan",
+            "market_cold_cohorts",
+            "market_cold_cohort_revisions",
+            "market_cold_cohort_strengths",
+        }
+        if version == 3:
+            from .catalogue_overlap import header as overlap_header
+
+            catalogue_layout["overlaps"] = overlap_header(store.db)
+            catalogue_layout["counts"] = record_masks.tallies(store.db, "record_parents")
+            record_masks.tallies(store.db, "record_owners")
+            record_masks.tallies(store.db, "record_aliases")
+            source_tables |= {
+                "market_record_owners",
+                "market_catalogue_index_counts",
+                "market_catalogue_overlap",
+            }
+    if store.db.execute("SELECT 1 FROM market_meta WHERE key='catalogue_queue'").fetchone():
+        from .catalogue_queue import header as queue_header
+
+        pending = queue_header(store.db)
+        oldest = pending["oldest_ms"]
+        catalogue_layout["pending"] = {
+            **pending,
+            "oldest_age_ms": max(0, now_ms - oldest) if oldest is not None else None,
+        }
+        source_tables.add("market_record_pending")
+    if store.db.execute("SELECT 1 FROM market_meta WHERE key='packet_bundles'").fetchone():
+        from .packet_bundles import INDEXES as bundle_indexes
+        from .packet_bundles import header as bundle_header
+
+        bundles = bundle_header(store.db)
+        oldest = bundles["oldest_ms"]
+        catalogue_layout["bundles"] = {
+            **bundles,
+            "oldest_age_ms": max(0, now_ms - oldest) if oldest is not None else None,
+        }
+        source_tables.update(bundle_indexes)
     indexes = store.get_runtime(
         "storage_index_measurement", {"state": "PENDING", "reason": "No bounded exact measurement yet"}
     )
+    if frame_layout["installed"]:
+        source_tables |= {"market_quality_frames", "market_quality_frame_pending"}
+    from .context_tile_maintenance import status as context_tile_status
+
+    context_tile_layout = context_tile_status(store.db, now_ms)
+    if context_tile_layout["installed"]:
+        source_tables |= {"market_context_tiles", "market_context_tile_pending"}
+    from .parent_affinity import header as parent_affinity_header
+
+    affinity_layout: dict[str, Any] = {"installed": parent_affinity_header(store.db)}
+    if affinity_layout["installed"]:
+        source_tables.add("market_parent_affinity")
+        affinity_layout.update(counts["parent_affinity"])
     if (
         indexes.get("state") == "PASS"
         and store.db.execute("SELECT 1 FROM sqlite_master WHERE name='market_expiry'").fetchone()
-        and not {"market_expiry", "market_quality_blocks"}.issubset(indexes.get("tables", {}))
+        and not (
+            {
+                "market_expiry",
+                "market_quality_blocks",
+                "market_source_windows",
+                "market_numeric",
+                "market_namespaces",
+            }
+            | source_tables
+        ).issubset(indexes.get("tables", {}))
     ):
         indexes = {**indexes, "state": "STALE", "reason": "STORAGE_EXTENSION_AFTER_SNAPSHOT"}
     return {
@@ -202,11 +410,39 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "at_ms": now_ms,
         "history_generation": store.get_runtime("history_generation", {}),
         "budget_bytes": BUDGET,
+        "catalogue_layout": catalogue_layout,
+        "quality_frame_layout": frame_layout,
+        "context_tile_layout": context_tile_layout,
+        "parent_affinity_layout": affinity_layout,
+        "candle_dependency_retention_estimate": {
+            "configured_minimum_days": settings.candle_retention_days,
+            "detail_days": settings.detail_retention_days,
+            "comparator_prior_days": COMPARATOR_LOOKBACK_DAYS,
+            "native_input_window": WINDOW_SIZE,
+            "days_for_estimate": candle_dependency_days,
+            "basis": "CURRENT_ADMITTED_INPUT_BOUND_AND_EXISTING_DETAIL_LEASES; NOT_A_POLICY_CHANGE",
+            "limitations": [
+                "Historical configurations outside current input bounds require observed lease qualification"
+            ],
+        },
+        "context_dependency_retention_estimate": {
+            "configured_minimum_days": settings.candle_retention_days,
+            "detail_days": settings.detail_retention_days,
+            "comparator_prior_days": COMPARATOR_LOOKBACK_DAYS,
+            "days_for_estimate": context_dependency_days,
+            "basis": "CURRENT_COMPARATOR_CUTOFF_AND_PARENT_DETAIL_LEASES; NOT_A_POLICY_CHANGE",
+            "limitations": [
+                "An older selector predecessor per stream/kind and supplied historical dependencies may exceed this span",
+                "Actual frozen leases, population churn and native allocation still require qualification",
+            ],
+        },
         "working_bytes": actual,
         "files": files,
         "allocated_database_bytes": pages * page,
         "freelist_bytes": free * page,
         "categories": counts,
+        "source_layout": source_layout,
+        "numeric_layout": numeric_layout,
         "measurement_confidence": "LOW_SHORT_SAMPLE"
         if elapsed < 3600
         else "OBSERVED_WINDOW_WITH_MODEL_LIMITATIONS",
@@ -216,16 +452,19 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "forecast": forecast,
         "projected_working_bytes": projected,
         "page_overhead_factor": factor,
+        "quality_physical_allocation_bytes": quality_physical,
+        "quality_replaced_categories": sorted(QUALITY_CATEGORIES),
         "sample_seconds": elapsed,
         "observed_events_total": event_total,
         "observed_events_per_day_extrapolated": event_rate * 86400 if event_rate is not None else None,
         "quality_forecast_model": {
-            "kind": "ISOLATED_CURRENT_CODEC_AND_SQLITE_LAYOUT_EXTRAPOLATION",
+            "kind": "ISOLATED_CQ5_ALL_QUALITY_POOLS_AND_INDEXES_SCENARIOS",
             "encoded_bytes_per_event": quality_model_per_event,
             "scenarios": list(scenarios),
             "point_scenario": "SPARSE_NO_COMPARATOR_BASELINE",
             "not_a_bound": True,
             "actual_production_measurement": False,
+            "shared_frame_mature_model_qualified": False,
         },
         "forecast_scenarios": alternatives,
         "repack": repack,
@@ -236,7 +475,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
             "Aggregate service occupancy extrapolates positive net growth conservatively; terminal1d and stream-scoped state are not multiplied by gross turnover",
             "Additional retained methodology/comparator versions can increase cost beyond the single-method fixture",
             "Retained used inputs may exceed raw TTL; forecast is a baseline, not an upper bound",
-            "20GB target includes indexes and working journals; no silent scope/retention reduction",
+            "25GB target includes indexes and working journals; no silent scope/retention reduction",
         ],
         "options": [
             "Review largest category and repeated values",
@@ -272,14 +511,25 @@ def sample(store: Store, now_ms: int) -> None:
         {
             "at_ms": now_ms,
             "working_bytes": value["working_bytes"],
-            "format_version": 3,
+            "format_version": SAMPLE_FORMAT,
+            "completed_repack_version": value["repack"].get("version")
+            if value["repack"].get("state") == "COMPLETE"
+            else None,
             "repack_saved": store.get_runtime("storage_repack", {}).get("saved_categories", {}),
             "categories": value["categories"],
             "event_total": value["observed_events_total"],
         }
     )
     # 24-hour minute samples are bounded. No full database/index scan here.
-    if len(samples) > 2 and samples[-1]["at_ms"] // 3600000 == samples[-2]["at_ms"] // 3600000:
+    if (
+        len(samples) > 2
+        and samples[-1]["at_ms"] // 3600000 == samples[-2]["at_ms"] // 3600000
+        and any(
+            s.get("format_version") == SAMPLE_FORMAT
+            and s.get("completed_repack_version") == samples[-1]["completed_repack_version"]
+            for s in samples[:-2]
+        )
+    ):
         samples.pop(-2)
     samples = samples[-26:]
     with store.db:
@@ -294,7 +544,7 @@ def measure_indexes(store: Store, seconds: float = 0.25) -> dict[str, Any]:
     deadline = time.monotonic() + seconds
     store.db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
     try:
-        rows = store.db.execute("SELECT name,SUM(pgsize) FROM dbstat GROUP BY name").fetchall()
+        rows = store.db.execute("SELECT name,pgsize FROM dbstat WHERE aggregate=TRUE").fetchall()
         schema = {r[0]: r[1] for r in store.db.execute("SELECT name,type FROM sqlite_master")}
         return {
             "state": "PASS",

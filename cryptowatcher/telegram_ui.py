@@ -18,7 +18,7 @@ from .config import TIMEFRAMES, ConfigError, instrument_key
 from .detector_config import PARAMETERS, effective_parameters
 from .diagnostics import snapshot as diagnostic_snapshot
 from .ingestion import BybitRadar
-from .storage import RevisionConflict, json_payload
+from .storage import RevisionConflict
 from .telegram_views import (
     DIRECTION,
     FAMILY,
@@ -51,6 +51,63 @@ class ControlDeck:
     def __init__(self, controller: Controller) -> None:
         self.c = controller
         self.statistics: dict[str, Any] = {}
+        self.history_contexts: dict[str, dict[str, Any]] = {}
+
+    @staticmethod
+    def input_back(value: dict[str, Any]) -> str:
+        field = value.get("field", "")
+        if value.get("kind") in ("add", "remove"):
+            return "radar"
+        for group, fields in {
+            "price": ["price_move_min", *["price_" + tf for tf in TIMEFRAMES]],
+            "turnover": ["turnover_ratio", "turnover_lookback"],
+            "breakout": ["breakout_lookback", "breakout_buffer"],
+            "volatility": ["volatility_ratio", "volatility_lookback"],
+            "common": ["watchlist_multiplier", "liquidity_floor_24h", "radar_poll_sec"],
+        }.items():
+            if field in fields:
+                return "parameter_group:" + group
+        return "settings"
+
+    async def show_event(
+        self, update: Update, event_id: str, token: str = "", *, result: bool = False
+    ) -> None:
+        from .config import OwnerSettings
+        from .events import identity
+        from .outcomes import METHOD
+        from .render import event_keyboard, event_text, outcome_text
+
+        try:
+            event_id = str(uuid.UUID(event_id))
+        except ValueError as exc:
+            raise ConfigError("Некорректная ссылка на событие") from exc
+        context = self.history_contexts.get(token, {})
+        valid = event_id in context.get("event_ids", []) and time.time() - context.get("at", 0) < 900
+        nav = token if valid else None
+        event = self.c.history.get("event-head:" + event_id)
+        if event is None:
+            await self.c.send(
+                update,
+                "Подробности события уже недоступны в текущем сроке хранения.",
+                keyboard([], back="returnhistory:" + token if valid else "history"),
+            )
+            return
+        if result:
+            horizons = OwnerSettings.from_payload(event["settings_snapshot"]).outcome_horizons
+            outcomes = [
+                self.c.history.get("outcome-head:" + identity(f"outcome/{event_id}/{h}/{METHOD}"))
+                for h in horizons
+            ]
+            body = outcome_text(event, outcomes, horizons)
+        else:
+            body = (
+                event_text(event, int(time.time() * 1000))
+                + "\nТип: "
+                + observation_kind(event)
+                + "\nTelegram: "
+                + self.delivery_note(event_id)
+            )
+        await self.c.send(update, body, event_keyboard(event, history_token=nav))
 
     def cancel(self) -> None:
         if self.c.store.get_runtime(INPUT):
@@ -144,7 +201,9 @@ class ControlDeck:
             return False
         if text.casefold() in ("отмена", "назад", "/cancel"):
             self.cancel()
-            await self.c.send(update, "Ввод отменён. Настройки сохранены.", keyboard([]))
+            await self.c.send(
+                update, "Ввод отменён. Настройки сохранены.", keyboard([], back=self.input_back(value))
+            )
             return True
         snapshot = self.c.store.snapshot()
         if snapshot.revision != value["revision"] or time.time() - value.get("at", 0) > 900:
@@ -191,7 +250,9 @@ class ControlDeck:
         self.c.store.put_runtime("last_poll_ts", 0)
         self.cancel()
         await self.c.send(
-            update, "Значение сохранено." if after != snapshot else "Значение уже установлено.", keyboard([])
+            update,
+            "Значение сохранено." if after != snapshot else "Значение уже установлено.",
+            keyboard([], back=self.input_back(value)),
         )
         return True
 
@@ -202,37 +263,58 @@ class ControlDeck:
             raise ConfigError("Некорректная страница истории")
         start = PREFIX + "history:"
         upper = start + (cursor or "~")
-        rows = self.c.store.db.execute(
-            "SELECT key,payload_json FROM runtime WHERE key>=? AND key<? ORDER BY key DESC LIMIT ?",
-            (start, upper, PAGE_SIZE + 1),
-        ).fetchall()
-        entries = []
-        for row in rows[:PAGE_SIZE]:
-            binding = json_payload(row[1])
-            event = self.c.history.get("event-head:" + binding["event_id"])
-            if event:
-                entries.append(event)
+        from .catalogue_sql import read_snapshot
+
+        with read_snapshot(self.c.store):
+            rows = list(self.c.store.scan_runtime(start, before=upper, reverse=True, limit=PAGE_SIZE + 1))
+            entries = []
+            for row in rows[:PAGE_SIZE]:
+                binding = row[1]
+                event = self.c.history.get("event-head:" + binding["event_id"])
+                if event:
+                    entries.append(event)
         lines = [
             "История · последние наблюдения" if not cursor else "История · более ранние наблюдения",
-            self.c.history_notice().strip(),
         ]
+        token = uuid.uuid4().hex[:8]
+        self.history_contexts = {
+            k: v for k, v in self.history_contexts.items() if time.time() - v["at"] < 900
+        }
+        while len(self.history_contexts) >= 64:
+            self.history_contexts.pop(next(iter(self.history_contexts)))
+        self.history_contexts[token] = {
+            "cursor": cursor,
+            "at": time.time(),
+            "event_ids": [e["event_id"] for e in entries],
+        }
         controls: list[list[tuple[str, str]]] = []
+        previous_date = ""
         for index, event in enumerate(entries, 1):
+            stamp = when(event["market_observation_ms"])
+            date, clock, zone = stamp.split()
+            if date != previous_date:
+                lines.append(date + " · " + zone)
+                previous_date = date
             lines.append(
-                f"{index}. {when(event['market_observation_ms'])} · {event['symbol']} · {market(event['market_type'])}\n"
+                f"{index}. {clock} · {event['symbol']} · {market(event['market_type'])}\n"
                 f"{FAMILY[event['detector_id']]} · {event['timeframe']} · {DIRECTION.get(event['direction'], event['direction'])} · ×{amount(round(event['strength'], 2))}\n"
                 + observation_kind(event)
                 + "; Telegram: "
                 + self.delivery_note(event["event_id"])
             )
             controls.append(
-                [(f"{index}. {event['symbol']} · {event['timeframe']}", "event:" + event["event_id"])]
+                [
+                    (
+                        f"{index}. {event['symbol']} · {event['timeframe']}",
+                        "ui:open:" + event["event_id"] + ":" + token,
+                    )
+                ]
             )
         if not entries:
             lines.append("История пока пуста в этом доступном периоде.")
-        lines.append(
-            "Сохранённое наблюдение не означает отправленное уведомление. Полная доступная выборка — через export."
-        )
+            lines.append(self.c.history_notice())
+        lines.append("Наблюдение не означает отправленное уведомление.")
+        controls.append([("Период и доступные данные", "ui:historyinfo")])
         if len(rows) > PAGE_SIZE:
             controls.append([("Ранее →", "ui:history:" + rows[PAGE_SIZE - 1][0][len(start) :])])
         if cursor:
@@ -264,6 +346,10 @@ class ControlDeck:
             "Сравнение" if value["command"] == "compare" else "Статистика детекторов",
             "Снимок: " + when(value["at"] * 1000),
         ]
+        if data.get("selection_period"):
+            lines.append(
+                "Архивная часть выбирается целыми UTC-днями; доступные подробности — по точному времени."
+            )
         for row in rows[page * 5 : page * 5 + 5]:
             group = row["group"]
             if isinstance(group, dict):
@@ -651,7 +737,13 @@ class ControlDeck:
 
         action = parts[0] if parts else ""
         snapshot = self.c.store.snapshot()
-        if action in ("cancel", "home"):
+        if action == "cancel" and self.c.store.get_runtime(INPUT):
+            value = self.c.store.get_runtime(INPUT)
+            self.cancel()
+            await self.c.send(
+                update, "Ввод отменён. Настройки сохранены.", keyboard([], back=self.input_back(value))
+            )
+        elif action in ("cancel", "home"):
             self.cancel()
             await self.c.command(update, "home")
         elif action == "parameters":
@@ -802,6 +894,50 @@ class ControlDeck:
             )
         elif action == "history":
             await self.history(update, ":".join(parts[1:]))
+        elif action == "historyinfo":
+            await self.c.send(
+                update,
+                self.c.history_notice()
+                + "\nСохранённое наблюдение не означает отправленное уведомление. Полная доступная выборка — через export.",
+                keyboard([], back="history"),
+            )
+        elif action == "returnhistory" and len(parts) == 2:
+            context = self.history_contexts.get(parts[1], {})
+            await self.history(
+                update, context.get("cursor", "") if time.time() - context.get("at", 0) < 900 else ""
+            )
+        elif action in ("open", "result") and len(parts) == 3:
+            await self.show_event(update, parts[1], parts[2], result=action == "result")
+        elif action in ("eventmore", "eventmute") and len(parts) in (2, 3):
+            from .render import alert_keyboard
+
+            event = self.c.history.get("event-head:" + str(uuid.UUID(parts[1])))
+            if event is None:
+                await self.c.send(update, "Событие уже недоступно.", keyboard([], back="history"))
+            else:
+                token = parts[2] if len(parts) == 3 else ""
+                back = "open:" + parts[1] + ":" + token if token else None
+                original = alert_keyboard(event["symbol"], event["market_type"]).inline_keyboard
+                copied = [
+                    [(b.text, b.callback_data) for b in row if isinstance(b.callback_data, str)]
+                    for row in original
+                ]
+                rows: list[list[tuple[str, str]]] = (
+                    [copied[1]]
+                    if action == "eventmute"
+                    else [
+                        [("Монета", copied[2][0][1])],
+                        [("Полные исходные данные", "ui:eventfile:" + parts[1])],
+                        [("Пересчитать сравнение", "recompare:" + parts[1])],
+                    ]
+                )
+                if not back:
+                    rows.append([("← Событие", "event:" + parts[1])])
+                await self.c.send(
+                    update,
+                    "Заглушение уведомлений" if action == "eventmute" else "Дополнительные действия события",
+                    keyboard(rows, back=back),
+                )
         elif action == "listpage" and len(parts) == 2 and parts[1].isdecimal():
             await self.command(update, "watchlist", parts[1])
         elif action == "mutespage" and len(parts) == 2 and parts[1].isdecimal():

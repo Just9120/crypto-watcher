@@ -7,17 +7,20 @@ import bisect
 import hashlib
 import json
 import math
+import time
 from dataclasses import asdict
 from typing import Any, Callable
 
+from .catalogue_sql import read_snapshot, source
 from .config import OwnerSettings
 from .detectors import VERSIONS, DetectorUnavailable, atr14, evaluate
 from .events import PREFIX, History, identity
 from .outcomes import DAY, MINUTE, calculate, pending_key, protect, read_candles
 from .source_context import context
-from .storage import StateError, Store, encode, json_payload
+from .storage import StateError, Store, encode
 
 COMPARATOR_VERSION = "1"
+COMPARATOR_LOOKBACK_DAYS = 28
 COMPARATOR_DEFINITION = {
     "version": COMPARATOR_VERSION,
     "period": "previous28days; same instrument/market/TF/UTC observation hour",
@@ -40,15 +43,10 @@ GROUPS = (
 
 
 def as_of(history: History, kind: str, key: str, cutoff_ms: int) -> dict[str, Any] | None:
-    prefix = PREFIX + f"{kind}:{key}:"
-    rows = history.store.db.execute(
-        "SELECT key,payload_json FROM runtime WHERE key>=? AND key<? ORDER BY key DESC",
-        (prefix, prefix + "~"),
-    )
-    for row in rows:
-        record = history.resolve(row[0][len(PREFIX) :], json_payload(row[1]))
-        if record["available_at_ms"] <= cutoff_ms:
-            return record
+    with read_snapshot(history.store):
+        for _, record in history.scan(f"{kind}:{key}:", reverse=True):
+            if record["available_at_ms"] <= cutoff_ms:
+                return record
     return None
 
 
@@ -65,9 +63,56 @@ def decision_context(history: History, event_id: str, cutoff_ms: int) -> dict[st
     }
 
 
+def prior_population(
+    store: Store, native: str, start: int, reference: int, needed: int, step: int
+) -> tuple[Any, Any, Any]:
+    from .detectors import true_range
+
+    frozen = store.readonly and store.db.in_transaction
+    warmup = max(256, needed) if frozen else needed
+    key = (native, start, reference, warmup, step, store.db.execute("PRAGMA data_version").fetchone()[0])
+    previous = store.comparison_population if frozen else None
+    if previous is not None and previous[0] == key:
+        return previous[1]
+    lower = max(0, start - warmup * step)
+    candles = None
+    if previous is not None:
+        old, value = previous
+        if (
+            old[0] == native
+            and old[3:] == key[3:]
+            and old[1] <= start
+            and old[2] < reference
+            and lower < old[2]
+        ):
+            # The same read transaction cannot acquire recovered/changed bars.
+            # Source ranges select starts in [lower, reference), including gaps.
+            # Reuse any overlap, including sparse admissions >256 bars apart.
+            # The new tail is a subset of the original permitted source range;
+            # no read, retained population or cache bound is increased.
+            candles = [c for c in value[0] if c.start >= lower]
+            candles.extend(read_candles(store, native, max(lower, old[2]), reference))
+    if candles is None:
+        candles = read_candles(store, native, lower, reference)
+    ranges = [0.0] + [true_range(b, a) for a, b in zip(candles, candles[1:])]
+    points = []
+    contiguous = 0
+    for i, current in enumerate(candles):
+        contiguous = contiguous + 1 if i == 0 or current.start - candles[i - 1].start == current.step else 1
+        if contiguous >= 16 and start <= current.end < reference:
+            # Same fourteen additions, order and division as atr14; no subtraction.
+            value = 100 * (sum(ranges[i - 14 : i]) / 14) / current.close
+            if math.isfinite(value):
+                points.append((current, i, value))
+    frozen_value = (candles, points, sorted(point[2] for point in points))
+    if frozen:
+        store.comparison_population = (key, frozen_value)
+    return frozen_value
+
+
 def comparison_dataset(store: Store, event: dict[str, Any]) -> dict[str, Any]:
     reference = event["reference_time_ms"]
-    start = max(0, reference - 28 * DAY)
+    start = max(0, reference - COMPARATOR_LOOKBACK_DAYS * DAY)
     settings = OwnerSettings.from_payload(event["settings_snapshot"])
     horizons = settings.outcome_horizons
     max_horizon = max(horizons) * MINUTE
@@ -106,19 +151,7 @@ def comparison_dataset(store: Store, event: dict[str, Any]) -> dict[str, Any]:
     if reference_atr is None or not math.isfinite(reference_atr):
         result["limitations"] = ["REFERENCE_ATR_UNAVAILABLE"]
         return result
-    candles = read_candles(store, native, max(0, start - needed * step), reference)
-    points = []
-    for i, current in enumerate(candles):
-        if not start <= current.end < reference:
-            continue
-        window = candles[max(0, i - needed + 1) : i + 1]
-        try:
-            value = 100 * atr14(window) / current.close
-        except DetectorUnavailable:
-            continue
-        if math.isfinite(value):
-            points.append((current, window, value))
-    population = sorted(point[2] for point in points)
+    candles, points, population = prior_population(store, native, start, reference, needed, step)
     result["population_size"] = len(population)
     if not population:
         result["limitations"] = ["INSUFFICIENT_PRIOR_HISTORY"]
@@ -129,7 +162,7 @@ def comparison_dataset(store: Store, event: dict[str, Any]) -> dict[str, Any]:
     occupied: list[tuple[int, int]] = []
     source_errors = 0
     missing_liquidity = 0
-    for current, window, value in reversed(points):
+    for current, index, value in reversed(points):
         if (
             current.end + max_horizon >= reference
             or current.end // 3_600_000 % 24 != reference // 3_600_000 % 24
@@ -137,6 +170,7 @@ def comparison_dataset(store: Store, event: dict[str, Any]) -> dict[str, Any]:
             or any(current.end < end and current.end + max_horizon > begin for begin, end in occupied)
         ):
             continue
+        window = candles[max(0, index - needed + 1) : index + 1]
         try:
             historical = context(store, native.rsplit("/", 1)[0], current.end)
             ticker = historical["ticker"]
@@ -175,7 +209,12 @@ def comparison_dataset(store: Store, event: dict[str, Any]) -> dict[str, Any]:
             "continuation_threshold_pct": noise,
         }
         outcomes = {
-            str(h): calculate(comparator_event, h, [c for c in future if c.end <= current.end + h * MINUTE])
+            str(h): calculate(
+                comparator_event,
+                h,
+                [c for c in future if c.end <= current.end + h * MINUTE],
+                include_source_inputs=False,
+            )
             for h in horizons
         }
         if any(v["state"] != "COMPLETE" for v in outcomes.values()):
@@ -245,12 +284,16 @@ class ComparisonWorker:
                 state="PENDING",
                 next_attempt_ms=now_ms,
                 recalculation_requested_ms=now_ms,
+                due_ms=now_ms,
                 methodology_version=COMPARATOR_VERSION,
             )
             job["pending_key"] = pending_key(now_ms, event_id).replace(
                 "outcome-pending:", "comparison-pending:", 1
             )
             self.history.put("comparison-job:" + event_id, job)
+            from .queue_health import arrival
+
+            arrival(self.store, "comparison")
             self.history.put(job["pending_key"], {"event_id": event_id})
             for stream in (native, native.rsplit("/", 1)[0] + "/1m"):
                 self.history.put(
@@ -259,7 +302,7 @@ class ComparisonWorker:
                         "start": max(
                             0,
                             event["reference_time_ms"]
-                            - 28 * DAY
+                            - COMPARATOR_LOOKBACK_DAYS * DAY
                             - lookback * int(event["timeframe"][:-1]) * MINUTE,
                         ),
                         "end": event["reference_time_ms"],
@@ -313,6 +356,7 @@ class ComparisonWorker:
         from .analytics_worker import prepare, read_snapshot
 
         now_ms = clock()
+        started = time.monotonic()
         prepared = await asyncio.to_thread(
             read_snapshot,
             self.store.path,
@@ -328,12 +372,29 @@ class ComparisonWorker:
                 self.calculate,
             ),
         )
+        read_seconds = time.monotonic() - started
         applied = 0
+        completed_lags = []
         for job, event, binding, result in prepared:
             if self.history.get("comparison-job:" + event["event_id"]) == job:
                 self.apply(job, event, binding, result, clock())
                 applied += 1
+                if result["state"] in ("COMPLETE", "COMPLETE_LIMITED"):
+                    due_ms = job.get(
+                        "due_ms", job.get("recalculation_requested_ms", event["available_at_ms"])
+                    )
+                    completed_lags.append(max(0, clock() - due_ms))
             await asyncio.sleep(0)
+        from .queue_health import completed_batch
+
+        completed_batch(
+            self.store,
+            "comparison",
+            clock(),
+            completed_lags,
+            time.monotonic() - started,
+            read_seconds=read_seconds,
+        )
         return applied
 
     def apply(
@@ -410,15 +471,45 @@ def cohort_rows(
     version: str | None = None,
     market: str | None = None,
 ) -> Any:
+    with read_snapshot(store):
+        yield from _cohort_rows(
+            store,
+            groups,
+            cutoff_ms=cutoff_ms,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            detector=detector,
+            version=version,
+            market=market,
+        )
+
+
+def _cohort_rows(
+    store: Store,
+    groups: tuple[str, ...],
+    *,
+    cutoff_ms: int | None,
+    start_ms: int,
+    end_ms: int,
+    detector: str | None,
+    version: str | None,
+    market: str | None,
+) -> Any:
     """SQLite sorts/aggregates on disk; the exporter never collects raw returns in memory."""
     if not groups or len(set(groups)) != len(groups) or any(g not in GROUPS for g in groups):
         raise ValueError("Invalid analytics grouping")
     args: list[Any] = []
     definitions = []
+    mixed = source(store, "event") != "runtime"
     for kind, name in (("outcome", "o"), ("comparison", "c")):
         if cutoff_ms is None:
             prefix = PREFIX + kind + "-head:"
-            if kind in ("comparison", "outcome"):
+            table = source(store, kind, head=True)
+            if mixed:
+                definitions.append(
+                    f"{name} AS (SELECT COALESCE(cw_runtime_payload('{PREFIX}' || json_extract(cw_record_json(h.payload_json),'$.revision_key')),h.payload_json) AS payload_json FROM {table} h WHERE h.key>=? AND h.key<?)"
+                )
+            else:
                 definitions.append(
                     f"{name} AS (SELECT COALESCE(v.payload_json,h.payload_json) AS payload_json "
                     "FROM runtime h LEFT JOIN runtime v ON v.key='"
@@ -426,13 +517,11 @@ def cohort_rows(
                     + "' || json_extract(cw_record_json(h.payload_json),'$.revision_key') "
                     "WHERE h.key>=? AND h.key<?)"
                 )
-            else:
-                definitions.append(f"{name} AS (SELECT payload_json FROM runtime WHERE key>=? AND key<?)")
             args += [prefix, prefix + "~"]
         else:
             prefix = PREFIX + kind + ":"
             definitions += [
-                f"{name}v AS (SELECT payload_json, ROW_NUMBER() OVER (PARTITION BY json_extract(cw_record_json(payload_json),'$.{kind}_id') ORDER BY json_extract(cw_record_json(payload_json),'$.revision') DESC) AS pos FROM runtime WHERE key>=? AND key<? AND json_extract(cw_record_json(payload_json),'$.available_at_ms')<=?)",
+                f"{name}v AS (SELECT payload_json, ROW_NUMBER() OVER (PARTITION BY json_extract(cw_record_json(payload_json),'$.{kind}_id') ORDER BY json_extract(cw_record_json(payload_json),'$.revision') DESC) AS pos FROM {source(store, kind)} WHERE key>=? AND key<? AND json_extract(cw_record_json(payload_json),'$.available_at_ms')<=?)",
                 f"{name} AS (SELECT payload_json FROM {name}v WHERE pos=1)",
             ]
             args += [prefix, prefix + "~", cutoff_ms]
@@ -448,11 +537,12 @@ def cohort_rows(
         "profile": "settings_snapshot.profile",
     }
     fields = []
+    event_payload = "e.value" if mixed else "e.payload_json"
     for group in groups:
         expression = (
-            "json_extract(cw_record_json(e.payload_json),'$.settings_revision')"
+            f"json_extract(cw_record_json({event_payload}),'$.settings_revision')"
             if group == "settings"
-            else f"json_extract(cw_record_json(e.payload_json),'$.{paths[group]}')"
+            else f"json_extract(cw_record_json({event_payload}),'$.{paths[group]}')"
         )
         # Settings revision uniquely identifies the immutable owner snapshot in this database.
         fields += [f"'{group}'", expression]
@@ -464,32 +554,40 @@ def cohort_rows(
     ]
     terms = [
         "json_extract(cw_record_json(o.payload_json),'$.state')='COMPLETE'",
-        "json_extract(cw_record_json(e.payload_json),'$.market_observation_ms')>=?",
-        "json_extract(cw_record_json(e.payload_json),'$.market_observation_ms')<?",
+        f"json_extract(cw_record_json({event_payload}),'$.market_observation_ms')>=?",
+        f"json_extract(cw_record_json({event_payload}),'$.market_observation_ms')<?",
     ]
     args += [start_ms, end_ms]
     if cutoff_ms is not None:
-        terms.append("json_extract(cw_record_json(e.payload_json),'$.available_at_ms')<=?")
+        terms.append(f"json_extract(cw_record_json({event_payload}),'$.available_at_ms')<=?")
         args.append(cutoff_ms)
     for field, value in (("detector_id", detector), ("detector_version", version), ("market_type", market)):
         if value is not None:
-            terms.append(f"json_extract(cw_record_json(e.payload_json),'$.{field}')=?")
+            terms.append(f"json_extract(cw_record_json({event_payload}),'$.{field}')=?")
             args.append(value)
+    event_key = (
+        "'"
+        + PREFIX
+        + "event:' || json_extract(cw_record_json(o.payload_json),'$.event_id') || ':' || printf('%010d',json_extract(cw_record_json(o.payload_json),'$.event_revision'))"
+    )
+    event_join = (
+        "FROM o JOIN json_each(json_array(cw_runtime_payload(" + event_key + "))) e WHERE "
+        if mixed
+        else "FROM o JOIN runtime e ON e.key=" + event_key + " WHERE "
+    )
     definitions += [
         "base AS (SELECT json_object(" + ",".join(fields) + ") AS group_key, "
-        "COALESCE(json_extract(cw_record_json(o.payload_json),'$.metrics.directed_return_pct'),json_extract(cw_record_json(o.payload_json),'$.metrics.price_return_pct')) AS value, "
+        "COALESCE(json_extract(cw_numeric_json(o.payload_json),'$.metrics.directed_return_pct'),json_extract(cw_numeric_json(o.payload_json),'$.metrics.price_return_pct')) AS value, "
         "json_extract(cw_record_json(o.payload_json),'$.classification') AS class, json_extract(cw_record_json(o.payload_json),'$.noise_threshold_pct') AS noise, "
         "json_extract(cw_record_json(o.payload_json),'$.event_id') AS event_id, json_extract(cw_record_json(o.payload_json),'$.horizon_min') AS horizon "
-        "FROM o JOIN runtime e ON e.key='"
-        + PREFIX
-        + "event:' || json_extract(cw_record_json(o.payload_json),'$.event_id') || ':' || printf('%010d',json_extract(cw_record_json(o.payload_json),'$.event_revision')) WHERE "
+        + event_join
         + " AND ".join(terms)
         + ")",
         "ordered AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY group_key ORDER BY value) AS rn, COUNT(*) OVER (PARTITION BY group_key) AS n FROM base)",
         "stats AS (SELECT group_key,COUNT(*) AS n,MIN(noise) AS noise_min,MAX(noise) AS noise_max,COUNT(noise) AS noise_n,AVG(value) AS mean,MIN(value) AS minimum,MAX(value) AS maximum,AVG(CASE WHEN rn IN ((n+1)/2,(n+2)/2) THEN value END) AS median,MAX(CASE WHEN rn=(n+9)/10 THEN value END) AS p10,MAX(CASE WHEN rn=(n*9+9)/10 THEN value END) AS p90 FROM ordered GROUP BY group_key)",
         "classes AS (SELECT group_key,class,COUNT(*) AS n FROM base GROUP BY group_key,class)",
         "class_json AS (SELECT group_key,json_group_object(class,n) AS counts FROM classes GROUP BY group_key)",
-        "comparators AS (SELECT b.group_key,COUNT(*) AS n,AVG(COALESCE(json_extract(s.value,'$.outcomes.' || json_quote(CAST(b.horizon AS TEXT)) || '.metrics.directed_return_pct'),json_extract(s.value,'$.outcomes.' || json_quote(CAST(b.horizon AS TEXT)) || '.metrics.price_return_pct'))) AS mean FROM base b JOIN c ON json_extract(cw_record_json(c.payload_json),'$.event_id')=b.event_id JOIN json_each(cw_record_json(c.payload_json),'$.samples') s GROUP BY b.group_key)",
+        "comparators AS (SELECT b.group_key,COUNT(*) AS n,AVG(COALESCE(json_extract(s.value,'$.outcomes.' || json_quote(CAST(b.horizon AS TEXT)) || '.metrics.directed_return_pct'),json_extract(s.value,'$.outcomes.' || json_quote(CAST(b.horizon AS TEXT)) || '.metrics.price_return_pct'))) AS mean FROM base b JOIN c ON json_extract(cw_record_json(c.payload_json),'$.event_id')=b.event_id JOIN json_each(cw_numeric_json(c.payload_json),'$.samples') s GROUP BY b.group_key)",
     ]
     if store.bounded and cutoff_ms is None:
         from .quality_summary import union_sql
@@ -549,8 +647,15 @@ def cohorts(
     cutoff_ms: int | None = None,
     limit: int = 50,
 ) -> dict[str, Any]:
+    with read_snapshot(store):
+        return _cohorts(store, groups, cutoff_ms=cutoff_ms, limit=limit)
+
+
+def _cohorts(store: Store, groups: tuple[str, ...], *, cutoff_ms: int | None, limit: int) -> dict[str, Any]:
     if limit < 1:
         raise ValueError("Invalid cohort limit")
+    from .quality_summary import period_metadata
+
     records: list[dict[str, Any]] = []
     truncated = False
     for row in cohort_rows(store, groups, cutoff_ms=cutoff_ms):
@@ -561,21 +666,30 @@ def cohorts(
     # Summary counts need only projected state; never expand every candle window.
     if cutoff_ms is None:
         incomplete = store.db.execute(
-            "SELECT COUNT(*) FROM runtime WHERE key>=? AND key<? AND json_extract(cw_record_json(payload_json),'$.state')!='COMPLETE'",
+            "SELECT COUNT(*) FROM "
+            + source(store, "outcome", head=True)
+            + " WHERE key>=? AND key<? AND json_extract(cw_record_json(payload_json),'$.state')!='COMPLETE'",
             (PREFIX + "outcome-head:", PREFIX + "outcome-head:~"),
         ).fetchone()[0]
     else:
         incomplete = store.db.execute(
             "WITH revisions AS (SELECT json_extract(cw_record_json(payload_json),'$.state') AS state, "
             "ROW_NUMBER() OVER (PARTITION BY json_extract(cw_record_json(payload_json),'$.outcome_id') "
-            "ORDER BY json_extract(cw_record_json(payload_json),'$.revision') DESC) AS pos FROM runtime "
+            "ORDER BY json_extract(cw_record_json(payload_json),'$.revision') DESC) AS pos FROM "
+            + source(store, "outcome")
+            + " "
             "WHERE key>=? AND key<? AND json_extract(cw_record_json(payload_json),'$.available_at_ms')<=?) "
             "SELECT COUNT(*) FROM revisions WHERE pos=1 AND state!='COMPLETE'",
             (PREFIX + "outcome:", PREFIX + "outcome:~", cutoff_ms),
         ).fetchone()[0]
     if store.bounded and cutoff_ms is None:
+        absent = (
+            "cw_runtime_payload(?||json_extract(cw_record_json(j.payload_json),'$.outcome_id')) IS NULL"
+            if source(store, "outcome", head=True) != "runtime"
+            else "NOT EXISTS (SELECT 1 FROM runtime h WHERE h.key=?||json_extract(cw_record_json(j.payload_json),'$.outcome_id'))"
+        )
         incomplete += store.db.execute(
-            "SELECT COUNT(*) FROM runtime j WHERE j.key>=? AND j.key<? AND NOT EXISTS (SELECT 1 FROM runtime h WHERE h.key=?||json_extract(cw_record_json(j.payload_json),'$.outcome_id'))",
+            "SELECT COUNT(*) FROM runtime j WHERE j.key>=? AND j.key<? AND " + absent,
             (PREFIX + "outcome-job:", PREFIX + "outcome-job:~", PREFIX + "outcome-head:"),
         ).fetchone()[0]
         incomplete += store.db.execute(
@@ -583,6 +697,7 @@ def cohorts(
         ).fetchone()[0]
     return {
         "schema": "cryptowatcher.analytics.v1",
+        "selection_period": period_metadata(0, 9_999_999_999_999_999) if store.bounded else {},
         "groups": list(groups),
         "cohorts": records,
         "incomplete_outcomes": incomplete,

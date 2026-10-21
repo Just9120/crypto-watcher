@@ -17,7 +17,7 @@ from cryptowatcher.capacity import (
 from cryptowatcher.events import DECISION_HEAD, PREFIX, EventEngine, History, identity
 from cryptowatcher.market_storage import enable
 from cryptowatcher.storage import StateError, Store
-from cryptowatcher.storage_repack import async_work, work
+from cryptowatcher.storage_repack import VERSION, async_work, work
 from scripts import observe_capacity as observer
 from scripts.observe_capacity import advance, atomic
 
@@ -94,9 +94,13 @@ def test_completed_repack_resumes_decision_pass_without_discarding_progress(stor
         work(store, NOW, batch=10, seconds=1)
     assert store.get_runtime("storage_repack") == previous
     assert store.get_runtime(PREFIX + key) == value
-    state = work(store, NOW, batch=10, seconds=1)
+    for _ in range(100):
+        state = work(store, NOW, batch=10, seconds=1)
+        if state["state"] == "COMPLETE":
+            break
     assert state["state"] == "COMPLETE" and state["decisions_complete"]
-    assert state["records"] == 1000 and state["cursor"] == previous["cursor"]
+    assert state["version"] == VERSION and state["previous_run"]["records"] == 1000
+    assert state["previous_run"]["cursor"] == previous["cursor"] and state["records"] >= 2
     assert state["saved_payload_bytes"] > 123
     assert h.get(key) == value and store.get_runtime(PREFIX + key) == {DECISION_HEAD: 1}
     assert work(store, NOW + 1) == state
@@ -149,6 +153,9 @@ def test_ledger_is_exact_no_sql_temp_sort_and_cohort_ablation_matches_frozen_eve
         assert cohorts["dimension_cardinality"]["horizon"] == 4
         assert cohorts["distinct_without_dimension"]["horizon"] * 4 == cohorts["cohort_days_if_archived"]
         partial = runtime_ledger(reader, seconds=0)
+        assert partial["state"] == "MEASURED" and partial["namespaces"] == ledger["namespaces"]
+        with patch("cryptowatcher.runtime_meter.read", return_value=None):
+            partial = runtime_ledger(reader, seconds=0)
         assert partial["state"] == "PARTIAL_BUDGET" and partial["records_scanned"] == 0
 
 
@@ -170,6 +177,17 @@ def test_quick_capacity_never_walks_runtime_or_quality_and_interval_does_not_inv
     result = interval(value, later)
     assert result["working_net_bytes"] == 100 and result["daily_extrapolation_bytes"] is None
     later["at_ms"] = value["at_ms"] + DAY
+    assert interval(value, later)["state"] == "PARTIAL_OR_UNSTABLE"
+    for boundary in (value, later):
+        boundary.update(
+            source_revision="f" * 40,
+            history_generation={"id": "one"},
+            runtime_instance={"id": "same"},
+            runtime_ledger={"state": "MEASURED", "namespaces": {}},
+            prospective_cohorts={"state": "MEASURED_PROSPECTIVE"},
+            quality_actual={"state": "MEASURED"},
+            physical_snapshot={"state": "PASS", "tables": {}, "total_index_bytes": 0},
+        )
     assert interval(value, later)["state"] == "OBSERVED_24H"
     later["configuration_revision"] += 1
     assert interval(value, later)["state"] == "PARTIAL_OR_UNSTABLE"
@@ -187,15 +205,84 @@ def test_stable_baseline_distinguishes_referenced_backfill_from_normal_pending_h
                 "recovery_pending": 0,
                 "recovery_working": 0,
                 "historical_gaps_pending": 0,
-                "subscriptions": {"spot:0": {"state": "CONNECTED", "requested": 1, "acknowledged": 1}},
+                "components_healthy": True,
+                "scope_synced": True,
+                "discovery": {
+                    market: {
+                        "metadata_ready": True,
+                        "tickers_ready": True,
+                        "metadata_age_seconds": 0,
+                        "ticker_age_seconds": 0,
+                    }
+                    for market in ("spot", "linear")
+                },
+                "subscriptions": {
+                    "spot:0": {
+                        "state": "CONNECTED",
+                        "requested": 1,
+                        "acknowledged": 1,
+                        "task_state": "RUNNING",
+                        "last_received_ms": NOW,
+                    }
+                },
             },
         )
         store.put_runtime("radar:v1:outcome-admission", {"complete": True})
-        store.put_runtime("storage_repack", {"state": "COMPLETE"})
         store.put_runtime("analytics", {"state": "OK", "at_ms": NOW})
-        History(store).put("outcome-pending:future-horizon", {"key": "normal-scheduled-work"})
+        History(store).put("outcome-pending:future-horizon", {"outcome_id": "normal-scheduled-work"})
+        History(store).put(
+            "outcome-job:normal-scheduled-work", {"state": "PENDING", "next_attempt_ms": NOW + 60000}
+        )
+    for _ in range(100):
+        complete = work(store, NOW, seconds=1)
+        if complete["state"] == "COMPLETE":
+            break
+    assert complete["state"] == "COMPLETE"
     with patch("cryptowatcher.capacity.time.time", return_value=NOW / 1000):
         assert stable_reason(store) == []
+        import copy
+
+        healthy = store.get_runtime("ingestion")
+        for field, limit, reason in (
+            ("metadata_age_seconds", 660, "METADATA_STALE_OR_UNKNOWN"),
+            ("ticker_age_seconds", 360, "TICKERS_STALE_OR_UNKNOWN"),
+        ):
+            for invalid in (None, True, -1, limit + 0.001, 40 * 3600):
+                changed = copy.deepcopy(healthy)
+                changed["discovery"]["linear"][field] = invalid
+                store.put_runtime("ingestion", changed)
+                assert stable_reason(store) == [reason]
+            changed["discovery"]["linear"][field] = limit
+            store.put_runtime("ingestion", changed)
+            assert stable_reason(store) == []
+            store.put_runtime("ingestion", healthy)
+        for field, reason in (
+            ("components_healthy", "INGESTION_COMPONENTS_NOT_CURRENT"),
+            ("scope_synced", "SUBSCRIPTION_SCOPE_PENDING"),
+        ):
+            changed = {**healthy, field: False}
+            store.put_runtime("ingestion", changed)
+            assert stable_reason(store) == [reason]
+        changed = copy.deepcopy(healthy)
+        changed["subscriptions"]["spot:0"]["last_received_ms"] = NOW - 40 * 3600 * 1000
+        store.put_runtime("ingestion", changed)
+        assert stable_reason(store) == ["SUBSCRIPTION_STALE"]
+        changed["subscriptions"]["spot:0"]["last_received_ms"] = NOW
+        changed["subscriptions"]["spot:0"]["task_state"] = "STOPPING"
+        store.put_runtime("ingestion", changed)
+        assert stable_reason(store) == ["SUBSCRIPTION_TASK_NOT_CURRENT"]
+        store.put_runtime("ingestion", healthy)
+        assert stable_reason(store) == []
+        store.put_runtime("retention_worker", {"state": "FAILED", "error_class": "RuntimeError"})
+        assert stable_reason(store) == ["RETENTION_WORKER_FAILED"]
+        store.put_runtime("retention_worker", {"state": "OK"})
+        assert stable_reason(store) == []
+        changed = copy.deepcopy(healthy)
+        changed["at"] -= 20
+        changed["discovery"]["linear"]["ticker_age_seconds"] = 350
+        store.put_runtime("ingestion", changed)
+        assert stable_reason(store) == ["TICKERS_STALE_OR_UNKNOWN"]
+        store.put_runtime("ingestion", healthy)
         with store.db:
             History(store).put("analytics-gap-pending:queued", {"id": "referenced-backfill"})
         assert stable_reason(store) == ["ANALYTICS_RECOVERY_PENDING"]
@@ -207,6 +294,11 @@ def test_stable_baseline_distinguishes_referenced_backfill_from_normal_pending_h
         assert stable_reason(store) == ["ANALYTICS_RECOVERY_WORKER_FAILED"]
         with store.db:
             store.put_runtime("analytics_recovery_worker", {"state": "OK"})
+        assert stable_reason(store) == []
+        for version in (3, 11, 12, 13, 14, None, str(VERSION), float(VERSION)):
+            store.put_runtime("storage_repack", {"state": "COMPLETE", "version": version})
+            assert stable_reason(store) == ["REPACK"]
+        store.put_runtime("storage_repack", complete)
         assert stable_reason(store) == []
 
 
@@ -229,7 +321,8 @@ def test_forecast_attribution_does_not_add_indexes_twice_and_sampling_is_finite(
     good = {"at_ms": 2000, "stability_blockers": []}
     state = advance(state, good, 2)
     assert state["state"] == "WAITING_STABLE"
-    assert advance(state, good, 302)["state"] == "READY_FOR_BASELINE"
+    assert advance(state, {**good, "at_ms": 302000}, 302)["state"] == "WAITING_STABLE"
+    assert advance(state, {**good, "at_ms": 1802000}, 1802)["state"] == "READY_FOR_BASELINE"
     assert advance(state, pending, 12 * 3600 + 1)["state"] == "WAIT_LIMIT_REACHED"
     observing = {"state": "OBSERVING", "created_at": 0, "baseline_ms": 2000}
     assert advance(observing, good, 86402)["state"] == "READY_FOR_FINAL"
@@ -284,7 +377,11 @@ def test_baseline_settles_current_queue_without_accepting_the_blocked_probe():
     assert "baseline_settling_attempts" not in cleared
     state = advance({"state": "WAITING_STABLE", "created_at": 0}, initial, 1)
     assert state["state"] == "WAITING_STABLE" and state["stable_samples"] == 1
-    assert advance(state, value, 311)["state"] == "READY_FOR_BASELINE"
+    settled = advance(state, value, 311)
+    assert settled["state"] == "WAITING_STABLE" and settled["stable_since_ms"] == 311000
+    assert (
+        advance(settled, {"at_ms": 2111000, "stability_blockers": []}, 2111)["state"] == "READY_FOR_BASELINE"
+    )
     # The original wait deadline still takes precedence over a cleared queue.
     assert advance(state, value, 12 * 3600 + 1)["state"] == "WAIT_LIMIT_REACHED"
 
@@ -352,13 +449,18 @@ def test_legacy_capacity_is_explicitly_unmetered_and_flags_do_not_affect_other_c
     assert cli(monkeypatch, infrastructure, "diagnostics", "--capacity-ledger") == 2
 
 
-def test_controlled_62week_population_plateaus_and_all_numeric_results_survive(tmp_path):
+@pytest.mark.parametrize("compact", [False, True])
+def test_controlled_62week_population_plateaus_and_all_numeric_results_survive(tmp_path, compact):
     from scripts.rehearse_retention import measure
 
-    value = measure(tmp_path / "rolling-retention.sqlite3")
+    value = measure(tmp_path / "rolling-retention.sqlite3", compact=compact)
     assert len(value["families"]) == 5 and value["markets"] == 2 and len(value["timeframes"]) == 4
     assert value["numeric_and_comparator_multiset_equality"] == value["private_equality"] == "PASS"
     assert value["restarts"] == 1 and not any(value["final_remaining"].values())
+    if compact:
+        assert value["storage_layout"] == f"MIXED_BLOCKS_REPACK{VERSION}"
+        assert value["compaction"]["state"] == "COMPLETE" and value["compaction"]["version"] == VERSION
+        assert value["issued_numeric_ids_after_final_gc"] > 0
     stable = value["steady_detail_population"][-8:]
     assert {s["events"] for s in stable} == {50}
     assert {s["quality_facts"] for s in stable} == {1920}
@@ -372,8 +474,8 @@ def test_controlled_62week_population_plateaus_and_all_numeric_results_survive(t
 
 def test_twenty_comparators_frozen_versions_retention_boundaries_and_source_leases(store):
     from cryptowatcher.analytics import ComparisonWorker, cohorts
-    from cryptowatcher.market_storage import decoded
     from cryptowatcher.outcomes import DEFINITION, MINUTE
+    from cryptowatcher.quality_packets import unpack as unpack_quality
 
     from .test_analytics import series
     from .test_outcomes import Candle
@@ -428,7 +530,7 @@ def test_twenty_comparators_frozen_versions_retention_boundaries_and_source_leas
     metric_sets = [
         f["comparator_metrics"]
         for r in store.db.execute("SELECT facts FROM market_quality")
-        for f in decoded(bytes(r[0]), 1024 * 1024)
+        for f in unpack_quality(store.db, bytes(r[0]))
     ]
     assert max(map(len, metric_sets)) == 20
     # A retry of detail cleanup must not duplicate numeric admissions.

@@ -78,7 +78,12 @@ class Sources:
             (prefix, prefix + "~", WINDOW_SIZE),
         ).fetchall()
         if self.store.bounded:
-            rows = [(encode(v),) for v in market_storage.read(self.store.db, stream, limit=WINDOW_SIZE)]
+            rows = [
+                (encode(v),)
+                for v in market_storage.read(
+                    self.store.db, stream, limit=WINDOW_SIZE, cache=self.store.cached_bytes
+                )
+            ]
         window: dict[int, Candle] = {}
         try:
             for row in rows:
@@ -119,8 +124,12 @@ class Sources:
         # Save before exposing to the detector/Telegram consumer.
         with self.store.db:
             if self.store.bounded:
-                for key, payload in writes:
-                    market_storage.admit(self.store.db, stream, json.loads(payload))
+                market_storage.admit_many(
+                    self.store.db,
+                    stream,
+                    [json.loads(payload) for _, payload in writes],
+                    cache=self.store.cached_bytes,
+                )
             else:
                 self.store.db.executemany(RUNTIME_UPSERT, writes)
         for candle in candles:

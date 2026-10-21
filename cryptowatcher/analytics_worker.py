@@ -6,7 +6,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from .events import History
+from .events import History, event_identity
 from .storage import Store
 
 
@@ -32,15 +32,79 @@ def prepare(
 ) -> list[tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]]:
     history = History(store)
     deadline = time.monotonic() + seconds
-    prepared = []
+    prepared: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]] = []
+    due: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
+    selected: set[str] = set()
+
+    def admit(binding: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]] | None:
+        identifier = binding[binding_id]
+        if identifier in selected or len(due) >= batch:
+            return None
+        job = history.get(job_prefix + identifier)
+        if job is None or job["next_attempt_ms"] > now_ms:
+            return None
+        event = history.metadata(f"event:{job['event_id']}:{job['event_revision']:010d}")
+        if event is None:
+            raise ValueError("Missing frozen analytics event")
+        due.append((job, event, binding))
+        selected.add(identifier)
+        return job, event
+
     for _, binding in history.items(prefix, batch):
-        if time.monotonic() >= deadline:
+        if len(due) >= batch or (due and time.monotonic() >= deadline):
             break
         job = history.get(job_prefix + binding[binding_id])
         if job is None:
             continue  # Bounded retention retires the dangling queue index.
         if job["next_attempt_ms"] > now_ms:
             break
-        event = history.get(f"event:{job['event_id']}:{job['event_revision']:010d}")
+        # Calculations load their own exact source ranges. Expanding the frozen
+        # detector window here duplicates hundreds of verified candle reads per
+        # horizon; metadata still validates the stored record/settings identity.
+        admitted = admit(binding)
+        if admitted is not None and prefix == "comparison-pending:":
+            from .detectors import FAMILIES, VERSIONS
+
+            _, event = admitted
+            if not {"market_observation_ms", "settings_revision", "detector_version"}.issubset(event):
+                continue  # Older minimal records retain the original admission path.
+            stream = f"{event['market_type']}/{event['symbol']}/{event['timeframe']}"
+            start = event["market_observation_ms"] - int(event["timeframe"][:-1]) * 60000
+            # Probe at most ten canonical siblings. This finds the same closed
+            # candle's families beyond a UUID-ordered batch, without a new queue
+            # or a large population cache. Their own cutoff/settings stay frozen.
+            for family in FAMILIES:
+                for version in {VERSIONS[family], event["detector_version"]}:
+                    if len(due) >= batch or time.monotonic() >= deadline:
+                        break
+                    peer = event_identity(stream, family, version, event["settings_revision"], start)
+                    if peer in selected:
+                        continue
+                    candidate = history.get(job_prefix + peer)
+                    if candidate is None or candidate.get("pending_key") is None:
+                        continue
+                    peer_binding = history.get(candidate["pending_key"])
+                    if isinstance(peer_binding, dict) and peer_binding.get(binding_id) == peer:
+                        admit(peer_binding)
+    if prefix == "comparison-pending:" and due:
+        # Calculations are independent and keep their immutable cutoff. Group
+        # only this bounded due batch to reuse one population, not a large cache.
+        # The earliest due job must run first even when one calculation consumes
+        # the remaining budget. Otherwise lexical grouping can starve its stream.
+        first = due.pop(0)
+        scope = tuple(first[1][field] for field in ("market_type", "symbol", "timeframe"))
+        due.sort(
+            key=lambda row: (
+                tuple(row[1][field] for field in ("market_type", "symbol", "timeframe")) != scope,
+                row[1]["market_type"],
+                row[1]["symbol"],
+                row[1]["timeframe"],
+                row[1]["reference_time_ms"],
+            )
+        )
+        due.insert(0, first)
+    for job, event, binding in due:
+        if prepared and time.monotonic() >= deadline:
+            break
         prepared.append((job, event, binding, calculate(store, job, event)))
     return prepared

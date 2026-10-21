@@ -7,10 +7,23 @@ import hashlib
 from datetime import datetime, timezone
 from typing import Any
 
-from .market_storage import decoded, encoded
+from .market_storage import encoded
 from .storage import Store, encode
 
 DAY = 86400000
+ArchiveFact = tuple[int, dict[str, Any], dict[str, Any], dict[str, Any]]
+
+
+def period_metadata(start_ms: int, end_ms: int) -> dict[str, Any]:
+    """Requested details stay exact; archived selection has UTC-day resolution."""
+    return {
+        "requested_start_ms": start_ms,
+        "requested_end_ms": end_ms,
+        "archive_start_ms": start_ms // DAY * DAY,
+        "archive_end_ms": (end_ms + DAY - 1) // DAY * DAY,
+        "archive_resolution": "UTC_DAY",
+        "archive_boundary_policy": "EXPAND_ARCHIVED_PART_TO_UTC_DAYS",
+    }
 
 
 def encode_facts(facts: list[Any]) -> bytes:
@@ -32,10 +45,10 @@ def month_boundary(day: int, months: int) -> int:
     return int(date.timestamp()) // 86400
 
 
-def install(db: Any) -> None:
-    db.create_function(
-        "cw_quality_json", 1, lambda b: encode(decoded(bytes(b), 1024 * 1024)), deterministic=True
-    )
+def install(db: Any, *, binary_cache: Any = None) -> None:
+    from .quality_packets import install_functions
+
+    install_functions(db, binary_cache)
 
 
 def create(db: Any) -> None:
@@ -76,15 +89,19 @@ def comparator_facts(comparisons: list[dict[str, Any]], horizon: int) -> tuple[l
 
 def archive_event(store: Store, event: dict[str, Any]) -> None:
     """Called in the same transaction as detail deletion. Replay rolls back both."""
+    archive_facts(store, prepare_event_facts(store, event))
+
+
+def prepare_event_facts(store: Store, event: dict[str, Any]) -> list[ArchiveFact]:
+    """Read immutable facts/definitions without interning or changing ownership."""
     from .events import PREFIX, History
     from .storage import StateError
 
     history = History(store)
     # Owner/event index is bounded to this event; never walk all method heads.
-    owned = store.db.execute(
-        "SELECT key,category FROM market_lifetimes WHERE event_id=? AND category IN ('outcome-head','outcome-job','comparison-head') ORDER BY key",
-        (event["event_id"],),
-    ).fetchall()
+    from .expiry_index import analytic_heads
+
+    owned = analytic_heads(store.db, event["event_id"], store.cached_text)
     outcomes: dict[str, dict[str, Any]] = {}
     jobs = []
     comparisons = []
@@ -123,6 +140,7 @@ def archive_event(store: Store, event: dict[str, Any]) -> None:
     versions = sorted({c.get("methodology_version", "UNSET") for c in comparisons})
     comparison_definitions = {v: history.get("comparison-method:" + v) for v in versions}
     revisions = {event["revision"]: event}
+    prepared = []
     for outcome in outcomes.values():
         horizon = outcome["horizon_min"]
         revision = outcome["event_revision"]
@@ -178,37 +196,84 @@ def archive_event(store: Store, event: dict[str, Any]) -> None:
                 k: outcome[k] for k in ("expected_candles", "observed_candles", "reason") if k in outcome
             },
         }
+        prepared.append((day, group, provenance, fact))
+    return prepared
+
+
+def archive_facts(store: Store, prepared: list[ArchiveFact]) -> None:
+    """Keep each cohort's fact order,128-fact chunks and existing provenance."""
+    from .events import History
+    from .quality_layout import put
+    from .quality_packets import AppendSizeError, append_many, pack
+
+    history = History(store)
+    groups: dict[tuple[int, str, str], tuple[dict[str, Any], Any, list[Any]]] = {}
+    provenance_cache: dict[str, Any] = {}
+    for day, group, provenance, fact in prepared:
         cohort = hashlib.sha256(encode(group).encode()).hexdigest()
-        packed = history.codec.pack({"quality_provenance": provenance})
+        key = encode(provenance)
+        if key not in provenance_cache:
+            provenance_cache[key] = history.codec.pack({"quality_provenance": provenance})
+        packed = provenance_cache[key]
+        groups.setdefault((day, cohort, encode(packed)), (group, packed, []))[2].append(fact)
+    for (day, cohort, serialized), (group, packed, facts) in groups.items():
         old = store.db.execute(
             "SELECT chunk,facts,n,provenance FROM market_quality WHERE day=? AND cohort=? ORDER BY chunk DESC LIMIT 1",
             (day, cohort),
         ).fetchone()
         chunk = old[0] if old else 0
-        append = old and old[2] < 128 and old[3] == encode(packed)
-        facts = decoded(bytes(old[1]), 1024 * 1024) if append else []
+        append = old is not None and old[2] < 128 and old[3] == serialized
         if old and not append:
             chunk += 1
-        facts.append(fact)
-        # Shared settings/definitions outlive detail via the same ref-counted body pool.
-        from .quality_layout import put
+        offset = 0
+        while offset < len(facts):
+            previous = old[2] if append else 0
+            added = facts[offset : offset + 128 - previous]
+            try:
+                packet = (
+                    append_many(store.db, bytes(old[1]), added, cohort, expected_count=previous)
+                    if append
+                    else pack(store.db, added, cohort)
+                )
+            except AppendSizeError:
+                # A byte-full partial chunk remains retained. This rejection
+                # precedes every speculative write; corruption is not caught.
+                chunk += 1
+                append = False
+                continue
+            put(
+                store.db,
+                (
+                    day,
+                    cohort,
+                    chunk,
+                    month_boundary(day, 12),
+                    encode(group),
+                    serialized,
+                    packet,
+                    previous + len(added),
+                ),
+            )
+            provenance_links(store, day, cohort, chunk, packed)
+            offset += len(added)
+            chunk += 1
+            append = False
 
-        put(
-            store.db,
-            (
-                day,
-                cohort,
-                chunk,
-                month_boundary(day, 12),
-                encode(group),
-                encode(packed),
-                encode_facts(facts),
-                len(facts),
-            ),
-        )
-        from .storage_lifecycle import body_links
 
-        body_links(store, f"quality:{day}:{cohort}:{chunk}", packed)
+def provenance_links(store: Store, day: int, cohort: str, chunk: int, packed: Any) -> None:
+    from .storage_lifecycle import body_links
+
+    identity = store.db.execute(
+        "SELECT id FROM market_quality_provenance WHERE payload=?", (encode(packed),)
+    ).fetchone()
+    if identity is None:
+        raise ValueError("Missing retained quality provenance")
+    body_links(store, f"quality-provenance:{identity[0]}", packed)
+    # The same frozen provenance now owns one body reference across its blocks.
+    # Bind it first, then retire any older per-block reference in this transaction.
+    from .reference_layout import remove_owner
+
+    remove_owner(store.db, f"quality:{day}:{cohort}:{chunk}")
 
 
 def union_sql(
@@ -238,7 +303,8 @@ def union_sql(
         )
     )
     clauses = ["q.day>=?", "q.day<?", "json_extract(s.value,'$.state')='COMPLETE'"]
-    args: list[Any] = [(start_ms + DAY - 1) // DAY, (end_ms + DAY - 1) // DAY]
+    period = period_metadata(start_ms, end_ms)
+    args: list[Any] = [period["archive_start_ms"] // DAY, period["archive_end_ms"] // DAY]
     for key, value in (("detector", detector), ("version", version), ("market", market)):
         if value is not None:
             clauses.append(f"json_extract(q.dimensions,'$.{key}')=?")

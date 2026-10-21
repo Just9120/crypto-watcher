@@ -84,9 +84,9 @@ runtime source/image и operator SHA256/head/CI; helper в running artifact до
 уже поддерживать используемый API. После операции hotfix проходит обычный merge/CD
 на новой малой working DB. Receiver/permit/protections/budgets не меняются.
 
-После reset автоматические delivery используют full source integrity и SQLite online backup на диске с полной integrity и streaming SHA256. Вся DB в RAM/tmpfs не копируется; cap4GiB/CPU1/no swap остается. Source+backup делят оставшееся время общего900s deadline с резервом переключения/post-checks. При нехватке места/времени stage завершается failure до switch; gates не ослабляются. Target20GB не является гарантией выполнения полного scan любой20GB базы за15min: фактическая скорость и длительность видны в records, превышение требует переработки, не автоматического увеличения deadline.
+После reset автоматические delivery используют full source integrity и SQLite online backup на диске с полной integrity и streaming SHA256. Вся DB в RAM/tmpfs не копируется; cap4GiB/CPU1/no swap остается. Source+backup делят оставшееся время общего900s deadline с резервом переключения/post-checks. При нехватке места/времени stage завершается failure до switch; gates не ослабляются. Текущий target25GB не гарантирует полный scan любой25GB базы за15min: фактическая скорость и длительность видны в records, превышение требует переработки, не автоматического увеличения deadline.
 
-Retention работает batches через indexes/transactional counters, summaries12 календарных месяцев; routine control не сканирует все DB pages. `storage-indexes` — отдельное ограниченное измерение, размер snapshot помечен временем. Его отсутствие/timeout не считается доказанным размером индексов. Forecast отражает short-window/model limitations и предупреждает о20GB без скрытого сокращения данных. Последующее наблюдение — отдельная задача владельца после завершения исправлений/reset.
+Retention работает batches через indexes/transactional counters, summaries12 календарных месяцев; routine control не сканирует все DB pages. `storage-indexes` — отдельное ограниченное измерение, размер snapshot помечен временем. Его отсутствие/timeout не считается доказанным размером индексов. Forecast отражает short-window/model limitations и текущий предел25,000,000,000bytes без скрытого сокращения данных. Исторические20GB records остаются snapshots прежнего требования. Последующее наблюдение входит в текущую Goal после завершения исправлений и штатной поставки, без нового reset.
 
 ## Storage extension3: routine delivery без reset
 
@@ -130,7 +130,7 @@ connection и освобождения live WAL snapshot. Полный SHA256/р
 backup integrity и все post-checks сохраняются. Small backups и TMPFS/compressed
 qualification не меняются. Qualification17Oct на live2.89GB:57.11s, peakRSS2.95GB,
 zero data writes; это snapshot текущего размера, не обещание времени для любой
-будущей базы и не доказательство20GB capacity. Failed attempt сохраняется; повтор
+будущей базы и не доказательство текущего25GB capacity. Failed attempt сохраняется; повтор
 делается после исправления через новый validated artifact, без bypass/reset.
 
 ## Измерение ёмкости и конечное24h наблюдение
@@ -169,6 +169,18 @@ coverage>=95%, ingestion age<=5s, poll age<=120s, analytics OK/age<=60s и от�
 200ms; readiness/live priority перепроверяются между slices. При потере условий
 дополнительные slices не выполняются, startup/current recovery guard сохраняется;
 отдельный SQLite I/O/commit может выйти за time check. COMPLETE прекращает slices.
+В уже существующем1s callback successful fresh retention backlog получает до4
+calls/0.5s admission с yield/recheck между calls, после600s startup и initial
+reclaim. Каждый call сохраняет50ms admission/atomic archive-before-delete;
+начатый event/SQL не обрывается по таймеру. Analytics и priority сериализованы
+одной retention lock. Нового scheduled callback/host task нет. Пока backlog
+подтверждён, один40ms repack slice сохраняет transfer/GC, но откладывает только
+последующую parent-bundle compaction; pending_work не скрывается. Initial reclaim
+не откладывается, нормальная compaction возобновляется после backlog. Worker
+failure виден в diagnostics/capacity и запрещает clean baseline; regular success
+восстанавливает работу. Native one-CPU throughput проверяется отдельно от local
+microbenchmark; RAM/CPU и CD/observer budgets не увеличиваются.
+
 Durable rotation phases сохраняет fairness после slow SQL и restart; каждая phase
 использует остаток общего deadline, не создает новый таймер внутри slice.
 Records/decision heads/quality используют fixed rowid interval и durable next ID,
@@ -199,11 +211,18 @@ Telegram/config writes. Metadata — отдельная root-owned0700 папк�
 `/opt/crypto_watcher/observations/capacity-*`, файлы0600; они не входят в рабочую БД.
 Existing directories/status с другим source/schema и symlinks отклоняются.
 
-Sample cadence5min; до старта нужны два последовательных samples без bootstrap/
+Sample cadence5min; до старта нужны минимум два последовательных samples и не менее
+30min непрерывной устойчивости без bootstrap/
 ingestion recovery/gaps и отдельной analytics-gap-pending queue, с полными ACK,
 current analytics и COMPLETE repack/admission. Analytics queue проверяется одним
 indexed existence lookup с LIMIT1, без count/scan. Нормальные ожидающие наступления
 outcome horizons сами по себе не являются backfill и не блокируют baseline.
+Также обязательны healthy named ingestion tasks, согласованные active streams /
+groups/sessions/connections, обе readiness flags и свежие metadata/tickers обоих
+рынков:600/300s +60s request/reconcile grace, включая возраст самого snapshot.
+Каждый ACKed subscription принадлежит RUNNING task с receipt<=90s и clock skew<=5s.
+Свежий heartbeat/общий WS snapshot не заменяет эти проверки; старый runtime без
+таких diagnostic fields получает явные reasons и не принимается как clean.
 Время завершения bootstrap/repack фиксируется как observed, не выдуманный exact end.
 Ожидание ограничено12h; затем WAIT_LIMIT_REACHED с причинами. После baseline —24h,
 deep scans только на baseline/final. Обычные samples не обходят runtime/quality/indexes.
@@ -218,7 +237,13 @@ Status/каждый sample/baseline/final/result сохраняются atomical
 интервалу не присваивается устойчивый суточный темп. Interval report содержит physical
 DB/index/WAL deltas, logical namespace deltas и cumulative cleanup counters; отсутствие
 полного boundary ledger явно UNSET. Даже успешные24h и controlled-clock tests сами
-по себе не подтверждают population mix следующего года или20GB fit.
+по себе не подтверждают population mix следующего года или25GB fit.
+
+`sample-attempt-NNNN.json.probes` сохраняет каждый из максимум4quick calls до
+baseline и единственный call после него: номер, время начала, PENDING, затем
+полный snapshot либо sanitized ERROR/timeout/returncode. Ошибка поздней
+перепроверки не удаляет предыдущие snapshots; restart завершает PENDING subprobe
+как INTERRUPTED вместе с sample. Старые attempt files без `probes` остаются readable.
 
 Каждый deep boundary имеет отдельный `baseline-attempt-NNNN.json` либо
 `final-attempt-NNNN.json`: PENDING до probe, полный snapshot/blockers и решение

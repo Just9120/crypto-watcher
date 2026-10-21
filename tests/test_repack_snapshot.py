@@ -9,7 +9,7 @@ from cryptowatcher.quality_layout import put as put_quality
 from cryptowatcher.quality_summary import encode_facts
 from cryptowatcher.record_codec import pack_binary, pack_binary_v2
 from cryptowatcher.storage import Store, encode
-from cryptowatcher.storage_repack import record_rows, work
+from cryptowatcher.storage_repack import VERSION, record_rows, work
 
 from .test_outcomes import NOW
 
@@ -44,7 +44,7 @@ def test_in_range_current_writes_cannot_extend_captured_records(store):
                     (f"radar:v1:fixture:0001-{tick * 2 + offset:08}", value),
                 )
         state = work(store, NOW + tick, batch=1, seconds=1)
-    assert state["state"] == "COMPLETE" and state["records"] == 4
+    assert state["records_complete"] and state["records"] == 4
     assert state["records_rowid_upper"] == ceiling
     assert (
         store.db.execute(
@@ -78,9 +78,9 @@ def test_sparse_physical_order_keeps_legacy_floor_and_restart_progress(store):
         for i in range(10):
             state = work(reopened, NOW + i, batch=1, seconds=1)
             assert state["records_rowid_upper"] == ceiling
-            if state["state"] == "COMPLETE":
+            if state.get("records_complete"):
                 break
-        assert state["state"] == "COMPLETE" and state["records"] == 3
+        assert state["records_complete"] and state["records"] == 3
         assert state["records_key_floor"] == "radar:v1:fixture:a"
         assert [encode(reopened.get_runtime(f"radar:v1:fixture:{k}")) for k in "abc"] == [raw] * 3
 
@@ -108,7 +108,7 @@ def test_new_pointer_heads_inside_the_old_upper_key_cannot_keep_decision_pass_op
                     (prefix + identity + ":0000000001", current({"revision": 1})),
                 )
         state = work(store, NOW + tick, batch=1, seconds=1)
-    assert state["state"] == "COMPLETE" and state["decisions_rowid_upper"] == ceiling
+    assert state["decisions_complete"] and state["decisions_rowid_upper"] == ceiling
     assert state["decision_heads_scanned"] == 2
     assert (
         store.db.execute(
@@ -135,9 +135,9 @@ def test_schema_rebuild_recaptures_physical_range_without_skipping_public_data(s
     assert changed != version
     for i in range(25):
         state = work(store, NOW + i, batch=1, seconds=1)
-        if state["state"] == "COMPLETE":
+        if state.get("records_complete"):
             break
-    assert state["state"] == "COMPLETE" and state["records_scan_restarts"] == 1
+    assert state["records_complete"] and state["records_scan_restarts"] == 1
     assert store.db.execute("PRAGMA schema_version").fetchone()[0] == changed
     assert [encode(store.get_runtime("radar:v1:fixture:" + k)) for k in "abcdefgh"] == [raw] * 8
 
@@ -179,9 +179,9 @@ def test_non_target_headers_advance_without_decoding_or_changing_shared_values(s
     assert first["records"] == 0 and first["records_rows_scanned"] == 1
     for i in range(5):
         state = work(store, NOW + i, batch=1, seconds=1)
-        if state["state"] == "COMPLETE":
+        if state.get("records_complete"):
             break
-    assert state["state"] == "COMPLETE"
+    assert state["records_complete"]
     assert (
         store.db.execute("SELECT payload_json FROM runtime WHERE key='historyblob:v1:untouched'").fetchone()[
             0
@@ -226,9 +226,9 @@ def test_incremental_vacuum_does_not_discard_the_saved_interval(store):
         assert state.get("records_scan_restarts", 0) == 0
         assert state["records_schema_version"] == store.db.execute("PRAGMA schema_version").fetchone()[0]
         previous = state["records_next_rowid"]
-        if state["state"] == "COMPLETE":
+        if state.get("records_complete"):
             break
-    assert state["state"] == "COMPLETE"
+    assert state["records_complete"]
     assert [encode(store.get_runtime(f"radar:v1:fixture:{i}")) for i in range(4)] == [raw] * 4
 
 
@@ -274,3 +274,37 @@ def test_quality_interval_finishes_with_new_facts_and_keeps_every_numeric_result
         i = date - day
         expected = [{"metrics": {"price_return_pct": i / 17, "mae_pct": -0.0}, "strength": 1.25}]
         assert encode(decoded(bytes(payload), 1024 * 1024)) == encode(expected)
+
+
+@pytest.mark.parametrize(
+    "checkpoint",
+    [
+        {"version": VERSION + 1},
+        {"version": "12"},
+        {"version": 12.0},
+        {"version": None},
+        {"version": True},
+        ["unknown"],
+    ],
+)
+def test_unknown_repack_checkpoint_is_rejected_before_schema_or_data_changes(store, checkpoint):
+    bounded(store)
+    store.put_runtime("storage_repack", checkpoint)
+    before = list(store.db.iterdump())
+    with pytest.raises(ValueError, match="Unknown storage repack"):
+        work(store, NOW)
+    assert list(store.db.iterdump()) == before
+
+
+@pytest.mark.parametrize("version", [12, 13])
+def test_missing_price_writer_checkpoint_is_not_recreated_after_a_committed_version(store, version):
+    bounded(store)
+    initial = work(store, NOW, seconds=0)
+    assert initial["version"] == VERSION
+    with store.db:
+        store.put_runtime("storage_repack", {**initial, "version": version})
+        store.db.execute("DELETE FROM market_meta WHERE key='numeric_price_runtime'")
+    before = list(store.db.iterdump())
+    with pytest.raises(ValueError, match="price writer checkpoint"):
+        work(store, NOW + 1)
+    assert list(store.db.iterdump()) == before

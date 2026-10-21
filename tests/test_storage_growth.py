@@ -8,7 +8,14 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from cryptowatcher import compact_json, expiry_index, quality_layout
+from cryptowatcher import (
+    compact_json,
+    expiry_index,
+    quality_layout,
+    quality_meter,
+    quality_packets,
+    reference_layout,
+)
 from cryptowatcher.analytics import cohort_rows
 from cryptowatcher.analytics_recovery import AnalyticsRecovery
 from cryptowatcher.events import History
@@ -131,6 +138,7 @@ def test_expiry_extension_and_repack_preserve_history_with_rollback_and_restart(
     # Construct the real old schema2 layout, then open it with the current writer.
     with monkeypatch.context() as m:
         m.setattr(expiry_index, "install", lambda db: None)
+        m.setattr(reference_layout, "install", lambda db: None)
         enable(store.db)
     store.bounded = True
     store.clock_ms = lambda: NOW
@@ -163,29 +171,49 @@ def test_expiry_extension_and_repack_preserve_history_with_rollback_and_restart(
         ).fetchall():
             store.db.execute("UPDATE runtime SET payload_json=? WHERE key=?", (pack_binary_v2(raw), key))
     expiry_index.install(store.db)
+    reference_layout.install(store.db)
     assert [
         tuple(r) for r in store.db.execute("SELECT * FROM market_lifetimes ORDER BY key")
     ] == expiry_before
     from cryptowatcher import record_codec
 
+    source_rows_before = store.db.execute("SELECT COUNT(*) FROM market_candles").fetchone()[0]
     with monkeypatch.context() as m:
         m.setattr(record_codec, "pack_binary", lambda value: (_ for _ in ()).throw(RuntimeError("interrupt")))
         with pytest.raises(RuntimeError):
-            work(store, NOW, batch=2, seconds=1)
+            # Reach record packing after this small fixture's finite source
+            # phase, so the fault also tests rollback of the preceding transfer.
+            work(store, NOW, batch=256, seconds=1)
     assert store.get_runtime("storage_repack") is None
+    assert store.db.execute("SELECT COUNT(*) FROM market_candles").fetchone()[0] == source_rows_before
+    assert store.db.execute("SELECT COUNT(*) FROM market_candle_blocks").fetchone()[0] == 0
+    assert (
+        store.db.execute("SELECT value FROM market_meta WHERE key='candle_block_runtime'").fetchone() is None
+    )
     assert h.events(50) == before
+    from cryptowatcher.catalogue_repack import busy
+
     for _ in range(500):
         state = work(store, NOW, batch=3, seconds=1)
-        if state["state"] == "COMPLETE":
+        if state["state"] == "COMPLETE" and not busy(state):
             break
-    assert state["state"] == "COMPLETE"
+    assert state["state"] == "COMPLETE" and state["initial_reclaim_complete"] and not busy(state)
     assert not store.db.execute("SELECT 1 FROM market_expiry_legacy LIMIT 1").fetchone()
     store.db.execute("VACUUM")
     assert store.db.execute("PRAGMA foreign_key_check").fetchall() == []
     assert h.events(50) == before and list(cohort_rows(store)) == cohorts
     assert tuple(store.db.execute("SELECT * FROM owner_settings").fetchone()) == private
     with closing(Store(store.path, store.owner_id, readonly=True)) as fresh:
-        assert work(store, NOW) == state
+        refreshed = work(store, NOW, seconds=1)
+        assert {key: value for key, value in refreshed.items() if key != "catalogue_maintenance"} == {
+            key: value for key, value in state.items() if key != "catalogue_maintenance"
+        }
+        assert (
+            refreshed["catalogue_maintenance"]["free_pages"]
+            == store.db.execute("PRAGMA freelist_count").fetchone()[0]
+        )
+        assert refreshed["catalogue_maintenance"]["pending_work"] is False
+        assert work(store, NOW) == refreshed
         assert History(fresh).events(50) == before
     # Aggregate after migration, preserving frozen source/method/strength and N.
     for _ in range(100):
@@ -225,6 +253,9 @@ def test_legacy_quality_rows_normalize_without_changing_exports_or_twelve_month_
     with monkeypatch.context() as m:
         m.setattr(expiry_index, "install", lambda db: None)
         m.setattr(quality_layout, "install", lambda db: None)
+        m.setattr(reference_layout, "install", lambda db: None)
+        m.setattr(quality_packets, "install", lambda db: None)
+        m.setattr(quality_meter, "install", lambda db: None)
         enable(store.db)
     store.bounded = True
     store.clock_ms = lambda: NOW
@@ -232,10 +263,23 @@ def test_legacy_quality_rows_normalize_without_changing_exports_or_twelve_month_
     observe(store, worker)
     Sources(store).put("spot/BTCUSDT/1m", future())
     worker.work(NOW + 6 * MINUTE)
-    for _ in range(100):
-        Retention(store).work(NOW + 31 * DAY)
-        if History(store).count("history:") == 0:
-            break
+    from cryptowatcher import quality_summary
+    from cryptowatcher.storage_lifecycle import body_links
+
+    # Reproduce the old writer's self-contained facts/per-block body ownership.
+    # New packet/ref installers require the normalized tables intentionally absent here.
+    with monkeypatch.context() as m:
+        m.setattr(quality_packets, "pack", lambda db, facts, cohort: encode_facts(facts))
+        m.setattr(quality_packets, "collect", lambda db, batch: 0)
+        m.setattr(
+            quality_summary,
+            "provenance_links",
+            lambda s, day, cohort, chunk, packed: body_links(s, f"quality:{day}:{cohort}:{chunk}", packed),
+        )
+        for _ in range(100):
+            Retention(store).work(NOW + 31 * DAY)
+            if History(store).count("history:") == 0:
+                break
     with store.db:
         for row in store.db.execute("SELECT day,cohort,chunk,facts FROM market_quality").fetchall():
             store.db.execute(
@@ -254,6 +298,9 @@ def test_legacy_quality_rows_normalize_without_changing_exports_or_twelve_month_
     assert counts
     expiry_index.install(store.db)
     quality_layout.install(store.db)
+    quality_packets.install(store.db)
+    reference_layout.install(store.db)
+    quality_meter.install(store.db)
     for _ in range(500):
         if work(store, NOW + 31 * DAY, batch=8, seconds=1)["state"] == "COMPLETE":
             break

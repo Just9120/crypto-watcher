@@ -16,13 +16,15 @@ from typing import Any
 from cryptowatcher.analytics import ComparisonWorker
 from cryptowatcher.config import TIMEFRAMES, OwnerSettings
 from cryptowatcher.events import EventEngine, History, identity
-from cryptowatcher.market_storage import decoded, enable
+from cryptowatcher.market_storage import enable
 from cryptowatcher.outcomes import DAY, MINUTE, OutcomeWorker, Retention
+from cryptowatcher.quality_packets import unpack as unpack_quality
 from cryptowatcher.quality_summary import month_boundary
 from cryptowatcher.reset_history import private_state, signature
 from cryptowatcher.source_context import save
 from cryptowatcher.sources import Candle, Sources
 from cryptowatcher.storage import Store, encode
+from cryptowatcher.storage_repack import VERSION
 
 NOW = 1_800_000_000_000
 
@@ -78,7 +80,7 @@ def retained_facts(store: Store) -> Counter[str]:
         result.update(detail_facts(h, event))
     for row in store.db.execute("SELECT dimensions,facts FROM market_quality"):
         group = json.loads(row[0])
-        for fact in decoded(bytes(row[1]), 1024 * 1024):
+        for fact in unpack_quality(store.db, bytes(row[1])):
             result[
                 fingerprint(
                     group, fact["strength"], fact["metrics"], fact["comparator_metrics"], fact["state"]
@@ -87,7 +89,7 @@ def retained_facts(store: Store) -> Counter[str]:
     return result
 
 
-def measure(path: Path, weeks: int = 62) -> dict[str, Any]:
+def measure(path: Path, weeks: int = 62, *, compact: bool = False) -> dict[str, Any]:
     if path.exists() or not 58 <= weeks <= 64:
         raise ValueError("New disposable DB path and58..64 simulated weeks required")
     started = time.monotonic()
@@ -100,6 +102,7 @@ def measure(path: Path, weeks: int = 62) -> dict[str, Any]:
     families: set[str] = set()
     comparator_nonempty = 0
     restarts = 0
+    compaction: dict[str, Any] = {}
     try:
         worker = OutcomeWorker(store)
         comparison = ComparisonWorker(store)
@@ -171,6 +174,18 @@ def measure(path: Path, weeks: int = 62) -> dict[str, Any]:
                 comparator_nonempty += int(comp.get("sample_size", 0) > 0)
             manifests.append((now // DAY, epoch_facts))
             private = signature(private_state(store))
+            if compact and week >= 8:
+                from cryptowatcher.catalogue_repack import busy
+                from cryptowatcher.storage_repack import work as repack
+
+                # Upgrade an already populated mixture of details and archived
+                # quality, then keep writing/expiring through the new adapters.
+                for tick in range(1000):
+                    compaction = repack(store, now + 61 * MINUTE + tick, seconds=0.04)
+                    if compaction["state"] == "COMPLETE" and not busy(compaction):
+                        break
+                else:
+                    raise ValueError("Finite block repack did not finish")
             retention = Retention(store)
             for _ in range(500):
                 removed = retention.work(now + 61 * MINUTE)
@@ -193,6 +208,11 @@ def measure(path: Path, weeks: int = 62) -> dict[str, Any]:
             if live_events != expected_events:
                 raise ValueError("Detail population did not follow30day TTL")
             store.db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
+            source_rows = store.db.execute("SELECT COUNT(*) FROM market_candles").fetchone()[0]
+            if compact and compaction:
+                from cryptowatcher.candle_blocks import summary as source_summary
+
+                source_rows += source_summary(store.db)["versions"]
             samples.append(
                 {
                     "week": week,
@@ -200,7 +220,7 @@ def measure(path: Path, weeks: int = 62) -> dict[str, Any]:
                     "quality_facts": store.db.execute(
                         "SELECT COALESCE(SUM(n),0) FROM market_quality"
                     ).fetchone()[0],
-                    "source_rows": store.db.execute("SELECT COUNT(*) FROM market_candles").fetchone()[0],
+                    "source_rows": source_rows,
                     "allocated_bytes": store.db.execute("PRAGMA page_count").fetchone()[0] * 4096,
                     "free_bytes": store.db.execute("PRAGMA freelist_count").fetchone()[0] * 4096,
                 }
@@ -226,8 +246,51 @@ def measure(path: Path, weeks: int = 62) -> dict[str, Any]:
             "market_quality",
             "market_quality_cohorts",
             "market_quality_provenance",
+            "market_quality_dictionary",
+            "market_quality_hints",
+            "market_numeric",
+            "market_source_windows",
+            "market_references",
+            "market_body_ids",
+            "market_cohorts",
+            "market_cohort_strengths",
+            "market_cohort_revisions",
+            "market_cohort_names",
             "market_body_links",
         )
+        numeric_issued = 0
+        if compact:
+            from cryptowatcher.candle_blocks import summary as source_summary
+            from cryptowatcher.numeric_blocks import summary as numeric_summary
+
+            empty_tables += (
+                "market_candle_blocks",
+                "market_candle_fallbacks",
+                "market_candle_gc",
+                "market_numeric_blocks",
+                "market_numeric_block_refs",
+                "market_numeric_block_lookup",
+                "market_numeric_transfer",
+                "market_numeric_gc",
+                "market_record_pending",
+                "market_records",
+                "market_record_parents",
+                "market_record_owners",
+                "market_record_members",
+                "market_record_bodies",
+                "market_packets",
+                "market_packet_arenas",
+                "market_cold_cohorts",
+                "market_cold_cohort_revisions",
+                "market_cold_cohort_strengths",
+            )
+            numeric = numeric_summary(store.db)
+            numeric_issued = numeric["issued"]
+            if any(numeric[k] for k in ("live", "details", "quality", "detail_bytes", "quality_bytes")):
+                raise ValueError("Expired numeric block/count survived final drain")
+            source = source_summary(store.db)
+            if any(source.values()):
+                raise ValueError("Expired source block/count survived final drain")
         remaining = {
             name: store.db.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0] for name in empty_tables
         }
@@ -241,6 +304,9 @@ def measure(path: Path, weeks: int = 62) -> dict[str, Any]:
             "schema": "cryptowatcher.retention-rehearsal.v1",
             "kind": "CONTROLLED_CLOCK_SYNTHETIC",
             "simulated_weeks": weeks,
+            "storage_layout": f"MIXED_BLOCKS_REPACK{VERSION}" if compact else "LEGACY_NORMALIZED",
+            "compaction": compaction,
+            "issued_numeric_ids_after_final_gc": numeric_issued,
             "families": sorted(families),
             "markets": 2,
             "timeframes": list(TIMEFRAMES),
@@ -253,7 +319,7 @@ def measure(path: Path, weeks: int = 62) -> dict[str, Any]:
             "elapsed_seconds": round(time.monotonic() - started, 3),
             "limitations": [
                 "Weekly complete local windows, not continuous market/load model",
-                "File pages include indexes; no multiplication into production20GB claim",
+                "File pages include indexes; no multiplication into production25GB claim",
                 "Calendar12month expiry and partial outcomes are checked; real annual mix remains unobserved",
             ],
         }
@@ -264,8 +330,9 @@ def measure(path: Path, weeks: int = 62) -> dict[str, Any]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--database", type=Path, required=True)
+    parser.add_argument("--compact", action="store_true")
     args = parser.parse_args()
-    print(json.dumps(measure(args.database)))
+    print(json.dumps(measure(args.database, compact=args.compact)))
 
 
 if __name__ == "__main__":

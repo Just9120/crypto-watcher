@@ -6,6 +6,11 @@ import re
 import time
 from typing import Any
 
+from .expiry_index import expires as saved_expiry
+from .expiry_index import member_deadline
+from .expiry_index import remove as remove_expiry
+from .expiry_index import renew as renew_expiry
+from .reference_layout import owner_refs, remove_owner
 from .storage import RUNTIME_UPSERT, Store, encode, json_payload
 
 DAY = 86400000
@@ -50,7 +55,10 @@ def body_links(store: Store, owner: str, value: Any) -> None:
                     visit(v)
 
     visit(value)
-    store.db.execute("DELETE FROM market_body_links WHERE owner=?", (owner,))
+    existing = owner_refs(store.db, owner)
+    if existing == keys:
+        return
+    remove_owner(store.db, owner)
     store.db.executemany("INSERT INTO market_body_links VALUES (?,?)", ((owner, k) for k in keys))
 
 
@@ -82,9 +90,14 @@ def parent_event(store: Store, value: Any, key: str) -> str | None:
             if result:
                 return result
     for candidate in re.findall(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", key):
-        if store.db.execute(
-            "SELECT 1 FROM runtime WHERE key=?", (PREFIX + "event-head:" + candidate,)
-        ).fetchone():
+        from .catalogue_lifecycle import parent_expiry
+
+        if (
+            store.db.execute(
+                "SELECT 1 FROM runtime WHERE key=?", (PREFIX + "event-head:" + candidate,)
+            ).fetchone()
+            or parent_expiry(store.db, candidate) is not None
+        ):
             return candidate
         for prefix in ("outcome-job:", "outbox:telegram:", "agent:outbox:"):
             parent = store.get_runtime(PREFIX + prefix + candidate)
@@ -113,7 +126,7 @@ def track(store: Store, key: str, value: Any) -> None:
     now = store.clock_ms()
     event_id = parent_event(store, value, name)
     days = store.snapshot().settings.detail_retention_days
-    previous = store.db.execute("SELECT expires FROM market_lifetimes WHERE key=?", (key,)).fetchone()
+    previous = saved_expiry(store.db, key)
     expiry = previous[0] if previous else now + days * DAY
     if isinstance(value, dict):
         anchor = value.get(
@@ -123,9 +136,14 @@ def track(store: Store, key: str, value: Any) -> None:
         if type(anchor) is int:
             expiry = anchor + days * DAY
     if event_id:
-        parent = store.db.execute(
-            "SELECT expires FROM market_lifetimes WHERE key=?", (PREFIX + "event-head:" + event_id,)
-        ).fetchone()
+        parent = saved_expiry(store.db, PREFIX + "event-head:" + event_id)
+        from .catalogue_lifecycle import parent_expiry
+
+        cold_parent = parent_expiry(store.db, event_id)
+        if cold_parent is not None:
+            if parent is not None and parent[0] != cold_parent:
+                raise ValueError("Conflicting frozen parent expiry")
+            parent = (cold_parent,)
         if parent:
             expiry = parent[0]
     if isinstance(value, dict) and type(value.get("expires_ms")) is int:
@@ -138,7 +156,7 @@ def track(store: Store, key: str, value: Any) -> None:
         expiry = now + store.snapshot().settings.candle_retention_days * DAY
     # Delete/insert also supports the normalized compatibility view. Both remain
     # in the caller's transaction, including counter/ref updates and rollback.
-    store.db.execute("DELETE FROM market_lifetimes WHERE key=?", (key,))
+    remove_expiry(store.db, key)
     store.db.execute("INSERT INTO market_lifetimes VALUES (?,?,?,?)", (key, expiry, category, event_id))
     if (
         isinstance(value, dict)
@@ -150,9 +168,7 @@ def track(store: Store, key: str, value: Any) -> None:
         finished = value.get("completed_ms", value.get("at_ms", now))
         if type(finished) is not int:
             finished = now
-        store.db.execute(
-            "UPDATE market_lifetimes SET expires=min(expires,?) WHERE key=?", (finished + DAY, key)
-        )
+        renew_expiry(store.db, key, finished + DAY, shorten=True)
     body_links(store, key, value)
     if name.startswith("hold:"):
         from .market_storage import stream_id
@@ -166,8 +182,8 @@ def track(store: Store, key: str, value: Any) -> None:
 
 
 def forget(store: Store, key: str) -> None:
-    store.db.execute("DELETE FROM market_body_links WHERE owner=?", (key,))
-    store.db.execute("DELETE FROM market_lifetimes WHERE key=?", (key,))
+    remove_owner(store.db, key)
+    remove_expiry(store.db, key)
     store.db.execute("DELETE FROM market_holds WHERE key=?", (key,))
 
 
@@ -183,7 +199,8 @@ class BoundedRetention:
     def work(self, now_ms: int, batch: int = 200) -> int:
         from .events import History
         from .history_codec import BLOB_PREFIX
-        from .quality_summary import archive_event
+        from .quality_summary import archive_event, archive_facts, prepare_event_facts
+        from .storage import encode
 
         store = self.store
         started = time.monotonic()
@@ -192,39 +209,68 @@ class BoundedRetention:
         # Chronological history index, no scan over the current candle universe.
         settings = store.snapshot().settings
         cutoff = now_ms - settings.detail_retention_days * DAY
-        prefix = PREFIX + "history:"
-        due = store.db.execute(
-            "SELECT key,payload_json FROM runtime WHERE key>=? AND key<? ORDER BY key LIMIT ?",
-            (prefix, prefix + f"{max(0, cutoff):016d}", batch),
-        ).fetchall()
+        from . import catalogue_retention
+
+        selected = catalogue_retention.due_events(store, now_ms, cutoff, batch)
+        due = selected.rows
         deadline = time.monotonic() + 0.05
         processed = 0
+        retired: set[str] = set()
+        due_keys = {row[0] for row in due}
         with store.db:
             # Repair only these two singleton scheduling indexes from initial v2.
             # A permanent target failure is retained until an owner re-enables it.
-            store.db.execute(
-                "DELETE FROM market_lifetimes WHERE key IN (?,?)",
-                (PREFIX + "target:telegram", PREFIX + "agent:target"),
-            )
+            for singleton in (PREFIX + "target:telegram", PREFIX + "agent:target"):
+                remove_expiry(store.db, singleton)
             for row in due:
-                if time.monotonic() >= deadline:
+                if row[0] in retired:
+                    continue
+                if processed >= batch or time.monotonic() >= deadline:
                     break
-                eid = json_payload(row[1])["event_id"]
+                eid = row[1]["event_id"]
                 event = history.metadata("event-head:" + eid)
                 if event is not None:
-                    archive_event(store, event)
-                owned = store.db.execute(
-                    "SELECT key FROM market_lifetimes WHERE event_id=?", (eid,)
-                ).fetchall()
-                for item in owned:
-                    raw = store.get_runtime(item[0], {})
-                    state = raw.get("state") if isinstance(raw, dict) else None
-                    if state in ("PENDING", "RETRY", "IN_FLIGHT", "BLOCKED", "INVALID_SOURCE", "INCOMPLETE"):
-                        self._terminal(item[0][len(PREFIX) :].split(":", 1)[0], state)
-                    remove(store, item[0])
-                    removed += 1
-                remove(store, row[0])
-                processed += 1
+                    events = [(row[0], event)]
+                    prepared = None
+                    charge = 0
+                    if min(8, batch - processed) > 1:
+                        for key, candidate in catalogue_retention.archive_candidates(
+                            store, event, now_ms, cutoff, deadline
+                        ):
+                            if key in retired:
+                                continue
+                            if prepared is None:
+                                prepared = prepare_event_facts(store, event)
+                                charge = len(encode(prepared).encode())
+                            if charge >= 1024 * 1024 or time.monotonic() >= deadline:
+                                break
+                            facts = prepare_event_facts(store, candidate)
+                            extra = len(encode(facts).encode())
+                            if charge + extra > 1024 * 1024:
+                                break
+                            prepared.extend(facts)
+                            charge += extra
+                            events.append((key, candidate))
+                            if len(events) >= min(8, batch - processed):
+                                break
+                    if len(events) > 1:
+                        assert prepared is not None
+                        archive_facts(store, prepared)
+                    else:
+                        archive_event(store, event)
+                else:
+                    from .storage import StateError
+
+                    raise StateError("Missing retained event head during expiry; data preserved")
+                for key, current in events:
+                    removed += catalogue_retention.remove_event(store, current["event_id"], self._terminal)
+                    remove(store, key)
+                    retired.add(key)
+                    processed += 1
+            store.db.execute(
+                "INSERT INTO market_meta VALUES('retention_history_cursor',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (selected.cursor if due_keys <= retired else "",),
+            )
             # Service receipts expire first. They do not keep detail alive indefinitely.
             from .expiry_index import due_services
 
@@ -234,12 +280,9 @@ class BoundedRetention:
                 if row[1] in ("episode", "episode-head"):
                     episode_id = row[0].split(":")[3]
                     prefix = PREFIX + "episode-event:" + episode_id + ":"
-                    keep = store.db.execute(
-                        "SELECT MIN(l.expires) FROM market_lifetimes l WHERE l.key>=? AND l.key<?",
-                        (prefix, prefix + "~"),
-                    ).fetchone()[0]
+                    keep = member_deadline(store.db, prefix)
                     if keep is not None and keep > now_ms:
-                        store.db.execute("UPDATE market_lifetimes SET expires=? WHERE key=?", (keep, row[0]))
+                        renew_expiry(store.db, row[0], keep)
                         continue
                 # Store a bounded terminal-status counter, instead of retaining whole jobs.
                 raw = store.get_runtime(row[0], {})
@@ -250,9 +293,7 @@ class BoundedRetention:
                 ):
                     # Preserve original pending methodology/revision until its
                     # parent is aggregated, even across a split expiry batch.
-                    if store.db.execute(
-                        "SELECT 1 FROM runtime WHERE key=?", (PREFIX + "event-head:" + raw["event_id"],)
-                    ).fetchone():
+                    if history.metadata("event-head:" + raw["event_id"]) is not None:
                         continue
                 state = raw.get("state") if isinstance(raw, dict) else None
                 if state in ("PENDING", "RETRY", "IN_FLIGHT", "BLOCKED", "INVALID_SOURCE", "INCOMPLETE"):
@@ -260,6 +301,12 @@ class BoundedRetention:
                 remove(store, row[0])
                 removed += 1
                 service_removed += 1
+            for index, (coordinate, _) in enumerate(catalogue_retention.due_services(store, now_ms, batch)):
+                if index and time.monotonic() >= deadline:
+                    break
+                count = catalogue_retention.service(store, coordinate, now_ms)
+                removed += count
+                service_removed += count
             removed += history.prune_pending()
             # A source revision survives the ordinary TTL only while a retained detail
             # references it. Old global `protected` records are not a v2 mechanism.
@@ -269,19 +316,19 @@ class BoundedRetention:
             ).fetchall()
             candles = []
             for candidate in candidates:
-                from .market_storage import public
+                from .market_storage import candle_deadline, public
 
                 value = public(bytes(candidate[3]))
-                real_expiry = max(
-                    value["start"] + value["step"] + settings.candle_retention_days * DAY,
-                    candidate[4] + settings.detail_retention_days * DAY,
+                real_expiry = candle_deadline(
+                    store.db,
+                    candidate[0],
+                    value["start"],
+                    value["step"],
+                    candidate[4],
+                    now_ms,
+                    settings.candle_retention_days,
+                    settings.detail_retention_days,
                 )
-                held = store.db.execute(
-                    "SELECT MAX(expires) FROM market_holds WHERE stream=? AND start<=? AND end>? AND expires>?",
-                    (candidate[0], candidate[1], candidate[1], now_ms),
-                ).fetchone()[0]
-                if held:
-                    real_expiry = max(real_expiry, min(held, now_ms + 3600000))
                 if real_expiry > now_ms:
                     store.db.execute(
                         "UPDATE market_candles SET purge_after=? WHERE stream=? AND start=? AND revision=?",
@@ -292,6 +339,15 @@ class BoundedRetention:
             store.db.executemany(
                 "DELETE FROM market_candles WHERE stream=? AND start=? AND revision=?", candles
             )
+            from .candle_access import installed as source_tiles_installed
+
+            removed_source_versions = 0
+            if source_tiles_installed(store.db):
+                from .candle_blocks import gc as collect_source_tiles
+
+                removed_source_versions = collect_source_tiles(
+                    store.db, now_ms, batch=min(16, batch), seconds=0.01
+                )
             context_candidates = store.db.execute(
                 "SELECT stream,kind,at,needed_anchor FROM market_context WHERE purge_after<=? ORDER BY purge_after LIMIT ?",
                 (now_ms, batch),
@@ -310,6 +366,9 @@ class BoundedRetention:
                 else:
                     contexts.append(candidate[:3])
             store.db.executemany("DELETE FROM market_context WHERE stream=? AND kind=? AND at=?", contexts)
+            from .context_tiles import expire as expire_context_tiles
+
+            removed_context_tiles = expire_context_tiles(store.db, now_ms, batch=1)
             context_garbage = store.db.execute(
                 "SELECT id FROM market_context_bodies WHERE refs=0 LIMIT ?",
                 (batch,),
@@ -322,9 +381,7 @@ class BoundedRetention:
                 (now_ms // DAY, batch),
             ).fetchall()
             for day, cohort, chunk in quality:
-                store.db.execute(
-                    "DELETE FROM market_body_links WHERE owner=?", (f"quality:{day}:{cohort}:{chunk}",)
-                )
+                remove_owner(store.db, f"quality:{day}:{cohort}:{chunk}")
                 store.db.execute(
                     "DELETE FROM market_quality WHERE day=? AND cohort=? AND chunk=?", (day, cohort, chunk)
                 )
@@ -335,6 +392,24 @@ class BoundedRetention:
                 collect_events(store.db, batch)
             if store.db.execute("SELECT 1 FROM sqlite_master WHERE name='market_quality_blocks'").fetchone():
                 collect_quality(store.db, batch)
+            from .source_windows import collect as collect_windows
+
+            removed_windows = collect_windows(store.db, now_ms, batch)
+            from .numeric_pool import collect as collect_numeric
+            from .quality_packets import collect as collect_packets
+
+            removed_packets = collect_packets(store.db, batch)
+            from .packet_store import collect as collect_record_packets
+
+            removed_record_packets = (
+                collect_record_packets(store.db, min(256, batch))
+                if store.db.execute("SELECT 1 FROM market_meta WHERE key='packet_layout'").fetchone()
+                else 0
+            )
+            removed_numeric = collect_numeric(store.db, batch)
+            from .cohort_meter import collect_current
+
+            removed_cohort_counters = collect_current(store.db, batch)
             garbage = store.db.execute(
                 "SELECT body FROM market_body_counts WHERE refs=0 LIMIT ?", (batch,)
             ).fetchall()
@@ -344,12 +419,17 @@ class BoundedRetention:
             telemetry = {
                 "at_ms": now_ms,
                 "expired_events": processed,
-                "remaining_due_batch": len(due) - processed,
+                "remaining_due_batch": len(due_keys - retired),
                 "removed_services": service_removed,
-                "removed_candles": len(candles),
-                "removed_context": len(contexts),
+                "removed_candles": len(candles) + removed_source_versions,
+                "removed_context": len(contexts) + removed_context_tiles,
                 "removed_summaries": len(quality),
                 "removed_bodies": len(garbage),
+                "removed_source_windows": removed_windows,
+                "removed_numeric": removed_numeric,
+                "removed_quality_components": removed_packets,
+                "removed_record_packets": removed_record_packets,
+                "removed_cohort_counters": removed_cohort_counters,
                 "batch": batch,
                 "state": "OK",
                 "terminal_status": "EXPIRED_RETENTION_INCOMPLETE",
@@ -359,10 +439,15 @@ class BoundedRetention:
                 "runs": 1,
                 "expired_events": processed,
                 "removed_services": service_removed,
-                "removed_candles": len(candles),
-                "removed_context": len(contexts),
+                "removed_candles": len(candles) + removed_source_versions,
+                "removed_context": len(contexts) + removed_context_tiles,
                 "removed_summary_blocks": len(quality),
                 "removed_bodies": len(garbage),
+                "removed_source_windows": removed_windows,
+                "removed_numeric": removed_numeric,
+                "removed_quality_components": removed_packets,
+                "removed_record_packets": removed_record_packets,
+                "removed_cohort_counters": removed_cohort_counters,
             }.items():
                 totals[key] = totals.get(key, 0) + count
             totals["at_ms"] = now_ms
@@ -373,7 +458,20 @@ class BoundedRetention:
             )
         if removed and store.db.execute("PRAGMA freelist_count").fetchone()[0] > 256:
             store.db.execute("PRAGMA incremental_vacuum(32)").fetchall()
-        return removed + len(candles) + len(contexts) + len(quality) + len(garbage)
+        return (
+            removed
+            + len(candles)
+            + removed_source_versions
+            + len(contexts)
+            + removed_context_tiles
+            + len(quality)
+            + len(garbage)
+            + removed_windows
+            + removed_numeric
+            + removed_packets
+            + removed_record_packets
+            + removed_cohort_counters
+        )
 
     def _terminal(self, category: str, state: str) -> None:
         row = self.store.db.execute("SELECT value FROM market_meta WHERE key='expired_work'").fetchone()

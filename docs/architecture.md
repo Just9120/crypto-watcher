@@ -4,6 +4,22 @@
 
 Один Python 3.11 процесс, один Compose service `crypto_watcher`, persistent SQLite physical schema2 в WAL mode; legacy schema1 поддерживается compatibility reader. Владелец один; settings/domain state не создаются для входящих чужих chats. Trading credentials и LLM отсутствуют.
 
+Bounded BP1 transpose выполняется C99 helper через ctypes при наличии artifact.
+ABI3 также строит тот же bounded BR1/BP1 flat layout и предоставляет read-only
+SQLite scalar для structural NF/NR/NS2 proof:
+Python сначала аутентифицирует BF1 bytes/Zstd bounds и OW mask; native flatten
+сохраняет прежние BR1/BP1 shape/identity/length checks. Затем native вызов
+читает до64 current parent/ref rows и сверяет неизменные pointer/NR/NS2 значения.
+SHA256 использует opaque EVP API уже загруженного Python OpenSSL; NR2 header —
+pinned Zstd API. Собственной crypto implementation нет. SQL scalar DIRECTONLY,
+extension loading отключается сразу после установки exact trusted artifact;
+один вызов проверяет до8frames (temporary derivative<=1153737B), повторно
+использует statement/EVP context внутри вызова и освобождает их на любом выходе,
+не оставляет DB pointers/cache
+и не выполняет writes. Общий pure cache1MiB и50s boundary budget сохранены.
+Canonical native build и Docker image собирают helper из той же source revision;
+installed bad ABI/error не подменяется portable fallback.
+
 Advisory consumer boundary: `agent_contract.py` проецирует immutable history в typed v2;
 `agent_delivery.py` владеет отдельными preference/intents/frozen bytes/attempts/ack baseline.
 Event/episode/outcome admission выполняется атомарно с source history; отдельный job
@@ -20,7 +36,7 @@ Binding/activation/recovery — в [agent procedure](runbooks/agent-delivery.md)
 | Analytics / recovery | `outcomes.py`, `analytics.py`, `analytics_worker.py`, `analytics_recovery.py` | Frozen horizons/comparator versions, readonly calculations, CAS apply и referenced recovery |
 | Retention / summaries | `storage_lifecycle.py`, `quality_summary.py`, `expiry_index.py`, `quality_layout.py` | Bounded expiry, all-method numeric quality перед удалением details, finite service dependencies |
 | Storage control | `storage_meter.py`, `storage_model.py`, `storage_repack.py` | Cheap counters/samples, separated occupancy/retained-flow forecast, isolated quality scenarios и durable bounded lossless repack |
-| Capacity evidence | `capacity.py`, `scripts/observe_capacity.py`, `scripts/rehearse_retention.py` | Readonly boundary ledger/cardinality/pages, finite host observation после stability и offline full lifecycle; tests/CD отдельно от20GB proof |
+| Capacity evidence | `capacity.py`, `scripts/observe_capacity.py`, `scripts/rehearse_retention.py` | Readonly boundary ledger/cardinality/pages, finite host observation после stability и offline full lifecycle; tests/CD отдельно от25GB proof |
 | Agent consumer | `agent_contract.py`, `agent_delivery.py` | Полный public snapshot/hash, independent immutable outbox/retries/ack и owner diagnostics |
 | Digest / optional context | `digest.py`, `enrichment.py`, `enrichment_runtime.py` | Independent period delivery и qualified derivatives mapping/source freshness |
 | Market adapter / computation | `cryptowatcher/market.py` | Общий async HTTP client, bounded REST requests; closed-candle composite, gaps/invalid data diagnostics |
@@ -34,6 +50,16 @@ Binding/activation/recovery — в [agent procedure](runbooks/agent-delivery.md)
 | Compatibility | `telegram_crypto_watcher.py` | Сохраняет прежний startup entrypoint; private legacy Python helpers не являются объявленным API |
 
 Owner configuration loop применяет смену selected source scope независимо от REST discovery/backoff. Reconcile сериализован; завершившийся старый REST refresh перечитывает owner revision и не возвращает прежний scope. Диагностика отдельно показывает revision applied scope, metadata readiness, freshness и completeness.
+
+Retirement прежних WS tasks ограничен15s: при timeout ownership/groups сохраняются,
+replacement не запускается до их завершения. Manager и configuration loop повторяют
+незавершённый reconcile даже при уже применённом active stream set/revision.
+Неожиданная ошибка refresh сохраняет безопасный class/code/count/time и не завершает
+discovery task; cancellation по-прежнему распространяется. Независимая диагностика
+показывает named tasks, STOPPING/FAILED, соответствие groups/sessions/connections и
+возраст последнего успешного metadata/ticker refresh для обоих рынков.
+Cadence600/300s сохраняется; допустимый refresh grace60s не меняет HTTP/backoff policy.
+Delivery и clean capacity baseline требуют актуальных discovery и согласованного scope.
 
 Network I/O выполняется вне DB transactions. Snapshot до market fetch имеет revision; смена settings во время fetch отменяет применение результата. Alerts маркируют использованную revision. SQLite update использует compare-and-swap; отправка сообщения не удерживает DB/state lock.
 
@@ -56,6 +82,12 @@ shared settings и compact immutable revisions/identity-checked heads.
 получают прежние полные values, formulas/reference/cutoff не меняются. Numeric quality
 summaries сохраняют recorded methodology и settings после истечения подробностей;
 ссылки на raw windows не продлевают подробную историю бессрочно.
+
+Context tile publication проверяет duplicate hot/cold ownership через один
+декодированный список времени и indexed point lookups. `CROSS JOIN` фиксирует
+порядок обхода: существующий hot prefix не запускает повторный decode пакета.
+Explicit installer атомарно заменяет только известный прежний trigger; неизвестный
+trigger сохраняется и блокирует upgrade. Открытие Store не меняет schema/guards.
 
 Image: pinned Python base digest, hash-locked dependencies, UID/GID10001, read-only
 root, no capabilities. `/data/sqlite` и backups принадлежат приложению; исходный
@@ -104,6 +136,16 @@ Restart восстанавливает episodes, per-direction conditions и pen
 
 `outcomes.py` принимает jobs в event transaction, затем bounded worker вычисляет полные future1m окна без смены reference; `analytics.py` вычисляет frozen prior comparator для каждого события в ограниченном batch и отделяет causal readout от late analytics. Cohort distributions сортирует/агрегирует SQLite, exporter не собирает все raw returns в памяти. Telegram/CLI views имеют явные ограничения выдачи; streaming export через отдельный readonly connection не усечён и pinning snapshot проверен concurrent-writer fixture.
 
+В одном readonly transaction comparison worker держит одну prior population.
+Для того же stream/шага/warmup/data version при движении обоих bounds вперёд
+он сохраняет любую пересекающуюся часть и читает только новый tail, в том числе
+для редких admissions дальше256native bars. Tail является подмножеством прежнего
+разрешённого range, размер28day window с warmup не меняется. ATR/quantiles вычисляются
+заново в прежнем порядке над точными свечами этого range. Обратный cutoff, отсутствие
+пересечения или смена cache identity требуют полного чтения. Writer не использует эту
+population; новый snapshot видит committed recovery через data version. Размеры
+byte/range caches, CAS apply, methods и deadlines не меняются.
+
 `source_context.py` архивирует public metadata/ticker availability; historical formula получает доступную тогда liquidity/tick context. Unavailable historical input означает limitation, не future substitution. `analytics_recovery.py` получает один referenced page через существующий HTTP client/budget; live gaps/bootstrap имеют приоритет. Он не создаёт memory windows/WS subscriptions inactive instruments и не переписывает conflicting used source. Outcome/retention holds переживают restart.
 Retirement pending jobs сохраняет свой64/25ms quantum; existing REST admission
 32pages/1s начинается после него. Scheduler delay во время retirement не должен
@@ -146,6 +188,20 @@ poll age<=120s, analytics OK/current<=60s и отсутствии фактиче
 Общий intended wall deadline200ms ограничивает burst, отдельный SQL/commit может
 превысить time check. COMPLETE прекращает лишние slices. При потере условий остается
 один slice; общий startup/current recovery guard сохраняется. RAM/cache не меняются.
+Тот же существующий1s maintenance callback после startup/initial reclaim сначала
+обслуживает backlog, подтверждённый successful retention telemetry не старше60s:
+до4прежних retention calls с0.5s admission window. Каждый call сохраняет50ms
+admission и atomic archive-before-delete; отдельный event/SQL может превысить time
+check. Между calls выполняется yield и повторная проверка live recovery/coverage/
+analytics freshness; analytics lock приостанавливает priority. Обычный analytics
+path и priority делят одну retention lock. Новые callbacks/timers не создаются.
+При backlog выполняется один40ms repack slice без повторной parent-bundle
+compaction уже истекающих details; transfer/GC/остальные phases продолжаются,
+pending_work остаётся видимым. Initial compaction/reclaim не откладывается.
+После очистки backlog обычная compaction возобновляется. Retention failure виден
+в singleton worker/diagnostics и блокирует clean baseline; successful regular
+call снимает failure. RAM4GiB/CPU1, retained data/N/settings и cache неизменны.
+
 Фазы records/decisions/expiry/quality имеют один deadline и сохраняют очередность
 первого хода. Slow SQL может превысить time check, но не вытесняет всегда одну фазу.
 Records/decision/quality scans фиксируют physical high water и следующий rowid.
@@ -172,10 +228,22 @@ row IDs/shared dimensions/provenance не заменяют внешние event 
 уже заполненные local ranges без REST и coalesce overlapping work, сохраняя source
 conflict checks/owner expiry. Детали upgrade/rollback boundaries — в [state contract](state_contract.md#storage-extension3-совместимое-уплотнение).
 
+QF1 хранит logical CQ5 packets в shared IF1 containers с exact numeric leases.
+Тот же maintenance worker обслуживает конечную initial scan, live eligibility
+queue и partial-slot GC. Открытый expiry-frontier tail остаётся CQ5 до закрытия
+UTC дня; его факты уже доступны. Body initial reclaim сохраняется при upgrade,
+поэтому retention priority может работать параллельно с finite frame pass.
+Observer отдельно требует frame initial reclaim; overdue/unknown clock не
+становятся current из-за нового checkpoint. Capacity counters различают CQ5
+staging, retained QF1 и transient queue, включая новые physical indexes.
+
 Перед baseline finite capacity observer перепроверяет только единственный blocker
 ANALYTICS_RECOVERY_PENDING максимум3 раза с10s pause, quick read-only probes без
 deep scans. Это устраняет привязку одного5min sample к краткой current-candle queue.
-Каждая неудачная попытка сохраняет timestamp/blockers; актуальная очередь должна
-быть действительно пуста. Main loop сохраняет300s pause, две чистые проверки и
+Каждый quick probe внутри sample имеет durable PENDING перед вызовом и полный
+snapshot либо sanitized ERROR после; restart закрывает незавершённый subprobe как
+INTERRUPTED. Уже captured snapshots не теряются при ошибке следующей перепроверки.
+Актуальная очередь должна быть действительно пуста. Main loop сохраняет300s pause,
+минимум две чистые проверки и не менее30min устойчивости, а также
 исходную deep boundary/12h wait policy. Другие blockers не retry; после baseline
 каждый interruption остается видимым. Resource caps и24h boundary не меняются.

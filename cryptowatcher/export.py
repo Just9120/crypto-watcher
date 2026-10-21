@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Iterator
 
 from .analytics import cohort_rows
+from .catalogue_sql import source
 from .events import PREFIX, History
 from .history_codec import MARKER
 from .storage import Store, encode, json_payload
@@ -36,7 +37,7 @@ class Selection:
             raise ValueError("Invalid export market")
 
 
-def event_selection(selection: Selection) -> tuple[str, list[Any]]:
+def event_selection(selection: Selection, store: Store | None = None) -> tuple[str, list[Any]]:
     selection.validate()
     terms = [
         "key>=?",
@@ -53,7 +54,10 @@ def event_selection(selection: Selection) -> tuple[str, list[Any]]:
         if value is not None:
             terms.append(f"json_extract(cw_record_json(payload_json),'$.{name}')=?")
             args.append(value)
-    return "WITH selected AS (SELECT payload_json FROM runtime WHERE " + " AND ".join(terms) + ") ", args
+    table = source(store, "event", head=True) if store is not None else "runtime"
+    return "WITH selected AS (SELECT key,payload_json FROM " + table + " WHERE " + " AND ".join(
+        terms
+    ) + ") ", args
 
 
 def paged(cursor: Any) -> Iterator[Any]:
@@ -64,12 +68,16 @@ def paged(cursor: Any) -> Iterator[Any]:
 def ndjson(store: Store, selection: Selection) -> Iterator[str]:
     if not store.readonly or store.db.in_transaction:
         raise ValueError("Export requires a separate read-only connection")
-    cte, args = event_selection(selection)
+    selection.validate()
     history = History(store)
     store.db.execute("BEGIN")
     try:
+        cte, args = event_selection(selection, store)
         # First read pins the WAL snapshot before any output; later writes cannot enter this export.
         total = store.db.execute(cte + "SELECT COUNT(*) FROM selected", args).fetchone()[0]
+        from .quality_summary import period_metadata
+
+        period = period_metadata(selection.start_ms, selection.end_ms) if store.bounded else {}
         yield (
             encode(
                 {
@@ -84,6 +92,7 @@ def ndjson(store: Store, selection: Selection) -> Iterator[str]:
                     "detail_retention_days": store.snapshot().settings.detail_retention_days,
                     "summary_retention_months": 12,
                     "summary_period_resolution": "UTC_DAY" if store.bounded else None,
+                    "selection_period": period,
                     "expired_detail": "Unavailable; summaries are not individual event results"
                     if store.bounded
                     else None,
@@ -102,7 +111,9 @@ def ndjson(store: Store, selection: Selection) -> Iterator[str]:
             start = PREFIX + kind + ":"
             rows = store.db.execute(
                 cte
-                + "SELECT r.key,r.payload_json FROM runtime r WHERE r.key>=? AND r.key<? AND "
+                + "SELECT r.key,r.payload_json FROM "
+                + source(store, kind)
+                + " r WHERE r.key>=? AND r.key<? AND "
                 + relation
                 + " ORDER BY r.key",
                 [*args, start, start + "~"],
@@ -116,7 +127,9 @@ def ndjson(store: Store, selection: Selection) -> Iterator[str]:
             cte
             + "SELECT DISTINCT json_extract(cw_record_json(r.payload_json),'$.settings_revision'), json_extract(cw_record_json(r.payload_json),'$.settings_snapshot'), "
             + f"json_extract(cw_record_json(r.payload_json),'$.{MARKER}.fields.settings_snapshot') "
-            + "FROM runtime r WHERE r.key>=? AND r.key<? AND "
+            + "FROM "
+            + source(store, "event")
+            + " r WHERE r.key>=? AND r.key<? AND "
             + relations["event"]
             + " ORDER BY 1,2,3",
             [*args, PREFIX + "event:", PREFIX + "event:~"],
@@ -149,12 +162,12 @@ def ndjson(store: Store, selection: Selection) -> Iterator[str]:
                 counts["methodology"] = counts.get("methodology", 0) + 1
                 yield encode({"schema": SCHEMA, "type": "methodology", "record": json_payload(row[0])}) + "\n"
         if store.bounded:
-            from .market_storage import decoded
+            from .quality_packets import unpack as unpack_quality
 
             clauses = ["day>=?", "day<?"]
             values: list[Any] = [
-                selection.start_ms // 86400000,
-                (selection.end_ms + 86400000 - 1) // 86400000,
+                period["archive_start_ms"] // 86400000,
+                period["archive_end_ms"] // 86400000,
             ]
             for name, filter_value in (
                 ("detector", selection.detector),
@@ -180,7 +193,7 @@ def ndjson(store: Store, selection: Selection) -> Iterator[str]:
                                 "event_day_utc": row[0],
                                 "dimensions": json_payload(row[1]),
                                 "provenance": history.codec.unpack(json.loads(row[2]))["quality_provenance"],
-                                "facts": decoded(bytes(row[3]), 1024 * 1024),
+                                "facts": unpack_quality(store.db, bytes(row[3])),
                                 "detail_available": False,
                             },
                         }
@@ -200,6 +213,9 @@ def csv_summary(store: Store, selection: Selection = Selection()) -> Iterator[st
     store.db.execute("BEGIN")
     try:
         selection.validate()
+        from .quality_summary import period_metadata
+
+        period = period_metadata(selection.start_ms, selection.end_ms) if store.bounded else {}
         records = cohort_rows(
             store,
             start_ms=selection.start_ms,
@@ -225,6 +241,7 @@ def csv_summary(store: Store, selection: Selection = Selection()) -> Iterator[st
             "noise_min_pct",
             "noise_max_pct",
             "noise_sample_size",
+            *period,
         ]
         writer = csv.DictWriter(output, fieldnames=columns)
         writer.writeheader()
@@ -237,6 +254,7 @@ def csv_summary(store: Store, selection: Selection = Selection()) -> Iterator[st
                     **record,
                     "group": encode(record["group"]),
                     "classifications": encode(record["classifications"]),
+                    **period,
                 }
             )
             yield output.getvalue()

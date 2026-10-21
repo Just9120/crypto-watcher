@@ -27,6 +27,25 @@ FIELDS = (
 )
 
 
+def candle_deadline(
+    db: sqlite3.Connection,
+    stream: int,
+    start: int,
+    step: int,
+    anchor: int,
+    now: int,
+    candle_days: int,
+    detail_days: int,
+) -> int:
+    """One existing retention/hold rule shared by legacy rows and source tiles."""
+    expiry = max(start + step + candle_days * DAY, anchor + detail_days * DAY)
+    held = db.execute(
+        "SELECT MAX(expires) FROM market_holds WHERE stream=? AND start<=? AND end>? AND expires>?",
+        (stream, start, start, now),
+    ).fetchone()[0]
+    return max(expiry, min(held, now + 3600000)) if held else expiry
+
+
 def enable(db: sqlite3.Connection) -> None:
     if db.execute("SELECT 1 FROM runtime LIMIT 1").fetchone():
         raise ValueError("Fresh market layout requires empty runtime")
@@ -99,6 +118,33 @@ def enable(db: sqlite3.Connection) -> None:
     from .quality_layout import install as install_quality
 
     install_quality(db)
+    from .source_windows import install as install_windows
+
+    install_windows(db)
+    from .numeric_pool import install as install_numeric
+
+    install_numeric(db)
+    from .quality_packets import install as install_packets
+
+    install_packets(db)
+    from .context_integrity import install as install_context_integrity
+
+    install_context_integrity(db)
+    from .reference_layout import install as install_references
+
+    install_references(db)
+    from .quality_meter import install as install_quality_meter
+
+    install_quality_meter(db)
+    from .cohort_meter import install as install_cohort_meter
+
+    install_cohort_meter(db)
+    from .runtime_meter import install as install_runtime_meter
+
+    install_runtime_meter(db)
+    from .cohort_meter import align_empty
+
+    align_empty(db)
 
 
 def active(db: sqlite3.Connection) -> bool:
@@ -114,7 +160,7 @@ def encoded(value: Any) -> bytes:
 
 
 def decoded(payload: bytes, maximum: int = 8192) -> Any:
-    if payload.startswith((b"CW2\x00", b"CW3\x00")):
+    if payload.startswith((b"CW2\x00", b"CW3\x00", b"CH1\x00")):
         from .record_codec import binary_payload
 
         raw = binary_payload(payload).encode()
@@ -145,38 +191,67 @@ def stream_id(db: sqlite3.Connection, name: str, *, create: bool = False) -> int
 def admit(
     db: sqlite3.Connection, stream: str, candle: dict[str, Any], needed_until: int = 0
 ) -> tuple[int, int, int]:
+    return admit_many(db, stream, [candle], needed_until)[0]
+
+
+def admit_many(
+    db: sqlite3.Connection,
+    stream: str,
+    candles: list[dict[str, Any]],
+    needed_until: int = 0,
+    *,
+    cache: Any = None,
+) -> list[tuple[int, int, int]]:
+    from .candle_access import admit_many as tiled_admit
+    from .candle_access import writing
     from .sources import Candle
 
-    # Validate before any source becomes addressable by a history reference.
-    c = Candle(**candle)
-    if c != Candle.parse(c.row(), stream.rsplit("/", 1)[1], c.source, c.received_ms, c.server_ms):
-        raise ValueError("Invalid normalized candle")
+    if not candles:
+        return []
+    if writing(db):
+        return tiled_admit(db, stream, candles, needed_until, cache=cache)
+    validated = []
+    for candle in candles:
+        c = Candle(**candle)
+        if c != Candle.parse(c.row(), stream.rsplit("/", 1)[1], c.source, c.received_ms, c.server_ms):
+            raise ValueError("Invalid normalized candle")
+        validated.append(c)
     sid = stream_id(db, stream, create=True)
     assert sid is not None
-    value = encoded([candle[f] for f in FIELDS])
     settings = json.loads(db.execute("SELECT settings_json FROM owner_settings LIMIT 1").fetchone()[0])
-    expiry = max(
-        c.end + settings.get("candle_retention_days", 35) * DAY,
-        needed_until + settings.get("detail_retention_days", 30) * DAY,
-    )
+    result = []
+    for candle, c in zip(candles, validated, strict=True):
+        value = encoded([candle[f] for f in FIELDS])
+        expiry = max(
+            c.end + settings.get("candle_retention_days", 35) * DAY,
+            needed_until + settings.get("detail_retention_days", 30) * DAY,
+        )
+        result.append(admit_value(db, int(sid), c.start, needed_until, expiry, value))
+    return result
+
+
+def admit_value(
+    db: sqlite3.Connection, sid: int, start: int, needed_until: int, expiry: int, value: bytes
+) -> tuple[int, int, int]:
+    """Insert one already validated value; source admission owns validation."""
     previous = db.execute(
         "SELECT revision,payload,needed_until FROM market_candles WHERE stream=? AND start=? ORDER BY revision DESC",
-        (sid, c.start),
+        (sid, start),
     ).fetchall()
     for row in previous:
         if bytes(row[1]) == value:
             if needed_until > row[2]:
                 db.execute(
                     "UPDATE market_candles SET needed_until=?,purge_after=max(purge_after,?) WHERE stream=? AND start=? AND revision=?",
-                    (needed_until, expiry, sid, c.start, row[0]),
+                    (needed_until, expiry, sid, start, row[0]),
                 )
-            return int(sid), c.start, row[0]
+            return sid, start, row[0]
     revision = previous[0][0] + 1 if previous else 0
     db.execute(
         "INSERT INTO market_candles VALUES (?,?,?,?,?,?)",
-        (sid, c.start, revision, value, needed_until, expiry),
+        (sid, start, revision, value, needed_until, expiry),
     )
-    return int(sid), c.start, revision
+    return sid, start, revision
 
 
 def public(payload: bytes) -> dict[str, Any]:
@@ -187,11 +262,22 @@ def public(payload: bytes) -> dict[str, Any]:
 
 
 def read(
-    db: sqlite3.Connection, stream: str, start: int = 0, end: int = 2**63 - 1, limit: int | None = None
+    db: sqlite3.Connection,
+    stream: str,
+    start: int = 0,
+    end: int = 2**63 - 1,
+    limit: int | None = None,
+    *,
+    cache: Any = None,
 ) -> list[dict[str, Any]]:
     sid = stream_id(db, stream)
     if sid is None:
         return []
+    from .candle_access import installed
+    from .candle_access import read as mixed_read
+
+    if installed(db):
+        return mixed_read(db, sid, start, end, limit, cache)
     suffix = " ORDER BY c.start DESC" if limit is not None else " ORDER BY c.start"
     query = (
         """SELECT c.payload FROM market_candles c WHERE c.stream=? AND c.start>=? AND c.start<?
@@ -206,53 +292,127 @@ def read(
 
 
 def window(
-    db: sqlite3.Connection, stream: str, candles: list[dict[str, Any]], expires: int
+    db: sqlite3.Connection, stream: str, candles: list[dict[str, Any]], expires: int, *, cache: Any = None
 ) -> dict[str, Any]:
-    points = [admit(db, stream, c, expires) for c in candles]
+    from .candle_access import admit_window, writing
+
+    tiled = writing(db)
+    if tiled:
+        points, all_tiled = admit_window(db, stream, candles, expires, cache=cache)
+    else:
+        points, all_tiled = admit_many(db, stream, candles, expires, cache=cache), False
+    if not points:
+        raise ValueError("Empty source window")
     raw = json.dumps(
         candles, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
     ).encode()
-    # Coordinates only; no OHLC arrays or overlapping window bodies are copied.
+    reference = compact_reference(
+        points[0][0], [[p[1], p[2]] for p in points], hashlib.sha256(raw).hexdigest()
+    )
+    if all_tiled and db.in_transaction:
+        # Admission just checked these actual values/revisions and renewed all
+        # exact leases. No writer or await intervenes before this descriptor.
+        return {"mode": "source-cells", "stream": reference["stream"], "runs": reference["runs"]}
+    if tiled:
+        from .source_cells import convert
+
+        cells = convert(db, reference, cache=cache)
+        if cells is not None:
+            return cells
+    from .source_windows import intern, lease_deadline
+
+    return intern(db, reference, lease_deadline(db, expires, max(c["start"] + c["step"] for c in candles)))
+
+
+def compact_reference(stream: int, points: list[list[int]], sha: str) -> dict[str, Any]:
+    """Exact arithmetic runs, including order, gaps and candle revisions."""
+    runs: list[list[int]] = []
+    for start, revision in points:
+        if runs and revision == runs[-1][3]:
+            previous = runs[-1]
+            delta = start - (previous[0] + previous[1] * (previous[2] - 1))
+            if previous[2] == 1 or delta == previous[1]:
+                if previous[2] == 1:
+                    previous[1] = delta
+                previous[2] += 1
+                continue
+        runs.append([start, 0, 1, revision])
+    return {"mode": "source-runs", "stream": stream, "runs": runs, "sha256": sha}
+
+
+def reference_points(reference: dict[str, Any]) -> list[Any]:
     import base64
 
-    return {
-        "mode": "source",
-        "stream": points[0][0],
-        "points": base64.b64encode(encoded([[p[1], p[2]] for p in points])).decode(),
-        "sha256": hashlib.sha256(raw).hexdigest(),
-    }
-
-
-def restore_window(db: sqlite3.Connection, reference: dict[str, Any]) -> bytes:
-    import base64
-
+    if reference.get("mode") in ("source-runs", "source-cells"):
+        fields = {"mode", "stream", "runs"} | ({"sha256"} if reference["mode"] == "source-runs" else set())
+        if set(reference) != fields or not isinstance(reference["runs"], list):
+            raise ValueError("Invalid source runs")
+        points: list[Any] = []
+        for run in reference["runs"]:
+            if (
+                not isinstance(run, list)
+                or len(run) != 4
+                or any(type(v) is not int for v in run)
+                or not 0 <= run[0] < 2**63
+                or not 0 <= run[3] < 2**63
+                or not -(2**63) < run[1] < 2**63
+                or run[2] < 1
+                or len(points) + run[2] > 65536
+            ):
+                raise ValueError("Invalid source run coordinate")
+            if not 0 <= run[0] + (run[2] - 1) * run[1] < 2**63:
+                raise ValueError("Invalid source run endpoint")
+            points.extend([[run[0] + i * run[1], run[3]] for i in range(run[2])])
+        return points
     if (
         set(reference) != {"mode", "stream", "points", "sha256"}
-        or type(reference["stream"]) is not int
+        or reference.get("mode") != "source"
         or not isinstance(reference["points"], str)
         or len(reference["points"]) > 4 * 1024 * 1024
     ):
         raise ValueError("Invalid source window reference")
-    points = decoded(base64.b64decode(reference["points"], validate=True), 2 * 1024 * 1024)
+    return decoded(base64.b64decode(reference["points"], validate=True), 2 * 1024 * 1024)
+
+
+def restore_window(db: sqlite3.Connection, reference: dict[str, Any], *, cache: Any = None) -> bytes:
+    return checked_window(db, reference, cache=cache)[0]
+
+
+def checked_window(
+    db: sqlite3.Connection, reference: dict[str, Any], *, cache: Any = None
+) -> tuple[bytes, bool]:
+    """Full old hash plus an ephemeral proof that every value came from a tile."""
+    if isinstance(reference, dict) and reference.get("mode") == "source-ref":
+        from .source_windows import load
+
+        if set(reference) != {"mode", "id"}:
+            raise ValueError("Invalid shared source reference")
+        reference = load(db, reference["id"])
+
+    if type(reference.get("stream")) is not int:
+        raise ValueError("Invalid source window reference")
+    points = reference_points(reference)
     if not isinstance(points, list) or not 0 < len(points) <= 65536:
         raise ValueError("Invalid source window coordinates")
+    from .candle_access import Lookup
+
+    cells = reference.get("mode") == "source-cells"
+    reader = Lookup(db, reference["stream"], cache, require_tiles=cells)
     candles = []
     for point in points:
-        if not isinstance(point, list) or len(point) != 2 or any(type(v) is not int or v < 0 for v in point):
+        if (
+            not isinstance(point, list)
+            or len(point) != 2
+            or any(type(v) is not int or not 0 <= v < 2**63 for v in point)
+        ):
             raise ValueError("Invalid candle coordinate")
-        row = db.execute(
-            "SELECT payload FROM market_candles WHERE stream=? AND start=? AND revision=?",
-            (reference["stream"], *point),
-        ).fetchone()
-        if row is None:
-            raise ValueError("Missing retained candle revision")
-        candles.append(public(bytes(row[0])))
+        candles.append(reader.point(*point))
     raw = json.dumps(
         candles, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
     ).encode()
-    if hashlib.sha256(raw).hexdigest() != reference["sha256"]:
+    if not cells and hashlib.sha256(raw).hexdigest() != reference["sha256"]:
         raise ValueError("Source window hash mismatch")
-    return raw
+    return raw, reader.all_frozen
 
 
 def context_public(db: sqlite3.Connection, row: Any) -> dict[str, Any]:
@@ -265,9 +425,24 @@ def context_public(db: sqlite3.Connection, row: Any) -> dict[str, Any]:
 def save_context(
     db: sqlite3.Connection, kind: str, instrument: str, value: dict[str, Any], anchor: int = 0
 ) -> tuple[int, str, int]:
+    from .storage import encode
+
     sid = stream_id(db, instrument, create=True)
     assert sid is not None
     when = value["available_at_ms"]
+    settings = json.loads(db.execute("SELECT settings_json FROM owner_settings LIMIT 1").fetchone()[0])
+    expires = max(
+        when + settings.get("candle_retention_days", 35) * DAY,
+        anchor + settings.get("detail_retention_days", 30) * DAY,
+    )
+    from . import context_tile_codec, context_tiles
+
+    tiled = context_tiles.cold(db, sid, kind, when)
+    if tiled is not None:
+        if encode(context_tile_codec.public(context_tile_codec.get(*tiled))) != encode(value):
+            raise ValueError("Conflicting public source snapshot")
+        context_tiles.renew(db, tiled, anchor=anchor, purge=expires)
+        return sid, kind, when
     timing = {k: v for k, v in value.items() if k in ("available_at_ms", "market_observation_ms")}
     stable = {k: v for k, v in value.items() if k not in timing}
     raw = encoded(stable)
@@ -283,27 +458,23 @@ def save_context(
     previous = db.execute(
         "SELECT body,timing FROM market_context WHERE stream=? AND kind=? AND at=?", (sid, kind, when)
     ).fetchone()
-    if previous is not None and context_public(db, previous) != value:
+    if previous is not None and encode(context_public(db, previous)) != encode(value):
         raise ValueError("Conflicting public source snapshot")
-    settings = json.loads(db.execute("SELECT settings_json FROM owner_settings LIMIT 1").fetchone()[0])
-    expires = max(
-        when + settings.get("candle_retention_days", 35) * DAY,
-        anchor + settings.get("detail_retention_days", 30) * DAY,
-    )
     db.execute(
-        "INSERT INTO market_context VALUES (?,?,?,?,?,?,?) ON CONFLICT(stream,kind,at) DO UPDATE SET needed_anchor=max(needed_anchor,excluded.needed_anchor),purge_after=max(purge_after,excluded.purge_after)",
+        "INSERT INTO market_context(stream,kind,at,body,timing,needed_anchor,purge_after) VALUES (?,?,?,?,?,?,?) ON CONFLICT(stream,kind,at) DO UPDATE SET needed_anchor=max(needed_anchor,excluded.needed_anchor),purge_after=max(purge_after,excluded.purge_after)",
         (sid, kind, when, body[0], encoded(timing), anchor, expires),
     )
     return sid, kind, when
 
 
 def read_context(db: sqlite3.Connection, kind: str, instrument: str, cutoff: int) -> dict[str, Any] | None:
+    from . import context_tile_codec, context_tiles
+
     sid = stream_id(db, instrument)
-    row = db.execute(
-        "SELECT body,timing FROM market_context WHERE stream=? AND kind=? AND at<=? ORDER BY at DESC LIMIT 1",
-        (sid, kind, cutoff),
-    ).fetchone()
-    return context_public(db, row) if row else None
+    if sid is None:
+        return None
+    point = context_tiles.lookup(db, sid, kind, cutoff, exact=False)
+    return context_tile_codec.public(point) if point is not None else None
 
 
 def context_window(db: sqlite3.Connection, stream: str, value: dict[str, Any], anchor: int) -> dict[str, Any]:
@@ -314,7 +485,9 @@ def context_window(db: sqlite3.Connection, stream: str, value: dict[str, Any], a
     raw = json.dumps(
         value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
     ).encode()
-    return {"mode": "contexts", "points": points, "sha256": hashlib.sha256(raw).hexdigest()}
+    from .context_integrity import freeze
+
+    return freeze(db, {k: [p[0], p[2]] if p is not None else None for k, p in points.items()}, raw)
 
 
 def restore_context(db: sqlite3.Connection, ref: dict[str, Any]) -> bytes:
@@ -337,12 +510,12 @@ def restore_context(db: sqlite3.Connection, ref: dict[str, Any]) -> bytes:
             or point[1] != kind
         ):
             raise ValueError("Invalid context coordinate")
-        row = db.execute(
-            "SELECT body,timing FROM market_context WHERE stream=? AND kind=? AND at=?", point
-        ).fetchone()
-        if row is None:
+        from . import context_tile_codec, context_tiles
+
+        found = context_tiles.lookup(db, point[0], kind, point[2])
+        if found is None:
             raise ValueError("Missing retained context")
-        result[kind] = context_public(db, row)
+        result[kind] = context_tile_codec.public(found)
     raw = json.dumps(
         result, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
     ).encode()

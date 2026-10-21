@@ -206,13 +206,39 @@ async def test_history_keyset_pages_keep_distinct_events_and_show_observation_ti
     engine = EventEngine(deck.store)
     for step in range(3):
         observe(engine, NOW + step * 60_000)
+    await history_pages(deck)
+
+
+async def test_cold_history_keeps_the_same_keyset_navigation_open_result_and_return(infrastructure, store):
+    from cryptowatcher.events import EventEngine
+    from tests.catalogue_fixture import move_events
+    from tests.test_bounded_storage import bounded
+    from tests.test_events import NOW, observe
+
+    bounded(store)
+    controller = Controller(
+        infrastructure, store, SimpleNamespace(snapshot=AsyncMock(return_value=RadarResult({}, {}, 0)))
+    )
+    engine = EventEngine(store)
+    for step in range(3):
+        observe(engine, NOW + step * 60_000)
+    expected = engine.history.events(100)
+    move_events(store)
+    assert engine.history.events(100) == expected
+    await history_pages(controller)
+
+
+async def history_pages(deck):
     request = update("История")
     await deck.handle(request, None)
     reply = request.effective_message.reply_text.call_args
     assert "МСК" in reply.args[0] and "не означает отправленное" in reply.args[0]
     markup = reply.kwargs["reply_markup"]
     first = {
-        b.callback_data for row in markup.inline_keyboard for b in row if b.callback_data.startswith("event:")
+        b.callback_data.split(":")[2]
+        for row in markup.inline_keyboard
+        for b in row
+        if b.callback_data.startswith("ui:open:")
     }
     cursor = next(
         b.callback_data
@@ -225,9 +251,38 @@ async def test_history_keyset_pages_keep_distinct_events_and_show_observation_ti
     await deck.handle(request, None)
     markup = request.callback_query.edit_message_text.call_args.kwargs["reply_markup"]
     second = {
-        b.callback_data for row in markup.inline_keyboard for b in row if b.callback_data.startswith("event:")
+        b.callback_data.split(":")[2]
+        for row in markup.inline_keyboard
+        for b in row
+        if b.callback_data.startswith("ui:open:")
     }
     assert first and second and first.isdisjoint(second)
+    opened = next(
+        b.callback_data
+        for row in markup.inline_keyboard
+        for b in row
+        if b.callback_data.startswith("ui:open:")
+    )
+    for action in ("open", "result"):
+        request = update(callback=opened.replace("ui:open:", "ui:" + action + ":"))
+        await deck.handle(request, None)
+        markup = request.callback_query.edit_message_text.call_args.kwargs["reply_markup"]
+        returned = next(
+            b.callback_data
+            for row in markup.inline_keyboard
+            for b in row
+            if (b.callback_data or "").startswith("ui:returnhistory:")
+        )
+        request = update(callback=returned)
+        await deck.handle(request, None)
+        markup = request.callback_query.edit_message_text.call_args.kwargs["reply_markup"]
+        actual = {
+            b.callback_data.split(":")[2]
+            for row in markup.inline_keyboard
+            for b in row
+            if b.callback_data.startswith("ui:open:")
+        }
+        assert actual == second
 
 
 async def test_event_details_distinguish_muted_observation_and_preserve_original_json(deck):
@@ -269,6 +324,8 @@ def test_diagnostics_distinguish_actual_forecast_optional_and_unknown(deck):
     }
     text = diagnostic_summary(data)
     assert "2.9 ГБ / 20 ГБ" in text and "163.28 ГБ" in text and "не подключена" in text
+    missing_budget = {**data, "storage": {k: v for k, v in data["storage"].items() if k != "budget_bytes"}}
+    assert "2.9 ГБ / 25 ГБ" in diagnostic_summary(missing_budget)
     assert "устарел" in text and "не текущий размер" in text
     queues = diagnostic_section(data, "queues")
     assert (

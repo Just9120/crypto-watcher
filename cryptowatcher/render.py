@@ -85,20 +85,30 @@ def history_keyboard(events: list[dict[str, Any]]) -> InlineKeyboardMarkup:
     )
 
 
-def event_keyboard(event: dict[str, Any]) -> InlineKeyboardMarkup:
+def event_keyboard(event: dict[str, Any], *, history_token: str | None = None) -> InlineKeyboardMarkup:
     rows = alert_keyboard(event["symbol"], event["market_type"]).inline_keyboard
+    eid = event["event_id"]
+    suffix = ":" + history_token if history_token else ""
     return InlineKeyboardMarkup(
         [
-            *rows,
-            [InlineKeyboardButton("Пересчитать сравнение", callback_data="recompare:" + event["event_id"])],
+            rows[0],
             [
                 InlineKeyboardButton(
-                    "Полные исходные данные", callback_data="ui:eventfile:" + event["event_id"]
-                )
+                    "Подробности", callback_data=("ui:open:" if history_token else "event:") + eid + suffix
+                ),
+                InlineKeyboardButton(
+                    "Результат", callback_data=("ui:result:" if history_token else "outcomes:") + eid + suffix
+                ),
             ],
             [
-                InlineKeyboardButton("Подробности", callback_data="event:" + event["event_id"]),
-                InlineKeyboardButton("Результат", callback_data="outcomes:" + event["event_id"]),
+                InlineKeyboardButton("Заглушить", callback_data="ui:eventmute:" + eid + suffix),
+                InlineKeyboardButton("Ещё", callback_data="ui:eventmore:" + eid + suffix),
+            ],
+            [
+                InlineKeyboardButton(
+                    "← История",
+                    callback_data="ui:returnhistory:" + history_token if history_token else "ui:history",
+                )
             ],
         ]
     )
@@ -349,15 +359,14 @@ def status_text(snapshot: Snapshot, result: RadarResult, enabled: bool) -> str:
     s = snapshot.settings
     return (
         "📊 Радар Bybit\n"
-        "Поддерживаемые рынки: Spot USDT + USDT Perpetual\n"
-        "Свечи: 1m / 3m / 5m / 15m одновременно\n"
-        "Детекторы: цена, оборот, пробой, диапазон, совпадение\n"
-        f"Охват: {'весь подходящий рынок' if s.alert_universe_mode == 'top' else 'мой список: ' + str(len(s.instruments()))}\n"
         f"Мгновенные уведомления: {'включены' if enabled else 'выключены'}\n"
         "Разрешены в Telegram: "
         + (", ".join(FAMILY[f] for f in s.alert_detectors) or "нет")
-        + f"\nСлужебный composite-снимок: {len(result.quotes)}/{result.requested} оценок инструмент/рынок/TF; неполных/ошибок: {len(result.errors)}."
-        + "\nЭта оценка не означает наличие или отсутствие событий остальных детекторов."
+        + (
+            f"\nОграничений служебной оценки composite: {len(result.errors)}. Подробнее — «Разбор composite»."
+            if result.errors
+            else ""
+        )
     )
 
 

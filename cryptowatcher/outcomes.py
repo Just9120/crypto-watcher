@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import time
 from dataclasses import asdict
 from typing import Any, Callable
 
@@ -27,10 +28,37 @@ DEFINITION = {
 
 
 def read_candles(store: Store, stream: str, start: int, end: int) -> list[Candle]:
+    frozen = store.bounded and store.readonly and store.db.in_transaction
+    key = (stream, start, end, store.db.execute("PRAGMA data_version").fetchone()[0]) if frozen else None
+    if key is not None and key in store.analytics_ranges:
+        cached = store.analytics_ranges.pop(key)
+        store.analytics_ranges[key] = cached
+        return list(cached[0])
     if store.bounded:
         from .market_storage import read
 
-        return [Candle(**v) for v in read(store.db, stream, start, end)]
+        result = [Candle(**v) for v in read(store.db, stream, start, end, cache=store.cached_bytes)]
+        if key is not None and len(result) <= 4096:
+            import sys
+
+            size = (
+                len(stream.encode())
+                + 256
+                + sys.getsizeof(tuple(result))
+                + sum(
+                    sys.getsizeof(c)
+                    + sys.getsizeof(vars(c))
+                    + sum(sys.getsizeof(v) for v in vars(c).values())
+                    for c in result
+                )
+            )
+            if size <= 4 * 1024 * 1024:
+                while store.analytics_ranges and store.analytics_range_bytes + size > 4 * 1024 * 1024:
+                    removed = store.analytics_ranges.pop(next(iter(store.analytics_ranges)))
+                    store.analytics_range_bytes -= removed[1]
+                store.analytics_ranges[key] = (tuple(result), size)
+                store.analytics_range_bytes += size
+        return result
     prefix = Sources.prefix(stream)
     rows = store.db.execute(
         "SELECT payload_json FROM runtime WHERE key>=? AND key<? ORDER BY key",
@@ -61,7 +89,9 @@ def missing_ranges(candles: list[Candle], start: int, end: int) -> list[tuple[in
     return gaps
 
 
-def calculate(event: dict[str, Any], horizon: int, candles: list[Candle]) -> dict[str, Any]:
+def calculate(
+    event: dict[str, Any], horizon: int, candles: list[Candle], *, include_source_inputs: bool = True
+) -> dict[str, Any]:
     if type(horizon) is not int or horizon <= 0:
         raise ValueError("Invalid outcome horizon")
     start = event["reference_time_ms"]
@@ -126,7 +156,9 @@ def calculate(event: dict[str, Any], horizon: int, candles: list[Candle]) -> dic
     if not all(math.isfinite(v) for v in metrics.values()):
         raise ValueError("Non-finite outcome metric")
     base.update(
-        metrics=metrics, units={key: "%" for key in metrics}, source_inputs=[asdict(c) for c in candles]
+        metrics=metrics,
+        units={key: "%" for key in metrics},
+        source_inputs=[asdict(c) for c in candles] if include_source_inputs else [],
     )
     return base
 
@@ -197,10 +229,14 @@ class OutcomeWorker:
                 "stream": stream,
                 "state": "PENDING",
                 "next_attempt_ms": due,
+                "due_ms": due,
                 "pending_key": pending,
                 "hold_key": hold,
             }
             self.history.put(key, job)
+            from .queue_health import arrival
+
+            arrival(self.store, "outcome")
             self.history.put(pending, {"outcome_id": outcome_id})
             self.history.put(hold, {"start": event["reference_time_ms"], "end": due})
         comparison = "comparison-job:" + event["event_id"]
@@ -224,9 +260,13 @@ class OutcomeWorker:
                     "methodology_version": COMPARATOR_VERSION,
                     "pending_key": comparison_pending,
                     "next_attempt_ms": event["available_at_ms"],
+                    "due_ms": event["available_at_ms"],
                 },
             )
             self.history.put(comparison_pending, {"event_id": event["event_id"]})
+            from .queue_health import arrival
+
+            arrival(self.store, "comparison")
             lookback = max(
                 16,
                 int(max(v for k, v in event["effective_parameters"].items() if k.endswith("lookback"))) + 2,
@@ -249,18 +289,35 @@ class OutcomeWorker:
         admission = self.history.get("outcome-admission", {"cursor": "", "complete": False})
         if admission["complete"]:
             return
+        from .packet_store import atomic
+
+        if self.store.db.in_transaction:
+            with atomic(self.store.db):
+                self._bootstrap(batch)
+        else:
+            with self.store.db:
+                self.store.db.execute("BEGIN IMMEDIATE")
+                with atomic(self.store.db):
+                    self._bootstrap(batch)
+
+    def _bootstrap(self, batch: int) -> None:
+        # Read cursor, frozen revisions and admit jobs in the same writer scope.
+        # A caller's transaction is neither committed nor rolled back here.
+        admission = self.history.get("outcome-admission", {"cursor": "", "complete": False})
+        if admission["complete"]:
+            return
         prefix = PREFIX + "history:"
-        rows = self.store.db.execute(
-            "SELECT key,payload_json FROM runtime WHERE key>? AND key<? ORDER BY key LIMIT ?",
-            (admission["cursor"] or prefix, prefix + "~", batch),
-        ).fetchall()
-        with self.store.db:
-            for row in rows:
-                event_id = json_payload(row[1])["event_id"]
-                self.admit(self.history.get("event:" + event_id + ":0000000001"))
-                admission["cursor"] = row[0]
-            admission["complete"] = len(rows) < batch
-            self.history.put("outcome-admission", admission)
+        rows = list(
+            self.store.scan_runtime(
+                prefix, after=admission["cursor"] or prefix, before=prefix + "~", limit=batch
+            )
+        )
+        for row in rows:
+            event_id = row[1]["event_id"]
+            self.admit(self.history.get("event:" + event_id + ":0000000001"))
+            admission["cursor"] = row[0]
+        admission["complete"] = len(rows) < batch
+        self.history.put("outcome-admission", admission)
 
     def work(self, now_ms: int, batch: int = 20) -> None:
         self.bootstrap(batch)
@@ -301,6 +358,7 @@ class OutcomeWorker:
 
         self.bootstrap(20)
         now_ms = clock()
+        started = time.monotonic()
         prepared = await asyncio.to_thread(
             read_snapshot,
             self.store.path,
@@ -316,13 +374,33 @@ class OutcomeWorker:
                 self.calculate,
             ),
         )
+        read_seconds = time.monotonic() - started
         applied = 0
+        completed_lags = []
         for job, event, binding, result in prepared:
             # Owner operations or a restarted worker cannot be overwritten by an old read.
             if self.history.get("outcome-job:" + job["outcome_id"]) == job:
                 self.apply(job, event, binding, result, clock())
                 applied += 1
+                if result["state"] == "COMPLETE":
+                    completed_lags.append(
+                        max(
+                            0,
+                            clock()
+                            - job.get("due_ms", event["reference_time_ms"] + job["horizon_min"] * MINUTE),
+                        )
+                    )
             await asyncio.sleep(0)
+        from .queue_health import completed_batch
+
+        completed_batch(
+            self.store,
+            "outcome",
+            clock(),
+            completed_lags,
+            time.monotonic() - started,
+            read_seconds=read_seconds,
+        )
         return applied
 
     def apply(

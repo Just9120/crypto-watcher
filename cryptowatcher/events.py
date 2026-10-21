@@ -14,7 +14,7 @@ from .detector_config import FAMILIES, effective_parameters
 from .detectors import FORMULAS, UNITS, VERSIONS, Detection, DetectorUnavailable, atr14, evaluate, freshness
 from .history_codec import Codec
 from .sources import Candle
-from .storage import RUNTIME_UPSERT, StateError, Store, encode, json_payload
+from .storage import RUNTIME_UPSERT, StateError, Store, encode
 
 PREFIX = "radar:v1:"
 HEAD_SCHEMA = "cryptowatcher.history-head.v1"
@@ -68,10 +68,14 @@ def identity(value: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, "cryptowatcher/" + value))
 
 
+def event_identity(stream: str, family: str, version: str, settings_revision: int, candle_start: int) -> str:
+    return identity(f"{stream}/{family}/{version}/{settings_revision}/{candle_start}")
+
+
 class History:
     def __init__(self, store: Store) -> None:
         self.store = store
-        self.codec = Codec(store.db)
+        self.codec = Codec(store.db, binary_cache=store.cached_bytes)
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.resolve(key, self.store.get_runtime(PREFIX + key, default))
@@ -228,57 +232,63 @@ class History:
             from .record_codec import pack_binary
 
             compact = pack_binary(plain)
-            if len(compact) < len(plain.encode()):
+            if len(compact) < len(plain.encode()) or '"source-cells"' in plain:
                 payload = compact
-        self.store.db.execute(RUNTIME_UPSERT, (PREFIX + key, payload))
-        if self.store.bounded:
-            from .storage_lifecycle import track
+        from .catalogue_write import mutation
 
-            track(self.store, PREFIX + key, value)
+        with mutation(self.store, PREFIX + key, value) as write:
+            if not write:
+                return
+            self.store.db.execute(RUNTIME_UPSERT, (PREFIX + key, payload))
+            if self.store.bounded:
+                from .storage_lifecycle import track
+
+                track(self.store, PREFIX + key, value)
+                if key.startswith(("outcome-job:", "comparison-job:")):
+                    from .queue_health import sync_job
+
+                    sync_job(self, key, value)
 
     def delete(self, key: str) -> None:
-        if self.store.bounded:
-            from .storage_lifecycle import forget
+        from .catalogue_write import deletion
 
-            forget(self.store, PREFIX + key)
-        self.store.db.execute("DELETE FROM runtime WHERE key=?", (PREFIX + key,))
+        with deletion(self.store, PREFIX + key):
+            if self.store.bounded:
+                from .storage_lifecycle import forget
+
+                forget(self.store, PREFIX + key)
+                if key.startswith(("outcome-job:", "comparison-job:")):
+                    from .queue_health import sync_job
+
+                    sync_job(self, key, None)
+            self.store.db.execute("DELETE FROM runtime WHERE key=?", (PREFIX + key,))
 
     def items(self, prefix: str, limit: int | None = None, *, reverse: bool = False) -> list[tuple[str, Any]]:
-        prefix = PREFIX + prefix
-        sql = "SELECT key,payload_json FROM runtime WHERE key>=? AND key<? ORDER BY key " + (
-            "DESC" if reverse else "ASC"
-        )
-        values: tuple[Any, ...] = (prefix, prefix + "~")
-        if limit is not None:
-            sql += " LIMIT ?"
-            values += (limit,)
         return [
-            (row[0][len(PREFIX) :], self.resolve(row[0][len(PREFIX) :], json_payload(row[1])))
-            for row in self.store.db.execute(sql, values)
+            (key[len(PREFIX) :], self.resolve(key[len(PREFIX) :], value))
+            for key, value in self.store.scan_runtime(PREFIX + prefix, limit, reverse=reverse)
         ]
 
-    def scan(self, prefix: str) -> Iterator[tuple[str, Any]]:
-        start = PREFIX + prefix
-        for row in self.store.db.execute(
-            "SELECT key,payload_json FROM runtime WHERE key>=? AND key<? ORDER BY key", (start, start + "~")
-        ):
-            yield row[0][len(PREFIX) :], self.resolve(row[0][len(PREFIX) :], json_payload(row[1]))
+    def scan(self, prefix: str, *, reverse: bool = False) -> Iterator[tuple[str, Any]]:
+        for key, value in self.store.scan_runtime(PREFIX + prefix, reverse=reverse):
+            yield key[len(PREFIX) :], self.resolve(key[len(PREFIX) :], value)
 
     def count(self, prefix: str) -> int:
-        start = PREFIX + prefix
-        return int(
-            self.store.db.execute(
-                "SELECT COUNT(*) FROM runtime WHERE key>=? AND key<?", (start, start + "~")
-            ).fetchone()[0]
-        )
+        return self.store.count_runtime(PREFIX + prefix)
 
     def version(self, kind: str, value: dict[str, Any]) -> None:
+        from .catalogue_write import scope
+
+        with scope(self.store):
+            self._version(kind, value)
+
+    def _version(self, kind: str, value: dict[str, Any]) -> None:
         key = value[f"{kind}_id"]
         version_key = f"{kind}:{key}:{value['revision']:010d}"
         existing = self.get(version_key)
         if existing is not None and encode(existing) != encode(value):
             raise StateError("Conflicting immutable history revision")
-        head = self.get(f"{kind}-head:{key}")
+        head = self.metadata(f"{kind}-head:{key}")
         if (
             kind == "event"
             and head
@@ -292,7 +302,7 @@ class History:
                 event = (
                     value
                     if kind == "event"
-                    else self.get(f"event:{value['event_id']}:{value['event_revision']:010d}")
+                    else self.metadata(f"event:{value['event_id']}:{value['event_revision']:010d}")
                 )
                 self.codec.source_stream = f"{event['market_type']}/{event['symbol']}/" + (
                     "1m" if kind == "outcome" else event["timeframe"]
@@ -504,8 +514,8 @@ class EventEngine:
                         self.history.put(key, runtime)
                     if not signal:
                         continue
-                    event_id = identity(
-                        f"{stream}/{family}/{VERSIONS[family]}/{snapshot.revision}/{current.start}"
+                    event_id = event_identity(
+                        stream, family, VERSIONS[family], snapshot.revision, current.start
                     )
                     if self.history.get("event-head:" + event_id):
                         continue

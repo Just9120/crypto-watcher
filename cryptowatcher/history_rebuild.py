@@ -425,6 +425,10 @@ class _FrozenCandidate(Store):
     def __init__(self, database: Any, snapshot: Snapshot):
         self.db = database
         self.owner_snapshot = snapshot
+        # This converter freezes a schema1 candidate, without market-layout
+        # tables or the live Store initialization/migration path.
+        self.bounded = False
+        self.readonly = True
 
     def snapshot(self) -> Snapshot:
         return self.owner_snapshot

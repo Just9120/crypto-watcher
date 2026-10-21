@@ -88,6 +88,20 @@ def main() -> None:
         version = json.loads(run(args.image, directory, "-m", "cryptowatcher", "--version"))
         assert version["source_revision"] == args.revision
         assert run(args.image, directory, "-c", "import os; print(os.getuid())").strip() == "10001"
+        expected_installers = {
+            line.split("==", 1)[0]: line.split("==", 1)[1].split()[0]
+            for line in Path("requirements-bootstrap.txt").read_text().splitlines()
+            if line and not line.startswith("#")
+        }
+        actual_installers = json.loads(
+            run(
+                args.image,
+                directory,
+                "-c",
+                "import json,importlib.metadata as m; print(json.dumps({k:m.version(k) for k in ('pip','setuptools')}))",
+            )
+        )
+        assert actual_installers == expected_installers
         migration = (
             "-m",
             "cryptowatcher",
@@ -173,10 +187,38 @@ def main() -> None:
             "from pathlib import Path; from cryptowatcher.native_validation import available; "
             "from cryptowatcher.compressed_validation import Image,frozen_vfs,MAX_COMPRESSED_BYTES; "
             "import time; assert available(); "
+            "from cryptowatcher.numeric_frame_native import available as nf_available,transpose; "
+            "assert nf_available(); assert transpose(bytes([2,1,3]),b'acdbef')==b'abcdef'; "
             "i=Image(Path('/data/ram-restore.db'),limit=MAX_COMPRESSED_BYTES,deadline=time.monotonic()+30); "
             "v=frozen_vfs(i,Path('/tmp/native-sentinel.sqlite3')); "
             "assert v.stats()['vfs_backend']=='native'; v.unregister()",
             temporary_size="64m",
+        )
+        # Exercise the ABI3 SQL/OpenSSL bridge in the actual runtime image,
+        # whose Python/OpenSSL/SQLite differ from the CI build environment.
+        run(
+            args.image,
+            directory,
+            "-c",
+            "import sqlite3,struct; "
+            "from cryptowatcher import numeric_frame_proof as p,numeric_frames as f; "
+            "from cryptowatcher.numeric_block_codec import counts; "
+            "from cryptowatcher.numeric_search import signature; "
+            "db=sqlite3.connect(':memory:'); assert p.install(db); "
+            "db.execute('CREATE TABLE market_numeric_blocks(id INTEGER PRIMARY KEY,payload BLOB)'); "
+            "db.execute('CREATE TABLE market_numeric_block_refs(id INTEGER PRIMARY KEY,counts BLOB,detail_slots INTEGER,search_seal BLOB)'); "
+            "entry=struct.pack('>Q',7)+bytes([0,26])+bytes(63+26); "
+            "flat=bytes([1])+struct.pack('>II',0,len(entry))+entry; "
+            "pointer=f.pointer(1,0); nr=counts(7,[0]*64,[1]+[0]*63); "
+            "db.execute('INSERT INTO market_numeric_blocks VALUES(?,?)',(7,pointer)); "
+            "db.execute('INSERT INTO market_numeric_block_refs VALUES(?,?,?,?)',"
+            "(7,nr,0,signature(7,pointer,nr,binding=entry))); "
+            "before=db.total_changes; "
+            "assert p.owners(db,1,flat,bytes(7)+bytes([1]),False)==1; "
+            "assert p.owners_batch(db,[(1,flat,bytes(7)+bytes([1]))],False)==1; "
+            "from cryptowatcher.numeric_frame_native import flatten; "
+            "assert flatten(b'BR1\\0'+bytes([1])+entry)==flat; "
+            "assert db.total_changes==before; db.close()",
         )
         for command in ("state-check", "backup"):
             extra = ["--destination", "/data/compressed-restore.db"] if command == "backup" else []
@@ -226,6 +268,9 @@ def main() -> None:
             directory,
             "-c",
             """import hashlib,sqlite3,zstandard
+from cryptowatcher.owner_slots import install_functions
+from cryptowatcher.catalogue_overlap import install_check
+from cryptowatcher.record_catalog import valid_heads
 from pathlib import Path
 p=Path('/data/archived.sqlite3.zst')
 assert hashlib.sha256(p.read_bytes()).hexdigest() == """
@@ -234,7 +279,10 @@ assert hashlib.sha256(p.read_bytes()).hexdigest() == """
 with p.open('rb') as source,Path('/data/archive-restored.sqlite3').open('xb') as target:
     zstandard.ZstdDecompressor().copy_stream(source,target)
 with sqlite3.connect('/data/archive-restored.sqlite3') as db:
+    install_functions(db)
+    install_check(db)
     assert db.execute('PRAGMA integrity_check').fetchall()==[('ok',)]
+    assert valid_heads(db)
     with sqlite3.connect('/data/ram-restore.db') as reference:
         for name in ('owner_settings','delivery_preferences','mutes','runtime','legacy_import'):
             assert db.execute('SELECT * FROM '+name+' ORDER BY 1').fetchall() == reference.execute('SELECT * FROM '+name+' ORDER BY 1').fetchall()
@@ -463,7 +511,7 @@ s.close()
             "-B",
             "-c",
             """import runpy
-from contextlib import closing
+from contextlib import ExitStack,closing
 from pathlib import Path
 from unittest.mock import patch
 from cryptowatcher.storage import Store
@@ -471,8 +519,18 @@ from cryptowatcher.market_storage import encoded
 from cryptowatcher.record_codec import pack_binary_v2
 from cryptowatcher.analytics import cohort_rows
 from cryptowatcher.storage_repack import work
+from cryptowatcher.storage_lifecycle import body_links
 m=runpy.run_path('/data/measure.py')
-with patch('cryptowatcher.expiry_index.install'),patch('cryptowatcher.quality_layout.install'),patch('cryptowatcher.record_codec.pack_binary',pack_binary_v2),patch('cryptowatcher.quality_summary.encode_facts',encoded):
+with ExitStack() as legacy:
+    # These installers depend on the normalized tables intentionally absent
+    # in this old-writer fixture. Restore every real installer before upgrade.
+    for name in ('expiry_index','quality_layout','reference_layout','quality_packets','quality_meter'):
+        legacy.enter_context(patch('cryptowatcher.'+name+'.install'))
+    legacy.enter_context(patch('cryptowatcher.record_codec.pack_binary',pack_binary_v2))
+    legacy.enter_context(patch('cryptowatcher.quality_summary.encode_facts',encoded))
+    legacy.enter_context(patch('cryptowatcher.quality_packets.pack',lambda db,facts,cohort:encoded(facts)))
+    legacy.enter_context(patch('cryptowatcher.quality_packets.collect',lambda db,batch:0))
+    legacy.enter_context(patch('cryptowatcher.quality_summary.provenance_links',lambda s,day,cohort,chunk,packed:body_links(s,f'quality:{day}:{cohort}:{chunk}',packed)))
     old=m['measure'](Path('/data/upgrade.db'),1)
 with closing(Store(Path('/data/upgrade.db'),233382575)) as s:
     before=list(cohort_rows(s))

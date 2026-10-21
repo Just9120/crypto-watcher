@@ -8,10 +8,144 @@ import pytest
 
 from cryptowatcher import compressed_validation as cv
 from cryptowatcher.native_validation import NativeVFS, available
+from cryptowatcher.storage_repack import VERSION
 
 from .test_history_rebuild import closed_backup
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux", reason="Native Linux validation helper")
+
+
+@pytest.mark.parametrize("damage", [None, "checksum", "heads", "overlap_checksum", "overlap_count"])
+def test_native_full_catalogue_checks_owner_masks_and_head_uniqueness(store, tmp_path, damage):
+    from .test_record_catalog import prepare, put
+
+    assert available(), "Build canonical native helper before Linux tests"
+    prepare(store)
+    with store.db:
+        put(store)
+        put(store, 2)
+        store.db.execute("UPDATE market_record_parents SET history_published=1")
+        store.db.execute("UPDATE market_record_parents SET history_published=2")
+        if damage == "checksum":
+            store.db.execute("DROP TRIGGER market_record_owner_frozen")
+            store.db.execute("PRAGMA ignore_check_constraints=ON")
+            store.db.execute("UPDATE market_record_owners SET checksum=zeroblob(32)")
+        elif damage == "heads":
+            store.db.execute("DROP TRIGGER market_record_head_changed")
+            store.db.execute("UPDATE market_records SET current=1")
+        elif damage in ("overlap_checksum", "overlap_count"):
+            store.db.execute("PRAGMA ignore_check_constraints=ON")
+            store.db.execute(
+                "UPDATE market_catalogue_overlap SET "
+                + ("checksum=zeroblob(32)" if damage == "overlap_checksum" else "n=n+1")
+            )
+    assert store.db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0
+    expected_owners = [
+        tuple(row)
+        for row in store.db.execute("SELECT slots,checksum FROM market_record_owners ORDER BY parent,packet")
+    ]
+    store.close()
+    original = store.path.read_bytes()
+    image = cv.Image(store.path, limit=cv.MAX_COMPRESSED_BYTES, deadline=time.monotonic() + 30)
+    sentinel = tmp_path / "catalogue-native.sqlite3"
+    sentinel.touch(mode=0o600)
+    vfs = cv.frozen_vfs(image, sentinel)
+    try:
+        with closing(apsw.Connection(str(sentinel), flags=apsw.SQLITE_OPEN_READWRITE, vfs=vfs.name)) as db:
+            cv.configure_cache(db, image)
+            if damage is None:
+                cv.full_check(db, image.deadline)
+                assert (
+                    list(db.execute("SELECT slots,checksum FROM market_record_owners ORDER BY parent,packet"))
+                    == expected_owners
+                )
+            else:
+                with pytest.raises(cv.QualificationError, match="DATABASE_CORRUPT"):
+                    cv.full_check(db, image.deadline)
+    finally:
+        vfs.unregister()
+    assert image.reconstructed_hash() == image.sha256
+    assert store.path.read_bytes() == original
+
+
+def test_native_full_validation_includes_source_tiles_cells_and_their_counters(store, tmp_path):
+    from cryptowatcher.market_storage import enable
+    from cryptowatcher.outcomes import OutcomeWorker
+    from cryptowatcher.sources import Sources
+    from cryptowatcher.storage_repack import work
+    from tests.test_numeric_price_blocks import activate, population
+    from tests.test_outcomes import MINUTE, NOW, future, observe
+
+    assert available(), "Build canonical native helper before Linux tests"
+    enable(store.db)
+    store.bounded = True
+    worker = OutcomeWorker(store)
+    observe(store, worker)
+    Sources(store).put("spot/BTCUSDT/1m", future())
+    worker.work(NOW + 6 * MINUTE)
+    for tick in range(100):
+        state = work(store, NOW + tick, seconds=1)
+        if state["state"] == "COMPLETE":
+            break
+    assert state["state"] == "COMPLETE" and state["version"] == VERSION
+    assert store.db.execute("SELECT COUNT(*) FROM market_candle_blocks").fetchone()[0] > 0
+    from cryptowatcher import metric_codec, metric_price_codec, numeric_block_codec, numeric_blocks
+
+    metric_ids, metric_values, candidates = population(store)
+    if not numeric_blocks.price_writing(store.db):
+        activate(store)
+    with store.db:
+        accepted = sum(
+            numeric_blocks.offer_price(store.db, i, c) for i, c in zip(metric_ids, candidates, strict=True)
+        )
+    assert accepted > 0
+    wanted = {i: metric_codec.pack(v) for i, v in zip(metric_ids, metric_values, strict=True)}
+    store.db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
+    tables = (
+        "market_candle_blocks",
+        "market_candle_block_totals",
+        "market_candle_fallbacks",
+        "market_candle_gc",
+        "market_numeric_blocks",
+        "market_numeric_block_refs",
+        "market_numeric_block_lookup",
+        "market_numeric_totals",
+        "market_numeric_transfer",
+        "market_numeric_gc",
+        "market_counts",
+        "runtime",
+    )
+    queries = {}
+    for table in tables:
+        columns = list(store.db.execute(f"PRAGMA table_info({table})"))
+        assert columns
+        order = ",".join(str(i + 1) for i in range(len(columns)))
+        queries[table] = f"SELECT * FROM {table} ORDER BY {order}"
+    expected_tables = {table: [tuple(row) for row in store.db.execute(queries[table])] for table in tables}
+    store.close()
+    original = store.path.read_bytes()
+    image = cv.Image(store.path, limit=cv.MAX_COMPRESSED_BYTES, deadline=time.monotonic() + 30)
+    sentinel = tmp_path / "source-tiles-native.sqlite3"
+    sentinel.touch(mode=0o600)
+    vfs = cv.frozen_vfs(image, sentinel)
+    try:
+        with closing(apsw.Connection(str(sentinel), flags=apsw.SQLITE_OPEN_READWRITE, vfs=vfs.name)) as db:
+            cv.configure_cache(db, image)
+            cv.full_check(db, image.deadline)
+            actual_metrics = {}
+            for block, payload in db.execute("SELECT id,payload FROM market_numeric_blocks"):
+                for slot, frame in enumerate(numeric_block_codec.unpack(bytes(payload), block)):
+                    identity_value = block * 64 + slot + 1
+                    if identity_value in wanted:
+                        actual_metrics[identity_value] = metric_price_codec.frame(frame)
+            assert actual_metrics == wanted
+            for table in tables:
+                actual = list(db.execute(queries[table]))
+                assert actual == expected_tables[table]
+    finally:
+        vfs.unregister()
+    assert image.reconstructed_hash() == image.sha256
+    assert store.path.read_bytes() == original
 
 
 def test_native_full_validation_preserves_all_types_and_rejects_writes_and_early_release(tmp_path):
@@ -48,7 +182,7 @@ def test_native_full_validation_preserves_all_types_and_rejects_writes_and_early
         vfs.stats()
 
 
-@pytest.mark.parametrize("damage", ["check", "index"])
+@pytest.mark.parametrize("damage", ["check", "index", "owner_checksum"])
 def test_native_full_check_rejects_constraint_or_index_corruption_without_changing_source(tmp_path, damage):
     assert available()
     source, _ = closed_backup(tmp_path)
@@ -57,11 +191,18 @@ def test_native_full_check_rejects_constraint_or_index_corruption_without_changi
             db.execute("PRAGMA ignore_check_constraints=ON")
             db.execute("UPDATE owner_settings SET revision=0")
             db.commit()
-        else:
+        elif damage == "index":
             page = db.execute(
                 "SELECT rootpage FROM sqlite_master WHERE type='index' AND tbl_name='runtime'"
             ).fetchone()[0]
             size = db.execute("PRAGMA page_size").fetchone()[0]
+        else:
+            from .test_owner_slots import create_probe
+
+            create_probe(db)
+            db.execute("PRAGMA ignore_check_constraints=ON")
+            db.execute("UPDATE owner_probe SET checksum=zeroblob(32)")
+            db.commit()
     if damage == "index":
         with source.open("r+b") as output:
             output.seek((page - 1) * size)

@@ -68,3 +68,22 @@ def preset(name: str) -> tuple[tuple[str, float], ...]:
         (key, float(value) if key.endswith("_lookback") else value * multiplier)
         for key, value in PARAMETERS.items()
     )
+
+
+def validate_effective_configuration(settings: Any) -> None:
+    """Admission guard only: historical settings remain readable unchanged."""
+    for instrument in ("", *settings.instruments()):
+        values = effective_parameters(settings, instrument)
+        for key in ("turnover_ratio", "volatility_ratio"):
+            if values[key] <= 1:
+                raise ValueError(
+                    f"{instrument or 'Общие пороги'}: {key} должен быть больше 1 с учётом множителя"
+                )
+        required = max(
+            16,
+            values["turnover_lookback"] + 1,
+            values["breakout_lookback"] + 1,
+            values["volatility_lookback"] + 2,
+        )
+        if required > 256:
+            raise ValueError(f"Для расчёта требуется {int(required)} свечей; доступное окно — 256")

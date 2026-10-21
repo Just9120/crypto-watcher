@@ -17,7 +17,7 @@ Radar обрабатывает широкий metadata/liquidity universe обо
 - [Исторический tooling: compact snapshot](docs/runbooks/delivery.md#read-only-измерение-compact-current-dataset)
 - [Repository procedures](AGENTS.md) и [CI/CD configuration contract](ci-cd-rules.md)
 
-Хранение обновляется по [D22/E13](docs/product_scope.md#e13--компактное-хранение-сроки-и-новый-период-истории): подробности30d, свечи35d, quality summaries12mo, измеряемый storage target20GB. Разовый сброс прежней тестовой market history выполняется отдельно после проверок; полная конвертация этой истории исключена из текущей задачи. Статус реализации — в плане.
+Хранение обновляется по [D22/E13](docs/product_scope.md#e13--компактное-хранение-сроки-и-новый-период-истории): подробности30d, свечи35d, quality summaries12mo, измеряемый storage target25GB. Разовый сброс прежней тестовой market history выполняется отдельно после проверок; полная конвертация этой истории исключена из текущей задачи. Статус реализации — в плане.
 
 ## Stack и установка
 
@@ -43,8 +43,21 @@ SQLite extension API, физически запрещает запись source 
 deadline/CPU1/RAM4GiB. Mutable capture использует Python VFS; frozen source и
 recovery выбирают native helper при наличии Linux artifact. Отсутствующий helper
 оставляет portable Python path; повреждённый или несовместимый установленный
-helper прекращает validation. Radar runtime extension не загружает. Native
+helper прекращает validation. Frozen-image extension отделён от runtime БД. Native
 corruption/bounds/lifetime/deadline fixtures входят в required Linux suite.
+
+Эта же сборка создаёт `numeric_frame.so` ABI3 для bounded BP1/BR1 flat layout
+и read-only NF/NR/NS2 proof. Transpose только копирует байты без allocations или
+float arithmetic. Python проверяет BF1/checksum/Zstd bounds и OW mask, native
+flatten сохраняет прежние BR1/BP1 shape/identity/length checks, а native proof
+читает до64 current parent/ref rows на frame, проверяет прежние NR/NS2 preimages через
+OpenSSL из Python и NR2 header через pinned Zstd. Extension не пишет данные,
+проверяет до8frames за вызов с временным blob не более1153737B и не сохраняет
+connection/statement/cache; загрузка разрешена только на время
+установки exact artifact. Прежний shared pure cache остаётся1MiB. При отсутствии
+artifact работает portable path; повреждённый installed artifact прекращает
+чтение. Linux CI и image checks требуют корректный artifact, byte-exact parity
+и полный finite structural read в прежнем50s budget.
 
 Конвертер также читает сохранённые gzip/Zstandard archives через bounded compressed
 image без дополнительной raw source copy. Explicit encoding/byte cap и полный набор
@@ -56,7 +69,7 @@ source/candidate проверок описаны в [процедуре конв
 python -m venv .venv
 ```
 
-Активировать `.venv/bin/activate` на Linux либо `.venv\Scripts\Activate.ps1` в PowerShell. Установить runtime или dev lock:
+Активировать `.venv/bin/activate` на Linux либо `.venv\Scripts\Activate.ps1` в PowerShell. Container installer versions фиксируются отдельно в `requirements-bootstrap.in` / `requirements-bootstrap.txt`; hashes проверяются до установки runtime dependencies. Установить runtime или dev lock:
 
 ```bash
 python -m pip install --require-hashes -r requirements.txt
@@ -100,7 +113,15 @@ python scripts/checks.py all
 python -m ruff format .
 ```
 
-`quality` проверяет canonical doc links/fences, Ruff lint/format и mypy. `test` запускает meaningful regression suite; `all` используется в CI. Во время разработки допустим точечный pytest по затронутому риску. Coverage target не задан. Основной merge gate — GitHub `ci-required` на актуальной PR test merge revision; local PASS его не заменяет.
+`quality` проверяет canonical doc links/fences, Ruff lint/format и mypy. `test` запускает meaningful regression suite; `all` объединяет оба этапа. PR CI исполняет оба с конечной numeric qualification между ними; trusted release проверяет `all`. Во время разработки допустим точечный pytest по затронутому риску. Coverage target не задан. Основной merge gate — GitHub `ci-required` на актуальной PR test merge revision; local PASS его не заменяет.
+
+После native build и quality Linux PR CI выполняет `python scripts/qualify_numeric_boundary.py`:
+конечная временная SQLite с129572frames/8292608owners проверяется новым текущим reader
+за прежние50s на одном CPU при address-space limit4GiB. Pinned seed содержит публичные
+metric bytes; при materialization guards временно сняты только в этой owned fixture
+и полностью восстановлены до чтения. Временная БД удаляется. Эта структурная проверка
+не подтверждает независимую рыночную entropy, ёмкость всей БД или live SLO;
+operating-system file cache не очищается.
 
 `capacity` читает counters/files и статус стабилизации без полного обхода данных.
 Explicit flags выполняют ограниченные разовые ledger/cohort/index измерения;
@@ -167,7 +188,7 @@ Native closed candles сохраняются в общей SQLite, memory window
 
 Новая generation использует нормализованные immutable candle revisions и отдельные context values; history windows содержат координаты, а не копии перекрывающихся OHLC arrays. Settings/context используют shared bodies, outcome heads не дублируют metrics; finished jobs удаляются после сохранения результатов, успешная доставка оставляет компактный receipt. Binary JSON records используют frozen dictionary/checksum/SHA256 без изменения public values. Schema1 читается для совместимости; обычный open/restart не конвертирует старую историю и не включает reset.
 
-`storage` возвращает actual working files/counts/encoded category bytes, durable repack progress и явно помеченный forecast. Retained inserts считаются отдельно от net queue occupancy; эффект repack не выдается за изменение потока событий. Quality baseline и сценарии density/comparators измеряют текущий codec/SQLite table+indexes на isolated synthetic данных; они не production measurement и не upper bound. Initial small-file index measurement ограничен; `storage-indexes` запрашивает отдельный bounded exact snapshot. Автоматический control не сканирует постоянно все страницы, samples ограничены26 записями;20GB fit не считается доказанным по fixture или короткому post-deploy окну. Windows без dbstat показывает UNAVAILABLE, required Linux verification остается обязательной.
+`storage` возвращает actual working files/counts/encoded category bytes, durable repack progress и явно помеченный forecast. Retained inserts считаются отдельно от net queue occupancy; эффект repack не выдается за изменение потока событий. Quality baseline и сценарии density/comparators измеряют текущий codec/SQLite table+indexes на isolated synthetic данных; они не production measurement и не upper bound. Initial small-file index measurement ограничен; `storage-indexes` запрашивает отдельный bounded exact snapshot. Автоматический control не сканирует постоянно все страницы, samples ограничены26 записями;25GB fit не считается доказанным по fixture или короткому post-deploy окну. Windows без dbstat показывает UNAVAILABLE, required Linux verification остается обязательной.
 
 Backfill и resumable repack обслуживаются отдельными jobs каждую секунду, независимо
 от долгих outcome/comparator calculations. Repack сохраняет конечные границы прохода

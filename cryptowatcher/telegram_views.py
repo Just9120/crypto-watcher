@@ -14,6 +14,7 @@ from .config import TIMEFRAMES
 from .detector_config import effective_parameters, preset
 from .detectors import freshness
 from .storage import Snapshot
+from .storage_meter import BUDGET
 
 FAMILY = {
     "price": "Движение цены",
@@ -274,7 +275,8 @@ def source_summary(snapshot: Snapshot, ingestion: dict[str, Any], now: float) ->
         result.append(
             f"Пробелы: {amount(ingestion.get('historical_gaps_pending'))}; "
             f"заблокировано: {amount(ingestion.get('blocked_streams'))}; "
-            f"восстановление: {amount(ingestion.get('recovery_pending'))}."
+            f"восстановление — ожидают: {amount(ingestion.get('recovery_pending'))}, "
+            f"в работе: {amount(ingestion.get('recovery_working'))}."
         )
     if ingestion.get("configuration_revision") != snapshot.revision:
         result.append("Применение текущего охвата к источнику еще не подтверждено этой сводкой.")
@@ -303,7 +305,7 @@ def diagnostic_summary(data: dict[str, Any]) -> str:
     if storage.get("working_bytes") is not None:
         lines.append(
             f"База + журналы сейчас: {amount(round(storage['working_bytes'] / 1e9, 2))} ГБ / "
-            f"{amount(storage.get('budget_bytes', 20e9) / 1e9)} ГБ"
+            f"{amount(storage.get('budget_bytes', BUDGET) / 1e9)} ГБ"
         )
     if storage.get("projected_working_bytes") is not None:
         lines.append(

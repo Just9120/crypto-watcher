@@ -11,7 +11,7 @@ import time
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from .config import ConfigError, OwnerSettings, instrument_key, normalize_pair, number
 
@@ -62,6 +62,12 @@ def check_integrity(database: sqlite3.Connection, *, deadline: float) -> None:
 
     database.set_progress_handler(progress, VALIDATION_PROGRESS_STEPS)
     try:
+        from .owner_slots import install_functions as owner_functions
+
+        owner_functions(database)
+        from .catalogue_overlap import install_check as overlap_check
+
+        overlap_check(database)
         previous_cache = int(database.execute("PRAGMA cache_size").fetchone()[0])
         mmap_row = database.execute("PRAGMA mmap_size").fetchone()
         previous_mmap = int(mmap_row[0]) if mmap_row is not None else None
@@ -70,6 +76,10 @@ def check_integrity(database: sqlite3.Connection, *, deadline: float) -> None:
         if previous_mmap is not None:
             database.execute(f"PRAGMA mmap_size={VALIDATION_MMAP_BYTES}")
         rows = database.execute("PRAGMA integrity_check").fetchall()
+        from .record_catalog import valid_heads
+
+        if len(rows) == 1 and rows[0][0] == "ok" and not valid_heads(database):
+            rows = [("Conflicting current records",)]
     except sqlite3.DatabaseError as exc:
         validation_failed = True
         code = getattr(exc, "sqlite_errorcode", 0) & 0xFF
@@ -104,9 +114,9 @@ class RevisionConflict(StateError):
 
 
 def json_payload(payload: Any) -> Any:
-    from .record_codec import sql_payload
+    from .record_codec import json_value
 
-    return json.loads(sql_payload(payload))
+    return json_value(payload)
 
 
 def encode(value: Any) -> str:
@@ -207,6 +217,13 @@ class Store:
         self.path = path
         self.owner_id = owner_id
         self.readonly = readonly
+        # One population, scoped to a single fixed read transaction. Never used
+        # by the writer or carried across snapshots.
+        self.comparison_population: tuple[Any, Any] | None = None
+        self.analytics_ranges: dict[tuple[str, int, int, int], tuple[tuple[Any, ...], int]] = {}
+        self.analytics_range_bytes = 0
+        self.reference_cache: dict[tuple[str, str, str | bytes], tuple[str | bytes, int]] = {}
+        self.reference_cache_bytes = 0
         self.clock_ms = lambda: int(time.time() * 1000)
         if path.exists():
             probe = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
@@ -230,15 +247,133 @@ class Store:
             uri=readonly,
             timeout=5,
         )
-        from .record_codec import sql_payload
+        from .key_registry import install_functions as registry_functions
 
-        self.db.create_function("cw_record_json", 1, sql_payload, deterministic=True)
+        registry_functions(self.db)
+        from .cohort_meter import install_functions as cohort_functions
+
+        cohort_functions(self.db)
+
+        self.db.create_function("cw_record_json", 1, self.cached_record_json, deterministic=True)
+        self.db.create_function("cw_clock_ms", 0, lambda: int(self.clock_ms()))
+        from .catalogue_sql import install_functions as catalogue_sql_functions
+
+        catalogue_sql_functions(self)
+        from .source_windows import references
+
+        self.db.create_function(
+            "cw_window_refs",
+            2,
+            lambda key, raw: self.cached_references("windows", key, raw, references),
+            deterministic=True,
+        )
+        from .runtime_meter import namespace
+
+        self.db.create_function("cw_namespace", 1, namespace, deterministic=True)
+        from .numeric_pool import install_functions as numeric_functions
+        from .numeric_pool import projection
+        from .numeric_pool import references as numeric_references
+
+        numeric_functions(self.db)
+        from .owner_slots import install_functions as owner_functions
+
+        owner_functions(self.db)
+        from .context_tiles import install_functions as context_tile_functions
+
+        context_tile_functions(self.db, self.cached_bytes)
+        from .parent_affinity import install_functions as parent_affinity_functions
+
+        parent_affinity_functions(self.db, self.cached_bytes)
+        # Pure functions also serve a read connection opened before an explicit
+        # layout upgrade. This registers no tables, markers or migration work.
+        from .numeric_blocks import install_functions as numeric_block_functions
+
+        numeric_block_functions(self.db, self.cached_bytes)
+        from .record_ownership import install_functions as catalogue_functions
+
+        catalogue_functions(self.db, self.cached_text, self.cached_bytes)
+
+        self.db.create_function(
+            "cw_numeric_refs",
+            2,
+            lambda key, raw: self.cached_references("numeric", key, raw, numeric_references),
+            deterministic=True,
+        )
+        self.db.create_function(
+            "cw_numeric_json", 1, lambda raw: encode(projection(self.db, json_payload(raw)))
+        )
         self.db.row_factory = sqlite3.Row
         self.bounded = self.db.execute("PRAGMA user_version").fetchone()[0] == 2
         if self.bounded:
             from .quality_summary import install
 
-            install(self.db)
+            install(self.db, binary_cache=self.cached_bytes)
+            numeric_blocks = self.db.execute(
+                "SELECT value FROM market_meta WHERE key='numeric_blocks'"
+            ).fetchone()
+            if numeric_blocks is not None:
+                if numeric_blocks[0] not in ("1", "2", "3"):
+                    raise StateError("Unknown numeric block layout; database preserved")
+                if numeric_blocks[0] == "3":
+                    from .numeric_search import header as search_header
+
+                    search_header(self.db)
+                from .numeric_blocks import summary as numeric_summary
+
+                numeric_summary(self.db)
+            catalogue = self.db.execute("SELECT value FROM market_meta WHERE key='record_catalog'").fetchone()
+            if catalogue is not None:
+                if catalogue[0] not in ("2", "3"):
+                    raise StateError("Unknown record catalogue; database preserved")
+                overlap = self.db.execute(
+                    "SELECT value FROM market_meta WHERE key='catalogue_overlap'"
+                ).fetchone()
+                if overlap is not None:
+                    from .catalogue_overlap import header as overlap_header
+
+                    try:
+                        overlap_header(self.db)
+                    except ValueError as exc:
+                        raise StateError("Invalid catalogue overlap counters; database preserved") from exc
+            source_tiles = self.db.execute(
+                "SELECT value FROM market_meta WHERE key='candle_blocks'"
+            ).fetchone()
+            if source_tiles is not None:
+                if source_tiles[0] != "1":
+                    raise StateError("Unknown source tile layout; database preserved")
+                from .candle_blocks import install_functions as source_tile_functions
+
+                source_tile_functions(self.db, self.cached_text)
+            if self.db.execute("SELECT 1 FROM market_meta WHERE key='packet_bundles'").fetchone():
+                from .packet_bundles import validate as validate_bundles
+
+                validate_bundles(self.db)
+            if self.db.execute("SELECT 1 FROM market_meta WHERE key='numeric_refs_compression'").fetchone():
+                from .numeric_refs import installed as validate_numeric_refs
+
+                validate_numeric_refs(self.db)
+            if self.db.execute("SELECT 1 FROM market_meta WHERE key='numeric_frames'").fetchone():
+                from .numeric_frames import header as validate_numeric_frames
+
+                validate_numeric_frames(self.db)
+            if self.db.execute("SELECT 1 FROM market_meta WHERE key='numeric_frame_queue'").fetchone():
+                from .numeric_frame_work import header as validate_numeric_frame_queue
+
+                validate_numeric_frame_queue(self.db)
+            if self.db.execute("SELECT 1 FROM market_meta WHERE key='quality_frames'").fetchone():
+                from .quality_frames import installed as validate_quality_frames
+
+                validate_quality_frames(self.db)
+            if self.db.execute("SELECT 1 FROM market_meta WHERE key='quality_frame_columns'").fetchone():
+                from .quality_frames import column_writing
+
+                column_writing(self.db)
+            from .context_tiles import installed as validate_context_tiles
+
+            validate_context_tiles(self.db)
+            from .parent_affinity import header as validate_parent_affinity
+
+            validate_parent_affinity(self.db)
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA busy_timeout=5000")
         if not readonly:
@@ -250,6 +385,33 @@ class Store:
 
                 install_expiry(self.db)
                 install_quality(self.db)
+                from .source_windows import install as install_windows
+
+                install_windows(self.db)
+                from .numeric_pool import install as install_numeric
+
+                install_numeric(self.db)
+                from .quality_packets import install as install_packets
+
+                install_packets(self.db)
+                from .context_integrity import install as install_context_integrity
+
+                install_context_integrity(self.db)
+                from .reference_layout import install as install_references
+
+                install_references(self.db)
+                from .quality_meter import install as install_quality_meter
+
+                install_quality_meter(self.db)
+                from .cohort_meter import install as install_cohort_meter
+
+                install_cohort_meter(self.db)
+                from .runtime_meter import install as install_runtime_meter
+
+                install_runtime_meter(self.db)
+                from .cohort_meter import align_empty
+
+                align_empty(self.db)
             if not self.bounded:
                 create_schema(self.db)
             if os.name != "nt":
@@ -257,6 +419,62 @@ class Store:
 
     def close(self) -> None:
         self.db.close()
+        self.comparison_population = None
+        self.analytics_ranges.clear()
+        self.analytics_range_bytes = 0
+        self.reference_cache.clear()
+        self.reference_cache_bytes = 0
+
+    def cached_references(self, kind: str, key: str, raw: Any, read: Any) -> str:
+        # Only pure extraction is cached, never body existence or payload data.
+        # Every owner INSERT still checks the current referenced rows in SQL.
+        if not isinstance(raw, (str, bytes)) or not key.startswith(
+            ("radar:v1:event:", "radar:v1:outcome:", "radar:v1:comparison:")
+        ):
+            return str(read(key, raw))
+        return self.cached_text(kind, key, raw, lambda: str(read(key, raw)))
+
+    def cached_record_json(self, raw: Any) -> Any:
+        from .record_codec import sql_payload
+
+        if not isinstance(raw, bytes):
+            return sql_payload(raw)
+        return self.cached_text("record-json", "", raw, lambda: str(sql_payload(raw)))
+
+    def cached_text(self, kind: str, key: str, raw: str | bytes, read: Any) -> str:
+        value = self._cached_value(kind, key, raw, lambda: str(read()))
+        if not isinstance(value, str):
+            raise StateError("Invalid pure text cache result")
+        return value
+
+    def cached_bytes(self, kind: str, key: str, raw: bytes, read: Any) -> bytes:
+        value = self._cached_value("bytes/" + kind, key, raw, read)
+        if not isinstance(value, bytes):
+            raise StateError("Invalid pure binary cache result")
+        return value
+
+    def _cached_value(self, kind: str, key: str, raw: str | bytes, read: Any) -> str | bytes:
+        # One existing1MiB budget shared by pure text/binary transforms. No
+        # referenced body lookup, DB row or object is cached by this method.
+        token = (kind, key, raw)
+        cached = self.reference_cache.get(token)
+        if cached is not None:
+            return cached[0]
+        result = read()
+        if not isinstance(result, (str, bytes)):
+            raise StateError("Invalid pure cache result")
+        import sys
+
+        # Unicode can use four bytes per character even when almost all of a
+        # JSON string is ASCII. Charge Python objects, not UTF8 lengths.
+        size = sys.getsizeof(key) + sys.getsizeof(raw) + sys.getsizeof(result) + 384
+        if size <= 1024 * 1024:
+            while self.reference_cache and self.reference_cache_bytes + size > 1024 * 1024:
+                removed = self.reference_cache.pop(next(iter(self.reference_cache)))
+                self.reference_cache_bytes -= removed[1]
+            self.reference_cache[token] = (result, size)
+            self.reference_cache_bytes += size
+        return result
 
     def initialize(self, defaults: OwnerSettings, *, legacy: Path | None = None) -> None:
         if self.db.execute("SELECT 1 FROM owner_settings").fetchone():
@@ -291,6 +509,12 @@ class Store:
             raise RevisionConflict("Owner settings changed; reread before updating")
         if current.settings == settings:
             return current
+        from .detector_config import validate_effective_configuration
+
+        try:
+            validate_effective_configuration(settings)
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
         with self.db:
             cursor = self.db.execute(
                 "UPDATE owner_settings SET revision=revision+1,settings_json=? WHERE owner_id=? AND revision=?",
@@ -327,13 +551,47 @@ class Store:
 
     def get_runtime(self, key: str, default: Any = None) -> Any:
         row = self.db.execute("SELECT payload_json FROM runtime WHERE key=?", (key,)).fetchone()
-        from .record_codec import sql_payload
+        if self.bounded:
+            from .catalogue_reader import MISSING, lookup
 
-        return json.loads(sql_payload(row[0])) if row else default
+            value = lookup(self.db, key, json_payload(row[0]) if row else MISSING, self.cached_bytes)
+            return default if value is MISSING else value
+        return json_payload(row[0]) if row else default
+
+    def scan_runtime(
+        self,
+        prefix: str,
+        limit: int | None = None,
+        *,
+        reverse: bool = False,
+        after: str | None = None,
+        before: str | None = None,
+    ) -> Iterator[tuple[str, Any]]:
+        from .catalogue_store import scan
+
+        yield from scan(
+            self.db,
+            prefix,
+            bounded=self.bounded,
+            limit=limit,
+            reverse=reverse,
+            after=after,
+            before=before,
+            cache=self.cached_bytes,
+        )
 
     def put_runtime(self, key: str, payload: Any) -> None:
+        from .catalogue_write import mutation
+
         with self.db:
-            self.db.execute(RUNTIME_UPSERT, (key, encode(payload)))
+            with mutation(self, key, payload) as write:
+                if write:
+                    self.db.execute(RUNTIME_UPSERT, (key, encode(payload)))
+
+    def count_runtime(self, prefix: str) -> int:
+        from .catalogue_store import count
+
+        return count(self.db, prefix, bounded=self.bounded)
 
     def backup(
         self,

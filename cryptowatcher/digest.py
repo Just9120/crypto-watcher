@@ -3,18 +3,27 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 from typing import Any
 
 from telegram.error import BadRequest, Forbidden, RetryAfter, TelegramError
 
+from .catalogue_sql import read_snapshot, source
 from .events import PREFIX, History, identity
 from .outcomes import MINUTE
 from .storage import Store, json_payload
 
 
 def aggregate(store: Store, start: int, end: int, now: int) -> dict[str, Any]:
-    base = " FROM runtime WHERE key>=? AND key<? AND json_extract(cw_record_json(payload_json),'$.market_observation_ms')>=? AND json_extract(cw_record_json(payload_json),'$.market_observation_ms')<?"
+    with read_snapshot(store):
+        return _aggregate(store, start, end, now)
+
+
+def _aggregate(store: Store, start: int, end: int, now: int) -> dict[str, Any]:
+    base = (
+        " FROM "
+        + source(store, "event", head=True)
+        + " WHERE key>=? AND key<? AND json_extract(cw_record_json(payload_json),'$.market_observation_ms')>=? AND json_extract(cw_record_json(payload_json),'$.market_observation_ms')<?"
+    )
     args = (PREFIX + "event-head:", PREFIX + "event-head:~", start, end)
     groups = [
         dict(row)
@@ -41,10 +50,22 @@ def aggregate(store: Store, start: int, end: int, now: int) -> dict[str, Any]:
             args,
         )
     ]
+    activity = [
+        dict(row)
+        for row in store.db.execute(
+            "SELECT json_extract(cw_record_json(payload_json),'$.market_type') || '/' || "
+            "json_extract(cw_record_json(payload_json),'$.symbol') AS instrument,COUNT(*) AS events"
+            + base
+            + " GROUP BY instrument ORDER BY events DESC,instrument LIMIT 5",
+            args,
+        )
+    ]
     ongoing = [
         History(store).resolve(row[0][len(PREFIX) :], json_payload(row[1]))
         for row in store.db.execute(
-            "SELECT key,payload_json FROM runtime WHERE key>=? AND key<? AND json_extract(cw_record_json(payload_json),'$.state')='ACTIVE' AND json_extract(cw_record_json(payload_json),'$.available_at_ms')<=? ORDER BY json_extract(cw_record_json(payload_json),'$.strength') DESC,key LIMIT 5",
+            "SELECT key,payload_json FROM "
+            + source(store, "episode", head=True)
+            + " WHERE key>=? AND key<? AND json_extract(cw_record_json(payload_json),'$.state')='ACTIVE' AND json_extract(cw_record_json(payload_json),'$.available_at_ms')<=? ORDER BY json_extract(cw_record_json(payload_json),'$.strength') DESC,key LIMIT 5",
             (PREFIX + "episode-head:", PREFIX + "episode-head:~", now),
         )
     ]
@@ -57,6 +78,8 @@ def aggregate(store: Store, start: int, end: int, now: int) -> dict[str, Any]:
         "active_instruments": count[1],
         "groups": groups,
         "strongest_episodes": strongest,
+        "most_active_instruments": activity,
+        "activity_metric": "SAVED_EVENT_OBSERVATIONS",
         "ongoing_episodes": ongoing,
         "period": "[start,end)",
         "ongoing_at": "snapshot_ms",
@@ -64,26 +87,27 @@ def aggregate(store: Store, start: int, end: int, now: int) -> dict[str, Any]:
 
 
 def text(snapshot: dict[str, Any]) -> str:
-    def utc(value: int) -> str:
-        return datetime.fromtimestamp(value / 1000, timezone.utc).strftime("%d.%m %H:%M")
+    from .telegram_views import DIRECTION, FAMILY, amount, market, when
 
     lines = [
-        f"📋 Digest · {utc(snapshot['start_ms'])}–{utc(snapshot['end_ms'])} UTC",
+        f"📋 Дайджест · {when(snapshot['start_ms'])} — {when(snapshot['end_ms'])}",
         f"Событий: {snapshot['event_count']} · инструментов: {snapshot['active_instruments']}",
-        "Оба рынка; history включает silent/muted и historical observations.",
+        "Оба рынка; сохранённые наблюдения включают исторические и без уведомлений.",
     ]
     lines += [
-        f"{r['market']} · {r['detector']}: {r['events']} events / {r['instruments']} instruments"
+        f"{market(r['market'])} · {FAMILY.get(r['detector'], r['detector'])}: {r['events']} событий / {r['instruments']} инструментов"
         for r in snapshot["groups"]
     ]
-    lines.append("Самые сильные episodes периода:")
+    lines.append("Самые активные инструменты · число сохранённых наблюдений:")
+    lines += [f"{v['instrument']} · {v['events']}" for v in snapshot.get("most_active_instruments", [])]
+    lines.append("Самые сильные эпизоды периода:")
     lines += [
-        f"{e['instrument']} · {e['direction']} · strength {e['strength']:.2f} · events {e['events']}"
+        f"{e['instrument']} · {DIRECTION.get(e['direction'], e['direction'])} · интенсивность ×{amount(round(e['strength'], 2))} · наблюдений {e['events']}"
         for e in snapshot["strongest_episodes"]
     ]
-    lines.append("Продолжающиеся episodes на момент сборки:")
+    lines.append("Продолжающиеся эпизоды на момент сборки:")
     lines += [
-        f"{e['instrument']} · {e['direction']} · strength {e['strength']:.2f}"
+        f"{e['instrument']} · {DIRECTION.get(e['direction'], e['direction'])} · интенсивность ×{amount(round(e['strength'], 2))}"
         for e in snapshot["ongoing_episodes"]
     ]
     return "\n".join(lines)

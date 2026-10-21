@@ -26,6 +26,7 @@ BLOB_PREFIX = "historyblob:v1:"
 MAX_BYTES = 32 * 1024 * 1024
 CACHE_BYTES = 4 * 1024 * 1024
 SHARED_FIELDS = {
+    "metrics",
     "settings_snapshot",
     "effective_parameters",
     "source_context",
@@ -49,10 +50,13 @@ def sql_value(value: Any, kind: str) -> Any:
 
 
 class Codec:
-    def __init__(self, database: sqlite3.Connection, *, body_encoding: str = "zlib"):
+    def __init__(
+        self, database: sqlite3.Connection, *, body_encoding: str = "zlib", binary_cache: Any = None
+    ):
         if body_encoding not in ("zlib", "zstd"):
             raise StateError("Unknown shared snapshot encoding")
         self.db = database
+        self.binary_cache = binary_cache
         self.source_stream: str | None = None
         self.source_expiry = 0
         self.bounded = database.execute("PRAGMA user_version").fetchone()[0] == 2
@@ -201,22 +205,41 @@ class Codec:
         return json.loads(self.field_raw(reference))
 
     def field_raw(self, reference: Any) -> bytes:
+        if isinstance(reference, dict) and reference.get("mode") in ("numeric", "numeric2"):
+            from .numeric_pool import resolve
+
+            if set(reference) != {"mode", "id"}:
+                raise StateError("Invalid numeric metric reference")
+            try:
+                return encode(resolve(self.db, reference)).encode()
+            except (ValueError, TypeError, KeyError) as exc:
+                raise StateError("Invalid retained numeric metric") from exc
         if isinstance(reference, dict) and reference.get("mode") == "value2":
             if set(reference) != {"mode", "id"}:
                 raise StateError("Invalid compact shared reference")
             return self.load_raw(reference["id"])[0]
-        if isinstance(reference, dict) and reference.get("mode") == "contexts":
+        if isinstance(reference, dict) and reference.get("mode") in ("contexts", "contexts2"):
+            from .context_integrity import restore
             from .market_storage import restore_context
 
             try:
-                return restore_context(self.db, reference)
+                return (
+                    restore(self.db, reference)
+                    if reference["mode"] == "contexts2"
+                    else restore_context(self.db, reference)
+                )
             except (ValueError, TypeError, KeyError, zlib.error) as exc:
                 raise StateError("Invalid normalized context reference") from exc
-        if isinstance(reference, dict) and reference.get("mode") == "source":
+        if isinstance(reference, dict) and reference.get("mode") in (
+            "source",
+            "source-runs",
+            "source-ref",
+            "source-cells",
+        ):
             from .market_storage import restore_window
 
             try:
-                return restore_window(self.db, reference)
+                return restore_window(self.db, reference, cache=self.binary_cache)
             except (ValueError, TypeError, KeyError, zlib.error) as exc:
                 raise StateError("Invalid normalized source reference") from exc
         if not isinstance(reference, dict) or set(reference) != {"mode", "ids", "sha256"}:
@@ -370,17 +393,58 @@ class Codec:
         fragments.append(encoded[previous:])
         return b"".join(fragments)
 
-    def pack(self, value: Any) -> Any:
+    def pack(self, value: Any, *, _price_context: Any = None, _numeric_owner: bool | None = None) -> Any:
+        from . import metric_price_context as price_context
+
+        if _price_context is None:
+            from .numeric_blocks import price_writing
+
+            _price_context = price_context.Context() if self.bounded and price_writing(self.db) else False
         if isinstance(value, list):
-            return [self.pack(item) for item in value]
+            return [
+                self.pack(item, _price_context=_price_context, _numeric_owner=_numeric_owner)
+                for item in value
+            ]
         if not isinstance(value, dict):
             return value
         if MARKER in value:
             raise StateError("Reserved history storage marker")
+        if _numeric_owner is None:
+            schema = value.get("schema")
+            # These namespaces do not own numeric/window leases in the hot
+            # layout. Preserve extra metrics as ordinary exact JSON instead.
+            _numeric_owner = not (
+                isinstance(schema, str)
+                and schema.startswith(("cryptowatcher.episode.", "cryptowatcher.decision."))
+            )
+        price_state = (
+            price_context.context(self.db, value, _price_context, self.field_raw, cache=self.binary_cache)
+            if _price_context is not False
+            else False
+        )
+
+        def price(frame: bytes) -> bytes | None:
+            if not isinstance(price_state, price_context.Context):
+                return None
+            return price_context.candidate(
+                self.db, value, frame, price_state, self.field_raw, cache=self.binary_cache
+            )
+
         result: dict[str, Any] = {}
         references = {}
         for name, item in value.items():
-            raw = encode(item).encode() if name in SHARED_FIELDS and isinstance(item, dict) else None
+            if self.bounded and _numeric_owner and name == "metrics" and isinstance(item, dict):
+                from .numeric_pool import encode_reference
+
+                reference = encode_reference(self.db, item, price=price if price_state is not False else None)
+                if reference is not None:
+                    references[name] = reference
+                    continue
+            raw = (
+                encode(item).encode()
+                if name in SHARED_FIELDS - {"metrics"} and isinstance(item, dict)
+                else None
+            )
             if (
                 self.source_stream
                 and name == "source_context"
@@ -412,7 +476,9 @@ class Codec:
                     if name == "source_inputs"
                     else self.source_stream.rsplit("/", 1)[0] + "/1m"
                 )
-                references[name] = source_window(self.db, stream, item, self.source_expiry)
+                references[name] = source_window(
+                    self.db, stream, item, self.source_expiry, cache=self.binary_cache
+                )
             elif name in WINDOW_FIELDS and isinstance(item, list) and item:
                 parts: list[list[Any]] = []
                 bucket: Any = None
@@ -438,19 +504,33 @@ class Codec:
                     "sha256": digest(window),
                 }
             else:
-                result[name] = self.pack(item) if isinstance(item, (dict, list)) else item
+                result[name] = (
+                    self.pack(item, _price_context=price_state, _numeric_owner=_numeric_owner)
+                    if isinstance(item, (dict, list))
+                    else item
+                )
         if references:
             result[MARKER] = {"schema": SCHEMA, "fields": references}
         return result
 
     def unpack(self, value: Any, *, omit_fields: frozenset[str] = frozenset()) -> Any:
+        from .numeric_pool import load_many, metric_ids
+
+        value = self.record_value(value)
+        try:
+            metrics = load_many(self.db, metric_ids(value, omit_fields=omit_fields))
+        except (ValueError, TypeError, KeyError) as exc:
+            raise StateError("Invalid retained numeric metric") from exc
+        return self._unpack(value, omit_fields, metrics)
+
+    def _unpack(self, value: Any, omit_fields: frozenset[str], metrics: dict[int, Any]) -> Any:
         value = self.record_value(value)
         if isinstance(value, list):
-            return [self.unpack(item, omit_fields=omit_fields) for item in value]
+            return [self._unpack(item, omit_fields, metrics) for item in value]
         if not isinstance(value, dict):
             return value
         result = {
-            k: self.unpack(v, omit_fields=omit_fields) if isinstance(v, (dict, list)) else v
+            k: self._unpack(v, omit_fields, metrics) if isinstance(v, (dict, list)) else v
             for k, v in value.items()
             if k != MARKER and k not in omit_fields
         }
@@ -469,7 +549,12 @@ class Codec:
                 raise StateError("Unknown shared history field")
             if name in omit_fields:
                 continue
-            restored = self.field(reference)
+            if isinstance(reference, dict) and reference.get("mode") in ("numeric", "numeric2"):
+                from .numeric_pool import reference_id, reference_value
+
+                restored = reference_value(reference, metrics[reference_id(reference)])
+            else:
+                restored = self.field(reference)
             if name in result:
                 projection = (
                     {k: restored[k] for k in ("profile", "alert_universe_mode") if k in restored}

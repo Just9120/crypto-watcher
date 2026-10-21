@@ -113,4 +113,14 @@ def drain(db: sqlite3.Connection, batch: int = 32) -> int:
 
 def collect_garbage(db: sqlite3.Connection, batch: int = 128) -> None:
     for table in ("market_quality_cohorts", "market_quality_provenance"):
+        if (
+            table == "market_quality_provenance"
+            and db.execute("SELECT 1 FROM sqlite_master WHERE name='market_body_links'").fetchone()
+        ):
+            for (identity,) in db.execute(
+                "SELECT id FROM market_quality_provenance WHERE refs=0 LIMIT ?", (batch,)
+            ).fetchall():
+                from .reference_layout import remove_owner
+
+                remove_owner(db, f"quality-provenance:{identity}")
         db.execute(f"DELETE FROM {table} WHERE id IN (SELECT id FROM {table} WHERE refs=0 LIMIT ?)", (batch,))

@@ -154,6 +154,7 @@ class Controller:
     def __init__(self, infrastructure: Infrastructure, store: Store, market: BybitREST) -> None:
         self.infrastructure = infrastructure
         self.store = store
+        store.put_runtime("runtime_instance", {"id": uuid.uuid4().hex, "started_ms": int(time.time() * 1000)})
         self.market = market
         self.history = History(store)
         self.ui = ControlDeck(self)
@@ -165,6 +166,7 @@ class Controller:
         self.retention = Retention(store)
         self.digest = Digest(store, infrastructure.delivery_chat_id)
         self.analytics_lock = asyncio.Lock()
+        self.retention_lock = asyncio.Lock()
         self.repack_lock = asyncio.Lock()
         self.recovery_lock = asyncio.Lock()
         self.maintenance_started_at = time.time()
@@ -372,12 +374,12 @@ class Controller:
             if command == "unmute" and parts == ["all"]:
                 with self.store.db:
                     self.store.db.execute("DELETE FROM mutes")
-                await self.send(update, "Все mutes сняты.")
+                await self.send(update, "Все заглушения сняты.")
                 return
             symbol = instrument_key(parts[0], snapshot.settings.bybit_category)
             duration = number(parts[1], "mute minutes") * 60 if len(parts) == 2 else 3600
             self.store.mute(symbol, 0 if command == "unmute" else time.time() + duration)
-            await self.send(update, "Mute сохранён." if command == "mute" else "Mute снят.")
+            await self.send(update, "Заглушение сохранено." if command == "mute" else "Заглушение снято.")
         elif command == "alerts":
             if raw and raw.lower() not in ("on", "off"):
                 raise ConfigError("Invalid alerts preference")
@@ -592,7 +594,7 @@ class Controller:
             if parts[1] == "mute" and len(parts) == duration_index + 1:
                 duration = number(parts[duration_index], "mute seconds")
                 self.store.mute(identity, time.time() + duration)
-                await self.send(update, "Mute сохранён.")
+                await self.send(update, "Заглушение сохранено.")
             elif parts[1] == "coin":
                 card_settings = (
                     snapshot.settings.changed(bybit_category=category)
@@ -745,7 +747,8 @@ class Controller:
                 started = time.monotonic()
                 processed_outcomes = await self.outcomes.async_work(self.market.server_now)
                 processed_comparisons = await ComparisonWorker(self.store).async_work(self.market.server_now)
-                self.retention.work(now)
+                async with self.retention_lock:
+                    self.retention_once(now)
                 from .storage_meter import sample
 
                 sample(self.store, now)
@@ -773,29 +776,129 @@ class Controller:
             return
         if not self.maintenance_ready():
             return
+        from .catalogue_repack import busy
         from .storage_repack import async_work
 
         async with self.repack_lock:
             try:
-                slices = 4 if self.repack_boost_ready() else 1
+                retention_slices = await self.retention_priority()
+                defer_compaction = (
+                    self.retention_pressure_current()
+                    and self.store.get_runtime("storage_repack", {}).get("initial_reclaim_complete") is True
+                )
+                slices = 1 if defer_compaction else 4 if self.repack_boost_ready() else 1
                 deadline = time.monotonic() + 0.2
                 for index in range(slices):
-                    if index and (
+                    if (index or retention_slices) and (
                         time.monotonic() >= deadline
                         or not self.maintenance_ready()
                         or not self.repack_boost_ready()
                     ):
                         break
-                    state = await async_work(self.store, self.market.server_now(), slices=1)
-                    if state.get("state") in ("COMPLETE", "N/A_LEGACY"):
+                    state = await async_work(
+                        self.store,
+                        self.market.server_now(),
+                        slices=1,
+                        **({"defer_compaction": True} if defer_compaction else {}),
+                    )
+                    if not busy(state):
                         break
-                self.store.put_runtime("repack_worker", {"state": "OK", "at_ms": self.market.server_now()})
+                self.store.put_runtime(
+                    "repack_worker",
+                    {
+                        "state": "OK",
+                        "at_ms": self.market.server_now(),
+                        "compaction_deferred_for_retention": defer_compaction,
+                    },
+                )
             except Exception as exc:
                 self.store.put_runtime(
                     "repack_worker",
                     {"state": "FAILED", "error_class": type(exc).__name__, "at_ms": now},
                 )
                 logger.error("Repack worker failure: %s", type(exc).__name__)
+
+    def retention_once(self, now: int) -> dict[str, Any]:
+        try:
+            self.retention.work(now)
+        except Exception as exc:
+            self.store.put_runtime(
+                "retention_worker", {"state": "FAILED", "error_class": type(exc).__name__, "at_ms": now}
+            )
+            raise
+        value = self.store.get_runtime("market_retention", {})
+        self.store.put_runtime(
+            "retention_worker",
+            {"state": "OK", "at_ms": now, "expired_events": value.get("expired_events", 0), "slices": 1},
+        )
+        return value
+
+    def retention_backlog_current(self) -> bool:
+        if not isinstance(self.market, BybitRadar):
+            return False
+        value = self.store.get_runtime("market_retention", {})
+        stamp = value.get("at_ms")
+        return (
+            value.get("state") == "OK"
+            and type(stamp) is int
+            and 0 <= self.market.server_now() - stamp <= 60000
+            and any(
+                type(value.get(key)) is int and value[key] > 0
+                for key in ("expired_events", "remaining_due_batch")
+            )
+        )
+
+    def retention_pressure_current(self) -> bool:
+        """Only an outstanding due batch may delay otherwise useful packing."""
+        value = self.store.get_runtime("market_retention", {})
+        remaining = value.get("remaining_due_batch")
+        return self.retention_backlog_current() and type(remaining) is int and remaining > 0
+
+    async def retention_priority(self) -> int:
+        """Borrow the existing maintenance turn for proven expiry work, yielding per call."""
+        if (
+            not isinstance(self.market, BybitRadar)
+            or self.retention_lock.locked()
+            or self.analytics_lock.locked()
+            or not self.retention_backlog_current()
+            or not self.repack_boost_ready()
+            or self.store.get_runtime("storage_repack", {}).get("initial_reclaim_complete") is not True
+            or self.store.get_runtime("retention_worker", {}).get("state") == "FAILED"
+        ):
+            return 0
+        async with self.retention_lock:
+            began = time.monotonic()
+            expired = 0
+            slices = 0
+            for index in range(4):
+                if (
+                    self.analytics_lock.locked()
+                    or not self.maintenance_ready()
+                    or not self.repack_boost_ready()
+                    or not self.retention_backlog_current()
+                    or index
+                    and time.monotonic() - began >= 0.5
+                ):
+                    break
+                value = self.retention_once(self.market.server_now())
+                count = value.get("expired_events", 0)
+                expired += count
+                slices += 1
+                await asyncio.sleep(0)
+                if not count:
+                    break
+            self.store.put_runtime(
+                "retention_worker",
+                {
+                    "state": "OK",
+                    "at_ms": self.market.server_now(),
+                    "expired_events": expired,
+                    "slices": slices,
+                    "elapsed_seconds": round(time.monotonic() - began, 6),
+                    "mode": "MAINTENANCE_PRIORITY",
+                },
+            )
+            return slices
 
     def repack_boost_ready(self) -> bool:
         """Use spare post-startup time, while retaining each40ms checkpoint/yield."""

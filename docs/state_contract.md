@@ -38,6 +38,525 @@ frozen. Canonical JSON bytes, SHA256, signed outbox body и source revision link
 
 ### Market layout v2: новый период
 
+#### CAPACITY25: совместимые readers и конечное уплотнение
+
+Source windows разделяют immutable coordinate bodies с exact runs/order/revisions/SHA.
+Числовые outcome metrics используют26/34byte frames без изменения float bits и
+int types; неподдерживаемые формы остаются inline. Numeric2 refs используют
+bodyID*4+view для exact mirrored/neutral представлений. Общий body допускается
+только при полном bit/type round trip; невыводимый range сохраняется целиком.
+Numeric IDs никогда не
+переиспользуются после удаления. Runtime refs и expiry leases обновляются в той
+же transaction, что immutable revision; отсутствующая зависимость отклоняется.
+
+Repack11 добавляет NB1/NR1 numeric blocks:64 slots адресуют прежние IDs,
+26/34byte frames остаются точными, без outcome arithmetic или зависимости от
+исходных свечей. SHA256 связывает actual compressed bytes/counts с block ID;
+bounded decoder проверяет header/window/content size до materialization.
+FP8 lookup сравнивает полный frame при совпадении hash. Per-slot detail/quality
+leases и GC атомарны с владельцами runtime/quality/catalogue; потеря counts,
+lookup или totals прекращает изменение. Удаление старой retained строки
+разрешено только после readback exact frame+leases в той же transaction.
+Передается исходный AUTOINCREMENT high water, включая уже удалённые IDs;
+частичная очистка не уплотняет IDs и не переиспользует слоты. Finite PK ceiling
+не растет от новых admissions и переживает restart/DDL/VACUUM. Installation и
+writer activation выполняет explicit repack; Store open регистрирует только
+чистые UDF и проверяет известный marker. Это также поддерживает reader,
+открытый до upgrade, при переходе к новой read transaction.
+Чистые frame/count transforms используют тот же общий1MiB cache; actual bytes,
+lookup presence и актуальные leases проверяются при чтении. Encoded bytes
+block/counts/lookup относятся к detail/quality proportional frame lengths,
+quality lease имеет прежний приоритет над detail. Это logical attribution;
+SQLite tables/indexes/free pages/WAL/SHM/journal измеряются отдельно целиком.
+Lease-only changes сохраняют уже проверенные encoded numeric body bytes и не
+выполняют BLOB UPDATE этого тела. Counts, allocation/totals и search seal всё
+так же обновляются атомарно; новые или изменённые slots проходят прежние guards.
+Старые numeric rows остаются читаемыми до finite transfer. После новых writes
+требуется compatible reader/forward-fix; native и mature capacity gates прежние.
+
+Repack12 допускает NB2/PR1 exact self-contained price operands после explicit
+numeric layout1→2 и отдельного writer marker, атомарного с новым checkpoint.
+Producers/retained normalizer используют candidate только при этом marker и
+проверенном frozen method/window context. NB1 bytes/длины frozen; NB2 имеет тот же
+64-slot bound/full SHA256 и хранит raw frames совместно с operands. ID/FP и
+owner leases относятся к восстановленному прежнему26/34byte canonical frame.
+Private offer допускает только byte equality всех metric values/types и
+уменьшение целого compressed block; rollback/readback/quality GC используют
+прежние transaction boundaries. Layout marker/actual bytes проверяются и при
+cache hit. Обычный open не повышает marker, не запускает migration и не включает
+writer. Record pass ждёт finite source+numeric transfer; signed numeric savings
+учитываются и без изменения owner reference. Legacy byte counters проверяются
+без cold доли; неизвестные/потерянные counters не исправляются обнулением.
+Неизвестный checkpoint отклоняется до DDL; committed12 без writer marker
+отклоняется без его восстановления. Clean baseline требует COMPLETE именно
+текущей версии repack. Native/mature qualification обязательны до поставки.
+
+Numeric layout3 добавляет NS1 search seals без изменения NB1/NB2 values и IDs.
+`detail_slots=-1` означает ещё не квалифицированный open block; он сохраняет
+полный FP8 index. Закрытый ID block без detail owners и unleased slots может
+заменить вспомогательные lookup rows явным SHA256, связывающим block ID и actual
+NB/NR bytes. Отсутствующий seal не считается допустимым состоянием cold block.
+Чтение проверяет seal и отсутствие searchable coordinate; незнакомая схема или
+index definition отклоняется. Detail renewal по retained ID атомарно восстанавливает
+все lookup rows блока до публикации нового владельца. GC обновляет seal вместе
+с lease/value bytes либо удаляет пустой block; byte counters учитывают новый
+формат. Новые admissions могут получить новый ID для равного sealed value;
+прежние IDs/values/leases сохраняются. Initial qualification имеет fixed ID
+ceiling; unknown/due partial indexes обслуживаются тем же bounded worker.
+Numeric pending work не объявляется пустым через отсутствие metadata.
+
+Repack17 добавляет NR2 для128integer lease counts. NR1 wire format остаётся
+читаемым и сохраняет прежний minimum172bytes; NR2 имеет full SHA256, block ID,
+declared expanded size128..1152bytes и один checksummed Zstd frame без dictionary,
+trailing data или oversized window. После decompression проверяются все128
+canonical varints и прежний signed63bit range. Числовые values/IDs/NB frames,
+detail/quality leases и методы не меняются. Chooser сохраняет меньший whole frame;
+actual stored counts lengths участвуют в before/after accounting и NS1 seal.
+Обновление/renewal/GC сохраняет outer transaction и rollback.
+Explicit `numeric_refs_compression` устанавливается через upgrade после search
+layout3. Mode1 допускает NR2; NR1_COMPAT сохраняет unreleased prototype table
+с прежним172byte CHECK без её перестройки. Published541 не содержал NB tables:
+его conversion создаёт NR2-capable table сразу. Store open только validates mode;
+missing/unknown marker/checkpoint не переустанавливается автоматически. Initial
+pass имеет конечный block-ID ceiling; новые writes используют выбранный mode.
+Geometry source/numeric/catalogue/quality прежних passes не открывается заново;
+initial reclaim подтверждается отдельно. Mixed NR1/NR2 readers, bounded cache,
+allocation/cohort reports и public/export contracts сохраняются. Component
+compression ratio не означает такой же экономии whole archive или capacity PASS.
+
+Explicit `numeric_frames=1` допускает NF1 coordinates в новом guarded NB table.
+BF1 объединяет до64закрытых quality-only blocks, каждый с прежними64metric slots.
+Container хранит IDs, format flags, lengths и exact literal/PR1 operand bytes;
+BR1/BP1 и checksummed Zstd выбирают меньшее представление без округления.
+Раскрытие ограничено143941bytes до decompression; dictionary, unknown size,
+oversized window, trailing frame, duplicate IDs и invalid slots отвергаются.
+Один OW1 mask с full checksum связывает владельцев с текущими NF1 coordinates.
+Publication выполняет immutable comparison, CAS и counter updates в одной outer
+transaction; failure откатывает контейнер и все опубликованные coordinates.
+Lease-only changes не переписывают container. Detail renewal восстанавливает
+обычный NB block и полный search index; GC удаляет только необладаемые slots
+и сохраняет retained bytes/positions. Старые WAL readers видят прежний snapshot.
+
+Для NF1 positive seal NS2 связывает ID, actual pointer, uncompressed typed metric
+bytes и actual NR bytes; одной подписи указателя недостаточно. Чтение не зависит
+от повторного получения source prices или результата будущего NB compressor.
+NS1 и прежние NB/NR readers остаются неизменными. Actual container/owner/counter
+binding проверяется перед pure reuse в прежнем shared1MiB cache. Unknown/missing
+layout или dependency не превращается в пустой результат. `NB_COMPAT` сохраняет
+старый populated unreleased CHECK109 table без rebuild и без NF1 writer; normal
+conversion published541 создаёт guarded NF1-capable table сразу. `Store` только
+validates установленный mode. Новые container bytes учитываются отдельной
+`quality_numeric_frames` category без повторного счёта numeric block payload.
+Эти primitives включаются явно; их наличие не подтверждает runtime queue,
+полные capacity boundaries, native service или25GB qualification.
+
+Runtime21 добавляет finite numeric block upper и отдельный admission watermark:
+позднее закрытие старого block ID не открывает законченную initial boundary.
+Live inbox сохраняет первоначальный queued clock;64closed blocks готовы сразу,
+малая группа ждёт5min, оставаясь полностью доступной для analytics из NB.
+Работа и GC входят в прежний rotating maintenance deadline. Counter/guard/clock
+неизвестного состояния не считается пустой очередью; NB_COMPAT не qualified
+для clean capacity baseline. Explicit boundary проверяет current owners,
+NS2 values, NR headers и actual byte counters; partial budget не становится PASS.
+
+Optional ABI1 `numeric_frame.so` выполняет только bounded BP1 transpose:
+до4096length bytes/139264operand bytes, fixed4097uint32 scratch и caller-owned output.
+Он не выполняет allocations, I/O, SQL или float arithmetic. Checksummed Zstd,
+ID/type/length/offset bounds и NS2/owner/NR validation остаются в Python.
+Отсутствующий artifact выбирает portable path; installed corrupt/unknown ABI
+прекращает чтение. Ledger указывает actual byte_transpose_backend. Linux native
+и image checks обязательны; локальный Windows C99 PASS не заменяет их.
+
+Архивный CQ5 packet сохраняет прежний public fact JSON. Общие templates,
+strength/noise columns и точные ordered comparator lists не меняют методику,
+N, ограничения и population_size. Comparator coordinates хранятся внутри packet
+как literal либо signed-delta vector; выбор делается по размеру целого compressed
+packet. Порядок, повторы, numeric IDs/views и unknown inline metrics сохраняются;
+пустой vector имеет значение null. Новые comparator sets не создают отдельных
+dictionary rows. Старые J/Z/CW2/CW3/CQ1/CQ2/CQ4 inputs и numeric refs читаются.
+Legacy set delta имеет не более8ancestor links; numeric bodies удерживаются
+фактическими leaf blocks, а не удалёнными элементами ancestor.
+При добавлении факта CQ5 сохраняет numeric coordinates прежнего prefix и
+кодирует только новый факт. Stored n проверяется против decoded prefix;
+переход к общим strength/noise columns и граница128 остаются точными.
+
+Append полностью проверяет прежний public prefix и новый факт. Если prefix прочитан
+в уже открытой transaction, после envelope round trip сравниваются все template /
+numeric coordinates, порядок и повторы comparator vector, population slots,
+strength/noise, без повторной materialization того же prefix. Immutable dependencies
+и та же transaction остаются обязательными; вне неё сохраняется full public
+round trip. Лимит полного decoded JSON остаётся1MiB. Ownership проверяет template
+без лишней mutable copy; повторные scalar numeric views восстанавливаются один
+раз за read и возвращают отдельные public dicts. Persistent cache/новый format
+и изменение scalar lease counts этим не вводятся.
+SQL extraction CQ5/QF1 может сохранять чистый byte summary ссылок в прежнем
+общем Store cache1MiB. Перед QF1 cache lookup читаются и проверяются actual
+container bytes, offsets и ownership mask. Тот же cache может хранить pure
+validated dictionary shape/canonical digest, привязанные к actual payload bytes.
+Current existence/kind/parent/depth/checksum/content hash читаются и сверяются
+при каждом вызове; изменение actual bytes требует новой shape validation.
+Lease counts и DB existence не кешируются. Rollback, GC и смена snapshot не превращают cache hit в проверку
+состояния. CQ1/CQ2/CQ4 и connections без cache используют прежний extractor.
+CQ1/CQ2/CQ4 prefix сначала преобразуется с прежними numeric IDs/leases.
+Подготовка archive facts читает frozen outcomes/settings/methods без DML.
+Публикация группирует подготовленные facts по day/cohort/exact provenance,
+сохраняя их порядок внутри группы, прежние128facts/chunk и1MiB public bound.
+Append-many один раз проверяет сохранённый prefix, оставляя его numeric IDs/views
+и ordered comparator vectors прежними. Byte-full partial chunk остаётся сохранён:
+specific size rejection до interning начинает следующий chunk; corruption errors
+не перехватываются. Parent deletion остаётся в той же внешней transaction.
+Отбор нескольких due parents этим core не включается автоматически.
+QF1 coordinate (`frame ID`, slot0..63) может заменять logical CQ5 packet.
+Explicit `quality_frame_columns=1` разрешает QC1 body рядом с прежним IF1.
+QC1 переставляет шесть полей CQ5 rows в шесть колонок внутри прежнего bounded
+indexed frame; checksum, offsets,64slots,1MiB admission и общий cache1MiB прежние.
+Reader восстанавливает точные typed entry bytes, включая vectors/порядок/IDs,
+scalar types и nullable dead slots. Writer выбирает меньший из IF1/QC1;
+если column candidate превышает frame bound, остаётся уже допустимый IF1.
+Прежние IF1 читаются без нового marker; QC1 требует известный marker при каждом
+чтении текущего frame до pure cache. Store не устанавливает marker. Explicit
+maintenance обновляет совместимый writer без переписывания всех старых frames;
+обычные новые публикации и GC могут выбрать QC1. Missing marker текущего repack
+не исправляется скрытой переустановкой и блокирует clean baseline. Ни QF1 pointer,
+ни public facts, ownership/NR counts, срок хранения или аналитический N не меняются.
+Shared IF1 frame содержит до64blocks одного birth day с admission1MiB expanded;
+day/cohort/chunk и scalar strength/noise сохранены внутри каждой записи.
+Numeric IDs/frames/leases, ordered comparator vectors и public JSON не меняются.
+Ownership mask и checksum обновляются атомарно с публикацией pointers. Partial
+expiry очищает только unowned slots; последняя ссылка освобождает frame.
+Late append возвращает block в CQ5 с прежними prefix coordinates и ставит его
+в durable очередь. Partial frontier tail остаётся CQ5 до следующего UTC дня;
+full128fact block допустим сразу. queued_at не обновляется повторным write,
+eligible_at отделяет штатную открытую границу от просроченной очереди.
+QF1 устанавливается только explicit maintenance на известном layout3;
+Store open регистрирует readers, без DDL и автоматической миграции.
+Provenance body живёт до последнего
+зависимого block. GC всех зависимостей конечен и учитывается как выполненная
+retention work даже после удаления последнего event.
+
+`market_body_links` сохраняет owner/body через compatibility view; новые пары
+хранят integer coordinates существующего owner registry и shared body dictionary.
+Legacy rows остаются видны, пока bounded repack не перенесёт их атомарно.
+Repack12 сохраняет durable finite phases records/decisions/expiry/quality/namespaces/
+references/quality-tally/key-registry/prospective-cohorts/source-tiles/numeric-blocks. Secondary registry CK1 сохраняет исходные
+runtime keys и stable integer IDs; mixed legacy text/tokens видимы через expiry4/
+reference2 views. Point mutations используют индексы, не полный scan view.
+Словарь prefixes/UUID/hex/padded integers frozen; malformed token отклоняется.
+Namespace и archived fact counters квалифицируются
+конечным сканированием; concurrent writes и rollback учитываются triggers.
+Prospective cohort/strength counters также имеют finite initialization и
+поколения после schema change; старые служебные поколения удаляются bounded GC.
+Полные ablations разделяются по UTC days, чтобы probe не держал месяц events
+в Python sets. Missing/unknown projection и unqualified generation не дают
+полного boundary. Это auxiliary accounting, не замена history/analytics.
+Schema change требует повторной квалификации transient cursors. Ни startup,
+ни capacity probe не объявляет частичный scan полным. После новых writes
+восстановление требует compatible reader/forward-fix; старый binary и blind
+restore поверх новых данных запрещены.
+
+Contexts2 сохраняет полный SHA256 один раз у referenced `market_context` row,
+а ссылки содержат точные kind/stream/time coordinates. Старый combined hash
+проверяется до преобразования. При каждом чтении parts проверяется их frozen
+SHA256; body/timing/coordinates и установленный digest неизменяемы. Unreferenced
+rows не конвертируются; сроки/leases прежние, public context bytes неизменны.
+Digest counters и detail ref conversion атомарны с writer transaction.
+
+Explicit repack19 устанавливает context tiles после проверки прежних boundaries;
+Store open регистрирует readers/UDF и проверяет известный marker без DDL.
+`context_tile_codec` сохраняет до64points
+одного stream/kind/UTC-day: IF1 хранит exact stable body/timing/coordinates,
+NR2 — два64-slot вектора anchor/purge, OW1 — frozen mask, связанный с stream и
+tile ID. Перед упаковкой проверяется каждый прежний frozen SHA256; его точное
+восстановление затем опирается на immutable IF1 с полным SHA256. Неустановленный
+digest остаётся неустановленным, а поздний freeze требует ожидаемый полный hash.
+Renewal только повышает anchor/purge, не переписывая immutable point frame.
+Partial expiry пересчитывает актуальные сроки и сохраняет прочие points/digests;
+повторная упаковка сохраняет stream/kind/time coordinates. Admission JSON и
+typed expansion ограничены1MiB; codec допускает прежний общий pure cache1MiB,
+новый cache не вводится. Полная проверка frame декодирует IF1/NR2 один раз,
+сохраняя прежние bytes и проверки каждой logical point.
+
+Частые exact/as-of lookups и metadata guards используют pure projection
+неизменного IF1 payload в прежнем общем byte cache1MiB. Перед каждым обращением
+проверяются actual checksum/offsets и текущие tile identity/stream/kind/day,
+NR1/NR2 leases и OW1 mask/seal; DB rows и актуальные сроки не кешируются.
+Первое декодирование проверяет все typed points, порядок и1MiB JSON bound;
+повторный decode возвращает независимые JSON objects с теми же float bits/types.
+При том же payload SQL renewal guard сравнивает свежие vectors и запрещает
+уменьшение anchor/purge или очистку frozen bits. Новый payload проходит полную
+проверку retained values/expiry. Дополнительные pure UDF не меняют schema/wire.
+Ошибка projection не скрывает SQLite interrupt/I/O/deadline.
+
+`market_context` остаётся hot-таблицей. Indexed exact/as-of adapters объединяют
+её с непересекающимися интервалами `market_context_tiles`; full scan SQL view
+не используется. Старые combined-hash и contexts2 references сохраняют прежние
+coordinates и public bytes. Поздняя точка внутри интервала может остаться hot.
+Публикация проверяет исходные frozen hashes, переносит exact hot rows через
+SAVEPOINT/CAS, сверяет cold readback и изменяет body refs/counters в той же
+транзакции. SQL guards запрещают duplicate ownership, изменение public values,
+уменьшение leases/frozen bits и преждевременное удаление. Partial/final expiry
+повторно учитывает текущую policy и MAX dependency; GC не сокращает сроков.
+
+Исторический comparator выбирает context на sample cutoff до28дней раньше
+parent event. Срок используемой точки равен MAX(raw35d, parent anchor+detail30d)
+и в обычном сценарии достигает58дней от точки. Forecast учитывает detail+lookback,
+не меняя expiry; более старый selector predecessor и supplied/frozen dependencies
+отмечаются отдельным ограничением модели. Native плотность включает IF1/NR2/OW1;
+повторно добавлять32байта за каждую frozen point нельзя.
+
+При свежем положительном remaining_due_batch существующий maintenance worker
+после initial body/reclaim boundary откладывает packing phases14/16/17/18.
+Успешное удаление без остатка batch не откладывает упаковку. Очереди, cursors и
+pending diagnostics сохраняются через reopen; обычные bounded passes возобновляются
+после разгрузки retention. Начальные boundaries не объявляются готовыми заранее.
+
+Retention сохраняет старейший выбранный seed и может добавить до7due parents
+того же actual native tuple из существующего64-row indexed hint range. Eligibility
+проверяется после LIMIT, по current expiry/observed/cutoff; truncated hash не заменяет
+полное сравнение native fields. Прежний50ms admission deadline и общий caller batch
+limit сохраняются. Суммарный encoded prepared charge группы не превышает1MiB;
+single/legacy/unsupported случай использует прежний путь. Все quality summaries
+публикуются до удаления любого parent в одной writer transaction. Любой отказ
+откатывает summaries, owners, leases, removals и telemetry вместе. Extras вне
+первоначального due window не продвигают его cursor и не дают отрицательный остаток.
+
+В существующем rotating worker добавлена конечная initial граница
+stream/kind/time и отдельная persistent live очередь с первым queued_at.
+Full64-point chunks доступны сразу; tails8..63 — после закрытия UTC дня,
+менее8points остаются hot. Несколько bounded групп обслуживаются до общего
+deadline; новый job/RAM не добавляется. Неподдерживаемые старые shapes остаются
+hot с явным blocker baseline. Observer различает future tails, overdue work,
+неизвестный clock/checkpoint и initial reclaim. Meter format8 сохраняет старые
+samples/event-frequency и учитывает cold/queue bytes и новые native indexes.
+Совместимость native validators опирается на прежний OW1 CHECK UDF; новые UDF
+применяются в SQL triggers, не добавляя обязательного native CHECK API.
+Production upgrade, native/resource SLO и mature whole25GB proof ещё необходимы;
+component equality/physical saving этих gates не заменяет. Recovery после
+выбора writer требует compatible reader/forward-fix.
+
+Capacity context нельзя механически считать как OHLCV prior28d плюс detail30d.
+Штатный producer выбирает latest context по server cutoff, а dependency anchor
+фиксирует market observation event. При raw35d/detail30d это даёт raw window
+и максимум одного старого predecessor на stream/kind после gap. Это условная
+оценка для этого пути, а не сокращение retention. Explicit older references,
+frozen leases прежних policies и прочие exceptions сохраняются по прежнему MAX
+и должны учитываться отдельным измеренным хвостом; без него whole bound не доказан.
+
+Repack20 добавляет явный `parent_affinity=1`: native hint по UTC expiry day и
+полному cohort ключу market/symbol/TF/detector/direction/settings revision.
+8byte fingerprint служит только ранжированию: actual private tuple, ownership,
+revisions, heads, source/numeric leases проверяет прежний relocation path.
+Oldest seed сохраняет приоритет. Lookup объединяет максимум15 indexed prefixes
+пяти известных families/трёх directions при прежних market/symbol/TF/settings:
+до480 small metadata rows, затем максимум32 oldest peers. Перед переносом
+сверяются actual source tuple и целый parent в пределах64 records/1MiB;
+полный native fingerprint и его SQL guard остаются прежними. Collision или
+unsupported shape не меняет исходные факты. Standalone episode revisions
+читаются через прежний coordinate PK с LIMIT65 и группируются только внутри
+expiry day. Каждая episode identity рассматривается один раз за операцию,
+включая случай недостаточного остатка пакета; oversized истории остаются
+читаемыми с явным fallback. Допустимая event-owned extension revision остаётся
+в своём прежнем parent bundle. Сроки и source/numeric ownership прежние.
+Hint guards и native counters атомарны с publication/deletion; Store open только
+проверяет известный layout и регистрирует trigger UDF, без скрытого installation.
+Finite parent/packet ceilings сохраняются после restart; checked detail packets
+перечитываются один раз, прежний age уже pending packets не сбрасывается.
+Переход19→20 сохраняет все прежние context/frame/source/numeric/catalogue/reclaim
+границы. Observer отдельно блокирует незавершённые affinity scan/reclaim;
+meter format9 учитывает hint/index bytes, сохраняя samples и frequency.
+Новый job, cache или увеличение RAM не требуются. Поставка и whole/mature
+capacity/native SLO подтверждаются отдельными обязательными gates.
+
+Byte-flow samples после завершения новой версии repack имеют отдельный epoch:
+backfill pools/digests не выдаётся за последующий ежедневный прирост. Старые
+samples и event-frequency observations сохраняются.
+
+CH1 — frozen template для inline projected heads с полным SHA256. Field positions
+и typed defaults неизменны; `schema`/`revision_key` восстанавливаются ровно из
+сохранённых ID/revision. Все query fields остаются в head; новой ссылки на detail
+для SQL нет. Unknown fields/неподходящие shapes остаются в общем codec. CW3 reader
+не меняет семантику. Чистый byte-to-JSON cache разделяет прежний1MiB budget с
+reference extraction; Python Unicode sizes учитываются через фактический размер
+objects, cache не заменяет проверку наличия внешних bodies.
+
+Candidate repack18 сохраняет DB1/DB2 catalogue adapters версии13. Переход через15:
+13→15 повторяет конечный CQ5 quality pass и добавляет NS1 qualification;14→15
+добавляет только NS1 qualification и physical reclaim. Initial catalogue geometry,
+queue ceiling, numeric IDs/frames/leases и source boundaries сохраняются.
+Upgrade15→17 добавляет bounded parent-bundle regrouping, NR2 pass и reclaim, сохраняя
+все завершённые source/numeric/quality/catalogue границы.
+Upgrade16→17 сохраняет также завершённый packet ceiling и добавляет только NR2
+pass/reclaim. Upgrade17→18 сохраняет эти qualified boundaries и body initial
+reclaim, добавляя QF1 initial tuple ceiling и live queue в прежний rotating worker.
+Global COMPLETE требует QF1 initial scan; отдельный frame initial reclaim ждёт
+dictionary GC и physical free-page reclaim. Observer проверяет обе границы,
+known clock и overdue frame/GC queue; будущий frontier tail остаётся current.
+Quality staging и shared frames учитываются один раз, со всеми индексами и
+working journals. Sample format7 сохраняет старые samples и event frequency;
+прежние CQ5 scenario coefficients явно не являются mature QF1 qualification.
+Упаковка просматривает до4других pending packets внутри finite ceiling;
+новые arrivals её не расширяют. Whole parent с cardinality сверх свободных slots
+пропускается до materialization, oversized whole parent сохраняет явный fallback.
+Explicit marker `packet_bundles=1` устанавливается только в upgrade, не при открытии Store.
+Старые packets получают NULL/unvisited metadata и конечный packet-ID ceiling;
+новые detail packets сразу pending со временем первого поступления. Проверенный
+packet при изменении live refs повторно становится pending; исходное время уже
+pending packet не обновляется при следующих изменениях. Partial indexes дают
+bounded initial/oldest-first selection. `bundle_pending` — gauge количества;
+его byte flows равны0, физические columns/index pages учитываются полностью.
+Parent grouping сохраняет public UUID/revision, current head, private body и
+projection, parent deadline и logical numeric/window references. Guarded
+delete/publication/readback выполняются в одном savepoint outer writer transaction;
+GC между release и повторным admission не допускается. Stale snapshot и поздний
+отказ откатывают только этот savepoint. Все записи имеют прежний expiry UTC-day,
+до64records/expanded1MiB; oversized/compressed-limit fallback сохраняет исходный
+layout с явным счётчиком. Служебные leases не сокращаются. Частично освобождённые
+packets обслуживаются повторно. Partial sparse-arena index выбирает detail arenas
+с used>768KiB и live_bytes<used/2; один шаг читает до32indexed packet rows,
+освобождает zero-ref prefix и переносит не более одного live packet прежним
+exact-byte relocator. Packet ID/refs/SHA/category/bucket прежние, savepoint rollback
+охватывает и blob bytes/append position. Empty arenas собирает прежний GC; actual
+free-page reclaim остаётся отдельным baseline gate. Новый phase40ms worker не задерживает hot transfer и не создаёт
+scheduler. Initial completion отдельно от текущих поступлений; baseline отвергает
+unknown/future clocks и backlog старше прежних60s. Deep ledger сверяет фактический
+pending count. Whole physical25GB/native/production throughput остаются отдельными
+gates, не следуют из успешной упаковки компонента.
+CQ1/CQ2 coordinates получают view0 без повторного intern числовых значений;
+CQ4 coordinates переносятся напрямую. Это frozen blocks
+с отдельно сжатыми projection/detail frames, полным SHA256 actual frames,
+проверкой UUID/revision/slot и allocation bounds до decompression. Каталог
+хранит immutable coordinates/parent deadlines и не дублирует integer rowid
+для primary domain key. Oversized отдельная запись требует прежнего layout.
+Append-only SQLite arenas публикуют packets атомарно; refs/verified relocation
+и GC не меняют logical packet identity. Numeric/source-window leases считаются
+по logical revision, shared JSON bodies — по packet до последнего владельца.
+Missing dependency/counter отклоняет удаление. Полные mixed readers, analytics/export,
+retention/accounting adapters и finite restart входят в candidate; required native,
+resource/mature25GB и ordinary delivery gates остаются до production применения.
+Existing Store open регистрирует UDF для
+уже установленного известного catalogue; DDL/migration при open не добавлены.
+DB2 использует IF1: неизменяемый typed dictionary, byte offsets и общий Zstd
+frame, с полным SHA256 actual header/offsets/compressed bytes и bounded content
+size/window до decompression. Чтение materialize только выбранный typed slice;
+чистая binary decompression разделяет общий1MiB cache с text/reference transforms.
+Writer сравнивает level3 и level19 для expanded payload>=4KiB и сохраняет меньший
+frame; wire format и reader bounds прежние. Transfer/steady collector группирует
+до64records одного expiry UTC-day в пределах существующего DB2 expanded1MiB.
+Individual admission448KiB, compressed packet512KiB и input buffer2MiB сохранены.
+FrameSizeError делит группу на две в той же outer transaction; singleton или
+иная ошибка прерывает публикацию с rollback. Увеличения cache/RAM config нет;
+resource/SLO и full mature physical capacity требуют отдельных измерений.
+По IDs/existence данные не кэшируются. DB1 остаётся читаемым; формат IF1 не
+меняет canonical JSON, float bits или numeric types. Linux/resource gates для
+runtime activation остаются обязательными.
+
+Candidate catalogue service expiry отделён от immutable body. Event parent
+deadline неизменяем; episode service row может только продлить lease до MAX
+действительно retained members и отдельно сохраняемой head-ссылки на эту ревизию.
+Hot duplicate и cold lease обновляются одним
+SAVEPOINT; missing/conflicting member/owner/checksum не даёт продлить или удалить
+запись. Episode extensions с внешними source/context dependencies до отдельного
+lease adapter остаются hot и учитываются в budget. Mixed expiry сначала сохраняет
+все method results/comparators/provenance, затем в той же transaction удаляет
+hot/cold revisions, membership и parent; refs освобождаются до bounded GC.
+Frozen future leases не теряются из-за нового age cutoff; bounded history cursor
+позволяет дойти до остальных due records и сохраняется только вместе с обработкой.
+Explicit repack включает adapter локально; это не подтверждение production или mature25GB.
+
+Candidate SQL consumers event/outcome/episode/comparison читают known native kind
+ranges и checked mixed point payload. Equality/identity/checksum guards не
+заменяются полным Python materialization. Current/cohort/causal/export выборки
+сохраняют прежние filters, revisions и numeric facts; read snapshot охватывает
+выбор layout и данные. Read helper закрывает только открытую им transaction,
+caller transaction сохраняется. Outcome bootstrap читает cursor/immutable inputs
+и создаёт jobs в одном writer SAVEPOINT; failed batch не оставляет partial jobs
+и не фиксирует внешние изменения. Schema1 frozen converter явно unbounded/read-only
+и не подключает market layout. Runtime activation/native/mature gates прежние.
+
+Candidate finite transfer использует explicit caller writer/checkpoint и schema
+generation: signed64 rowid intervals для bodies/heads/aliases фиксируются вместе до переноса,
+DDL/VACUUM сбрасывают незавершённую физическую границу. UUID cursor не служит
+хронологическим watermark. Metadata scan ограничен256rows, payload budget2MiB,
+один packet — прежними64records/encoded bounds и одним expiry UTC day.
+Declared expansion проверяется до typed decompression; oversized/unsupported
+records сохраняются hot целиком и входят в общий budget. Fallback visits —
+cumulative diagnostics, не число оставшихся записей. Publication/ref adoption,
+exact persisted private readback, hot CAS removal и checkpoint атомарны.
+Head удаляется только вместе с matching body/lease; остальные hot heads остаются
+совместимыми ссылками. Initial COMPLETE означает конец фиксированной границы;
+новые admissions обрабатывает прежний repack worker через pending-only inbox.
+Repack13 включает queue writer после завершения предыдущих normalization phases;
+queue хранит registry RID, монотонный sequence и frozen first-enqueue time. Нет
+дополнительного индекса всех retained keys или нового scheduled job. Fixed queue
+ceiling закрывает initial COMPLETE; последующие admissions не открывают его заново.
+Прежние40ms slices/health boost gates действуют также после COMPLETE. Unknown
+checkpoint/ownership/counter не считается пустой очередью; baseline блокируется
+при возрасте pending более60s или неизвестном состоянии.
+Storage report включает queue occupancy/age и новые physical tables/indexes;
+explicit boundary ledger отдельно сверяет actual hot/cold coordinates, aliases,
+checked overlaps и pending count. Logical coordinates не добавляются повторно к
+physical pages. Hot details после activation прогнозируются как staging occupancy,
+а не второй retained gross flow уже перенесённых packets. Sample format6 отделяет
+новую модель; прежние samples сохраняются. Эти adapters не доказывают mature25GB.
+
+SB1 source tiles введены явным finite repack10 и сохраняются в repack11; обычный Store open не
+создает их и не включает writer. Замороженный блок
+содержит32 native временных слота, до256 immutable revisions суммарно,
+точные typed values/needed_until/purge_after и SHA256 actual header/IF1 frame.
+Mixed point/range adapters сохраняют общий revision space, порядок, пропуски
+и frozen window SHA. Пакетная запись переносит legacy tile в том же savepoint;
+непоместившаяся история коррекций остается в прежней таблице с явным fallback
+и scalar counters. SQL guards запрещают изменение старых значений и сокращение
+leases. GC перепроверяет каждую revision по исходной retention/hold policy;
+общая first_due блока — только индекс кандидатов, не срок удаления всех свечей.
+Чистые binary transforms используют прежний общий1MiB cache, actual bytes
+проверяются при чтении. DDL выполняется только explicit install; Store open
+регистрирует UDF существующего известного layout. Source transfer/checkpoint
+и writer marker фиксируются в одной транзакции; исходная logical верхняя
+граница не растет от новых поступлений и не зависит от rowid/VACUUM.
+Только после переноса sources выполняется record pass: source-cells заменяет
+descriptor после проверки полного исходного window SHA и точного равенства
+всех свечей; fallback сохраняет прежний descriptor/hash. Cell coordinates
+защищены full-checksum owner record, который сохраняется даже без выигрыша
+длины; каждый source block проверяется по actual bytes. Descriptor leases
+снимаются атомарно с заменой owner, source leases/policy не сокращаются.
+Новый window producer может сразу вернуть тот же source-cells descriptor по
+результату собственной checked tile admission. Доказательство действительно
+только внутри текущего синхронного вызова при удерживаемой write transaction;
+оно не сохраняется в cache или БД. После commit либо при capacity fallback
+используется прежняя проверка полного window SHA. Конвертация уже сохранённого
+descriptor всегда проверяет его исходный SHA и actual values; markers/existence
+не заменяют эту проверку. Общий cache остаётся1MiB.
+Новый формат требует compatible reader/forward-fix. Native mature/resource
+qualification и общий backlog SLO остаются обязательными release gates.
+Проверка старого SHA и доказательство cold-only разрешения выполняются одним
+проходом; при duplicate legacy revision дополнительно требуется не меньшая
+needed_until/purge_after у cold копии. Иначе сохраняется прежний hash/descriptor.
+Один синхронный window удерживает один проверенный tile reader; доказательство
+существования объектов не переживает этот вызов. Чистый typed-to-canonical-JSON
+transform source slots делит прежний1MiB Store cache. Actual header/bytes
+проверяются до его использования, JSON round trip сохраняет IEEE bits/int types;
+возвращаемые mutable values не разделяются. Полная admission/SQL проверка новых
+frames сохраняется; уже проверенные incoming values не парсятся повторно.
+
+Candidate source writer также допускает SB2/JS1 для scalar candle tails: те же32
+слота/256revisions, coordinates, needed_until/purge_after и полный SHA256.
+JS1 хранит canonical JSON slices с byte offsets и Zstd level3. Полные allocation,
+offset/content/window/checksum bounds проверяются до materialization; объекты,
+нечисловые/nonfinite/oversized значения и неизвестное представление отклоняются.
+Writer выбирает SB2 только при поддерживаемых scalar types и меньшем полном
+frame; иначе сохраняет frozen SB1/IF1. Integer types, IEEE float bits, signed zero,
+строки и source metadata проходят точный round trip. Необычные старые source
+shapes остаются в typed SB1 без усечения. Point/range, CAS, SQL guards, lease renewal,
+corrections и GC читают оба формата; record/source IDs и retention прежние.
+JS1 использует bounded byte-container validator IF1, но собственный JSON
+materializer. Чистые bytes делят прежний1MiB cache; новый cache/budget не вводится.
+Открытие Store не перекодирует tiles; обычный explicit source writer выбирает
+формат при записи. Native/resource и общая mature25GB qualification остаются
+обязательными, isolated codec equality/size proof их не заменяет.
+
+#### Market layout v2: устройство
+
 Format2 включается только для нового reset candidate; schema1 не переписывается обычным open. Private tables сохраняются побайтно по значениям SQL rows; `reset_history.prepare` читает только private state, сохраняет private JSON recovery, проверяет restore на отдельном файле и integrity нового candidate. Он не удаляет и не переключает production. Host cutover/CI/artifact/unit/locks остаются отдельной обязательной процедурой.
 
 `market_candles` хранит один closed value/revision с compact numeric payload и source/provenance. Source correction создает новую revision, не меняет used inputs. Coordinate windows с checksum ссылаются на точные revisions. `needed_until` в этом layout — anchor observation time последнего использующего detail; effective expiry вычисляется по актуальной detail policy. `purge_after` — indexed scheduling hint, перепроверяемый перед удалением. Pending holds имеют конечную owner dependency. `market_context` отделяет availability timestamps от shared stable bodies; used context также имеет anchor lease. Старые permanent protected markers в v2 не пишутся.
@@ -46,7 +565,7 @@ Format2 включается только для нового reset candidate; s
 
 Completed outcome/comparison jobs не дублируют результаты. Bootstrap проверяет immutable heads, explicit recompare восстанавливает job из исходной event revision. Job сохраняет frozen method; недоступная старая формула дает явный INVALID_SOURCE, а не расчет новой формулой под прежним номером. Retention читает metadata без материализации уже истекших raw windows; обычные public readers по-прежнему проверяют полные references. Retry/IN_FLIGHT payload остается immutable; terminal delivery receipt сокращается, успешные attempts/receipts диагностируются1day, event/episode/transport sequence сохраняют dedup в подробном сроке. Pending recovery проверяет существование активного owner hold; отсутствие владельца дает EXPIRED_RETENTION_INCOMPLETE, а не бесконечный backfill.
 
-Category counters обновляются triggers и rollback вместе с данными. Initial small DB index walk bounded; дальше runtime использует cheap counters/files/pages/samples и явно помеченную модель до появления годовых summaries. Exact later index snapshot — отдельная bounded read-only команда. Physical target20GB/forecast не доказан fixture, backups/experiments отдельно. После expiry incremental vacuum освобождает pages небольшими порциями; полный VACUUM живой истории не запускается.
+Category counters обновляются triggers и rollback вместе с данными. Initial small DB index walk bounded; дальше runtime использует cheap counters/files/pages/samples и явно помеченную модель до появления годовых summaries. Exact later index snapshot — отдельная bounded read-only команда. Physical target25GB включает free pages и sidecars; его соблюдение не следует из успешного codec/CI test, backups/experiments отдельно. После expiry incremental vacuum освобождает pages небольшими порциями; полный VACUUM живой истории не запускается.
 
 
 ## Compact history representation
@@ -76,6 +595,18 @@ Overflow блокирует affected stream и запускает priority REST 
 recovery не создаёт live alert. До ACK/rejection buffer не пишет candles/events.
 Это bounded transient ingestion state, не durable consumer outbox и не history;
 restart восстанавливает пропуски существующим source recovery.
+
+`ingestion` публикует `components_healthy`, named `components`, `scope_synced`,
+`manager_failures` без exception bodies, per-market `metadata_age_seconds` /
+`ticker_age_seconds` и per-subscription `task_state` / `last_received_ms`.
+RUNNING task не доказывает свежесть source. Clean baseline требует обеих readiness
+flags, конечных неотрицательных ages не старше600/300s +60s request/reconcile grace
+с добавлением возраста diagnostic snapshot; каждый acknowledged subscription должен
+принадлежать RUNNING task и иметь receipt не старше90s (receive65s + retirement15s
++10s allowance), будущий receipt допускается лишь в пределах5s clock skew.
+Прежние diagnostic frames без новых полей не считаются clean baseline.
+Незавершённый retirement не теряет ownership и не создаёт overlapping sockets;
+повторный reconcile завершает частичный scope без новой owner revision.
 
 Physical SQLite user_version остаётся1. Public immutable revisions могут содержать
 `_history_storage` / `cryptowatcher.shared-fields.v1`: content-addressed ссылки на
@@ -202,6 +733,7 @@ D22 заменяет прежнюю indefinite policy: details30d, small-TF35d �
 | source:v1:candle:market/symbol/TF:start | Closed OHLCV/turnover, interval/start, source, exchange/receipt times; quote units USDT |
 | source:v1:gap:market/symbol/TF | Durable start/end historical recovery cursor и PENDING/COMPLETE |
 | ingestion | Actual source/market errors, subscription acknowledgements, TF, pending/buffer diagnostics |
+| retention_worker | Singleton priority/regular expiry state, actual expired count/slices/timing; sanitized failure blocks clean baseline, not an additional annual history stream |
 
 Native свечи закрыты по confirm=true либо REST exchange time. Historical/bootstrap/recovered записи сохраняются, но live eligibility — process-local и после restart пуста. Cached window≤256; остальные rows остаются в DB. Online backup schema1 включает все source namespaces. Raw retention35d и используемые snapshots до окончания срока подробных расчетов определены D22; owner/import/backup data не входят в market cleanup.
 

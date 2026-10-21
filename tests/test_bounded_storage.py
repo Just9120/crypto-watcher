@@ -40,7 +40,14 @@ def test_normalized_overlapping_windows_replay_and_restart_keep_exact_analytics(
             expected = calculate(history.get("event-head:" + outcome["event_id"]), 5, future())
             assert outcome["metrics"] == expected["metrics"]
     stored = store.get_runtime("radar:v1:event:" + first["event_id"] + ":0000000001")
-    assert stored[MARKER]["fields"]["source_inputs"]["mode"] == "source"
+    reference = stored[MARKER]["fields"]["source_inputs"]
+    assert reference["mode"] == "source-ref" and type(reference["id"]) is int
+    assert (
+        store.db.execute("SELECT refs FROM market_source_windows WHERE id=?", (reference["id"],)).fetchone()[
+            0
+        ]
+        > 0
+    )
     assert all(
         "source_inputs" not in json_payload(r[0])
         for r in store.db.execute("SELECT payload_json FROM runtime WHERE key LIKE 'radar:v1:event:%'")
@@ -88,7 +95,11 @@ def test_retention_keeps_exact_cohorts_and_method_settings_after_detail_expiry(s
     retention = Retention(store)
     retention.work(NOW + 30 * DAY - 1)
     assert History(store).events(20)
-    retention.work(NOW + 30 * DAY + 1)
+    # One bounded timer slice need not retire every eligible parent.
+    for _ in range(100):
+        retention.work(NOW + 30 * DAY + 1)
+        if not History(store).events(1):
+            break
     assert not History(store).events(20)
     after = cohorts(store)
     assert after["cohorts"] == before["cohorts"]
@@ -507,8 +518,8 @@ def test_retention_preserves_all_method_versions_and_frozen_strength_grouping(st
     from cryptowatcher import outcomes as outcome_module
     from cryptowatcher.analytics import cohort_rows
     from cryptowatcher.events import identity
-    from cryptowatcher.market_storage import decoded
     from cryptowatcher.outcomes import DAY, Retention
+    from cryptowatcher.quality_packets import unpack as unpack_quality
 
     bounded(store)
     worker = OutcomeWorker(store)
@@ -549,7 +560,7 @@ def test_retention_preserves_all_method_versions_and_frozen_strength_grouping(st
     rows = store.db.execute("SELECT dimensions,provenance,facts FROM market_quality").fetchall()
     assert {json_payload(r[0])["methodology_version"] for r in rows} == {"1", "2"}
     assert all(json_payload(r[0])["methodology_version"] != "new-default" for r in rows)
-    facts = [v for r in rows for v in decoded(bytes(r[2]), 1024 * 1024)]
+    facts = [v for r in rows for v in unpack_quality(store.db, bytes(r[2]))]
     assert source["strength"] + 100 not in [v["strength"] for v in facts]
     assert any(
         h.codec.unpack(json_payload(r[1]))["quality_provenance"]["outcome_definition"]
@@ -561,8 +572,8 @@ def test_retention_preserves_all_method_versions_and_frozen_strength_grouping(st
 def test_retention_keeps_all_comparator_versions_and_original_pending_method(store):
     from cryptowatcher.analytics import cohort_rows
     from cryptowatcher.events import identity
-    from cryptowatcher.market_storage import decoded
     from cryptowatcher.outcomes import DAY, Retention
+    from cryptowatcher.quality_packets import unpack as unpack_quality
 
     bounded(store)
     worker = OutcomeWorker(store)
@@ -605,7 +616,12 @@ def test_retention_keeps_all_comparator_versions_and_original_pending_method(sto
             },
         )
     before = list(cohort_rows(store))
-    Retention(store).work(NOW + 31 * DAY)
+    # Drain this finite population without assuming one machine's slice speed.
+    for _ in range(100):
+        Retention(store).work(NOW + 31 * DAY)
+        if not h.events(1):
+            break
+    assert not h.events(1)
     assert list(cohort_rows(store)) == before
     rows = store.db.execute("SELECT dimensions,provenance,facts FROM market_quality").fetchall()
     assert any(
@@ -620,7 +636,7 @@ def test_retention_keeps_all_comparator_versions_and_original_pending_method(sto
     assert relevant
     provenance = h.codec.unpack(json_payload(relevant[0][1]))["quality_provenance"]
     assert provenance["comparison_definitions"] == {"1": {"version": "1"}, "2": {"version": "2"}}
-    facts = [v for r in relevant for v in decoded(bytes(r[2]), 1024 * 1024)]
+    facts = [v for r in relevant for v in unpack_quality(store.db, bytes(r[2]))]
     assert any(
         len(v["comparator_metrics"]) == 2 and v["limitations"] == ["fixture-1", "fixture-2"] for v in facts
     )
