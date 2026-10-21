@@ -41,7 +41,7 @@ def setup(store, count=8, *, freeze=True):
             }
             old.append(legacy)
             refs.append(convert(store.db, legacy) if freeze else None)
-    tiles.install(store.db)
+    tiles.install(store.db, store.cached_bytes)
     return keys, refs, old
 
 
@@ -155,7 +155,7 @@ def test_outer_rollback_and_publish_failure_preserve_hot_rows_counters_and_body_
     assert counts(store) == original
     assert store.db.execute("SELECT COUNT(*) FROM market_context_tiles").fetchone()[0] == 0
     original_values = tiles._values
-    monkeypatch.setattr(tiles, "_values", lambda value: (*original_values(value)[:-1], 0))
+    monkeypatch.setattr(tiles, "_values", lambda db, value: (*original_values(db, value)[:-1], 0))
     with pytest.raises(sqlite3.IntegrityError, match="metadata"):
         tiles.publish(store.db, keys)
     assert counts(store) == original

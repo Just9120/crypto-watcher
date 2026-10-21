@@ -7,6 +7,7 @@ opening a Store, and publication/expiry never commit a caller's transaction.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import contextmanager
 from typing import Any, Iterator
@@ -104,10 +105,10 @@ def _atomic(db: sqlite3.Connection) -> Iterator[None]:
         raise
 
 
-def install_functions(db: sqlite3.Connection) -> None:
+def install_functions(db: sqlite3.Connection, cache: Any = None) -> None:
     def valid(*values: Any) -> int:
         tile = _tile(values)
-        stats = codec.stats(tile)
+        stats = codec.stats(tile, cache)
         return int(
             tuple(values[8:]) == tuple(stats[key] for key in ("count", "first_at", "last_at", "first_due"))
         )
@@ -116,14 +117,9 @@ def install_functions(db: sqlite3.Connection) -> None:
         old, new = _tile(values[:8]), _tile(values[8:])
         if (old.identity, old.stream, old.kind, old.day) != (new.identity, new.stream, new.kind, new.day):
             return 0
-        original, updated = codec.points(old), codec.points(new)
-        if old.payload == new.payload and len(original) == len(updated):
-            for before, after in zip(original, updated):
-                if after.anchor < before.anchor or after.purge < before.purge:
-                    return 0
-                if before.integrity is not None and after.integrity != before.integrity:
-                    return 0
-            return 1
+        if old.payload == new.payload:
+            return int(codec.monotonic(old, new, cache))
+        original, updated = codec.points(old, cache), codec.points(new, cache)
         candle_days, detail_days = _policy(db)
         retained = {point.at: point for point in updated}
         if set(retained) - {point.at for point in original}:
@@ -165,16 +161,28 @@ def install_functions(db: sqlite3.Connection) -> None:
     db.create_function("cw_context_tile_removable", 8, removable)
     db.create_function("cw_context_tile_contains", 2, contains, deterministic=True)
     db.create_function("cw_context_tile_times", 1, times, deterministic=True)
+    db.create_function(
+        "cw_context_tile_index",
+        8,
+        lambda *values: encode(codec.times(_tile(values), cache)),
+        deterministic=True,
+    )
+    db.create_function(
+        "cw_context_tile_stats",
+        8,
+        lambda *values: encode(codec.stats(_tile(values), cache)),
+        deterministic=True,
+    )
 
 
-def install(db: sqlite3.Connection) -> None:
+def install(db: sqlite3.Connection, cache: Any = None) -> None:
     if installed(db):
         _upgrade_publication_guard(db)
         return
     marker = db.execute("SELECT value FROM market_meta WHERE key='context_integrity'").fetchone()
     if db.in_transaction or marker is None or marker[0] != "1":
         raise StateError("Context tiles require a known outer integrity boundary")
-    install_functions(db)
+    install_functions(db, cache)
     new = ",".join("NEW." + field for field in FIELDS.split(","))
     old = ",".join("OLD." + field for field in FIELDS.split(","))
     size = "(length({a}.payload)+length({a}.leases)+length({a}.frozen)+length({a}.seal))"
@@ -304,8 +312,10 @@ def cold(
     if row is None:
         return None
     tile = _tile(row)
-    rows = codec.points(tile)
-    eligible = [slot for slot, point in enumerate(rows) if point.at == at or (not exact and point.at <= at)]
+    times = _derived(db, "index", tile)
+    eligible = [
+        slot for slot, point_at in enumerate(times) if point_at == at or (not exact and point_at <= at)
+    ]
     return (tile, eligible[-1]) if eligible else None
 
 
@@ -329,8 +339,32 @@ def lookup(
     return hot if hot is not None and (tiled is None or hot.at > tiled.at) else tiled
 
 
-def _values(tile: codec.Tile) -> tuple[Any, ...]:
-    stats = codec.stats(tile)
+def _derived(db: sqlite3.Connection, kind: str, tile: codec.Tile) -> Any:
+    if kind not in ("index", "stats"):
+        raise ValueError("Unknown context tile projection")
+    try:
+        raw = db.execute(
+            f"SELECT cw_context_tile_{kind}(?,?,?,?,?,?,?,?)",
+            (
+                tile.identity,
+                tile.stream,
+                tile.kind,
+                tile.day,
+                tile.payload,
+                tile.leases,
+                tile.frozen,
+                tile.seal,
+            ),
+        ).fetchone()[0]
+    except sqlite3.OperationalError as error:
+        if getattr(error, "sqlite_errorcode", None) != sqlite3.SQLITE_ERROR:
+            raise  # Preserve interrupt/I/O/deadline semantics.
+        raise ValueError("Invalid context tile projection") from error
+    return json.loads(raw)
+
+
+def _values(db: sqlite3.Connection, tile: codec.Tile) -> tuple[Any, ...]:
+    stats = _derived(db, "stats", tile)
     return (
         tile.identity,
         tile.stream,
@@ -353,7 +387,7 @@ def _update(db: sqlite3.Connection, old: codec.Tile, new: codec.Tile) -> None:
     result = db.execute(
         f"UPDATE {TABLE} SET payload=?,leases=?,frozen=?,seal=?,n=?,first_at=?,last_at=?,due=? "
         "WHERE id=? AND payload=? AND leases=? AND frozen=? AND seal=?",
-        (*_values(new)[4:], old.identity, old.payload, old.leases, old.frozen, old.seal),
+        (*_values(db, new)[4:], old.identity, old.payload, old.leases, old.frozen, old.seal),
     )
     if result.rowcount != 1:
         raise StateError("Stale context tile revision")
@@ -397,7 +431,8 @@ def publish(db: sqlite3.Connection, keys: list[tuple[int, str, int]]) -> int:
             if result.rowcount != 1:
                 raise StateError("Stale hot context publication source")
         db.execute(
-            f"INSERT INTO {TABLE}({FIELDS},{META}) VALUES ({','.join('?' for _ in range(12))})", _values(tile)
+            f"INSERT INTO {TABLE}({FIELDS},{META}) VALUES ({','.join('?' for _ in range(12))})",
+            _values(db, tile),
         )
         actual = db.execute(f"SELECT {FIELDS} FROM {TABLE} WHERE id=?", (identity,)).fetchone()
         if actual is None or codec.signature(codec.points(_tile(actual))) != codec.signature(expected):

@@ -280,7 +280,7 @@ class Store:
         owner_functions(self.db)
         from .context_tiles import install_functions as context_tile_functions
 
-        context_tile_functions(self.db)
+        context_tile_functions(self.db, self.cached_bytes)
         from .parent_affinity import install_functions as parent_affinity_functions
 
         parent_affinity_functions(self.db, self.cached_bytes)

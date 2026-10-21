@@ -276,6 +276,17 @@ typed expansion ограничены1MiB; codec допускает прежни�
 новый cache не вводится. Полная проверка frame декодирует IF1/NR2 один раз,
 сохраняя прежние bytes и проверки каждой logical point.
 
+Частые exact/as-of lookups и metadata guards используют pure projection
+неизменного IF1 payload в прежнем общем byte cache1MiB. Перед каждым обращением
+проверяются actual checksum/offsets и текущие tile identity/stream/kind/day,
+NR1/NR2 leases и OW1 mask/seal; DB rows и актуальные сроки не кешируются.
+Первое декодирование проверяет все typed points, порядок и1MiB JSON bound;
+повторный decode возвращает независимые JSON objects с теми же float bits/types.
+При том же payload SQL renewal guard сравнивает свежие vectors и запрещает
+уменьшение anchor/purge или очистку frozen bits. Новый payload проходит полную
+проверку retained values/expiry. Дополнительные pure UDF не меняют schema/wire.
+Ошибка projection не скрывает SQLite interrupt/I/O/deadline.
+
 `market_context` остаётся hot-таблицей. Indexed exact/as-of adapters объединяют
 её с непересекающимися интервалами `market_context_tiles`; full scan SQL view
 не используется. Старые combined-hash и contexts2 references сохраняют прежние

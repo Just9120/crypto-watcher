@@ -568,7 +568,7 @@ def work(
     numeric_frames.install(store.db, store.cached_bytes)
     numeric_frame_work.install(store.db)
     quality_frames.install(store.db)
-    context_tiles.install(store.db)
+    context_tiles.install(store.db, store.cached_bytes)
     parent_affinity.install(store.db, store.cached_bytes)
     maintenance = catalogue_repack.status(store, now_ms)
     frame_maintenance = quality_frames.status(store.db, now_ms)

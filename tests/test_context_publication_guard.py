@@ -45,7 +45,7 @@ def test_each_publication_decodes_one_probe_with_many_hot_rows_and_still_rejects
     with pytest.raises(sqlite3.IntegrityError, match="Duplicate hot/cold context ownership"):
         store.db.execute(
             f"INSERT INTO {tiles.TABLE}({tiles.FIELDS},{tiles.META}) VALUES ({','.join('?' for _ in range(12))})",
-            tiles._values(duplicate),
+            tiles._values(store.db, duplicate),
         )
     assert len(probes) == 2
     assert counts(store) == original

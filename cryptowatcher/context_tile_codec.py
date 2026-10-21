@@ -8,6 +8,7 @@ point's old SHA256 is exactly derived from its authenticated immutable value.
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -128,13 +129,71 @@ def _decoded_point(tile: Tile, slot: int, value: Any, anchors: list[int], purges
     return replace(point, integrity=digest(point)) if owner_slots.has(tile.frozen, slot) else point
 
 
+def _payload_values(payload: bytes, cache: Any = None) -> list[Any]:
+    # Authenticate current bytes before a pure derivative can be reused. The
+    # cache never contains tile rows, leases, masks or mutable Python objects.
+    offsets, _ = indexed_frame.layout(payload)
+
+    def read() -> list[Any]:
+        _, raw = indexed_frame.data(payload)
+        values = [typed_unpack(raw[a:b], MAX_EXPANDED) for a, b in zip(offsets, offsets[1:])]
+        scope = None
+        previous = -1
+        for value in values:
+            if not isinstance(value, list) or len(value) != 5:
+                raise ValueError("Context tile point coordinate mismatch")
+            point = Point(value[0], value[1], value[2], value[3], value[4], 0, 0)
+            _point(point)
+            current = (point.stream, point.kind, point.at // DAY)
+            if (scope is not None and current != scope) or point.at <= previous:
+                raise ValueError("Unordered or conflicting context tile points")
+            scope, previous = current, point.at
+        if len(encode(values).encode()) > MAX_EXPANDED:
+            raise ValueError("Context tile expanded admission bound")
+        return values
+
+    if cache is None:
+        return read()
+    raw = cache("context-tile-values", "", payload, lambda: encode(read()).encode())
+    if not isinstance(raw, bytes):
+        raise ValueError("Invalid pure context tile cache result")
+    values = json.loads(raw)
+    if not isinstance(values, list) or len(values) != len(offsets) - 1:
+        raise ValueError("Invalid pure context tile cache result")
+    return values
+
+
+def _current(tile: Tile, cache: Any = None) -> tuple[list[int], list[int], list[Any]]:
+    count, anchors, purges = _header(tile)
+    values = _payload_values(tile.payload, cache)
+    if len(values) != count or values[0][:2] != [tile.stream, tile.kind] or values[0][2] // DAY != tile.day:
+        raise ValueError("Context tile point coordinate mismatch")
+    return anchors, purges, values
+
+
+def times(tile: Tile, cache: Any = None) -> list[int]:
+    _, _, values = _current(tile, cache)
+    return [value[2] for value in values]
+
+
+def monotonic(old: Tile, new: Tile, cache: Any = None) -> bool:
+    """Current headers plus one immutable payload; never reuse mutable leases."""
+    before, purges, _ = _current(old, cache)
+    _, after, updated_purges = _header(new)
+    if (old.identity, old.stream, old.kind, old.day, old.payload) != (
+        new.identity,
+        new.stream,
+        new.kind,
+        new.day,
+        new.payload,
+    ) or owner_slots.bits(old.frozen) & ~owner_slots.bits(new.frozen):
+        return False
+    return all(a >= b for a, b in zip(after, before)) and all(a >= b for a, b in zip(updated_purges, purges))
+
+
 def points(tile: Tile, cache: Any = None) -> list[Point]:
-    _, anchors, purges = _header(tile)
-    offsets, raw = indexed_frame.data(tile.payload, cache)
-    rows = [
-        _decoded_point(tile, slot, typed_unpack(raw[a:b], MAX_EXPANDED), anchors, purges)
-        for slot, (a, b) in enumerate(zip(offsets, offsets[1:]))
-    ]
+    anchors, purges, values = _current(tile, cache)
+    rows = [_decoded_point(tile, slot, value, anchors, purges) for slot, value in enumerate(values)]
     if any(a.at >= b.at for a, b in zip(rows, rows[1:])):
         raise ValueError("Unordered context tile points")
     if len(encode([_value(row) for row in rows]).encode()) > MAX_EXPANDED:
@@ -220,16 +279,16 @@ def expire(tile: Tile, now: int, *, candle_days: int, detail_days: int) -> Tile 
     return tile if signature(retained) == signature(original) else pack(tile.identity, retained)
 
 
-def stats(tile: Tile) -> dict[str, Any]:
-    rows = points(tile)
+def stats(tile: Tile, cache: Any = None) -> dict[str, Any]:
+    _, purges, values = _current(tile, cache)
     return {
         "identity": tile.identity,
         "stream": tile.stream,
         "kind": tile.kind,
         "day": tile.day,
-        "count": len(rows),
-        "first_at": rows[0].at,
-        "last_at": rows[-1].at,
-        "first_due": min(row.purge for row in rows),
-        "frozen": sum(row.integrity is not None for row in rows),
+        "count": len(values),
+        "first_at": values[0][2],
+        "last_at": values[-1][2],
+        "first_due": min(purges[: len(values)]),
+        "frozen": owner_slots.bits(tile.frozen).bit_count(),
     }
