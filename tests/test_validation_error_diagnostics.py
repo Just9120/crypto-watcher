@@ -151,6 +151,21 @@ def test_receiver_keeps_only_fixed_finite_phase_durations(monkeypatch, invalid):
     assert "secret" not in json.dumps(record)
 
 
+def test_later_validation_failure_cannot_attach_different_cause_metrics(monkeypatch):
+    record = {"failure_code": "DATABASE_ERROR", "failure_detail_code": "COMPRESSED_MEMORY_LIMIT"}
+    monkeypatch.setattr(deploy_receiver, "ACTIVE_RECORD", record)
+    body = {
+        "status": "blocked",
+        "failure_code": "TIME_BUDGET_EXCEEDED",
+        "backup": {"phase": "SNAPSHOT_SEAL", "elapsed_seconds": 100.0},
+    }
+    deploy_receiver.capture_validation_failure(
+        ["docker", "run", "backup"],
+        subprocess.CompletedProcess([], 3, stderr=json.dumps(body)),
+    )
+    assert record == {"failure_code": "DATABASE_ERROR", "failure_detail_code": "COMPRESSED_MEMORY_LIMIT"}
+
+
 def test_receiver_ignores_oversize_invalid_and_nonvalidation_output(monkeypatch):
     record = {}
     monkeypatch.setattr(deploy_receiver, "ACTIVE_RECORD", record)
