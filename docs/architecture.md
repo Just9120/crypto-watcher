@@ -5,13 +5,17 @@
 Один Python 3.11 процесс, один Compose service `crypto_watcher`, persistent SQLite physical schema2 в WAL mode; legacy schema1 поддерживается compatibility reader. Владелец один; settings/domain state не создаются для входящих чужих chats. Trading credentials и LLM отсутствуют.
 
 Bounded BP1 transpose выполняется C99 helper через ctypes при наличии artifact.
-ABI2 также предоставляет read-only SQLite scalar для structural NF/NR/NS2 proof:
-Python сначала аутентифицирует BF1 bytes/shape и OW mask, затем native вызов
+ABI3 также строит тот же bounded BR1/BP1 flat layout и предоставляет read-only
+SQLite scalar для structural NF/NR/NS2 proof:
+Python сначала аутентифицирует BF1 bytes/Zstd bounds и OW mask; native flatten
+сохраняет прежние BR1/BP1 shape/identity/length checks. Затем native вызов
 читает до64 current parent/ref rows и сверяет неизменные pointer/NR/NS2 значения.
 SHA256 использует opaque EVP API уже загруженного Python OpenSSL; NR2 header —
 pinned Zstd API. Собственной crypto implementation нет. SQL scalar DIRECTONLY,
 extension loading отключается сразу после установки exact trusted artifact;
-каждый вызов освобождает statement/EVP context, не оставляет DB pointers/cache
+один вызов проверяет до8frames (temporary derivative<=1153737B), повторно
+использует statement/EVP context внутри вызова и освобождает их на любом выходе,
+не оставляет DB pointers/cache
 и не выполняет writes. Общий pure cache1MiB и50s boundary budget сохранены.
 Canonical native build и Docker image собирают helper из той же source revision;
 installed bad ABI/error не подменяется portable fallback.

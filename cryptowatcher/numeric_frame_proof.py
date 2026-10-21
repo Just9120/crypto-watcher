@@ -10,6 +10,7 @@ import _hashlib
 import ctypes
 import hashlib
 import sqlite3
+import struct
 import sys
 from pathlib import Path
 from threading import RLock
@@ -92,14 +93,36 @@ def install(db: sqlite3.Connection) -> bool:
 
 
 def owners(db: sqlite3.Connection, identity: int, flat: bytes, mask: bytes, compressed: bool) -> int:
+    return _owners(db, "SELECT cw_nf_proof(?,?,?,?)", (identity, flat, mask, int(compressed)), 64)
+
+
+def owners_batch(db: sqlite3.Connection, rows: list[tuple[int, bytes, bytes]], compressed: bool) -> int:
+    if not isinstance(rows, list) or not 1 <= len(rows) <= 8:
+        raise ValueError("Native numeric owner batch cardinality")
+    parts = [bytes([len(rows)])]
+    for identity, flat, mask in rows:
+        if (
+            type(identity) is not int
+            or not 0 < identity < 2**63
+            or not isinstance(flat, bytes)
+            or not 9 <= len(flat) <= numeric_frame_native.MAX_FLAT
+            or not isinstance(mask, bytes)
+            or len(mask) != 8
+        ):
+            raise ValueError("Native numeric owner batch bound")
+        parts.extend((struct.pack(">Q", identity), mask, struct.pack(">I", len(flat)), flat))
+    return _owners(db, "SELECT cw_nf_proof_batch(?,?)", (b"".join(parts), int(compressed)), len(rows) * 64)
+
+
+def _owners(db: sqlite3.Connection, query: str, args: tuple[Any, ...], maximum: int) -> int:
     try:
-        row = db.execute("SELECT cw_nf_proof(?,?,?,?)", (identity, flat, mask, int(compressed))).fetchone()
+        row = db.execute(query, args).fetchone()
     except sqlite3.OperationalError as error:
         if getattr(error, "sqlite_errorcode", None) == sqlite3.SQLITE_ERROR and str(error).startswith(
             "cw_nf:"
         ):
             raise ValueError(str(error)) from error
         raise
-    if row is None or type(row[0]) is not int or not 0 <= row[0] <= 64:
+    if row is None or type(row[0]) is not int or not 0 <= row[0] <= maximum:
         raise ValueError("Invalid native numeric frame proof result")
     return row[0]

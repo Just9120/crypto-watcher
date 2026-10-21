@@ -1,10 +1,12 @@
 import ctypes
 import random
+import struct
 import sys
 
 import pytest
 
 from cryptowatcher import numeric_frame_codec, numeric_frame_native
+from tests.test_numeric_frame_codec import forged, row_body, values
 
 
 @pytest.fixture(autouse=True)
@@ -106,3 +108,81 @@ def test_native_invalid_buffers_are_rejected_before_any_output_write(accelerator
     before = output.raw
     assert accelerator.cw_nf_untranspose(lengths, count, planes, size, output, capacity) == 0
     assert output.raw == before
+
+
+@pytest.mark.parametrize("count", [1, 2, 64])
+@pytest.mark.parametrize("planes", [False, True])
+def test_native_flat_layout_matches_portable_for_every_original_slot_and_representation(
+    accelerator, monkeypatch, count, planes
+):
+    body = row_body(values(count))
+    if planes:
+        start = 5 + count * 73
+        lengths = body[5 + count * 9 : start]
+        row = body[start:]
+        offsets = [0]
+        for size in lengths:
+            offsets.append(offsets[-1] + size)
+        transposed = b"".join(
+            bytes(row[offsets[slot] + column] for slot, size in enumerate(lengths) if size > column)
+            for column in range(max(lengths))
+        )
+        body = b"BP1\0" + body[4:start] + transposed
+    with monkeypatch.context() as portable:
+        portable.setattr(numeric_frame_native, "flatten", lambda body: None)
+        portable.setattr(numeric_frame_native, "transpose", lambda *args: None)
+        expected = numeric_frame_codec.data(forged(body))
+    assert numeric_frame_native.flatten(body) == expected
+
+
+@pytest.mark.parametrize("damage", ["null", "capacity", "count", "duplicate", "length", "identity"])
+def test_native_flatten_rejects_invalid_shapes_without_touching_output_or_size(accelerator, damage):
+    body = bytearray(row_body(values(2)))
+    capacity = numeric_frame_native.MAX_FLAT
+    if damage == "count":
+        body[4] = 65
+    elif damage == "duplicate":
+        body[13:21] = body[5:13]
+    elif damage == "length":
+        body[23] = 255
+    elif damage == "identity":
+        body[5:13] = struct.pack(">Q", (2**63 - 2) // 64 + 1)
+    elif damage == "capacity":
+        capacity = 1
+    output = ctypes.create_string_buffer(b"!" * numeric_frame_native.MAX_FLAT)
+    before = output.raw
+    size = ctypes.c_size_t(173)
+    assert (
+        accelerator.cw_nf_flatten(
+            None if damage == "null" else bytes(body), len(body), output, capacity, ctypes.byref(size)
+        )
+        != 1
+    )
+    assert output.raw == before and size.value == 173
+
+
+def test_native_flatten_maximum_body_fills_exact_output_between_canaries(accelerator):
+    body = (
+        b"BR1\0"
+        + bytes([64])
+        + struct.pack(">64Q", *range(64))
+        + bytes(64)
+        + bytes([34]) * 4096
+        + bytes(i % 251 for i in range(4096 * 34))
+    )
+    assert len(body) == numeric_frame_native.MAX_BODY
+    output = ctypes.create_string_buffer(b"!" * (numeric_frame_native.MAX_FLAT + 2))
+    size = ctypes.c_size_t()
+    assert (
+        accelerator.cw_nf_flatten(
+            body,
+            len(body),
+            ctypes.byref(output, 1),
+            numeric_frame_native.MAX_FLAT,
+            ctypes.byref(size),
+        )
+        == 1
+    )
+    assert size.value == numeric_frame_native.MAX_FLAT
+    assert output.raw[0:1] == output.raw[-2:-1] == b"!"
+    assert output.raw[1 : 1 + size.value] == numeric_frame_native.flatten(body)

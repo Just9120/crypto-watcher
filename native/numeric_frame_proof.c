@@ -80,6 +80,70 @@ static uint64_t be64(const unsigned char *p) {
 static void put64(unsigned char *p, uint64_t value) {
     for (unsigned int i = 0; i < 8u; ++i) p[7u - i] = (unsigned char)(value >> (i * 8u));
 }
+static void put32(unsigned char *p, uint32_t value) {
+    for (unsigned int i = 0; i < 4u; ++i) p[3u - i] = (unsigned char)(value >> (i * 8u));
+}
+
+extern int cw_nf_untranspose(const unsigned char *, size_t, const unsigned char *,
+                            size_t, unsigned char *, size_t);
+
+/* Python authenticates and decompresses BF1 before this pure bounded copy.
+ * Retain every BR1/BP1 shape/identity/length rule before touching output. */
+CW_EXPORT int cw_nf_flatten(const unsigned char *body, size_t size,
+                            unsigned char *output, size_t capacity, size_t *written) {
+    unsigned char rows[64u * 64u * 34u];
+    uint64_t ids[CW_BLOCKS];
+    uint32_t spans[CW_BLOCKS];
+    const unsigned char *flags, *lengths, *data;
+    unsigned int n, valid = 0;
+    size_t position, total = 0, flat_size, row = 0, at;
+    int planes;
+    if (!body || !output || !written || size < 5u || size > 5u + CW_BLOCKS * CW_ENTRY_MAX) return 0;
+    planes = memcmp(body, "BP1\0", 4u) == 0;
+    if (!planes && memcmp(body, "BR1\0", 4u)) return -1;
+    n = body[4]; position = 5u + (size_t)n * 73u;
+    if (!n || n > CW_BLOCKS || position > size) return -2;
+    flags = body + 5u + (size_t)n * 8u;
+    lengths = flags + n; data = body + position;
+    for (unsigned int i = 0; i < n; ++i) {
+        unsigned int span = 0, flag = flags[i];
+        uint64_t id = be64(body + 5u + (size_t)i * 8u);
+        if (flag > 1u) return -2;
+        for (unsigned int j = 0; j < 64u; ++j) {
+            unsigned int length = lengths[i * 64u + j];
+            if (length && (flag ? length < 6u || length > 34u : length != 26u && length != 34u)) return -4;
+            span += length;
+        }
+        if (id == UINT64_MAX) {
+            if (flag || span) return -3;
+        } else {
+            if (!span || id > CW_MAX_BLOCK || (id == CW_MAX_BLOCK && lengths[i * 64u + 63u])) return -3;
+            for (unsigned int j = 0; j < i; ++j) if (ids[j] == id) return -3;
+            ++valid;
+        }
+        ids[i] = id; spans[i] = span; total += span;
+    }
+    if (!valid) return -3;
+    if (total != size - position) return -5;
+    flat_size = 1u + ((size_t)n + 1u) * 4u + (size_t)n * 73u + total;
+    if (flat_size > CW_FLAT_MAX || capacity < flat_size) return 0;
+    if (planes) {
+        if (!cw_nf_untranspose(lengths, (size_t)n * 64u, data, total, rows, sizeof(rows))) return -4;
+        data = rows;
+    }
+    output[0] = (unsigned char)n; put32(output + 1u, 0);
+    at = 1u + ((size_t)n + 1u) * 4u;
+    position = 0;
+    for (unsigned int i = 0; i < n; ++i) {
+        put64(output + at, ids[i]); output[at + 8u] = flags[i];
+        memcpy(output + at + 9u, lengths + i * 64u, 64u);
+        memcpy(output + at + 73u, data + row, spans[i]);
+        at += 73u + spans[i]; row += spans[i]; position += 73u + spans[i];
+        put32(output + 1u + ((size_t)i + 1u) * 4u, (uint32_t)position);
+    }
+    *written = at;
+    return 1;
+}
 
 static int lease(const unsigned char *raw, size_t size, const unsigned char *tag,
                  int compressed, EVP_MD_CTX *ctx, unsigned char *message) {
@@ -158,23 +222,92 @@ static int entries(const unsigned char *flat, size_t size, cw_entry *out,
     return 1;
 }
 
-static void proof(sqlite3_context *context, int argc, sqlite3_value **argv) {
+static const char *owner_query =
+    "SELECT b.id,CASE WHEN typeof(b.payload)='blob' AND length(b.payload)<=4096 THEN b.payload END,"
+    "CASE WHEN typeof(r.counts)='blob' AND length(r.counts)<=1196 THEN r.counts END,r.detail_slots,"
+    "CASE WHEN typeof(r.search_seal)='blob' AND length(r.search_seal)<=32 THEN r.search_seal END "
+    "FROM main.market_numeric_blocks b "
+    "LEFT JOIN main.market_numeric_block_refs r ON r.id=b.id WHERE b.id IN("
+    "?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"
+    "?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+
+static int reconcile(sqlite3_stmt *statement, EVP_MD_CTX *ctx, uint64_t identity,
+                     const unsigned char *flat, size_t size, const unsigned char *mask,
+                     int compressed, unsigned int *owned) {
     cw_entry values[CW_BLOCKS];
     unsigned int count = 0, slots = 0;
     uint64_t wanted, observed = 0;
     unsigned char pointer[13] = "NF1\0", message[26u + CW_ENTRY_MAX + CW_NR_MAX], actual[32];
+    int rc;
+    if (!identity || identity > UINT64_C(9223372036854775807) || !mask ||
+        !entries(flat, size, values, &count, &slots)) return SQLITE_ERROR;
+    wanted = be64(mask);
+    if (slots < 64u && (wanted >> slots)) return SQLITE_ERROR;
+    put64(pointer + 4u, identity);
+    for (unsigned int i = 0; i < CW_BLOCKS; ++i) {
+        rc = i < count ? sqlite3_bind_int64(statement, (int)i + 1, (sqlite3_int64)values[i].id) :
+            sqlite3_bind_null(statement, (int)i + 1);
+        if (rc != SQLITE_OK) return rc;
+    }
+    while ((rc = sqlite3_step(statement)) == SQLITE_ROW) {
+        uint64_t id;
+        unsigned int left = 0, right = count;
+        const cw_entry *item;
+        const unsigned char *payload, *nr, *seal;
+        size_t nr_size, length;
+        if (sqlite3_column_type(statement, 0) != SQLITE_INTEGER) return SQLITE_ERROR;
+        id = (uint64_t)sqlite3_column_int64(statement, 0);
+        while (left < right) { unsigned int middle = left + (right - left) / 2u;
+            if (values[middle].id < id) left = middle + 1u; else right = middle; }
+        if (left == count || values[left].id != id || sqlite3_column_type(statement, 1) != SQLITE_BLOB) return SQLITE_ERROR;
+        item = values + left;
+        payload = sqlite3_column_blob(statement, 1);
+        pointer[12] = (unsigned char)item->slot;
+        if (sqlite3_column_bytes(statement, 1) != 13 || !payload || memcmp(payload, pointer, 13u)) continue;
+        if (!(wanted & (UINT64_C(1) << item->slot)) || (observed & (UINT64_C(1) << item->slot)) ||
+            sqlite3_column_type(statement, 2) != SQLITE_BLOB ||
+            sqlite3_column_type(statement, 3) != SQLITE_INTEGER || sqlite3_column_int64(statement, 3) != 0 ||
+            sqlite3_column_type(statement, 4) != SQLITE_BLOB || sqlite3_column_bytes(statement, 4) != 32) return SQLITE_ERROR;
+        nr_size = (size_t)sqlite3_column_bytes(statement, 2);
+        nr = sqlite3_column_blob(statement, 2); seal = sqlite3_column_blob(statement, 4);
+        if (!seal || !lease(nr, nr_size, item->entry, compressed, ctx, message)) return SQLITE_ERROR;
+        memcpy(message, "NS2\0", 4u); memcpy(message + 4u, item->entry, 8u);
+        memcpy(message + 12u, pointer, 13u); memcpy(message + 25u, item->entry, item->size);
+        memcpy(message + 25u + item->size, nr, nr_size);
+        length = 25u + item->size + nr_size;
+        if (!digest(ctx, message, length, actual) || memcmp(actual, seal, 32u)) return SQLITE_ERROR;
+        observed |= UINT64_C(1) << item->slot;
+    }
+    if (rc != SQLITE_DONE) return rc;
+    if (observed != wanted) return SQLITE_ERROR;
+    *owned = 0;
+    while (observed) { observed &= observed - 1u; ++*owned; }
+    return sqlite3_reset(statement);
+}
+
+static int prepare_proof(sqlite3_context *context, sqlite3_stmt **statement, EVP_MD_CTX **ctx) {
+    int rc = sqlite3_prepare_v2(sqlite3_context_db_handle(context), owner_query, -1, statement, NULL);
+    if (rc != SQLITE_OK) return rc;
+    *ctx = crypto.new_ctx();
+    return *ctx ? SQLITE_OK : SQLITE_NOMEM;
+}
+
+static void finish_proof(sqlite3_context *context, sqlite3_stmt *statement, EVP_MD_CTX *ctx,
+                         int rc, unsigned int owned) {
+    if (statement) sqlite3_finalize(statement);
+    if (ctx) crypto.free_ctx(ctx);
+    if (rc == SQLITE_OK) sqlite3_result_int(context, (int)owned);
+    else if (rc != SQLITE_ERROR && rc != SQLITE_ROW && rc != SQLITE_DONE) {
+        sqlite3_result_error_code(context, rc);
+    } else sqlite3_result_error(context, "cw_nf: conflicting actual numeric frame owner/lease/value seal", -1);
+}
+
+static void proof(sqlite3_context *context, int argc, sqlite3_value **argv) {
     sqlite3_stmt *statement = NULL;
     EVP_MD_CTX *ctx = NULL;
     const unsigned char *flat, *mask;
-    int rc = SQLITE_ERROR, ok = 0, compressed;
-    const char *query =
-        "SELECT b.id,CASE WHEN typeof(b.payload)='blob' AND length(b.payload)<=4096 THEN b.payload END,"
-        "CASE WHEN typeof(r.counts)='blob' AND length(r.counts)<=1196 THEN r.counts END,r.detail_slots,"
-        "CASE WHEN typeof(r.search_seal)='blob' AND length(r.search_seal)<=32 THEN r.search_seal END "
-        "FROM main.market_numeric_blocks b "
-        "LEFT JOIN main.market_numeric_block_refs r ON r.id=b.id WHERE b.id IN("
-        "?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"
-        "?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)";
+    unsigned int owned = 0;
+    int rc = SQLITE_ERROR;
     if (!crypto_ready || argc != 4 || sqlite3_value_type(argv[0]) != SQLITE_INTEGER ||
         sqlite3_value_int64(argv[0]) <= 0 || sqlite3_value_type(argv[1]) != SQLITE_BLOB ||
         sqlite3_value_bytes(argv[1]) < 9 || sqlite3_value_bytes(argv[1]) > (int)CW_FLAT_MAX ||
@@ -183,66 +316,59 @@ static void proof(sqlite3_context *context, int argc, sqlite3_value **argv) {
         (sqlite3_value_int64(argv[3]) != 0 && sqlite3_value_int64(argv[3]) != 1)) goto done;
     flat = sqlite3_value_blob(argv[1]); mask = sqlite3_value_blob(argv[2]);
     if (!flat || !mask) { rc = SQLITE_NOMEM; goto done; }
-    if (!entries(flat, (size_t)sqlite3_value_bytes(argv[1]), values, &count, &slots)) goto done;
-    wanted = be64(mask);
-    if (slots < 64u && (wanted >> slots)) goto done;
-    put64(pointer + 4u, (uint64_t)sqlite3_value_int64(argv[0]));
-    compressed = sqlite3_value_int(argv[3]);
-    rc = sqlite3_prepare_v2(sqlite3_context_db_handle(context), query, -1, &statement, NULL);
-    if (rc != SQLITE_OK) goto done;
-    for (unsigned int i = 0; i < CW_BLOCKS; ++i) {
-        rc = i < count ? sqlite3_bind_int64(statement, (int)i + 1, (sqlite3_int64)values[i].id) :
-            sqlite3_bind_null(statement, (int)i + 1);
-        if (rc != SQLITE_OK) goto done;
-    }
-    ctx = crypto.new_ctx();
-    if (!ctx) { rc = SQLITE_NOMEM; goto done; }
-    while ((rc = sqlite3_step(statement)) == SQLITE_ROW) {
-        uint64_t id;
-        unsigned int left = 0, right = count;
-        const cw_entry *item;
-        const unsigned char *payload, *nr, *seal;
-        size_t nr_size, length;
-        if (sqlite3_column_type(statement, 0) != SQLITE_INTEGER) goto done;
-        id = (uint64_t)sqlite3_column_int64(statement, 0);
-        while (left < right) { unsigned int middle = left + (right - left) / 2u;
-            if (values[middle].id < id) left = middle + 1u; else right = middle; }
-        if (left == count || values[left].id != id || sqlite3_column_type(statement, 1) != SQLITE_BLOB) goto done;
-        item = values + left;
-        payload = sqlite3_column_blob(statement, 1);
-        pointer[12] = (unsigned char)item->slot;
-        if (sqlite3_column_bytes(statement, 1) != 13 || !payload || memcmp(payload, pointer, 13u)) continue;
-        if (!(wanted & (UINT64_C(1) << item->slot)) || (observed & (UINT64_C(1) << item->slot)) ||
-            sqlite3_column_type(statement, 2) != SQLITE_BLOB ||
-            sqlite3_column_type(statement, 3) != SQLITE_INTEGER || sqlite3_column_int64(statement, 3) != 0 ||
-            sqlite3_column_type(statement, 4) != SQLITE_BLOB || sqlite3_column_bytes(statement, 4) != 32) goto done;
-        nr_size = (size_t)sqlite3_column_bytes(statement, 2);
-        nr = sqlite3_column_blob(statement, 2); seal = sqlite3_column_blob(statement, 4);
-        if (!seal || !lease(nr, nr_size, item->entry, compressed, ctx, message)) goto done;
-        memcpy(message, "NS2\0", 4u); memcpy(message + 4u, item->entry, 8u);
-        memcpy(message + 12u, pointer, 13u); memcpy(message + 25u, item->entry, item->size);
-        memcpy(message + 25u + item->size, nr, nr_size);
-        length = 25u + item->size + nr_size;
-        if (!digest(ctx, message, length, actual) || memcmp(actual, seal, 32u)) goto done;
-        observed |= UINT64_C(1) << item->slot;
-    }
-    if (rc == SQLITE_DONE && observed == wanted) ok = 1;
+    rc = prepare_proof(context, &statement, &ctx);
+    if (rc == SQLITE_OK) rc = reconcile(statement, ctx, (uint64_t)sqlite3_value_int64(argv[0]),
+        flat, (size_t)sqlite3_value_bytes(argv[1]), mask, sqlite3_value_int(argv[3]), &owned);
 done:
-    if (statement) sqlite3_finalize(statement);
-    if (ctx) crypto.free_ctx(ctx);
-    if (ok) {
-        unsigned int owned = 0;
-        while (observed) { observed &= observed - 1u; ++owned; }
-        sqlite3_result_int(context, (int)owned);
-    } else if (rc != SQLITE_ERROR && rc != SQLITE_OK && rc != SQLITE_ROW && rc != SQLITE_DONE) {
-        sqlite3_result_error_code(context, rc);
-    } else sqlite3_result_error(context, "cw_nf: conflicting actual numeric frame owner/lease/value seal", -1);
+    finish_proof(context, statement, ctx, rc, owned);
+}
+
+/* At most8 authenticated derivatives, up to64 current parents each. Statement
+ * and EVP context are reused only within this call, never kept by SQLite. */
+static void proof_batch(sqlite3_context *context, int argc, sqlite3_value **argv) {
+    sqlite3_stmt *statement = NULL;
+    EVP_MD_CTX *ctx = NULL;
+    const unsigned char *raw;
+    unsigned int owned = 0, n;
+    uint64_t previous = 0;
+    size_t size, at = 1;
+    int rc = SQLITE_ERROR;
+    if (!crypto_ready || argc != 2 || sqlite3_value_type(argv[0]) != SQLITE_BLOB ||
+        sqlite3_value_bytes(argv[0]) < 30 || sqlite3_value_bytes(argv[0]) > (int)(1u + 8u * (20u + CW_FLAT_MAX)) ||
+        sqlite3_value_type(argv[1]) != SQLITE_INTEGER ||
+        (sqlite3_value_int64(argv[1]) != 0 && sqlite3_value_int64(argv[1]) != 1)) goto done;
+    raw = sqlite3_value_blob(argv[0]);
+    if (!raw) { rc = SQLITE_NOMEM; goto done; }
+    size = (size_t)sqlite3_value_bytes(argv[0]); n = raw[0];
+    if (!n || n > 8u) goto done;
+    rc = prepare_proof(context, &statement, &ctx);
+    if (rc != SQLITE_OK) goto done;
+    for (unsigned int i = 0; i < n; ++i) {
+        uint64_t identity;
+        unsigned int count = 0;
+        size_t length;
+        rc = SQLITE_ERROR;
+        if (at > size || size - at < 20u) goto done;
+        identity = be64(raw + at); length = be32(raw + at + 16u);
+        if (identity <= previous || length < 9u || length > CW_FLAT_MAX || length > size - at - 20u) goto done;
+        rc = reconcile(statement, ctx, identity, raw + at + 20u, length, raw + at + 8u,
+            sqlite3_value_int(argv[1]), &count);
+        if (rc != SQLITE_OK) goto done;
+        owned += count; previous = identity; at += 20u + length;
+    }
+    if (at != size) rc = SQLITE_ERROR;
+done:
+    finish_proof(context, statement, ctx, rc, owned);
 }
 
 CW_EXPORT int sqlite3_extension_init(sqlite3 *db, char **error, const sqlite3_api_routines *api) {
+    int rc;
     (void)error;
     if (!api || !crypto_ready || (sqlite3_api && sqlite3_api != api)) return SQLITE_ERROR;
     if (!sqlite3_api) { SQLITE_EXTENSION_INIT2(api); }
-    return sqlite3_create_function_v2(db, "cw_nf_proof", 4, SQLITE_UTF8 | SQLITE_DIRECTONLY,
+    rc = sqlite3_create_function_v2(db, "cw_nf_proof", 4, SQLITE_UTF8 | SQLITE_DIRECTONLY,
         NULL, proof, NULL, NULL, NULL);
+    if (rc != SQLITE_OK) return rc;
+    return sqlite3_create_function_v2(db, "cw_nf_proof_batch", 2, SQLITE_UTF8 | SQLITE_DIRECTONLY,
+        NULL, proof_batch, NULL, NULL, NULL);
 }

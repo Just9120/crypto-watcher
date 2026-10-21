@@ -194,7 +194,7 @@ def main() -> None:
             "assert v.stats()['vfs_backend']=='native'; v.unregister()",
             temporary_size="64m",
         )
-        # Exercise the ABI2 SQL/OpenSSL bridge in the actual runtime image,
+        # Exercise the ABI3 SQL/OpenSSL bridge in the actual runtime image,
         # whose Python/OpenSSL/SQLite differ from the CI build environment.
         run(
             args.image,
@@ -215,6 +215,9 @@ def main() -> None:
             "(7,nr,0,signature(7,pointer,nr,binding=entry))); "
             "before=db.total_changes; "
             "assert p.owners(db,1,flat,bytes(7)+bytes([1]),False)==1; "
+            "assert p.owners_batch(db,[(1,flat,bytes(7)+bytes([1]))],False)==1; "
+            "from cryptowatcher.numeric_frame_native import flatten; "
+            "assert flatten(b'BR1\\0'+bytes([1])+entry)==flat; "
             "assert db.total_changes==before; db.close()",
         )
         for command in ("state-check", "backup"):

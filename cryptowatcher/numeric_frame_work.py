@@ -417,23 +417,36 @@ def measure(db: sqlite3.Connection, deadline: float, cache: Any = None) -> dict[
     }
     try:
         while cursor < upper and time.monotonic() < deadline:
-            row = db.execute(
-                "SELECT id,payload,slots,checksum FROM market_numeric_frames WHERE id>? AND id<=? ORDER BY id LIMIT 1",
-                (cursor, upper),
-            ).fetchone()
-            if row is None:
+            rows = db.execute(
+                "SELECT id,CASE WHEN typeof(payload)='blob' AND length(payload) BETWEEN 37 AND ? THEN payload END,"
+                "CASE WHEN typeof(slots)='blob' AND length(slots)=8 THEN slots END,"
+                "CASE WHEN typeof(checksum)='blob' AND length(checksum)=32 THEN checksum END "
+                "FROM market_numeric_frames WHERE id>? AND id<=? ORDER BY id LIMIT ?",
+                (numeric_frame_codec.MAX_FRAME, cursor, upper, 8 if native_owners else 1),
+            ).fetchall()
+            if not rows:
                 cursor = upper
                 break
+            if any(not isinstance(value, bytes) for row in rows for value in row[1:]):
+                raise ValueError("Invalid actual numeric frame row bound")
+            if native_owners:
+                batch = []
+                size = 0
+                for row in rows:
+                    identity, payload, mask, checksum = row[0], bytes(row[1]), bytes(row[2]), bytes(row[3])
+                    if owner_slots.signature(3, identity, mask) != checksum:
+                        raise ValueError("Conflicting actual numeric frame owner checksum")
+                    batch.append((identity, numeric_frame_codec.data(payload, cache), mask))
+                    size += len(payload)
+                owned += numeric_frame_proof.owners_batch(db, batch, compressed_leases)
+                frames += len(batch)
+                payload_bytes += size
+                cursor = rows[-1][0]
+                continue
+            row = rows[0]
             identity, payload, mask, checksum = row[0], bytes(row[1]), bytes(row[2]), bytes(row[3])
             if owner_slots.signature(3, identity, mask) != checksum:
                 raise ValueError("Conflicting actual numeric frame owner checksum")
-            if native_owners:
-                flat = numeric_frame_codec.data(payload, cache)
-                owned += numeric_frame_proof.owners(db, identity, flat, mask, compressed_leases)
-                frames += 1
-                payload_bytes += len(payload)
-                cursor = identity
-                continue
             entries = numeric_frame_codec.raw_entries(payload, cache)
             # One validated container identity; enumerated slots are already
             # bounded by the authenticated BF1 decoder's <=64 cardinality.

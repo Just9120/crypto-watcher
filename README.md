@@ -46,12 +46,14 @@ recovery выбирают native helper при наличии Linux artifact. О
 helper прекращает validation. Frozen-image extension отделён от runtime БД. Native
 corruption/bounds/lifetime/deadline fixtures входят в required Linux suite.
 
-Эта же сборка создаёт `numeric_frame.so` ABI2 для bounded BP1 byte transposition
+Эта же сборка создаёт `numeric_frame.so` ABI3 для bounded BP1/BR1 flat layout
 и read-only NF/NR/NS2 proof. Transpose только копирует байты без allocations или
-float arithmetic. Python проверяет BF1/checksum/shape и OW mask, а native proof
-читает до64 current parent/ref rows, проверяет прежние NR/NS2 preimages через
+float arithmetic. Python проверяет BF1/checksum/Zstd bounds и OW mask, native
+flatten сохраняет прежние BR1/BP1 shape/identity/length checks, а native proof
+читает до64 current parent/ref rows на frame, проверяет прежние NR/NS2 preimages через
 OpenSSL из Python и NR2 header через pinned Zstd. Extension не пишет данные,
-не сохраняет connection/statement/cache; загрузка разрешена только на время
+проверяет до8frames за вызов с временным blob не более1153737B и не сохраняет
+connection/statement/cache; загрузка разрешена только на время
 установки exact artifact. Прежний shared pure cache остаётся1MiB. При отсутствии
 artifact работает portable path; повреждённый installed artifact прекращает
 чтение. Linux CI и image checks требуют корректный artifact, byte-exact parity

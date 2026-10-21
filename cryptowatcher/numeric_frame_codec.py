@@ -89,6 +89,9 @@ def _expanded(raw: bytes) -> bytes:
         )
     except zstandard.ZstdError as error:
         raise ValueError("Invalid numeric frame compression") from error
+    native = numeric_frame_native.flatten(body)
+    if native is not None:
+        return native
     if body[:4] not in (b"BR1\x00", b"BP1\x00"):
         raise ValueError("Unknown numeric frame representation")
     n = body[4]

@@ -11,7 +11,7 @@
 #define CW_NF_WIDTH 34u
 #define CW_NF_BYTES (CW_NF_SLOTS * CW_NF_WIDTH)
 
-CW_EXPORT uint32_t cw_nf_abi(void) { return 2u; }
+CW_EXPORT uint32_t cw_nf_abi(void) { return 3u; }
 
 CW_EXPORT int cw_nf_untranspose(const unsigned char *lengths, size_t count,
                       const unsigned char *planes, size_t plane_size,
