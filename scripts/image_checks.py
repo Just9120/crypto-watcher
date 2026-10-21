@@ -511,7 +511,7 @@ s.close()
             "-B",
             "-c",
             """import runpy
-from contextlib import closing
+from contextlib import ExitStack,closing
 from pathlib import Path
 from unittest.mock import patch
 from cryptowatcher.storage import Store
@@ -519,8 +519,18 @@ from cryptowatcher.market_storage import encoded
 from cryptowatcher.record_codec import pack_binary_v2
 from cryptowatcher.analytics import cohort_rows
 from cryptowatcher.storage_repack import work
+from cryptowatcher.storage_lifecycle import body_links
 m=runpy.run_path('/data/measure.py')
-with patch('cryptowatcher.expiry_index.install'),patch('cryptowatcher.quality_layout.install'),patch('cryptowatcher.record_codec.pack_binary',pack_binary_v2),patch('cryptowatcher.quality_summary.encode_facts',encoded):
+with ExitStack() as legacy:
+    # These installers depend on the normalized tables intentionally absent
+    # in this old-writer fixture. Restore every real installer before upgrade.
+    for name in ('expiry_index','quality_layout','reference_layout','quality_packets','quality_meter'):
+        legacy.enter_context(patch('cryptowatcher.'+name+'.install'))
+    legacy.enter_context(patch('cryptowatcher.record_codec.pack_binary',pack_binary_v2))
+    legacy.enter_context(patch('cryptowatcher.quality_summary.encode_facts',encoded))
+    legacy.enter_context(patch('cryptowatcher.quality_packets.pack',lambda db,facts,cohort:encoded(facts)))
+    legacy.enter_context(patch('cryptowatcher.quality_packets.collect',lambda db,batch:0))
+    legacy.enter_context(patch('cryptowatcher.quality_summary.provenance_links',lambda s,day,cohort,chunk,packed:body_links(s,f'quality:{day}:{cohort}:{chunk}',packed)))
     old=m['measure'](Path('/data/upgrade.db'),1)
 with closing(Store(Path('/data/upgrade.db'),233382575)) as s:
     before=list(cohort_rows(s))
