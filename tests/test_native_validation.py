@@ -261,3 +261,42 @@ def test_native_frame_bounds_and_absolute_deadline_refuse(tmp_path):
                 db.execute("SELECT count(*) FROM runtime").fetchone()
     finally:
         vfs.unregister()
+
+
+def test_native_deadline_during_integrity_is_not_a_corruption_verdict(tmp_path):
+    assert available()
+    source = tmp_path / "deadline-source.sqlite3"
+    with closing(sqlite3.connect(source)) as db:
+        db.create_function("cw_deadline_probe", 1, lambda value: 1)
+        db.execute("CREATE TABLE proof(value INTEGER CHECK(cw_deadline_probe(value)),payload BLOB)")
+        # Exceed SQLite's default cache so the expired native xRead is reached
+        # even when the integrity opcode has already visited the whole table.
+        db.executemany("INSERT INTO proof VALUES(?,zeroblob(4096))", [(n,) for n in range(4096)])
+        db.commit()
+    original = source.read_bytes()
+    image = cv.Image(source, limit=cv.MAX_COMPRESSED_BYTES, deadline=time.monotonic() + 30)
+    image.deadline = time.monotonic() + 1
+    sentinel = tmp_path / "deadline-during-integrity.sqlite3"
+    sentinel.touch()
+    vfs = cv.frozen_vfs(image, sentinel)
+    called = False
+
+    def expire_inside_opcode(value):
+        nonlocal called
+        if not called:
+            called = True
+            time.sleep(max(0, image.deadline - time.monotonic()) + 0.02)
+        return 1
+
+    try:
+        with closing(apsw.Connection(str(sentinel), flags=apsw.SQLITE_OPEN_READWRITE, vfs=vfs.name)) as db:
+            db.create_scalar_function("cw_deadline_probe", expire_inside_opcode, 1)
+            with (
+                pytest.raises(cv.QualificationError, match="TIME_BUDGET_EXCEEDED"),
+                cv.classified_errors(image.deadline),
+            ):
+                cv.full_check(db, image.deadline)
+            assert called
+    finally:
+        vfs.unregister()
+    assert source.read_bytes() == original

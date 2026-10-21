@@ -510,3 +510,37 @@ def test_archive_persisted_corruption_never_passes(store, tmp_path, monkeypatch)
         store.backup(destination, validation_directory=scratch, compressed_validation=True, archive=True)
     assert destination.is_file() and store.snapshot().revision == 1
     assert not list(scratch.iterdir())
+
+
+@pytest.mark.parametrize("stage", ["integrity", "heads"])
+@pytest.mark.parametrize("valid", [False, True])
+def test_late_sqlite_results_never_become_corruption_or_success(monkeypatch, stage, valid):
+    from cryptowatcher import compressed_validation as cv
+    from cryptowatcher import record_catalog
+
+    clock = [0.0]
+    monkeypatch.setattr(cv.time, "monotonic", lambda: clock[0])
+
+    class Database:
+        def set_progress_handler(self, *args):
+            pass
+
+        def create_scalar_function(self, *args, **kwargs):
+            pass
+
+        def execute(self, sql):
+            if sql == "PRAGMA integrity_check":
+                if stage == "integrity":
+                    clock[0] = 2.0
+                    return [("ok",)] if valid else [("native read failed after deadline",)]
+                return [("ok",)]
+            return []
+
+    def heads(database):
+        assert stage == "heads"
+        clock[0] = 2.0
+        return valid
+
+    monkeypatch.setattr(record_catalog, "valid_heads", heads)
+    with pytest.raises(QualificationError, match="TIME_BUDGET_EXCEEDED"):
+        cv.full_check(Database(), 1.0)

@@ -511,11 +511,17 @@ def full_check(db: apsw.Connection, deadline: float) -> None:
         db.create_scalar_function("cw_catalogue_shadow_digest", overlap_signature, 2, deterministic=True)
         db.execute("PRAGMA mmap_size=0")
         db.execute("PRAGMA ignore_check_constraints=OFF")
-        if list(db.execute("PRAGMA integrity_check")) != [("ok",)]:
+        integrity = list(db.execute("PRAGMA integrity_check"))
+        # Native xRead can expire inside SQLite's integrity opcode. SQLite may
+        # return those read failures as rows without running our progress hook.
+        budget(deadline)
+        if integrity != [("ok",)]:
             raise QualificationError("DATABASE_CORRUPT")
         from .record_catalog import valid_heads
 
-        if not valid_heads(db):
+        heads_valid = valid_heads(db)
+        budget(deadline)
+        if not heads_valid:
             raise QualificationError("DATABASE_CORRUPT")
         budget(deadline)
     finally:
