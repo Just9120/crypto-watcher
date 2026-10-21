@@ -65,7 +65,10 @@ class NativeVFS:
             ]
             arena = image.blocks
             # This exported buffer and image reference keep the mmap alive.
-            self.borrow = ctypes.c_char.from_buffer(arena.data)
+            data = arena.data
+            if data is None:
+                raise QualificationError("FROZEN_IMAGE_REQUIRED")
+            self.borrow = ctypes.c_char.from_buffer(data)
             offsets = ctypes.cast(arena.offsets.buffer_info()[0], ctypes.POINTER(ctypes.c_uint64))
             lengths = ctypes.cast(arena.lengths.buffer_info()[0], ctypes.POINTER(ctypes.c_uint64))
             self.pointer = create(
@@ -79,8 +82,12 @@ class NativeVFS:
                 image.deadline,
             )
         except (OSError, AttributeError, apsw.Error) as error:
+            if hasattr(self, "borrow"):
+                del self.borrow
             raise QualificationError("NATIVE_VFS_LOAD_FAILED") from error
         if self.pointer is None:
+            if hasattr(self, "borrow"):
+                del self.borrow
             raise QualificationError("NATIVE_VFS_REGISTRATION_REFUSED")
 
     def unregister(self) -> None:
@@ -91,6 +98,7 @@ class NativeVFS:
         if self.lib.cwcvfs_destroy(self.pointer) != apsw.SQLITE_OK:
             raise QualificationError("NATIVE_VFS_HANDLES_OPEN")
         self.pointer = None
+        del self.borrow
 
     def stats(self) -> dict[str, Any]:
         from .compressed_validation import QualificationError

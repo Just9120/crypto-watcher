@@ -22,6 +22,7 @@ import apsw
 import zstandard
 
 from .storage import IntegrityError
+from .validation_archive import ArchiveArena
 
 BLOCK = 65536
 CACHE_PAGES = 512
@@ -113,8 +114,11 @@ class Image:
         deadline: float,
         progress: Any = lambda **kw: None,
         archive_encoding: Literal["GZIP", "ZSTD"] | None = None,
+        archive_store: ArchiveArena | None = None,
     ) -> None:
-        self.blocks = _FrameArena(limit)
+        if archive_store is not None and (path is not None or limit != archive_store.limit):
+            raise QualificationError("INVALID_ARCHIVE_BOUND")
+        self.blocks = _FrameArena(limit) if archive_store is None else archive_store
         self.size = 0
         self.retained = 0
         self.deadline = deadline
@@ -225,7 +229,13 @@ class Image:
         for index, value in self.write_cache.items():
             self.set_block(index, bytes(value))
         self.write_cache.clear()
+        if isinstance(self.blocks, ArchiveArena) and self.size % BLOCK:
+            index, tail = divmod(self.size, BLOCK)
+            raw = self.decompressor.decompress(self.blocks[index], max_output_size=BLOCK)
+            self.set_block(index, raw[:tail])
         self.mutable = False
+        if isinstance(self.blocks, ArchiveArena):
+            self.blocks.finish(self.size, self.reconstructed_hash())
 
     def truncate(self, size: int) -> None:
         budget(self.deadline)
@@ -390,6 +400,14 @@ def configure_cache(db: apsw.Connection, image: Image) -> int:
     budget(image.deadline)
     if image.mutable:
         raise QualificationError("FROZEN_IMAGE_REQUIRED")
+    if isinstance(image.blocks, ArchiveArena):
+        if not image.blocks.sealed:
+            raise QualificationError("FROZEN_IMAGE_REQUIRED")
+        # File pages remain reclaimable by the unchanged4GiB cgroup limit.
+        # Keep the same128MiB SQLite cache as the ordinary disk validator.
+        cache_kib = 128 * 1024
+        db.execute(f"PRAGMA cache_size=-{cache_kib}")
+        return cache_kib
     image_bytes = image.retained + sys.getsizeof(image.blocks)
     cache_bytes = min(
         MAX_SQLITE_CACHE_BYTES, VALIDATION_MEMORY_BYTES - image_bytes - VALIDATION_OVERHEAD_BYTES
@@ -500,10 +518,15 @@ def classified_errors(deadline: float) -> Iterator[None]:
 
 @contextmanager
 def snapshot_image(
-    path: Path, directory: Path, *, deadline: float
+    path: Path, directory: Path, *, deadline: float, archive_store: ArchiveArena | None = None
 ) -> Iterator[tuple[apsw.Connection, Image]]:
     """Pinned online backup, full writable validation, then metadata from that same image."""
-    image = Image(None, limit=MAX_COMPRESSED_BYTES, deadline=deadline)
+    image = Image(
+        None,
+        limit=MAX_COMPRESSED_BYTES if archive_store is None else archive_store.limit,
+        deadline=deadline,
+        archive_store=archive_store,
+    )
     with (
         classified_errors(deadline),
         tempfile.TemporaryDirectory(prefix="cw-cvfs-live-", dir=directory) as work,
