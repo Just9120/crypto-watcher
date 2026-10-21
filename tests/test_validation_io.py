@@ -108,6 +108,7 @@ def test_expensive_qualification_selected_only_for_its_inputs():
     assert backup_io_required([])
     for path in (
         "cryptowatcher/validation_io.py",
+        "cryptowatcher/source_validation.py",
         "native/compressed_vfs.c",
         "requirements.txt",
         "scripts/impact.py",

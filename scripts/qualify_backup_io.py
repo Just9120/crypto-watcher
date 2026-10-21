@@ -31,11 +31,11 @@ def worker(directory: Path) -> dict:
     import zstandard
 
     from cryptowatcher import compressed_validation as cv
-    from cryptowatcher import framed_backup, native_validation, validation_io
+    from cryptowatcher import framed_backup, native_validation, source_validation, validation_io
     from cryptowatcher.__main__ import main as backup_cli
     from cryptowatcher.config import OwnerSettings
     from cryptowatcher.storage import Store
-    from cryptowatcher.validation import scratch_space
+    from cryptowatcher.validation import fingerprint, scratch_space
     from cryptowatcher.validation_archive import ArchiveArena
 
     assert sys.platform == "linux" and native_validation.available() and validation_io._supported()
@@ -101,6 +101,14 @@ def worker(directory: Path) -> dict:
     supported = validation_io._supported
     raw_hash = None
     original_snapshot = framed_backup.snapshot_image
+    original_source = framed_backup.open_source
+    original_fingerprints = framed_backup.independent_fingerprints
+
+    def old_source(path, deadline):
+        return source_validation.open_source(path, deadline, native=False)
+
+    def separate_fingerprints(image, arena):
+        return image.reconstructed_hash(), fingerprint(arena.path, deadline)
 
     def io_bytes() -> int:
         return int(
@@ -133,6 +141,8 @@ def worker(directory: Path) -> dict:
             return original_snapshot(*args, **kwargs)
 
         validation_io._supported = supported if enabled else lambda: False
+        framed_backup.open_source = original_source if enabled else old_source
+        framed_backup.independent_fingerprints = original_fingerprints if enabled else separate_fingerprints
         framed_backup.snapshot_image = measured_snapshot
         previous_argv = sys.argv
         try:
@@ -161,6 +171,8 @@ def worker(directory: Path) -> dict:
             sys.argv = previous_argv
             validation_io._supported = supported
             framed_backup.snapshot_image = original_snapshot
+            framed_backup.open_source = original_source
+            framed_backup.independent_fingerprints = original_fingerprints
         elapsed, cpu_used, read_bytes = (
             time.monotonic() - began,
             time.process_time() - cpu,
@@ -169,6 +181,7 @@ def worker(directory: Path) -> dict:
         assert proof["phase"] == "COMPLETE"
         assert proof["sqlite_cache_kib"] == 2097152
         if enabled:
+            assert proof["source_reader"]["vfs_backend"] == "native-read-ahead"
             assert proof["source_io"] == {
                 "policy": "SEQUENTIAL_NOREUSE",
                 "reason": "APPLIED",
@@ -176,11 +189,12 @@ def worker(directory: Path) -> dict:
             }
         else:
             assert proof["source_io"]["policy"] == "DEFAULT"
+            assert proof["source_reader"] == {"vfs_backend": "sqlite-default"}
         if raw_hash is None:
             raw_hash = proof["sha256"]
         assert proof["sha256"] == raw_hash
         progress["pending_run"] = {
-            "advised": enabled,
+            "optimized": enabled,
             "wall_seconds": round(elapsed, 3),
             "cpu_seconds": round(cpu_used, 3),
             "physical_read_bytes": read_bytes,
@@ -189,6 +203,7 @@ def worker(directory: Path) -> dict:
             "raw_sha256": proof["sha256"],
             "phases": proof["phase_seconds"],
             "source_io": proof["source_io"],
+            "source_reader": proof["source_reader"],
         }
         save_progress("STANDARD_ZSTD_RESTORE")
         # A generic standard ZSTD decoder independently restores every byte.
@@ -232,12 +247,13 @@ def worker(directory: Path) -> dict:
             sentinel.unlink()
         results.append(
             {
-                "advised": enabled,
+                "optimized": enabled,
                 "wall_seconds": round(elapsed, 3),
                 "cpu_seconds": round(cpu_used, 3),
                 "physical_read_bytes": read_bytes,
                 "physical_reads_by_phase": reads_by_phase,
                 "archive_bytes": proof["archive_bytes"],
+                "source_reader": proof["source_reader"],
                 "phases": proof["phase_seconds"],
             }
         )
@@ -253,8 +269,8 @@ def worker(directory: Path) -> dict:
         assert hashlib.file_digest(handle, "sha256").hexdigest() == source_hash
     events = dict(line.split() for line in Path("/sys/fs/cgroup/memory.events").read_text().splitlines())
     assert int(events["oom"]) == 0 and int(events["oom_kill"]) == 0
-    baseline = [run for run in results if not run["advised"]]
-    candidate = [run for run in results if run["advised"]]
+    baseline = [run for run in results if not run["optimized"]]
+    candidate = [run for run in results if run["optimized"]]
     wall_ratio = statistics.mean(run["wall_seconds"] for run in candidate) / statistics.mean(
         run["wall_seconds"] for run in baseline
     )
@@ -359,7 +375,7 @@ def main() -> None:
         receipt.write_text(json.dumps(result, indent=2) + "\n")
         assert result["state"] == "EXACT_BACKUP_AND_STANDARD_RESTORE_PASS"
         assert result["meaningful_improvement"], (
-            "Exact Linux backup passed, but source advice has no qualified performance benefit"
+            "Exact Linux backup passed, but the combined source/hash path has no qualified performance benefit"
         )
     assert not directory.exists()
     print("Owned temporary source and archives cleaned; bounded qualification receipt retained.")

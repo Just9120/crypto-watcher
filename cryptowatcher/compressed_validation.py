@@ -23,7 +23,7 @@ import apsw
 import zstandard
 
 from .storage import IntegrityError
-from .validation_archive import ArchiveArena
+from .validation_archive import PREFIX_BYTES, ArchiveArena
 from .validation_codes import DETAIL_CODES
 from .validation_io import source_scan
 
@@ -356,18 +356,31 @@ class Image:
             pos += n
         return b"".join(pieces)
 
-    def reconstructed_hash(self) -> str:
+    def reconstructed_hash(self, *, encoded: Callable[[bytes], None] | None = None) -> str:
         result = hashlib.sha256()
-        for value in self.iter_bytes():
+        for value in self.iter_bytes(encoded=encoded):
             result.update(value)
         return result.hexdigest()
 
-    def iter_bytes(self) -> Iterator[bytes]:
+    def iter_bytes(self, *, encoded: Callable[[bytes], None] | None = None) -> Iterator[bytes]:
         if self.mutable:
             raise QualificationError("FROZEN_IMAGE_REQUIRED")
+        archive = self.blocks if isinstance(self.blocks, ArchiveArena) else None
+        physical_cursor = PREFIX_BYTES
+        if encoded is not None:
+            if archive is None or not archive.sealed or archive.data is None:
+                raise QualificationError("FROZEN_IMAGE_REQUIRED")
+            archive.assert_unchanged()
+            encoded(archive.data[:PREFIX_BYTES])
         self.cache.clear()
         for index, blob in enumerate(self.blocks):
             budget(self.deadline)
+            if encoded is not None and index:
+                assert archive is not None
+                if archive.offsets[index] != physical_cursor:
+                    raise QualificationError("BYTE_IDENTITY_MISMATCH")
+                encoded(blob)
+                physical_cursor += len(blob)
             value = self.unpack_block(blob)
             expected = min(BLOCK, self.size - index * BLOCK)
             if len(value) not in (expected, BLOCK) or (
@@ -375,6 +388,13 @@ class Image:
             ):
                 raise QualificationError("BYTE_IDENTITY_MISMATCH")
             yield value[:expected]
+        if encoded is not None:
+            assert archive is not None and archive.data is not None
+            if not PREFIX_BYTES <= physical_cursor <= len(archive.data):
+                raise QualificationError("BYTE_IDENTITY_MISMATCH")
+            budget(self.deadline)
+            encoded(archive.data[physical_cursor:])
+            archive.assert_unchanged()
 
 
 class File(apsw.VFSFile):

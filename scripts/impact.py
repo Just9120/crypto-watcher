@@ -22,6 +22,7 @@ def backup_io_required(paths: list[str]) -> bool:
         "cryptowatcher/native_validation.py",
         "cryptowatcher/validation_archive.py",
         "cryptowatcher/validation_io.py",
+        "cryptowatcher/source_validation.py",
         "cryptowatcher/validation.py",
         "cryptowatcher/storage.py",
     }

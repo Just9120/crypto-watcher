@@ -173,3 +173,158 @@ int sqlite3_cwcvfs_init(sqlite3 *db,char **error,const sqlite3_api_routines *api
     (void)db;(void)error;SQLITE_EXTENSION_INIT2(api);
     return sqlite3_libversion_number()==3053004 && ZSTD_versionNumber()==10507?SQLITE_OK:SQLITE_MISMATCH;
 }
+
+/* A single read-only source handle, retaining the original VFS lock/SHM
+   protocol. Cache physical main-file reads only while the SQLite read lock is
+   held. WAL reads and all other auxiliary operations use the parent directly. */
+#define SOURCE_READ_BYTES 1048576
+typedef struct SourceCtx SourceCtx;
+typedef struct {
+    sqlite3_file base;
+    SourceCtx *ctx;
+    sqlite3_file *parent;
+    unsigned char *cache;
+    sqlite3_int64 offset;
+    int valid;
+} SourceFile;
+struct SourceCtx {
+    sqlite3_vfs vfs;
+    sqlite3_vfs *parent;
+    char name[100], path[4096];
+    double deadline;
+    int opens;
+    uint64_t reads, parent_reads, fetched;
+};
+static int source_expired(SourceCtx *c) {
+    struct timespec now;
+    return clock_gettime(CLOCK_MONOTONIC,&now)!=0 || now.tv_sec+now.tv_nsec/1e9>=c->deadline;
+}
+static int source_close(sqlite3_file *p) {
+    SourceFile *f=(SourceFile*)p;
+    int result=f->parent->pMethods->xClose(f->parent);
+    free(f->cache);f->cache=NULL;f->ctx->opens--;return result;
+}
+static int source_read(sqlite3_file *p,void *out,int n,sqlite3_int64 offset) {
+    SourceFile *f=(SourceFile*)p;SourceCtx *c=f->ctx;unsigned char *target=out;
+    if(n<0 || n>SOURCE_READ_BYTES || offset<0 || offset>INT64_MAX-n || source_expired(c)) return SQLITE_IOERR_READ;
+    c->reads++;
+    if(!n)return SQLITE_OK;
+    if(!f->cache) { f->cache=malloc(SOURCE_READ_BYTES);if(!f->cache)return SQLITE_NOMEM; }
+    int left=n;
+    while(left) {
+        if(source_expired(c))return SQLITE_IOERR_READ;
+        if(!f->valid || offset<f->offset || offset-f->offset>=f->valid) {
+            sqlite3_int64 size;
+            int result=f->parent->pMethods->xFileSize(f->parent,&size);
+            if(result!=SQLITE_OK)return result;
+            f->valid=0;
+            if(offset>=size) { memset(target,0,(size_t)left);return SQLITE_IOERR_SHORT_READ; }
+            f->offset=offset/SOURCE_READ_BYTES*SOURCE_READ_BYTES;
+            sqlite3_int64 available=size-f->offset;
+            int amount=available<SOURCE_READ_BYTES?(int)available:SOURCE_READ_BYTES;
+            result=f->parent->pMethods->xRead(f->parent,f->cache,amount,f->offset);
+            c->parent_reads++;
+            if(result!=SQLITE_OK)return result;
+            c->fetched+=(uint64_t)amount;f->valid=amount;
+        }
+        int start=(int)(offset-f->offset),take=f->valid-start;
+        if(take>left)take=left;
+        memcpy(target,f->cache+start,(size_t)take);
+        target+=take;offset+=take;left-=take;
+    }
+    return SQLITE_OK;
+}
+static int source_size(sqlite3_file *p,sqlite3_int64 *size) {
+    SourceFile *f=(SourceFile*)p;return f->parent->pMethods->xFileSize(f->parent,size);
+}
+static int source_lock(sqlite3_file *p,int level) {
+    SourceFile *f=(SourceFile*)p;f->valid=0;return f->parent->pMethods->xLock(f->parent,level);
+}
+static int source_unlock(sqlite3_file *p,int level) {
+    SourceFile *f=(SourceFile*)p;if(level<SQLITE_LOCK_SHARED)f->valid=0;
+    return f->parent->pMethods->xUnlock(f->parent,level);
+}
+static int source_reserved(sqlite3_file *p,int *out) {
+    SourceFile *f=(SourceFile*)p;return f->parent->pMethods->xCheckReservedLock(f->parent,out);
+}
+static int source_control(sqlite3_file *p,int op,void *out) {
+    SourceFile *f=(SourceFile*)p;f->valid=0;return f->parent->pMethods->xFileControl(f->parent,op,out);
+}
+static int source_sector(sqlite3_file *p) {
+    SourceFile *f=(SourceFile*)p;return f->parent->pMethods->xSectorSize(f->parent);
+}
+static int source_characteristics(sqlite3_file *p) {
+    SourceFile *f=(SourceFile*)p;return f->parent->pMethods->xDeviceCharacteristics(f->parent);
+}
+static int source_shm_map(sqlite3_file *p,int page,int size,int extend,void volatile **out) {
+    SourceFile *f=(SourceFile*)p;return f->parent->pMethods->xShmMap(f->parent,page,size,extend,out);
+}
+static int source_shm_lock(sqlite3_file *p,int offset,int n,int flags) {
+    SourceFile *f=(SourceFile*)p;f->valid=0;
+    return f->parent->pMethods->xShmLock(f->parent,offset,n,flags);
+}
+static void source_shm_barrier(sqlite3_file *p) {
+    SourceFile *f=(SourceFile*)p;f->parent->pMethods->xShmBarrier(f->parent);
+}
+static int source_shm_unmap(sqlite3_file *p,int remove) {
+    SourceFile *f=(SourceFile*)p;f->valid=0;return f->parent->pMethods->xShmUnmap(f->parent,remove);
+}
+static const sqlite3_io_methods source_methods={
+    .iVersion=2,.xClose=source_close,.xRead=source_read,.xWrite=readonly_write,
+    .xTruncate=readonly_truncate,.xSync=sync_file,.xFileSize=source_size,
+    .xLock=source_lock,.xUnlock=source_unlock,.xCheckReservedLock=source_reserved,
+    .xFileControl=source_control,.xSectorSize=source_sector,.xDeviceCharacteristics=source_characteristics,
+    .xShmMap=source_shm_map,.xShmLock=source_shm_lock,.xShmBarrier=source_shm_barrier,.xShmUnmap=source_shm_unmap
+};
+static int source_auxiliary(SourceCtx *c,const char *name) {
+    size_t n=strlen(c->path);
+    return name && !strncmp(name,c->path,n) && (!strcmp(name+n,"-wal") || !strcmp(name+n,"-journal"));
+}
+static int source_open(sqlite3_vfs *v,const char *name,sqlite3_file *file,int flags,int *out) {
+    SourceCtx *c=v->pAppData;
+    if(!(flags&SQLITE_OPEN_MAIN_DB)) return source_auxiliary(c,name)?c->parent->xOpen(c->parent,name,file,flags,out):SQLITE_CANTOPEN;
+    if(!name || strcmp(name,c->path) || c->opens || !(flags&SQLITE_OPEN_READONLY) || (flags&(SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE)) || source_expired(c))return SQLITE_CANTOPEN;
+    SourceFile *f=(SourceFile*)file;f->parent=(sqlite3_file*)(f+1);
+    int result=c->parent->xOpen(c->parent,name,f->parent,flags,out);
+    if(result!=SQLITE_OK)return result;
+    if(f->parent->pMethods->iVersion<2) { f->parent->pMethods->xClose(f->parent);return SQLITE_CANTOPEN; }
+    f->ctx=c;f->cache=NULL;f->valid=0;f->offset=0;f->base.pMethods=&source_methods;c->opens++;
+    return SQLITE_OK;
+}
+static int source_delete(sqlite3_vfs *v,const char *name,int sync) {
+    SourceCtx *c=v->pAppData;return source_auxiliary(c,name)?c->parent->xDelete(c->parent,name,sync):SQLITE_READONLY;
+}
+static int source_access(sqlite3_vfs *v,const char *name,int flags,int *out) {
+    SourceCtx *c=v->pAppData;return c->parent->xAccess(c->parent,name,flags,out);
+}
+static int source_pathname(sqlite3_vfs *v,const char *name,int n,char *out) {
+    SourceCtx *c=v->pAppData;return c->parent->xFullPathname(c->parent,name,n,out);
+}
+static int source_randomness(sqlite3_vfs *v,int n,char *out) {
+    SourceCtx *c=v->pAppData;return c->parent->xRandomness(c->parent,n,out);
+}
+static int source_sleep(sqlite3_vfs *v,int n) {
+    SourceCtx *c=v->pAppData;return c->parent->xSleep(c->parent,n);
+}
+static int source_time(sqlite3_vfs *v,double *out) {
+    SourceCtx *c=v->pAppData;return c->parent->xCurrentTime(c->parent,out);
+}
+void *cwsource_create(const char *name,const char *path,double deadline) {
+    if(!sqlite3_api || !name || !path || !*path || strlen(name)>=100 || strlen(path)>=4096 || !isfinite(deadline) || sqlite3_vfs_find(name))return NULL;
+    SourceCtx *c=calloc(1,sizeof(*c));if(!c)return NULL;
+    c->parent=sqlite3_vfs_find(NULL);if(!c->parent) { free(c);return NULL; }
+    strcpy(c->name,name);c->deadline=deadline;
+    if(c->parent->xFullPathname(c->parent,path,(int)sizeof(c->path),c->path)!=SQLITE_OK) { free(c);return NULL; }
+    c->vfs=(sqlite3_vfs){.iVersion=1,.szOsFile=(int)sizeof(SourceFile)+c->parent->szOsFile,.mxPathname=c->parent->mxPathname,.zName=c->name,.pAppData=c,
+        .xOpen=source_open,.xDelete=source_delete,.xAccess=source_access,.xFullPathname=source_pathname,
+        .xRandomness=source_randomness,.xSleep=source_sleep,.xCurrentTime=source_time};
+    if(source_expired(c) || sqlite3_vfs_register(&c->vfs,0)!=SQLITE_OK) { free(c);return NULL; }
+    return c;
+}
+int cwsource_destroy(void *p) {
+    SourceCtx *c=p;if(!c)return SQLITE_MISUSE;if(c->opens)return SQLITE_BUSY;
+    int result=sqlite3_vfs_unregister(&c->vfs);if(result==SQLITE_OK)free(c);return result;
+}
+void cwsource_stats(void *p,uint64_t *reads,uint64_t *parent_reads,uint64_t *fetched) {
+    SourceCtx *c=p;*reads=c->reads;*parent_reads=c->parent_reads;*fetched=c->fetched;
+}
