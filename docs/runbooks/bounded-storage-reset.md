@@ -211,7 +211,8 @@ Telegram/config writes. Metadata — отдельная root-owned0700 папк�
 `/opt/crypto_watcher/observations/capacity-*`, файлы0600; они не входят в рабочую БД.
 Existing directories/status с другим source/schema и symlinks отклоняются.
 
-Sample cadence5min; до старта нужны два последовательных samples без bootstrap/
+Sample cadence5min; до старта нужны минимум два последовательных samples и не менее
+30min непрерывной устойчивости без bootstrap/
 ingestion recovery/gaps и отдельной analytics-gap-pending queue, с полными ACK,
 current analytics и COMPLETE repack/admission. Analytics queue проверяется одним
 indexed existence lookup с LIMIT1, без count/scan. Нормальные ожидающие наступления

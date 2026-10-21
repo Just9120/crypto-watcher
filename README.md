@@ -108,6 +108,14 @@ python -m ruff format .
 
 `quality` проверяет canonical doc links/fences, Ruff lint/format и mypy. `test` запускает meaningful regression suite; `all` используется в CI. Во время разработки допустим точечный pytest по затронутому риску. Coverage target не задан. Основной merge gate — GitHub `ci-required` на актуальной PR test merge revision; local PASS его не заменяет.
 
+После native build и suite Linux CI выполняет `python scripts/qualify_numeric_boundary.py`:
+конечная временная SQLite с129572frames/8292608owners проверяется новым текущим reader
+за прежние50s на одном CPU при address-space limit4GiB. Pinned seed содержит публичные
+metric bytes; при materialization guards временно сняты только в этой owned fixture
+и полностью восстановлены до чтения. Временная БД удаляется. Эта структурная проверка
+не подтверждает независимую рыночную entropy, ёмкость всей БД или live SLO;
+operating-system file cache не очищается.
+
 `capacity` читает counters/files и статус стабилизации без полного обхода данных.
 Explicit flags выполняют ограниченные разовые ledger/cohort/index измерения;
 logical bytes не складываются с physical pages. Автоматический finite24h observer
