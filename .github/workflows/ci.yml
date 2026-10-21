@@ -42,6 +42,9 @@ jobs:
       - run: uv pip check --python "$(command -v python)"
       - run: python scripts/build_native.py
       - run: python scripts/checks.py all
+      # Finite offline structural authentication check on an owned temporary DB.
+      # This does not claim whole capacity, independent entropy or a live SLO.
+      - run: python scripts/qualify_numeric_boundary.py
       - env:
           REVISION: ${{ github.sha }}
           RUN_ID: ${{ github.run_id }}
