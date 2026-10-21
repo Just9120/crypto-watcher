@@ -1,6 +1,8 @@
 """Source advice must never weaken SQLite snapshots or descriptor lifetime."""
 
+import json
 import os
+import sqlite3
 import time
 from contextlib import closing
 
@@ -178,3 +180,49 @@ def test_framed_backup_restores_hint_before_seal_and_keeps_full_exact_restore(st
     )
     assert result["source_io"] == {"policy": "SEQUENTIAL_NOREUSE", "reason": "APPLIED", "restored": True}
     assert result["phase"] == "COMPLETE"
+
+
+def test_cli_releases_metadata_connection_before_pinned_framed_capture(
+    store, infrastructure, tmp_path, monkeypatch, capsys
+):
+    from cryptowatcher import __main__ as command
+    from cryptowatcher.storage import Store
+    from tests.test_cli import cli
+    from tests.test_framed_backup import environment
+
+    opened = []
+
+    class TrackedStore(Store):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            opened.append(self)
+
+    monkeypatch.setattr(command, "Store", TrackedStore)
+    original = framed_backup.backup
+
+    def backup(*args, **kwargs):
+        assert len(opened) == 1 and opened[0].readonly
+        with pytest.raises(sqlite3.ProgrammingError):
+            opened[0].db.execute("SELECT 1")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(framed_backup, "backup", backup)
+    scratch, destination = environment(tmp_path, monkeypatch)
+    expected = store.snapshot()
+    assert (
+        cli(
+            monkeypatch,
+            infrastructure,
+            "backup",
+            "--destination",
+            str(destination),
+            "--validation-directory",
+            str(scratch),
+            "--archive-backup",
+            "--framed-archive-validation",
+        )
+        == 0
+    )
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "backup_integrity_ok" and result["backup"]["phase"] == "COMPLETE"
+    assert store.snapshot() == expected

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -13,7 +14,7 @@ import sys
 import tempfile
 import time
 import uuid
-from contextlib import closing
+from contextlib import closing, redirect_stdout
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -26,8 +27,10 @@ def worker(directory: Path) -> dict:
 
     from cryptowatcher import compressed_validation as cv
     from cryptowatcher import framed_backup, native_validation, validation_io
+    from cryptowatcher.__main__ import main as backup_cli
     from cryptowatcher.config import OwnerSettings
     from cryptowatcher.storage import Store
+    from cryptowatcher.validation import scratch_space
     from cryptowatcher.validation_archive import ArchiveArena
 
     assert sys.platform == "linux" and native_validation.available() and validation_io._supported()
@@ -36,6 +39,9 @@ def worker(directory: Path) -> dict:
     quota, period = map(int, Path("/sys/fs/cgroup/cpu.max").read_text().split())
     assert quota == period
     assert not any(directory.iterdir())
+    scratch = Path("/validation")
+    scratch_space(scratch, 0)
+    assert not any(scratch.iterdir())
     progress = {
         "state": "RUNNING",
         "phase": "GENERATED_SOURCE",
@@ -86,8 +92,6 @@ def worker(directory: Path) -> dict:
     assert source.stat().st_size > 6 * 1024**3
     with source.open("rb") as handle:
         source_hash = hashlib.file_digest(handle, "sha256").hexdigest()
-    scratch = directory / "scratch"
-    scratch.mkdir()
     results = []
     supported = validation_io._supported
     raw_hash = None
@@ -125,9 +129,31 @@ def worker(directory: Path) -> dict:
 
         validation_io._supported = supported if enabled else lambda: False
         framed_backup.snapshot_image = measured_snapshot
+        previous_argv = sys.argv
         try:
-            proof = framed_backup.backup(source, archive, scratch, owner=owner, deadline=deadline)
+            sys.argv = [
+                "cryptowatcher",
+                "backup",
+                "--database",
+                str(source),
+                "--owner-id",
+                str(owner),
+                "--destination",
+                str(archive),
+                "--validation-directory",
+                str(scratch),
+                "--archive-backup",
+                "--framed-archive-validation",
+                "--timeout-seconds",
+                str(min(900, deadline - time.monotonic())),
+            ]
+            output = io.StringIO()
+            with redirect_stdout(output):
+                status = backup_cli()
+            assert status == 0, "Actual backup CLI refused the generated fixture"
+            proof = json.loads(output.getvalue())["backup"]
         finally:
+            sys.argv = previous_argv
             validation_io._supported = supported
             framed_backup.snapshot_image = original_snapshot
         elapsed, cpu_used, read_bytes = (
@@ -286,6 +312,7 @@ def main() -> None:
                     "--memory-swap=4g",
                     "--cpus=1",
                     "--tmpfs=/tmp:rw,noexec,nosuid,size=16m",
+                    f"--tmpfs=/validation:rw,noexec,nosuid,nodev,size=64m,mode=0700,uid={os.getuid()},gid={os.getgid()}",
                     "-v",
                     f"{directory.resolve()}:/qualification",
                     "-v",

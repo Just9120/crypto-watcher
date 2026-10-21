@@ -249,6 +249,11 @@ def main() -> int:
                         raise ConfigError("backup requires destination")
                     if not math.isfinite(args.timeout_seconds) or not 0 < args.timeout_seconds <= 900:
                         raise ConfigError("Invalid backup time budget")
+                    if args.framed_archive_validation:
+                        # Metadata preflight is complete. Release its separate
+                        # SQLite handle before the pinned APSW source reader;
+                        # otherwise per-handle source advice is ambiguous.
+                        store.close()
                     metrics = store.backup(
                         args.destination,
                         timeout_seconds=args.timeout_seconds,
