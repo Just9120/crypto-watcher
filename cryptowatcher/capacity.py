@@ -10,7 +10,12 @@ import time
 from collections import Counter, defaultdict
 from typing import Any
 
-from .config import METADATA_REFRESH_SECONDS, SOURCE_REFRESH_GRACE_SECONDS, TICKER_REFRESH_SECONDS
+from .config import (
+    CLOSED_CANDLE_GRACE_MS,
+    METADATA_REFRESH_SECONDS,
+    SOURCE_REFRESH_GRACE_SECONDS,
+    TICKER_REFRESH_SECONDS,
+)
 from .events import PREFIX, History
 from .history_codec import Codec
 from .queue_health import snapshot as queue_snapshot
@@ -289,6 +294,40 @@ def prospective_cohorts(store: Store, seconds: float = 60) -> dict[str, Any]:
     }
 
 
+def confirmed_source_reason(ingestion: dict[str, Any], frame_age: float) -> str | None:
+    value = ingestion.get("confirmed_sources")
+    if (
+        not isinstance(value, dict)
+        or value.get("state") != "MEASURED"
+        or type(value.get("grace_ms")) is not int
+        or value.get("grace_ms") != CLOSED_CANDLE_GRACE_MS
+        or any(
+            type(value.get(k)) is not int or value[k] < 0
+            for k in ("streams", "unknown_streams", "late_streams")
+        )
+        or type(ingestion.get("active_streams")) is not int
+        or value["streams"] != ingestion.get("active_streams")
+        or value["streams"] <= 0
+        or value["unknown_streams"] > value["streams"]
+        or value["late_streams"] > value["streams"] - value["unknown_streams"]
+        or value["unknown_streams"]
+        or type(value.get("earliest_deadline_ms")) is not int
+        or value["earliest_deadline_ms"] <= 0
+    ):
+        return "CLOSED_SOURCE_UNKNOWN"
+    server_ms = ingestion.get("server_ms")
+    at = ingestion.get("at")
+    if type(server_ms) is not int or not isinstance(at, (int, float)) or isinstance(at, bool):
+        return "CLOSED_SOURCE_CLOCK_UNKNOWN"
+    if not math.isfinite(at) or abs(server_ms - at * 1000) > 5000 or at > time.time() + 5:
+        return "CLOSED_SOURCE_CLOCK_UNKNOWN"
+    if value["earliest_deadline_ms"] > server_ms + 15 * 60_000 + CLOSED_CANDLE_GRACE_MS:
+        return "CLOSED_SOURCE_UNKNOWN"
+    if value["late_streams"] or server_ms + math.ceil(frame_age * 1000) > value["earliest_deadline_ms"]:
+        return "CLOSED_SOURCE_LAG"
+    return None
+
+
 def stable_reason(store: Store) -> list[str]:
     ingestion = store.get_runtime("ingestion", {})
     reasons = []
@@ -311,6 +350,8 @@ def stable_reason(store: Store) -> list[str]:
         reasons.append("SUBSCRIPTION_SCOPE_PENDING")
     discovery = ingestion.get("discovery", {})
     frame_age = max(0, time.time() - ingestion.get("at", 0))
+    if source_reason := confirmed_source_reason(ingestion, frame_age):
+        reasons.append(source_reason)
     for kind, field, ready, cadence in (
         ("METADATA", "metadata_age_seconds", "metadata_ready", METADATA_REFRESH_SECONDS),
         ("TICKERS", "ticker_age_seconds", "tickers_ready", TICKER_REFRESH_SECONDS),

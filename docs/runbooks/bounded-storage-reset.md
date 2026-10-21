@@ -286,6 +286,16 @@ groups/sessions/connections, обе readiness flags и свежие metadata/tic
 Каждый ACKed subscription принадлежит RUNNING task с receipt<=90s и clock skew<=5s.
 Свежий heartbeat/общий WS snapshot не заменяет эти проверки; старый runtime без
 таких diagnostic fields получает явные reasons и не принимается как clean.
+Дополнительно `ingestion.confirmed_sources` измеряет реальные закрытые свечи всех
+активных streams в уже загруженных bounded windows: unknown/late counts, ближайший
+deadline и максимум20samples. Следующая ожидаемая закрытая свеча должна поступить
+за30s; свежие частичные WS updates не заменяют ее. Observer учитывает возраст
+snapshot при проверке deadline. Missing/неполный summary либо неверный clock дают
+`CLOSED_SOURCE_UNKNOWN`/`CLOSED_SOURCE_CLOCK_UNKNOWN`, опоздание — `CLOSED_SOURCE_LAG`.
+Режим чтения WS сохраняет65s timeout и ограниченный transport queue: buffered
+messages обрабатываются без отдельного recv-task на кадр, с yield не позднее
+16кадров или5ms работы. Cancellation при завершении recv должна сохраняться;
+subscription shutdown budget15s и close timeout5s не увеличиваются.
 Время завершения bootstrap/repack фиксируется как observed, не выдуманный exact end.
 Ожидание ограничено12h; затем WAIT_LIMIT_REACHED с причинами. После baseline —24h,
 deep scans только на baseline/final. Обычные samples не обходят runtime/quality/indexes.

@@ -207,6 +207,16 @@ def test_stable_baseline_distinguishes_referenced_backfill_from_normal_pending_h
                 "historical_gaps_pending": 0,
                 "components_healthy": True,
                 "scope_synced": True,
+                "server_ms": NOW,
+                "active_streams": 1,
+                "confirmed_sources": {
+                    "state": "MEASURED",
+                    "streams": 1,
+                    "unknown_streams": 0,
+                    "late_streams": 0,
+                    "earliest_deadline_ms": NOW + 90000,
+                    "grace_ms": 30000,
+                },
                 "discovery": {
                     market: {
                         "metadata_ready": True,
@@ -243,6 +253,30 @@ def test_stable_baseline_distinguishes_referenced_backfill_from_normal_pending_h
         import copy
 
         healthy = store.get_runtime("ingestion")
+        for changed, expected in (
+            ({k: v for k, v in healthy.items() if k != "confirmed_sources"}, "CLOSED_SOURCE_UNKNOWN"),
+            (
+                {**healthy, "confirmed_sources": {**healthy["confirmed_sources"], "unknown_streams": 1}},
+                "CLOSED_SOURCE_UNKNOWN",
+            ),
+            (
+                {**healthy, "confirmed_sources": {**healthy["confirmed_sources"], "late_streams": 1}},
+                "CLOSED_SOURCE_LAG",
+            ),
+            ({**healthy, "server_ms": NOW - 6000}, "CLOSED_SOURCE_CLOCK_UNKNOWN"),
+        ):
+            store.put_runtime("ingestion", changed)
+            assert stable_reason(store) == [expected]
+        # A heartbeat remains current while the saved closed-source deadline
+        # expires between diagnostic snapshots. Advance the snapshot age too.
+        changed = {
+            **healthy,
+            "confirmed_sources": {**healthy["confirmed_sources"], "earliest_deadline_ms": NOW + 1000},
+        }
+        store.put_runtime("ingestion", changed)
+        with patch("cryptowatcher.capacity.time.time", return_value=(NOW + 1001) / 1000):
+            assert stable_reason(store) == ["CLOSED_SOURCE_LAG"]
+        store.put_runtime("ingestion", healthy)
         for field, limit, reason in (
             ("metadata_age_seconds", 660, "METADATA_STALE_OR_UNKNOWN"),
             ("ticker_age_seconds", 360, "TICKERS_STALE_OR_UNKNOWN"),
@@ -279,6 +313,7 @@ def test_stable_baseline_distinguishes_referenced_backfill_from_normal_pending_h
         assert stable_reason(store) == []
         changed = copy.deepcopy(healthy)
         changed["at"] -= 20
+        changed["server_ms"] -= 20000
         changed["discovery"]["linear"]["ticker_age_seconds"] = 350
         store.put_runtime("ingestion", changed)
         assert stable_reason(store) == ["TICKERS_STALE_OR_UNKNOWN"]

@@ -47,6 +47,36 @@ def packet(store):
     return values, owners
 
 
+@pytest.mark.parametrize("category", ["record_parents", "record_owners", "record_aliases"])
+def test_grouped_counter_check_rechecks_current_sql_and_rollback_for_each_category(store, category):
+    prepare(store)
+    with store.db:
+        packet(store)
+        store.db.execute(
+            "INSERT INTO market_counts(category,records,logical_bytes,inserted_bytes,deleted_bytes) "
+            "VALUES('record_aliases',0,0,0,0) ON CONFLICT(category) DO NOTHING"
+        )
+    expected = record_masks.all_tallies(store.db)
+    assert all(
+        record_masks.tallies(store.db, name) == expected
+        for name in ("record_parents", "record_owners", "record_aliases")
+    )
+    original = list(store.db.iterdump())
+    store.db.execute("BEGIN IMMEDIATE")
+    try:
+        store.db.execute(
+            "UPDATE market_counts SET logical_bytes=logical_bytes+1 WHERE category=?", (category,)
+        )
+        with pytest.raises(ValueError, match="byte counter"):
+            record_masks.all_tallies(store.db)
+        with pytest.raises(ValueError, match="byte counter"):
+            record_masks.tallies(store.db, category)
+    finally:
+        store.db.rollback()
+    assert record_masks.all_tallies(store.db) == expected
+    assert list(store.db.iterdump()) == original
+
+
 def test_mask_last_slot_multi_owner_exact_retry_deletion_and_transaction_abort(store):
     prepare(store)
     with store.db:

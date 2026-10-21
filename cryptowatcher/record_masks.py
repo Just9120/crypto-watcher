@@ -10,12 +10,16 @@ from typing import Any
 from . import owner_slots, packet_store, record_blocks
 
 
-def tallies(db: sqlite3.Connection, category: str) -> dict[str, int]:
+def _tally_values(db: sqlite3.Connection) -> dict[str, int]:
     values = dict(db.execute("SELECT name,n FROM market_catalogue_index_counts ORDER BY name LIMIT 5"))
     if set(values) != {"parents", "owners", "history", "membership"} or any(
         type(n) is not int or not 0 <= n < 2**63 for n in values.values()
     ):
         raise ValueError("Missing catalogue index counter")
+    return values
+
+
+def _check_tally(values: dict[str, int], category: str, row: Any) -> None:
     if category == "record_parents":
         count, size = values["parents"], 41 * values["parents"]
     elif category == "record_owners":
@@ -25,9 +29,6 @@ def tallies(db: sqlite3.Connection, category: str) -> dict[str, int]:
         size = 24 * values["history"] + 40 * values["membership"]
     else:
         raise ValueError("Unknown catalogue index category")
-    row = db.execute(
-        "SELECT records,logical_bytes FROM market_counts WHERE category=?", (category,)
-    ).fetchone()
     if (
         count >= 2**63
         or size >= 2**63
@@ -35,6 +36,29 @@ def tallies(db: sqlite3.Connection, category: str) -> dict[str, int]:
         or (row is not None and (any(type(n) is not int for n in row) or tuple(row) != (count, size)))
     ):
         raise ValueError("Missing catalogue index byte counter")
+
+
+def tallies(db: sqlite3.Connection, category: str) -> dict[str, int]:
+    values = _tally_values(db)
+    row = db.execute(
+        "SELECT records,logical_bytes FROM market_counts WHERE category=?", (category,)
+    ).fetchone()
+    _check_tally(values, category, row)
+    return values
+
+
+def all_tallies(db: sqlite3.Connection) -> dict[str, int]:
+    """Check all three current counters together, without caching mutable state."""
+    values = _tally_values(db)
+    rows = {
+        category: (count, size)
+        for category, count, size in db.execute(
+            "SELECT category,records,logical_bytes FROM market_counts "
+            "WHERE category IN('record_parents','record_owners','record_aliases')"
+        )
+    }
+    for category in ("record_parents", "record_owners", "record_aliases"):
+        _check_tally(values, category, rows.get(category))
     return values
 
 

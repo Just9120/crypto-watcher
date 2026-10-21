@@ -52,24 +52,22 @@ def point(key: str) -> Point | None:
 
 
 def reading(db: sqlite3.Connection) -> bool:
-    flag = db.execute("SELECT value FROM market_meta WHERE key='record_catalogue_runtime'").fetchone()
-    if flag is None:
-        return False
-    if flag[0] != "1":
-        raise ValueError("Unknown catalogue runtime adapter")
     markers = dict(
         db.execute(
-            "SELECT key,value FROM market_meta WHERE key IN('record_catalog','record_ownership','catalogue_cohorts')"
+            "SELECT key,value FROM market_meta WHERE key IN('record_catalogue_runtime','record_catalog','record_ownership','catalogue_cohorts')"
         )
     )
+    flag = markers.pop("record_catalogue_runtime", MISSING)
+    if flag is MISSING:
+        return False
+    if flag != "1":
+        raise ValueError("Unknown catalogue runtime adapter")
     if markers.get("record_catalog") not in ("2", "3") or {
         key: value for key, value in markers.items() if key != "record_catalog"
     } != {"record_ownership": "1", "catalogue_cohorts": "1"}:
         raise ValueError("Missing or unknown catalogue reader layout")
     if markers["record_catalog"] == "3":
-        record_masks.tallies(db, "record_parents")
-        record_masks.tallies(db, "record_owners")
-        record_masks.tallies(db, "record_aliases")
+        record_masks.all_tallies(db)
     return True
 
 

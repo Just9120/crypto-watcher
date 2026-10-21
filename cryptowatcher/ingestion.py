@@ -703,6 +703,23 @@ class BybitRadar(BybitREST):
         finally:
             await websocket.close()
 
+    async def _receive_messages(self, websocket: Any, name: str, market: str, allowed: set[str]) -> None:
+        started, processed = time.monotonic(), 0
+        while True:
+            # Python3.11 wait_for creates a separate task even for a buffered
+            # frame. Under writer contention its extra turns delay confirmed
+            # candles behind already received partial updates. Keep the same
+            # cancellation/deadline, and bound draining to preserve fairness.
+            async with asyncio.timeout(65):
+                raw = await websocket.recv()
+            received_ms = int(time.time() * 1000)
+            self.accept_message(market, json.loads(raw), allowed, received_ms=received_ms)
+            self.connections[name]["last_received_ms"] = int(time.time() * 1000)
+            processed += 1
+            if processed >= 16 or time.monotonic() - started >= 0.005:
+                await asyncio.sleep(0)
+                started, processed = time.monotonic(), 0
+
     async def _session(self, name: str, market: str, streams: list[str]) -> None:
         allowed = set(streams)
         backoff = 1.0
@@ -794,11 +811,7 @@ class BybitRadar(BybitREST):
                             self.accept_message(market, message, allowed, received_ms=received_ms)
                             await asyncio.sleep(0)
                         deferred.clear()
-                        while True:
-                            raw = await asyncio.wait_for(websocket.recv(), 65)
-                            received_ms = int(time.time() * 1000)
-                            self.accept_message(market, json.loads(raw), allowed, received_ms=received_ms)
-                            self.connections[name]["last_received_ms"] = int(time.time() * 1000)
+                        await self._receive_messages(websocket, name, market, allowed)
                     finally:
                         ping.cancel()
                         await asyncio.gather(ping, return_exceptions=True)
@@ -962,6 +975,38 @@ class BybitRadar(BybitREST):
             }
         return {**result, "state": "STOPPING" if task.cancelling() else "RUNNING"}
 
+    def confirmed_source_diagnostic(self, now_ms: int) -> dict[str, Any]:
+        from .config import CLOSED_CANDLE_GRACE_MS
+
+        unknown = late = 0
+        earliest = None
+        samples: list[dict[str, Any]] = []
+        for stream in sorted(self.streams):
+            window = self.sources.windows.get(stream)
+            if not window:
+                unknown += 1
+                continue
+            latest = max(c.end for c in window.values())
+            step = int(stream.rsplit("/", 1)[1][:-1]) * 60_000
+            deadline = latest + step + CLOSED_CANDLE_GRACE_MS
+            earliest = deadline if earliest is None else min(earliest, deadline)
+            if now_ms > deadline:
+                late += 1
+                if len(samples) < 20:
+                    samples.append(
+                        {"stream": stream, "latest_closed_ms": latest, "lag_ms": now_ms - latest - step}
+                    )
+        return {
+            "state": "MEASURED" if now_ms > 0 else "CLOCK_UNKNOWN",
+            "streams": len(self.streams),
+            "unknown_streams": unknown,
+            "late_streams": late,
+            "earliest_deadline_ms": earliest,
+            "grace_ms": CLOSED_CANDLE_GRACE_MS,
+            "samples": samples,
+            "samples_truncated": late > len(samples),
+        }
+
     def persist_diagnostics(self) -> None:
         self.store.put_runtime(
             "ingestion",
@@ -1002,6 +1047,7 @@ class BybitRadar(BybitREST):
                     for name, value in self.connections.items()
                 },
                 "active_streams": len(self.streams),
+                "confirmed_sources": self.confirmed_source_diagnostic(self.server_now()),
                 "startup_recovered_buckets": sorted("/".join(bucket) for bucket in self._recovered_buckets),
                 "bootstrap_pending_streams": len(self.streams - self.sources.windows.keys()),
                 "recovery_pending": len(self._pending),

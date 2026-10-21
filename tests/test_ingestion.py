@@ -79,6 +79,27 @@ def radar(store):
     yield instance
 
 
+def test_confirmed_source_freshness_uses_actual_closed_candles_and_a_bounded_sample(radar):
+    at_boundary = radar.confirmed_source_diagnostic(NOW + 90000)
+    assert at_boundary["state"] == "MEASURED" and at_boundary["streams"] == len(radar.streams)
+    assert at_boundary["unknown_streams"] == at_boundary["late_streams"] == 0
+    assert at_boundary["earliest_deadline_ms"] == NOW + 90000
+    late = radar.confirmed_source_diagnostic(NOW + 90001)
+    assert late["late_streams"] == 2
+    assert {v["stream"] for v in late["samples"]} == {"spot/BTCUSDT/1m", "linear/BTCUSDT/1m"}
+    assert all(v["lag_ms"] == 30001 for v in late["samples"])
+    missing = "linear/BTCUSDT/15m"
+    radar.sources.remove_window(missing)
+    assert radar.confirmed_source_diagnostic(NOW)["unknown_streams"] == 1
+    assert radar.confirmed_source_diagnostic(0)["state"] == "CLOCK_UNKNOWN"
+    for i in range(28):
+        stream = f"spot/EXTRA{i}USDT/1m"
+        radar.streams.add(stream)
+        radar.sources.windows[stream] = dict(radar.sources.windows["spot/BTCUSDT/1m"])
+    crowded = radar.confirmed_source_diagnostic(NOW + 90001)
+    assert crowded["late_streams"] > 20 and len(crowded["samples"]) == 20 and crowded["samples_truncated"]
+
+
 def test_persisted_block_diagnostics_are_exact_bounded_and_distinguish_inactive_streams(radar):
     active = sorted(radar.streams)[0]
     radar.sources.blocked = {active: "conflicting_closed_candle"}
