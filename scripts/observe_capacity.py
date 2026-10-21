@@ -12,6 +12,7 @@ import os
 import socket
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -55,7 +56,9 @@ raise SystemExit(main())
     return value
 
 
-def sample_for_state(expected: str, state: str) -> dict[str, Any]:
+def sample_for_state(
+    expected: str, state: str, read: Callable[[str], dict[str, Any]] | None = None
+) -> dict[str, Any]:
     """Avoid aliasing a brief current-candle queue with the five-minute cadence.
 
     All original blockers still apply. Only before the baseline may a sole
@@ -63,7 +66,8 @@ def sample_for_state(expected: str, state: str) -> dict[str, Any]:
     Keep failed observations visible, and never hide interruptions once observing.
     The main loop still sleeps300s between accepted samples.
     """
-    value = probe(expected)
+    read = read or probe
+    value = read(expected)
     attempts = []
     if state == "WAITING_STABLE":
         for _ in range(3):
@@ -71,7 +75,7 @@ def sample_for_state(expected: str, state: str) -> dict[str, Any]:
                 break
             attempts.append({"at_ms": value["at_ms"], "blockers": value["stability_blockers"]})
             time.sleep(10)
-            value = probe(expected)
+            value = read(expected)
     return {**value, "baseline_settling_attempts": attempts} if attempts else value
 
 
@@ -89,17 +93,42 @@ def sample_probe(folder: Path, state: dict[str, Any], expected: str) -> dict[str
         "started_at": time.time(),
         "decision": "PENDING",
         "expected_source": expected,
+        "probes": [],
     }
     atomic(path, attempt)
     atomic(folder / "status.json", state)
+
+    def capture(source: str) -> dict[str, Any]:
+        # At most four quick probes before baseline; one while observing.
+        # Persist each start and snapshot before a later retry can fail.
+        entry = {
+            "number": len(attempt["probes"]) + 1,
+            "phase": "QUICK_PROBE",
+            "started_at": time.time(),
+            "decision": "PENDING",
+        }
+        attempt["probes"].append(entry)
+        atomic(path, attempt)
+        value = probe(source)
+        entry.update(decision="CAPTURED", finished_at=time.time(), snapshot=value)
+        atomic(path, attempt)
+        return value
+
     try:
-        value = sample_for_state(expected, state["state"])
+        value = sample_for_state(expected, state["state"], read=capture)
     except PROBE_ERRORS as exc:
-        attempt.update(decision="ERROR", finished_at=time.time(), error_class=type(exc).__name__)
+        failure: dict[str, Any] = {
+            "decision": "ERROR",
+            "finished_at": time.time(),
+            "error_class": type(exc).__name__,
+        }
         if isinstance(exc, subprocess.CalledProcessError):
-            attempt["returncode"] = exc.returncode
+            failure["returncode"] = exc.returncode
         if isinstance(exc, subprocess.TimeoutExpired):
-            attempt["timeout_seconds"] = exc.timeout
+            failure["timeout_seconds"] = exc.timeout
+        attempt.update(failure)
+        if attempt["probes"] and attempt["probes"][-1]["decision"] == "PENDING":
+            attempt["probes"][-1].update(failure)
         atomic(path, attempt)
         state["last_sample_error_attempt"] = path.name
         raise
@@ -118,6 +147,13 @@ def recover_sample(folder: Path, state: dict[str, Any]) -> None:
             attempt = json.loads(path.read_text())
             if attempt.get("decision") == "PENDING":
                 attempt.update(decision="INTERRUPTED", error_class="ObserverRestart", finished_at=time.time())
+                for entry in attempt.get("probes", []):
+                    if entry.get("decision") == "PENDING":
+                        entry.update(
+                            decision="INTERRUPTED",
+                            error_class="ObserverRestart",
+                            finished_at=attempt["finished_at"],
+                        )
                 atomic(path, attempt)
     if state["state"] == "OBSERVING":
         state["interrupted_samples"] = state.get("interrupted_samples", 0) + 1

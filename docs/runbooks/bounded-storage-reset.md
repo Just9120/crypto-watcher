@@ -238,6 +238,12 @@ DB/index/WAL deltas, logical namespace deltas и cumulative cleanup counters; о
 полного boundary ledger явно UNSET. Даже успешные24h и controlled-clock tests сами
 по себе не подтверждают population mix следующего года или25GB fit.
 
+`sample-attempt-NNNN.json.probes` сохраняет каждый из максимум4quick calls до
+baseline и единственный call после него: номер, время начала, PENDING, затем
+полный snapshot либо sanitized ERROR/timeout/returncode. Ошибка поздней
+перепроверки не удаляет предыдущие snapshots; restart завершает PENDING subprobe
+как INTERRUPTED вместе с sample. Старые attempt files без `probes` остаются readable.
+
 Каждый deep boundary имеет отдельный `baseline-attempt-NNNN.json` либо
 `final-attempt-NNNN.json`: PENDING до probe, полный snapshot/blockers и решение
 после него, sanitized error class/returncode при failure. `status.phase` показывает

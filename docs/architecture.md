@@ -231,7 +231,10 @@ staging, retained QF1 и transient queue, включая новые physical ind
 Перед baseline finite capacity observer перепроверяет только единственный blocker
 ANALYTICS_RECOVERY_PENDING максимум3 раза с10s pause, quick read-only probes без
 deep scans. Это устраняет привязку одного5min sample к краткой current-candle queue.
-Каждая неудачная попытка сохраняет timestamp/blockers; актуальная очередь должна
-быть действительно пуста. Main loop сохраняет300s pause, две чистые проверки и
+Каждый quick probe внутри sample имеет durable PENDING перед вызовом и полный
+snapshot либо sanitized ERROR после; restart закрывает незавершённый subprobe как
+INTERRUPTED. Уже captured snapshots не теряются при ошибке следующей перепроверки.
+Актуальная очередь должна быть действительно пуста. Main loop сохраняет300s pause,
+минимум две чистые проверки и не менее30min устойчивости, а также
 исходную deep boundary/12h wait policy. Другие blockers не retry; после baseline
 каждый interruption остается видимым. Resource caps и24h boundary не меняются.
