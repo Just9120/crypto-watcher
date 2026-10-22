@@ -231,6 +231,70 @@ def test_actual_shared_publication_and_reopen_keep_original_bytes_and_ownership(
     assert store.db.execute("SELECT 1 FROM market_shared_records WHERE id=?", (group,)).fetchone() is None
 
 
+def test_partial_sb2_publication_gc_and_pinned_reader_preserve_original_values(store):
+    from cryptowatcher import shared_record_work as work
+    from cryptowatcher.reset_history import private_state, signature
+
+    old_packets = setup(store)
+    private = signature(private_state(store))
+    packet_bundles.install(store.db)
+    values = [
+        (coordinate, {**value, "retained_unknown": rows(16)}, head) for coordinate, value, head in entries()
+    ]
+    originals = []
+    with store.db:
+        store.db.execute("BEGIN IMMEDIATE")
+        for selected in (values[:2], values[2:]):
+            raw = record_blocks.pack(selected)
+            packet = packet_store.append(store.db, "detail_packets", 132, raw)
+            packet_store.retain(store.db, packet)
+            originals.append((packet, raw))
+        for packet, _ in old_packets + originals:
+            packet_bundles.checked(store.db, packet)
+    store.clock_ms = lambda: 1_800_000_000_000
+    work.install(store.db, store.clock_ms(), store.cached_bytes)
+    with store.db:
+        store.db.execute("BEGIN IMMEDIATE")
+        work.scan(store.db, store.clock_ms())
+    with store.db:
+        store.db.execute("BEGIN")
+        prepared = shared_records.prepare(store.db, [packet for packet, _ in originals], scalar_units=True)
+    assert prepared.body.startswith(scalar.MAGIC)
+    with store.db:
+        store.db.execute("BEGIN IMMEDIATE")
+        group = work.stage(store.db, prepared)
+        assert work.advance(store.db, store.cached_bytes) == originals[0][0]
+    with closing(Store(store.path, store.owner_id, readonly=True)) as snapshot:
+        snapshot.db.execute("BEGIN")
+        equal(originals[0][1], domain_packets.read(snapshot.db, originals[0][0], snapshot.cached_bytes))
+        with store.db:
+            store.db.execute("BEGIN IMMEDIATE")
+            packet_store.release(store.db, originals[1][0])
+            packet_store.collect(store.db)
+            assert shared_records.collect(store.db) == 0
+        assert work.header(store.db)["pending"] == 0
+        assert tuple(
+            store.db.execute("SELECT kind FROM market_shared_reclaim WHERE group_id=?", (group,)).fetchone()
+        ) == ("sparse",)
+        equal(originals[0][1], domain_packets.read(store.db, originals[0][0], store.cached_bytes))
+        with store.db:
+            store.db.execute("BEGIN IMMEDIATE")
+            packet_store.release(store.db, originals[0][0])
+            packet_store.collect(store.db)
+            assert shared_records.collect(store.db) == 1
+        # The snapshot owns its old bytes and old SQL bindings through both
+        # pending-member retirement and final group collection.
+        for packet, original in originals:
+            equal(original, domain_packets.read(snapshot.db, packet, snapshot.cached_bytes))
+        assert store.path.with_name(store.path.name + "-wal").stat().st_size > 0
+    assert signature(private_state(store)) == private
+    assert store.db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    assert not store.db.execute("PRAGMA foreign_key_check").fetchall()
+    for packet, original in old_packets:
+        equal(original, domain_packets.read(store.db, packet, store.cached_bytes))
+    assert store.db.execute("SELECT 1 FROM market_shared_records WHERE id=?", (group,)).fetchone() is None
+
+
 def test_readonly_preparation_preflights_full_logical_packet_bound_before_main_publication(store):
     from cryptowatcher.shared_record_worker import read_batch
 
