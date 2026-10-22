@@ -251,6 +251,12 @@ Opt-in SB2 восстанавливает исходные typed bytes чере�
 Выбор slot не требует восстановления остальных записей. SB1/SV1 читаются как прежде,
 RP1 сохраняет свой frozen SB1 container; shared cache остаётся1MiB. Подготовка заранее
 проверяет полный512KiB DB3 wrapper и уменьшает prefix до staging при переполнении.
+Если даже singleton достигает исходного предела, группа сохраняет его два
+исходных authenticated IF1 frame и возвращает byte-identical DB2 без дополнительной
+view wrapper. Только paired IF1/IF1 иinitial1 допустимы; mixed formats/partial spans
+отклоняются, current digest/bindings и typed equality проверяются как прежде.
+Это явный fallback без обещания compression saving, нового schema или увеличения
+512KiB/2MiB/cache limits; запись не пропускается и очередь продолжает работу.
 Store/startup не устанавливают shared schema. После явной offline активации layout3
 Controller предпочитает SB2, когда он меньше SB1; библиотечный Worker без явного
 параметра сохраняет SB1. Existing writer switch0 сохраняет паузу и при повторной
@@ -264,7 +270,7 @@ shared1MiB cache. Если stats/points уже проверили full values, �
 результат; отдельный index miss не удерживает full JSON. Каждый вызов вновь проверяет
 актуальные header/leases/mask/seal и payload bytes; объекты и SQL proofs не кэшируются.
 Store/startup не активируют3; current native/image, runtime activation/recovery,
-совместный50s boundary и mature25GB еще требуют qualification перед production.
+Linux/native совместный50s boundary и mature25GB еще требуют qualification перед production.
 Тот же maintenance worker обслуживает конечную initial scan, live eligibility
 queue и partial-slot GC. Открытый expiry-frontier tail остаётся CQ5 до закрытия
 UTC дня; его факты уже доступны. Body initial reclaim сохраняется при upgrade,

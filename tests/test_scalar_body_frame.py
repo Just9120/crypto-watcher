@@ -295,6 +295,100 @@ def test_partial_sb2_publication_gc_and_pinned_reader_preserve_original_values(s
     assert store.db.execute("SELECT 1 FROM market_shared_records WHERE id=?", (group,)).fetchone() is None
 
 
+def test_original_ceiling_singleton_preserves_exact_packet_publication_backup_and_gc(store):
+    from cryptowatcher import shared_record_work as work
+    from cryptowatcher.shared_record_worker import read_batch
+
+    setup(store)
+    packet_bundles.install(store.db)
+    coordinate, value, head = entries()[-1]
+    entropy = random.Random(9947).randbytes(700000)
+    low, high = 100000, len(entropy)
+    original = None
+    while low <= high:
+        size = (low + high) // 2
+        try:
+            raw = record_blocks.pack(
+                [(coordinate, {**value, "retained_unknown": entropy[:size].hex()}, head)]
+            )
+        except indexed_frame.FrameSizeError:
+            high = size - 1
+        else:
+            original = raw
+            low = size + 1
+    assert original is not None and len(original) > record_blocks.MAX_PACKET - 256
+    with store.db:
+        store.db.execute("BEGIN IMMEDIATE")
+        packet = packet_store.append(store.db, "detail_packets", 132, original)
+        packet_store.retain(store.db, packet)
+        packet_bundles.checked(store.db, packet)
+    now = 1_800_000_000_000
+    store.clock_ms = lambda: now
+    work.install(store.db, now, store.cached_bytes)
+    with store.db:
+        store.db.execute("BEGIN IMMEDIATE")
+        work.scan(store.db, now)
+    prepared = read_batch(store.path, store.owner_id, [packet], now, scalar_units=True)
+    assert prepared is not None
+    assert prepared.body.startswith(indexed_frame.MAGIC) and prepared.projection.startswith(
+        indexed_frame.MAGIC
+    )
+    with store.db:
+        store.db.execute("BEGIN IMMEDIATE")
+        group = work.stage(store.db, prepared)
+        assert group is not None and work.advance(store.db, store.cached_bytes) == packet
+    assert domain_packets.read(store.db, packet, store.cached_bytes) == original
+    with closing(Store(store.path, store.owner_id, readonly=True)) as reopened:
+        assert domain_packets.read(reopened.db, packet, reopened.cached_bytes) == original
+    backup = store.path.with_name("ceiling-backup.sqlite3")
+    assert store.backup(backup, timeout_seconds=10)["phase"] == "COMPLETE"
+    with closing(Store(backup, store.owner_id, readonly=True)) as restored:
+        assert domain_packets.read(restored.db, packet, restored.cached_bytes) == original
+    with store.db:
+        packet_store.release(store.db, packet)
+        packet_store.collect(store.db)
+        assert shared_records.collect(store.db) == 1
+    assert store.db.execute("SELECT 1 FROM market_shared_records WHERE id=?", (group,)).fetchone() is None
+
+
+@pytest.mark.parametrize("damage", ["multiple_members", "body_only", "projection_only"])
+def test_original_frame_fallback_requires_one_member_and_both_original_frames(damage):
+    raw = record_blocks.pack(entries()[:2])
+    projection, body = record_blocks.frames(raw)
+    initial = 1
+    if damage == "multiple_members":
+        initial = 2
+    elif damage == "body_only":
+        projection = projection_recipes.pack_frames([raw])
+    else:
+        body = shared.pack_frames([body])
+    with pytest.raises(ValueError, match="paired singleton"):
+        shared_records.signature("detail_packets", 132, body, projection, initial)
+
+
+def test_original_singleton_blob_damage_is_detected_after_warm_cache_without_sql_changes(store):
+    originals = setup(store)
+    packet, original = originals[0]
+    with store.db:
+        store.db.execute("BEGIN")
+        captured = shared_records.prepare(store.db, [packet])
+    projection, body = record_blocks.frames(original)
+    prepared = shared_records.Prepared(captured.members, body, projection)
+    with store.db:
+        store.db.execute("BEGIN IMMEDIATE")
+        group = shared_records.publish(store.db, prepared, store.cached_bytes)
+    assert domain_packets.read(store.db, packet, store.cached_bytes) == original
+    changes = store.db.total_changes
+    with store.db.blobopen("market_shared_records", "body", group) as blob:
+        blob.seek(4)
+        before = blob.read(1)
+        blob.seek(4)
+        blob.write(bytes([before[0] ^ 1]))
+    assert store.db.total_changes == changes
+    with pytest.raises(ValueError):
+        domain_packets.read(store.db, packet, store.cached_bytes)
+
+
 def test_readonly_preparation_preflights_full_logical_packet_bound_before_main_publication(store):
     from cryptowatcher.shared_record_worker import read_batch
 

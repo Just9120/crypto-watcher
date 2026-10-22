@@ -189,7 +189,7 @@ def install_functions(db: sqlite3.Connection) -> None:
         ):
             return 0
         base.descriptor(group, first, count, row[4])
-        return int(first + count < len(base.shared_body_frame.layout(row[2])[0]))
+        return int(first + count <= base.body_count(row[2]))
 
     db.create_function("cw_shared_pending", 5, pending)
 
@@ -390,7 +390,7 @@ def stage(db: sqlite3.Connection, prepared: base.Prepared) -> int | None:
                 (member.identity, group, first, member.count, hashlib.sha256(member.raw).digest()),
             )
             first += member.count
-        if first != len(base.shared_body_frame.layout(prepared.body)[0]) - 1:
+        if first != base.body_count(prepared.body):
             raise ValueError("Shared staged cardinality mismatch")
         return group
 

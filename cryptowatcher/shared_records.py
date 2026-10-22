@@ -1,8 +1,9 @@
 """Explicit shared record storage; no automatic installation or runtime work.
 
 Physical packet IDs/refs remain the ownership authority. DS2 descriptors bind
-immutable RP1/SB1 groups; only a byte-exact logical transition may resize an old
-DB2 packet. All publication runs in the caller's existing writer transaction.
+immutable RP1/shared-body groups or paired original singleton IF1 frames. Only a
+byte-exact transition resizes an old DB2 packet. Publication uses the caller's
+existing writer transaction.
 """
 
 from __future__ import annotations
@@ -21,6 +22,11 @@ GROUPS = "shared_record_groups"
 MEMBERS = "shared_record_members"
 
 
+def body_count(body: bytes) -> int:
+    layout = indexed_frame.layout if body.startswith(indexed_frame.MAGIC) else shared_body_frame.layout
+    return len(layout(body)[0]) - 1
+
+
 def signature(category: str, bucket: int, body: bytes, projection: bytes, initial: int) -> bytes:
     if (
         category != "detail_packets"
@@ -34,7 +40,15 @@ def signature(category: str, bucket: int, body: bytes, projection: bytes, initia
         or not 0 < len(projection) <= shared_body_frame.MAX_COMPRESSED
     ):
         raise ValueError("Invalid shared record group bounds")
-    if len(shared_body_frame.layout(body)[0]) != len(projection_recipes.layout(projection)[0]):
+    original = body.startswith(indexed_frame.MAGIC) or projection.startswith(indexed_frame.MAGIC)
+    if original and (
+        initial != 1
+        or not body.startswith(indexed_frame.MAGIC)
+        or not projection.startswith(indexed_frame.MAGIC)
+    ):
+        raise ValueError("Original shared frames require a paired singleton")
+    positions = indexed_frame.layout(projection)[0] if original else projection_recipes.layout(projection)[0]
+    if body_count(body) != len(positions) - 1:
         raise ValueError("Shared record group cardinality mismatch")
     return hashlib.sha256(
         struct.pack(">qHII", bucket, initial, len(body), len(projection)) + body + projection
@@ -88,6 +102,20 @@ def _group(db: sqlite3.Connection, identity: int) -> Any:
 
 
 def _logical(row: Any, first: int, count: int, cache: Any) -> bytes:
+    if row[2].startswith(indexed_frame.MAGIC):
+        if (
+            row[5] != 1
+            or type(first) is not int
+            or first != 0
+            or type(count) is not int
+            or count != body_count(row[2])
+        ):
+            raise ValueError("Original shared singleton span mismatch")
+        checked = struct.pack(">I", len(row[3])) + row[3] + row[2]
+        result = record_blocks.MAGIC + hashlib.sha256(checked).digest() + checked
+        if len(result) > record_blocks.MAX_PACKET:
+            raise indexed_frame.FrameSizeError("Original shared singleton packet bound")
+        return result
     projection = projection_recipes.restore(row[3], first, count, cache)
     return record_blocks.shared_packet(projection, row[2], first, count)
 
@@ -121,7 +149,11 @@ def _equal(old: bytes, new: bytes, cache: Any = None) -> bool:
     new_p, new_b = record_blocks.frames(new)
     return [typed_pack(r) for r in indexed_frame.all_values(old_p)] == [
         typed_pack(r) for r in indexed_frame.all_values(new_p)
-    ] and record_blocks._body_parts(old_b) == shared_body_frame.parts(new_b, cache)
+    ] and record_blocks._body_parts(old_b) == (
+        shared_body_frame.parts(new_b, cache)
+        if new_b.startswith(shared_body_frame.VIEW_MAGIC)
+        else record_blocks._body_parts(new_b)
+    )
 
 
 def install_functions(db: sqlite3.Connection, cache: Any = None) -> None:
@@ -390,18 +422,31 @@ def prepare(db: sqlite3.Connection, identities: list[int], *, scalar_units: bool
         if not raw.startswith(record_blocks.MAGIC):
             raise ValueError("Shared preparation requires ordinary DB2 packets")
         members.append(Member(identity, binding, raw, len(record_blocks.projections(raw))))
-    body = shared_body_frame.pack_frames(
-        [record_blocks.frames(m.raw)[1] for m in members], scalar_units=scalar_units
-    )
-    projection = projection_recipes.pack_frames([m.raw for m in members])
-    # Both group frames may fit while their combined logical DB3 wrapper does
-    # not. Reject on the read task so its existing prefix fallback runs before
-    # staging; otherwise one oversized member would permanently block publish.
-    first = 0
-    for member in members:
-        restored = projection_recipes.restore(projection, first, member.count)
-        record_blocks.shared_packet(restored, body, first, member.count)
-        first += member.count
+    try:
+        body = shared_body_frame.pack_frames(
+            [record_blocks.frames(m.raw)[1] for m in members], scalar_units=scalar_units
+        )
+        projection = projection_recipes.pack_frames([m.raw for m in members])
+        # Both group frames may fit while their combined logical DB3 wrapper
+        # does not. Prefix fallback must run before staging/main publication.
+        first = 0
+        for member in members:
+            restored = projection_recipes.restore(projection, first, member.count)
+            record_blocks.shared_packet(restored, body, first, member.count)
+            first += member.count
+    except indexed_frame.FrameSizeError:
+        if len(members) != 1:
+            raise
+        # A valid original packet can itself reach the unchanged512KiB bound.
+        # Keep its exact authenticated frames, without another view envelope,
+        # rather than skipping it or retrying an impossible singleton forever.
+        member = members[0]
+        projection, body = record_blocks.frames(member.raw)
+        category, bucket = member.binding[5:]
+        digest = signature(category, bucket, body, projection, 1)
+        row = (category, bucket, body, projection, digest, 1, 1)
+        if _logical(row, 0, member.count, None) != member.raw:
+            raise ValueError("Original shared singleton changed packet bytes")
     return Prepared(tuple(members), body, projection)
 
 
@@ -428,7 +473,7 @@ def publish(db: sqlite3.Connection, prepared: Prepared, cache: Any = None) -> in
         for member in prepared.members:
             publish_member(db, member, group, first, digest, cache)
             first += member.count
-        if first != len(shared_body_frame.layout(prepared.body)[0]) - 1:
+        if first != body_count(prepared.body):
             raise ValueError("Shared publication cardinality mismatch")
         return group
 
