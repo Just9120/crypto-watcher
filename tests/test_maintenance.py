@@ -487,13 +487,59 @@ async def test_maintenance_misfires_coalesce_without_parallel_replays(store, inf
     radar, _, _, _ = seed(store, monkeypatch, 0)
     controller = Controller(infrastructure, store, radar)
     app = application(controller)
-    selected = {controller.warmup_poll, controller.repack_job, controller.backfill_job}
+    selected = {
+        controller.poll,
+        controller.warmup_poll,
+        controller.heartbeat,
+        controller.deliver,
+        controller.analytics_job,
+        controller.repack_job,
+        controller.backfill_job,
+        controller.enrichment_job,
+        controller.agent_job,
+    }
     jobs = [j for j in app.job_queue.jobs() if j.callback in selected]
-    assert len(jobs) == 3
+    assert len(jobs) == len(app.job_queue.jobs()) == 9
     for job in jobs:
         assert job.job.max_instances == 1 and job.job.coalesce
         assert job.job.misfire_grace_time == 30
     await radar.close()
+
+
+async def test_real_scheduler_executes_briefly_late_heartbeat_and_rejects_expired_run(
+    store, infrastructure, monkeypatch
+):
+    from datetime import datetime, timedelta, timezone
+
+    from apscheduler.events import EVENT_JOB_EXECUTED, EVENT_JOB_MISSED
+    from apscheduler.executors.asyncio import run_coroutine_job
+
+    radar, _, _, _ = seed(store, monkeypatch, 0)
+    controller = Controller(infrastructure, store, radar)
+    app = application(controller)
+    scheduler = app.job_queue.scheduler
+    scheduler.start(paused=True)  # Resolve real scheduler defaults without running other callbacks.
+    job = next(j.job for j in app.job_queue.jobs() if j.callback == controller.heartbeat)
+    calls = []
+
+    async def heartbeat():
+        await controller.heartbeat(None)
+        calls.append(store.get_runtime("heartbeat"))
+
+    job.modify(func=heartbeat, args=(), kwargs={})
+    try:
+        recent = datetime.now(timezone.utc) - timedelta(seconds=4)
+        events = await run_coroutine_job(job, "default", [recent], "test.scheduler")
+        assert [e.code for e in events] == [EVENT_JOB_EXECUTED]
+        assert len(calls) == 1 and calls[0]["components_healthy"] is True
+        expired = datetime.now(timezone.utc) - timedelta(seconds=31)
+        events = await run_coroutine_job(job, "default", [expired], "test.scheduler")
+        assert [e.code for e in events] == [EVENT_JOB_MISSED]
+        assert len(calls) == 1  # The finite grace is not permission to run arbitrary old work.
+    finally:
+        scheduler.shutdown(wait=False)
+        await asyncio.sleep(0)
+        await radar.close()
 
 
 @pytest.mark.parametrize(
