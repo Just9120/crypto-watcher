@@ -11,7 +11,7 @@ import sqlite3
 import uuid
 from typing import Any, Iterable
 
-from . import packet_store, record_blocks, record_masks
+from . import domain_packets, packet_store, record_blocks, record_masks
 from .record_blocks import Coordinate
 from .storage import encode
 
@@ -177,7 +177,7 @@ def read(db: sqlite3.Connection, coordinate: Coordinate, cache: Any = None) -> d
     saved = row(db, coordinate)
     if saved is None:
         return None
-    return record_blocks.read(packet_store.read(db, saved[0]), saved[1], coordinate, cache)
+    return record_blocks.read(domain_packets.read(db, saved[0], cache), saved[1], coordinate, cache)
 
 
 def head(
@@ -198,7 +198,7 @@ def head(
     if version == 3:
         record_masks.owner(db, saved[0], saved[1], saved[3])
     coordinate = Coordinate(kind, identity, saved[2])
-    projected = record_blocks.projected(packet_store.read(db, saved[0]), saved[1], coordinate, cache)
+    projected = record_blocks.projected(domain_packets.read(db, saved[0], cache), saved[1], coordinate, cache)
     return coordinate, projected
 
 
@@ -270,7 +270,7 @@ def append(
             if expected_expiry // 86400000 != bucket:
                 raise ValueError("Record bucket crosses retention day")
             if old is not None:
-                raw = packet_store.read(db, old[0])
+                raw = domain_packets.read(db, old[0])
                 if (
                     encode(record_blocks.read(raw, old[1], coordinate)) != encode(value)
                     or encode(record_blocks.projections(raw)[old[1]][1]) != encode(projected)

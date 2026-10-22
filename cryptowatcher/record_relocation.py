@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from . import packet_store, record_blocks, record_catalog
+from . import domain_packets, packet_store, record_blocks, record_catalog
 from .catalogue_sql import read_snapshot
 from .storage import StateError, Store, encode
 
@@ -36,9 +36,9 @@ def capture(store: Store, coordinate: record_blocks.Coordinate) -> Record:
         if saved is None:
             raise StateError("Missing relocation record; data preserved")
         packet, slot, parent, expires, current = saved
-        raw = packet_store.read(store.db, packet)
+        raw = domain_packets.read(store.db, packet, store.cached_bytes)
         value = record_blocks.read(raw, slot, coordinate, store.cached_bytes)
-        projected = record_blocks.projections(raw)[slot][1]
+        projected = record_blocks.checked_projected(raw, slot, coordinate, store.cached_bytes)
         if parent is not None:
             root = store.db.execute(
                 "SELECT expires FROM market_record_parents WHERE id=?", (parent,)
@@ -108,7 +108,7 @@ def relocate(store: Store, records: list[Record]) -> int:
         packets = {r.binding[0] for r in records}
         if len(packets) == 1:
             packet = next(iter(packets))
-            if packet_store.read(store.db, packet) == proposed:
+            if domain_packets.read(store.db, packet, store.cached_bytes) == proposed:
                 return packet
         # Deletion releases each logical numeric/window lease and clears its
         # old owner bit through existing guards. Keep parents/membership intact.

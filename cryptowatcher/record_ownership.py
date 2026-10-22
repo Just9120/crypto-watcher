@@ -9,7 +9,7 @@ import sqlite3
 import uuid
 from typing import Any
 
-from . import numeric_pool, packet_store, record_blocks, source_windows
+from . import domain_packets, numeric_pool, packet_store, record_blocks, source_windows
 from .storage import encode
 
 
@@ -28,9 +28,11 @@ def block_references(raw: bytes) -> list[Any]:
     return result
 
 
-def block_entries(db: sqlite3.Connection, packet: int, cache: Any = None) -> list[Any]:
+def block_entries(
+    db: sqlite3.Connection, packet: int, cache: Any = None, binary_cache: Any = None
+) -> list[Any]:
     # Actual bytes are always read and authenticated before a pure cache hit.
-    raw = packet_store.read(db, packet)
+    raw = domain_packets.read(db, packet, binary_cache)
 
     def read() -> str:
         return encode(block_references(raw))
@@ -45,10 +47,12 @@ def block_entries(db: sqlite3.Connection, packet: int, cache: Any = None) -> lis
     return values
 
 
-def block_entry(db: sqlite3.Connection, packet: int, slot: int, cache: Any = None) -> list[Any]:
+def block_entry(
+    db: sqlite3.Connection, packet: int, slot: int, cache: Any = None, binary_cache: Any = None
+) -> list[Any]:
     if type(slot) is not int or not 0 <= slot < 64:
         raise ValueError("Invalid catalogue ownership slot")
-    values = block_entries(db, packet, cache)
+    values = block_entries(db, packet, cache, binary_cache)
     if slot >= len(values):
         raise ValueError("Catalogue ownership coordinate mismatch")
     return values[slot]
@@ -59,6 +63,9 @@ def install_functions(db: sqlite3.Connection, cache: Any = None, binary_cache: A
     from .record_masks import install_functions as install_masks
 
     packet_store.install_functions(db)
+    from .shared_records import install_functions as shared_functions
+
+    shared_functions(db, binary_cache)
     install_masks(db, cache, binary_cache)
 
     def key(kind: int, identity: bytes, revision: int) -> str:
@@ -75,7 +82,7 @@ def install_functions(db: sqlite3.Connection, cache: Any = None, binary_cache: A
         coordinate = record_blocks.Coordinate(
             record_blocks.KINDS[kind], str(uuid.UUID(bytes=identity)), revision
         )
-        raw = packet_store.read(db, packet)
+        raw = domain_packets.read(db, packet, binary_cache)
 
         def read() -> str:
             return encode(record_blocks.read(raw, slot, coordinate, binary_cache))
@@ -89,7 +96,7 @@ def install_functions(db: sqlite3.Connection, cache: Any = None, binary_cache: A
             or which not in ("numeric", "windows")
         ):
             raise ValueError("Invalid owned record kind")
-        value = block_entry(db, packet, slot, cache)
+        value = block_entry(db, packet, slot, cache, binary_cache)
         coordinate = [record_blocks.KINDS[kind], str(uuid.UUID(bytes=identity)), revision]
         if value[:3] != coordinate:
             raise ValueError("Catalogue ownership coordinate mismatch")

@@ -56,6 +56,46 @@ def shards(streams: list[str]) -> list[list[str]]:
     return groups
 
 
+def _subscription_groups(
+    market: str, streams: set[str], previous: dict[str, tuple[str, ...]]
+) -> dict[str, tuple[str, ...]]:
+    """Keep unaffected sockets while retaining the original count/byte bounds."""
+    fresh = {f"{market}:{i}": tuple(group) for i, group in enumerate(shards(list(streams)))}
+    prior = {name: group for name, group in previous.items() if name.startswith(market + ":")}
+    if not prior:
+        return fresh
+    groups = {name: tuple(s for s in group if s in streams) for name, group in prior.items()}
+    groups = {name: group for name, group in groups.items() if group}
+    assigned = {stream for group in groups.values() for stream in group}
+
+    def place(stream: str) -> bool:
+        # Prefer already changed groups, then use existing spare capacity.
+        for name in sorted(groups, key=lambda name: (groups[name] == prior.get(name), name)):
+            group = groups[name]
+            if (
+                len(group) < SUBSCRIPTION_SHARD_TOPICS
+                and len(json.dumps([topic(s) for s in (*group, stream)])) <= 20_000
+            ):
+                groups[name] = (*group, stream)
+                return True
+        return False
+
+    for stream in sorted(streams - assigned):
+        if not place(stream):
+            index = 0
+            while f"{market}:{index}" in groups:
+                index += 1
+            groups[f"{market}:{index}"] = (stream,)
+    # Removals can leave sparse groups. Consolidate the smallest one first;
+    # never allow more sockets than the original bounded packing would use.
+    while len(groups) > len(fresh):
+        smallest = min(groups, key=lambda name: (len(groups[name]), name))
+        moved = groups.pop(smallest)
+        if not all(place(stream) for stream in moved):
+            return fresh  # Unusual topic byte sizes may require a full repack.
+    return groups
+
+
 class BybitRadar(BybitREST):
     def __init__(
         self,
@@ -112,6 +152,8 @@ class BybitRadar(BybitREST):
         candles = sorted(self.sources.windows[stream].values(), key=lambda c: c.start)
         if through is not None:
             candles = [c for c in candles if c.start <= through]
+        if not candles:
+            return
         self.on_observation(
             stream,
             candles,
@@ -272,8 +314,11 @@ class BybitRadar(BybitREST):
         self._scope_revision = current.revision if settings == current.settings else None
         new_groups: dict[str, tuple[str, ...]] = {}
         for market in ("spot", "linear"):
-            for index, group in enumerate(shards([s for s in new_streams if s.startswith(market + "/")])):
-                new_groups[f"{market}:{index}"] = tuple(group)
+            new_groups.update(
+                _subscription_groups(
+                    market, {s for s in new_streams if s.startswith(market + "/")}, self._groups
+                )
+            )
         if new_streams == self.streams and new_groups == self._groups and self.scope_synced():
             return
         removed = self.streams - new_streams
@@ -726,6 +771,7 @@ class BybitRadar(BybitREST):
         while True:
             self.connections[name] = {
                 "state": "CONNECTING",
+                "phase": "CONNECT",
                 "market": market,
                 "requested": len(streams),
                 "acknowledged": 0,
@@ -741,6 +787,7 @@ class BybitRadar(BybitREST):
                 ) as websocket:
                     ping = asyncio.create_task(self._ping(websocket))
                     try:
+                        self.connections[name]["phase"] = "RECOVERY"
                         for stream in streams:
                             self.sources.live.pop(stream, None)
                             window = self.sources.windows.get(stream, {})
@@ -759,6 +806,7 @@ class BybitRadar(BybitREST):
                         for offset in range(0, len(streams), batch_size):
                             batch = streams[offset : offset + batch_size]
                             request_id = f"cw{offset}"
+                            self.connections[name]["phase"] = "SUBSCRIBE_SEND"
                             await websocket.send(
                                 json.dumps(
                                     {
@@ -769,11 +817,14 @@ class BybitRadar(BybitREST):
                                 )
                             )
                             deadline = time.monotonic() + 15
+                            started, processed = time.monotonic(), 0
+                            self.connections[name]["phase"] = "SUBSCRIBE_ACK"
                             while True:
                                 remaining = deadline - time.monotonic()
                                 if remaining <= 0:
                                     raise TimeoutError("Subscription acknowledgement deadline")
-                                raw = await asyncio.wait_for(websocket.recv(), remaining)
+                                async with asyncio.timeout(remaining):
+                                    raw = await websocket.recv()
                                 received_ms = int(time.time() * 1000)
                                 message = json.loads(raw)
                                 # Subscription responses must not wait for cold source
@@ -805,12 +856,18 @@ class BybitRadar(BybitREST):
                                         raise MarketError("subscription_rejected")
                                     self.connections[name]["acknowledged"] += len(batch)
                                     break
+                                processed += 1
+                                if processed >= 16 or time.monotonic() - started >= 0.005:
+                                    await asyncio.sleep(0)
+                                    started, processed = time.monotonic(), 0
                         self.connections[name]["state"] = "CONNECTED"
+                        self.connections[name]["phase"] = "DEFERRED"
                         backoff = 1.0
                         for message, received_ms in deferred:
                             self.accept_message(market, message, allowed, received_ms=received_ms)
                             await asyncio.sleep(0)
                         deferred.clear()
+                        self.connections[name]["phase"] = "RECEIVE"
                         await self._receive_messages(websocket, name, market, allowed)
                     finally:
                         ping.cancel()

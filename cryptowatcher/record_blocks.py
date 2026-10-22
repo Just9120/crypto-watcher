@@ -15,12 +15,14 @@ from typing import Any, Iterable, Iterator
 
 import zstandard
 
-from . import indexed_frame
+from . import indexed_frame, shared_body_frame
+from .compact_json import unpack as typed_unpack
 from .record_codec import BINARY_MAGIC, TYPED_MAGIC, pack_binary, sql_payload
 from .storage import encode
 
 LEGACY_MAGIC = b"DB1\x00"
 MAGIC = b"DB2\x00"
+SHARED_MAGIC = b"DB3\x00"
 KINDS = ("event", "outcome", "episode", "comparison", "decision")
 MAX_RECORDS = 64
 MAX_EXPANDED = 1024 * 1024
@@ -167,14 +169,60 @@ def frames(raw: bytes) -> tuple[bytes, bytes]:
     if (
         not isinstance(raw, bytes)
         or not 40 < len(raw) <= MAX_PACKET
-        or not raw.startswith((LEGACY_MAGIC, MAGIC))
+        or not raw.startswith((LEGACY_MAGIC, MAGIC, SHARED_MAGIC))
         or hashlib.sha256(raw[36:]).digest() != raw[4:36]
     ):
         raise ValueError("Invalid domain block checksum")
     size = struct.unpack(">I", raw[36:40])[0]
     if not 0 < size < len(raw) - 40:
         raise ValueError("Invalid projected frame length")
-    return raw[40 : 40 + size], raw[40 + size :]
+    projection, body = raw[40 : 40 + size], raw[40 + size :]
+    if raw.startswith(SHARED_MAGIC) != body.startswith(shared_body_frame.VIEW_MAGIC):
+        raise ValueError("Invalid shared domain body version")
+    return projection, body
+
+
+def _body_count(frame: bytes) -> int:
+    if frame.startswith(shared_body_frame.VIEW_MAGIC):
+        return shared_body_frame.view_layout(frame)[1]
+    return len(indexed_frame.layout(frame)[0]) - 1
+
+
+def _body_parts(frame: bytes) -> list[bytes]:
+    if frame.startswith(shared_body_frame.VIEW_MAGIC):
+        return shared_body_frame.parts(frame)
+    offsets, raw = indexed_frame.data(frame)
+    return [raw[start:end] for start, end in zip(offsets, offsets[1:])]
+
+
+def _body_select(frame: bytes, slot: int, cache: Any) -> Any:
+    if frame.startswith(shared_body_frame.VIEW_MAGIC):
+        return shared_body_frame.select(frame, slot, cache)
+    return indexed_frame.select(frame, slot, cache)
+
+
+def with_shared_body(raw: bytes, frame: bytes, first: int) -> bytes:
+    """Re-encode only an exact body view; coordinates and projections stay fixed."""
+    if not isinstance(raw, bytes) or not raw.startswith((MAGIC, SHARED_MAGIC)):
+        raise ValueError("Shared bodies require an indexed domain packet")
+    projection, body = frames(raw)
+    count = len(projections(raw))
+    view = shared_body_frame.view(frame, first, count)
+    if _body_parts(body) != shared_body_frame.parts(view):
+        raise ValueError("Shared body changed immutable domain values")
+    return shared_packet(projection, frame, first, count)
+
+
+def shared_packet(projection: bytes, frame: bytes, first: int, count: int) -> bytes:
+    """Restore logical framing from a stored group/view binding."""
+    if len(indexed_frame.layout(projection)[0]) - 1 != count:
+        raise ValueError("Shared domain projection cardinality mismatch")
+    view = shared_body_frame.view(frame, first, count)
+    checked = struct.pack(">I", len(projection)) + projection + view
+    result = SHARED_MAGIC + hashlib.sha256(checked).digest() + checked
+    if len(result) > MAX_PACKET:
+        raise indexed_frame.FrameSizeError("Compressed shared domain block bound")
+    return result
 
 
 def parse(frame: bytes) -> Any:
@@ -232,18 +280,41 @@ def projection(row: Any) -> tuple[Coordinate, dict[str, Any] | None]:
 
 def bodies(raw: bytes) -> list[Any]:
     frame = frames(raw)[1]
-    values = parse(frame) if raw.startswith(LEGACY_MAGIC) else indexed_frame.all_values(frame)
+    values = (
+        parse(frame)
+        if raw.startswith(LEGACY_MAGIC)
+        else [typed_unpack(part, indexed_frame.MAX_BYTES) for part in _body_parts(frame)]
+    )
     if not isinstance(values, list) or not 0 < len(values) <= MAX_RECORDS:
         raise ValueError("Domain body cardinality mismatch")
     return values
 
 
+def checked_projected(
+    raw: bytes, slot: int, expected: Coordinate, cache: Any = None
+) -> dict[str, Any] | None:
+    """Validate every projection while caching only a pure immutable-byte result.
+
+    The caller still reads current packet bytes and SQL bindings. This cache
+    owns neither a binding nor a mutable head; selected heads are decoded anew.
+    """
+    frame = frames(raw)[0]
+
+    def validate() -> bytes:
+        projections(raw)
+        return b"validated"
+
+    result = validate() if cache is None else cache("domain-projections-v1", "", frame, validate)
+    if result != b"validated":
+        raise ValueError("Invalid pure projection validation result")
+    return projected(raw, slot, expected, cache)
+
+
 def projected(raw: bytes, slot: int, expected: Coordinate, cache: Any = None) -> dict[str, Any] | None:
     p, b = frames(raw)
-    if raw.startswith(MAGIC):
+    if raw.startswith((MAGIC, SHARED_MAGIC)):
         p_offsets, _ = indexed_frame.layout(p)
-        b_offsets, _ = indexed_frame.layout(b)
-        if len(p_offsets) != len(b_offsets):
+        if len(p_offsets) - 1 != _body_count(b):
             raise ValueError("Domain body cardinality mismatch")
         actual, head = projection(indexed_frame.select(p, slot, cache))
     else:
@@ -258,15 +329,14 @@ def projected(raw: bytes, slot: int, expected: Coordinate, cache: Any = None) ->
 
 def read(raw: bytes, slot: int, expected: Coordinate, cache: Any = None) -> dict[str, Any]:
     p, b = frames(raw)
-    if raw.startswith(MAGIC):
+    if raw.startswith((MAGIC, SHARED_MAGIC)):
         p_offsets, _ = indexed_frame.layout(p)
-        b_offsets, _ = indexed_frame.layout(b)
-        if len(p_offsets) != len(b_offsets):
+        if len(p_offsets) - 1 != _body_count(b):
             raise ValueError("Domain body cardinality mismatch")
         actual, _ = projection(indexed_frame.select(p, slot, cache))
         if actual != expected:
             raise ValueError("Domain slot identity mismatch")
-        return expanded(expected, indexed_frame.select(b, slot, cache))
+        return expanded(expected, _body_select(b, slot, cache))
     values = projections(raw)
     if type(slot) is not int or not 0 <= slot < len(values) or values[slot][0] != expected:
         raise ValueError("Domain slot identity mismatch")

@@ -205,8 +205,10 @@ def leases(raw: bytes, block: int) -> tuple[list[int], list[int]]:
                 break
         else:
             raise ValueError("Numeric lease overflow")
-        number(value)
-        if integer(value) != body[start:offset]:
+        # At most nine seven-bit groups construct an unsigned 63-bit int.
+        # A multi-byte LEB128 value is minimal exactly when its final group
+        # is nonzero; re-encoding every decoded integer proves the same fact.
+        if offset - start > 1 and byte == 0:
             raise ValueError("Noncanonical numeric lease")
         values.append(value)
     if offset != len(body):

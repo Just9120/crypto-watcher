@@ -135,7 +135,7 @@ def remove_event(store: Store, event_id: str, terminal: Callable[[str, str], Non
     if not catalogue_lifecycle.active(store.db):
         return removed
     while True:
-        reader = catalogue_lifecycle.owned_records(store.db, event_id, store.cached_text)
+        reader = catalogue_lifecycle.owned_records(store.db, event_id, store.cached_text, store.cached_bytes)
         try:
             # Close the cursor before mutating its owner range.
             records = list(islice(reader, 64))

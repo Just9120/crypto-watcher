@@ -16,6 +16,7 @@ from . import (
     catalogue_lifecycle,
     catalogue_reader,
     catalogue_transfer,
+    domain_packets,
     packet_store,
     record_blocks,
     record_catalog,
@@ -167,7 +168,7 @@ def _head(store: Store, key: str, raw: str | bytes, state: dict[str, Any]) -> bo
     if body is None:
         raise StateError("Missing queued immutable body")
     projected = record_blocks.projected(
-        packet_store.read(store.db, saved[0]), saved[1], coordinate, store.cached_bytes
+        domain_packets.read(store.db, saved[0], store.cached_bytes), saved[1], coordinate, store.cached_bytes
     )
     if selected.kind == "decision":
         matched = value == {DECISION_HEAD: revision} or catalogue_reader.equal_public(

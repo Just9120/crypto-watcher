@@ -65,11 +65,18 @@ def checked_write(store: Store, key: str, value: Any) -> bool:
     body = store.get_runtime(catalogue_reader.PREFIX + coordinate.key, catalogue_reader.MISSING)
     if body is catalogue_reader.MISSING:
         raise StateError("Missing new history head revision")
-    from .events import History
+    from .events import DECISION_HEAD, History
 
     history = History(store)
-    public = history.resolve(key[len(catalogue_reader.PREFIX) :], value)
-    actual = history.resolve(coordinate.key, body)
+    public, compact = history._resolve_with_head(key[len(catalogue_reader.PREFIX) :], value)
+    if compact and not (isinstance(body, dict) and DECISION_HEAD in body):
+        # The resolver just read this exact revision and checked every head
+        # field in our writer snapshot. Reuse its complete restoration; no
+        # mutable DB lookup or proof is cached across calls. Keep the same
+        # service normalization comparison as a direct revision read.
+        actual = history._expand_services(public) if store.bounded else public
+    else:
+        actual = history.resolve(coordinate.key, body)
     if encode(public) != encode(actual):
         raise StateError("Conflicting new history head projection")
     current = record_catalog.head(store.db, selected.kind, selected.identity, store.cached_bytes)

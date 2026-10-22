@@ -41,6 +41,8 @@ def main() -> int:
             "export",
             "analytics",
             "context",
+            "enable-shared-storage",
+            "shared-storage-status",
         ),
         default="run",
     )
@@ -66,6 +68,10 @@ def main() -> int:
     parser.add_argument("--cutoff-ms", type=int)
     parser.add_argument("--capacity-ledger", action="store_true")
     parser.add_argument("--capacity-cohorts", action="store_true")
+    parser.add_argument("--expected-source")
+    parser.add_argument("--expected-generation")
+    parser.add_argument("--expected-configuration-revision", type=int)
+    parser.add_argument("--expected-private-sha256")
     args = parser.parse_args()
     if args.version:
         revision = os.getenv("SOURCE_REVISION", "UNSET")
@@ -76,6 +82,14 @@ def main() -> int:
     load_dotenv(override=False)
     configure_logging(os.environ.get("TELEGRAM_BOT_TOKEN", ""))
     try:
+        activation_values = (
+            args.expected_source,
+            args.expected_generation,
+            args.expected_configuration_revision,
+            args.expected_private_sha256,
+        )
+        if args.command != "enable-shared-storage" and any(value is not None for value in activation_values):
+            raise ConfigError("expected identity flags require enable-shared-storage")
         if (args.capacity_ledger or args.capacity_cohorts) and args.command != "capacity":
             raise ConfigError("capacity flags require capacity command")
         if args.validation_directory is not None and args.command not in ("state-check", "backup"):
@@ -95,6 +109,33 @@ def main() -> int:
             args.command != "backup" or not (args.compressed_validation or args.framed_archive_validation)
         ):
             raise ConfigError("archive-backup requires backup and compressed-validation")
+        if args.command == "enable-shared-storage":
+            if (
+                args.database is None
+                or args.destination is None
+                or args.owner_id is None
+                or any(value is None for value in activation_values)
+            ):
+                raise ConfigError(
+                    "enable-shared-storage requires database, destination, owner and every expected identity"
+                )
+            from .shared_activation import activate
+
+            print(
+                encode(
+                    activate(
+                        args.database,
+                        args.destination,
+                        owner=args.owner_id,
+                        expected_source=args.expected_source,
+                        expected_generation=args.expected_generation,
+                        expected_revision=args.expected_configuration_revision,
+                        expected_private=args.expected_private_sha256,
+                        timeout_seconds=args.timeout_seconds,
+                    )
+                )
+            )
+            return 0
         if args.command == "migrate":
             if (
                 args.database is None
@@ -124,11 +165,17 @@ def main() -> int:
             "export",
             "analytics",
             "context",
+            "shared-storage-status",
         ):
             database = args.database or Path(os.environ.get("DATABASE_FILE", "/data/cryptowatcher.sqlite3"))
             owner = args.owner_id or int(os.environ.get("OWNER_USER_ID", "0"))
             store = Store(database, owner, readonly=True)
             try:
+                if args.command == "shared-storage-status":
+                    from .shared_activation import status as shared_status
+
+                    print(encode(shared_status(store)))
+                    return 0
                 if args.command == "capacity":
                     from .capacity import snapshot as capacity_snapshot
 

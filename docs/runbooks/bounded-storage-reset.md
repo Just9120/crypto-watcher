@@ -196,6 +196,69 @@ TIME_BUDGET_EXCEEDED. После PRAGMA integrity_check/current-head query deadl
 Выбор метода не является доказательством его времени на произвольной базе;
 actual ordinary CD и полный backup остаются обязательны.
 
+## Явное включение shared storage без сброса истории
+
+Эта операция относится к CAPACITY25 и не повторяет reset. До production нужны
+qualification текущего source/image, retention/public equality, capacity и
+обязательные CI/review/CD gates из [плана](../open_issues.md). Новый формат сам
+не устанавливается при открытии Store или обычном startup. Сроки хранения,
+generation/config/private state, прежние archives и файлы замеров сохраняются.
+
+На проверенном target сначала прочитать `python -m cryptowatcher shared-storage-status`
+из exact нового image с текущими `--database` и `--owner-id`. Это readonly pinned
+snapshot: source revision, generation, configuration revision, private SHA256 и
+layout/work header. Он не подтверждает full integrity, capacity или readiness.
+Сверить source с image/CD record; сохранить token в private operation record.
+
+Включение выполняется под existing `.deploy.lock`, после проверки отсутствия
+conflicting delivery/active observer и остановки только identified writer.
+Canonical host orchestration выполняет [enable_shared_storage.py](../../scripts/enable_shared_storage.py):
+проверяет Linux/root/host, exact target SHA/permissions, private env, unit/image/mount
+и единственную successful CD запись. Readonly token сверяется до stop; private
+operation record создается до изменения сервиса, затем atomic phases, image/helper
+hashes, backup и post-check evidence сохраняются в `rehearsals/shared-storage-*`.
+Script и его pure container-arguments dependency `fresh_measurement.py` перед запуском
+сверяются с merged source; reset/fresh/discard functions не вызываются.
+
+```bash
+python3 enable_shared_storage.py --expected-source MERGED_SOURCE_SHA --expected-generation CURRENT_GENERATION_ID --expected-configuration-revision CURRENT_CONFIG_REVISION --expected-private-sha256 CURRENT_PRIVATE_SHA256 --expected-target-sha256 CURRENT_TARGET_SHA256
+```
+
+Host script держит existing deployment lock, отказывает active capacity observer,
+создает только новый backup и private operation record. После ambiguous stop
+сначала читает state. При сбое offline candidate сначала подтверждает его exact
+name/image/отсутствие Compose ownership и stop/absence, затем при необходимости
+запускает тот же identified container. Чужой/неизвестный candidate не останавливает
+и второй writer поверх него не запускает. После failed health/private post-check
+сохраняет FAILED; повторной поставки/сброса и удаления файлов не выполняет.
+Использовать canonical offline container constraints из [поставки](delivery.md):
+exact image/project/data/env/owner, read-only rootfs, no network, CPU1/RAM4GiB,
+без повышения ресурсов и новых расписаний. Весь stop/backup/adoption/start/post-check
+должен укладываться в900s с прежним запасом recovery; timeout CLI ограничить
+фактическим остатком за вычетом start/post-check/recovery, не выдавать ему новые900s.
+
+```bash
+python -m cryptowatcher enable-shared-storage --database /data/sqlite/cryptowatcher.sqlite3 --owner-id OWNER_ID --destination /data/sqlite/backups/UNIQUE_PRE_SHARED.sqlite3 --expected-source MERGED_SOURCE_SHA --expected-generation CURRENT_GENERATION_ID --expected-configuration-revision CURRENT_CONFIG_REVISION --expected-private-sha256 CURRENT_PRIVATE_SHA256 --timeout-seconds REMAINING_CORE_SECONDS
+```
+
+Все uppercase значения берутся из fresh primary records/token и remaining budget,
+не являются defaults. Destination и sidecars должны отсутствовать; проверить место
+под обычный полный backup. CLI берет exclusive RuntimeLease, отказывает работающему
+writer, сверяет current source/schema/generation/config/private до backup и повторно
+перед DDL. Только COMPLETE backup допускает guarded layout2, затем layout3.
+Ни одна прежняя строка/файл не удаляется; исходная history generation не меняется.
+Fresh reopen подтверждает identity и exact schema. Initial scan/publication затем
+продолжаются существующим bounded maintenance worker; baseline их не пропускает.
+
+После неизвестного исхода/ошибки сначала читать layout и operation/backup records.
+Известная частичная layout2 остается читаемой новым artifact; требуется forward
+recovery, без старого image, сброса БД и слепого retry. COMPLETE layout3 повторно
+проверяется и возвращает ALREADY_ENABLED без нового backup/перезаписи и без снятия
+writer switch0. Не удалять incomplete backup. Запускать только тот же проверенный
+совместимый image; подтвердить source/private/generation/config, health/readiness,
+работу sources/queues и bounded maintenance. Отсутствующий required post-check не
+считать успешной операцией. Сам CLI не управляет контейнером и не запускает observer.
+
 ## Измерение ёмкости и конечное24h наблюдение
 
 Canonical команды из root, existing env/owner binding:

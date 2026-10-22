@@ -19,6 +19,7 @@ from . import (
     catalogue_aliases,
     catalogue_lifecycle,
     catalogue_reader,
+    domain_packets,
     packet_store,
     record_blocks,
     record_catalog,
@@ -234,7 +235,7 @@ def prepare(store: Store, key: str, raw: str | bytes, state: dict[str, Any]) -> 
             _fallback(state, "existing_private_variant")
             return None
         previous_projection = record_blocks.projected(
-            packet_store.read(store.db, old[0]), old[1], coordinate, store.cached_bytes
+            domain_packets.read(store.db, old[0], store.cached_bytes), old[1], coordinate, store.cached_bytes
         )
         if encode(previous_projection) != encode(projection):
             projection = previous_projection

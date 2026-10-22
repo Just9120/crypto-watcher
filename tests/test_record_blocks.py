@@ -1,4 +1,5 @@
 import hashlib
+import struct
 import uuid
 
 import pytest
@@ -32,6 +33,48 @@ def entries():
         )
         result.append((coordinate, value, head))
     return result
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_checked_projection_cache_never_shares_mutable_heads_or_skips_current_bytes(store, legacy):
+    values = entries()
+    raw = blocks.pack(values, legacy=legacy)
+    coordinate, _, expected = values[0]
+    first = blocks.checked_projected(raw, 0, coordinate, store.cached_bytes)
+    assert encode(first) == encode(expected)
+    first["local_mutation"] = ["must not be cached"]
+    assert encode(blocks.checked_projected(raw, 0, coordinate, store.cached_bytes)) == encode(expected)
+    damaged = raw[:-1] + bytes((raw[-1] ^ 1,))
+    with pytest.raises(ValueError):
+        blocks.checked_projected(damaged, 0, coordinate, store.cached_bytes)
+    assert store.reference_cache_bytes <= 1024 * 1024
+
+
+def test_checked_projection_revalidates_changed_nonselected_coordinates_after_cache_hit(store, monkeypatch):
+    values = entries()
+    raw = blocks.pack(values)
+    coordinate = values[0][0]
+    count = 0
+    original = blocks.projections
+
+    def counted(packet):
+        nonlocal count
+        count += 1
+        return original(packet)
+
+    monkeypatch.setattr(blocks, "projections", counted)
+    blocks.checked_projected(raw, 0, coordinate, store.cached_bytes)
+    blocks.checked_projected(raw, 1, values[1][0], store.cached_bytes)
+    assert count == 1
+    projection, body = blocks.frames(raw)
+    rows = blocks.indexed_frame.all_values(projection)
+    rows[-1] = rows[0]
+    projection = blocks.indexed_frame.pack(rows)
+    frames = struct.pack(">I", len(projection)) + projection + body
+    changed = blocks.MAGIC + hashlib.sha256(frames).digest() + frames
+    with pytest.raises(ValueError, match="Duplicate domain projection"):
+        blocks.checked_projected(changed, 0, coordinate, store.cached_bytes)
+    assert count == 2
 
 
 @pytest.mark.parametrize("legacy", [False, True])

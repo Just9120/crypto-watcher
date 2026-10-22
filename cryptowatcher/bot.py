@@ -168,6 +168,9 @@ class Controller:
         self.analytics_lock = asyncio.Lock()
         self.retention_lock = asyncio.Lock()
         self.repack_lock = asyncio.Lock()
+        from .shared_record_worker import Worker as SharedRecordWorker
+
+        self.shared_records = SharedRecordWorker(store, scalar_units=True)
         self.recovery_lock = asyncio.Lock()
         self.maintenance_started_at = time.time()
         self.first_ready_poll = False
@@ -787,6 +790,8 @@ class Controller:
                     and self.store.get_runtime("storage_repack", {}).get("initial_reclaim_complete") is True
                 )
                 slices = 1 if defer_compaction else 4 if self.repack_boost_ready() else 1
+                if not defer_compaction:
+                    await self.shared_records.step(self.market.server_now)
                 deadline = time.monotonic() + 0.2
                 for index in range(slices):
                     if (index or retention_slices) and (
@@ -1021,6 +1026,7 @@ def application(controller: Controller) -> Application[Any, Any, Any, Any, Any, 
             await controller.market.start()
 
     async def shutdown(app: Application[Any, Any, Any, Any, Any, Any]) -> None:
+        await controller.shared_records.close()
         await controller.market.close()
 
     async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:

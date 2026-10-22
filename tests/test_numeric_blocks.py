@@ -1,10 +1,12 @@
 import copy
 import random
 import sqlite3
+import struct
 import time
 from contextlib import closing
 
 import pytest
+import zstandard
 
 from cryptowatcher import metric_codec, numeric_pool
 from cryptowatcher import numeric_block_codec as codec
@@ -76,6 +78,26 @@ def test_codec_preserves_all_float_bits_integer_flags_sparse_slots_and_bounds():
     for invalid in (0, -1, True, 1.0, 2**63):
         with pytest.raises(ValueError):
             codec.coordinate(invalid)
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_lease_vectors_preserve_integer_boundaries_and_reject_noncanonical_values(compressed):
+    details = [0, 1, 127, 128, 16383, 16384, 2**56, codec.LIMIT] * 8
+    quality = list(reversed(details))
+    assert codec.leases(codec.counts(73, details, quality, compressed=compressed), 73) == (
+        details,
+        quality,
+    )
+
+    for values in (b"\x80\x00" + bytes(127), b"\x80" * 9 + bytes(127), bytes(127), bytes(129)):
+        if compressed:
+            body = struct.pack(">QH", 73, len(values))
+            body += zstandard.ZstdCompressor(write_checksum=True).compress(values)
+            raw = codec.seal(b"NR2\x00", body)
+        else:
+            raw = codec.seal(b"NR1\x00", struct.pack(">Q", 73) + values)
+        with pytest.raises(ValueError):
+            codec.leases(raw, 73)
 
 
 def test_lease_only_adjustment_keeps_payload_without_blob_write(store):

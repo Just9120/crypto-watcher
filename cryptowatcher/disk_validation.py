@@ -53,6 +53,9 @@ def validated_disk(path: Path, *, deadline: float) -> Iterator[apsw.Connection]:
         database.create_scalar_function(
             "cw_catalogue_shadow_digest", overlap_signature, 2, deterministic=True
         )
+        from .shared_records import sql_signature as shared_signature
+
+        database.create_scalar_function("cw_shared_digest", shared_signature, 5, deterministic=True)
         integrity = list(database.execute("PRAGMA integrity_check"))
         budget(deadline)
         if integrity != [("ok",)]:

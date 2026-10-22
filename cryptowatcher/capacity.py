@@ -70,6 +70,11 @@ def boundary_blockers(value: dict[str, Any]) -> list[str]:
         and value.get("runtime_ledger", {}).get("numeric_frames", {}).get("state") != "MEASURED"
     ):
         reasons.append("BOUNDARY_NUMERIC_FRAME_LEDGER_INCOMPLETE")
+    if (
+        value.get("storage", {}).get("shared_record_layout", {}).get("installed")
+        and value.get("runtime_ledger", {}).get("shared_records", {}).get("state") != "MEASURED"
+    ):
+        reasons.append("BOUNDARY_SHARED_RECORD_LEDGER_INCOMPLETE")
     if not re.fullmatch(r"[0-9a-f]{40}", value.get("source_revision", "")):
         reasons.append("BOUNDARY_SOURCE_UNSET")
     generation = value.get("history_generation") or {}
@@ -111,6 +116,7 @@ def runtime_ledger(store: Store, seconds: float = 50) -> dict[str, Any]:
     complete = measured is not None
     catalogue: dict[str, Any] = {"state": "NOT_MEASURED"}
     numeric: dict[str, Any] = {"state": "NOT_MEASURED"}
+    shared: dict[str, Any] = {"state": "NOT_MEASURED"}
     store.db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
     try:
         while not complete and time.monotonic() < deadline:
@@ -137,6 +143,9 @@ def runtime_ledger(store: Store, seconds: float = 50) -> dict[str, Any]:
             from .numeric_frame_work import measure as numeric_ledger
 
             numeric = numeric_ledger(store.db, deadline, store.cached_bytes)
+            from .shared_record_work import verify as shared_ledger
+
+            shared = shared_ledger(store.db, deadline)
     except sqlite3.OperationalError as exc:
         if getattr(exc, "sqlite_errorcode", None) != sqlite3.SQLITE_INTERRUPT:
             raise
@@ -150,6 +159,7 @@ def runtime_ledger(store: Store, seconds: float = 50) -> dict[str, Any]:
     return {
         "state": "MEASURED" if complete else "PARTIAL_BUDGET",
         "numeric_frames": numeric,
+        "shared_records": shared,
         "method": "TRANSACTIONAL_NAMESPACE_COUNTERS_AFTER_COMPLETE_FINITE_SCAN"
         if measured is not None
         else "BOUNDED_EXPLICIT_ROWID_SCAN",
@@ -511,7 +521,30 @@ def stable_reason(store: Store) -> list[str]:
                 reasons.append("CATALOGUE_BUNDLE_BACKLOG")
         except (ValueError, StateError, sqlite3.Error):
             reasons.append("CATALOGUE_CHECKPOINT_UNKNOWN")
-    for key in ("repack_worker", "analytics_recovery_worker", "retention_worker"):
+    try:
+        from .shared_record_work import status as shared_status
+
+        shared = shared_status(store.db, int(time.time() * 1000))
+        if shared["installed"]:
+            if not shared.get("work_installed"):
+                reasons.append("SHARED_RECORD_WORK_NOT_INSTALLED")
+            elif shared.get("checkpoint_unknown"):
+                reasons.append("SHARED_RECORD_CHECKPOINT_UNKNOWN")
+            elif shared.get("clock_unknown"):
+                reasons.append("SHARED_RECORD_CLOCK_UNKNOWN")
+            elif shared.get("checkpoint_stale"):
+                reasons.append("SHARED_RECORD_WORKER_STALE")
+            elif not shared.get("writer_enabled"):
+                reasons.append("SHARED_RECORD_WRITER_DISABLED")
+            elif not shared.get("initial_complete"):
+                reasons.append("SHARED_RECORD_INITIAL_INCOMPLETE")
+            elif not shared.get("initial_reclaim_complete"):
+                reasons.append("SHARED_RECORD_INITIAL_RECLAIM_PENDING")
+            elif shared.get("pending_work"):
+                reasons.append("SHARED_RECORD_BACKLOG")
+    except (ValueError, StateError, sqlite3.Error):
+        reasons.append("SHARED_RECORD_CHECKPOINT_UNKNOWN")
+    for key in ("repack_worker", "analytics_recovery_worker", "retention_worker", "shared_record_worker"):
         if store.get_runtime(key, {}).get("state") == "FAILED":
             reasons.append(key.upper() + "_FAILED")
     analytics = store.get_runtime("analytics", {})

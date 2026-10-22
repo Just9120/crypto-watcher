@@ -160,6 +160,23 @@ def test_head_write_failure_and_whole_history_version_failure_restore_ownership_
     assert history.get(coordinate.key) == body
 
 
+def test_compact_head_cannot_bypass_reserved_decision_reference_validation(store):
+    values = cold(store)
+    coordinate, body, _ = next(item for item in values if item[0].kind == "event")
+    newer = Coordinate("event", coordinate.identity, coordinate.revision + 1)
+    malformed = {**body, "revision": newer.revision, DECISION_HEAD: 7}
+    store.put_runtime(PREFIX + newer.key, malformed)
+    head = History._head("event", malformed, newer.key, bounded=True)
+    before = list(store.db.iterdump())
+
+    with pytest.raises(StateError, match="Invalid decision head reference"):
+        store.put_runtime(head_key(coordinate), head)
+
+    assert list(store.db.iterdump()) == before
+    assert encode(History(store).get(coordinate.key)) == encode(body)
+    assert catalog.row(store.db, coordinate)[4] == 1
+
+
 def test_cold_alias_deletion_does_not_delete_events_or_resurrect_unpublished_history(store):
     public = populated(store)
     store.bounded = True
