@@ -173,7 +173,7 @@ def _current(tile: Tile, cache: Any = None) -> tuple[list[int], list[int], list[
 
 
 class _MissingPayloadCache(Exception):
-    """A pure cache probe must not admit a full value when only times are needed."""
+    """A pure cache probe must not derive or admit a missing value."""
 
 
 def times(tile: Tile, cache: Any = None) -> list[int]:
@@ -219,9 +219,31 @@ def times(tile: Tile, cache: Any = None) -> list[int]:
     return result
 
 
+def _leased_index(tile: Tile, cache: Any = None) -> tuple[list[int], list[int], list[int]]:
+    if cache is not None:
+
+        def existing(kind: str, key: str, raw: bytes, unused: Any) -> bytes:
+            def missing() -> bytes:
+                raise _MissingPayloadCache
+
+            return cache(kind, key, raw, missing)
+
+        try:
+            index = times(tile, existing)
+        except _MissingPayloadCache:
+            pass
+        else:
+            _, anchors, purges = _header(tile)
+            return anchors, purges, index
+    # Preserve full-payload admission on a first stats/lease check. A later
+    # points read must retain the existing reuse rather than decode twice.
+    anchors, purges, values = _current(tile, cache)
+    return anchors, purges, [value[2] for value in values]
+
+
 def monotonic(old: Tile, new: Tile, cache: Any = None) -> bool:
     """Current headers plus one immutable payload; never reuse mutable leases."""
-    before, purges, _ = _current(old, cache)
+    before, purges, _ = _leased_index(old, cache)
     _, after, updated_purges = _header(new)
     if (old.identity, old.stream, old.kind, old.day, old.payload) != (
         new.identity,
@@ -323,15 +345,15 @@ def expire(tile: Tile, now: int, *, candle_days: int, detail_days: int) -> Tile 
 
 
 def stats(tile: Tile, cache: Any = None) -> dict[str, Any]:
-    _, purges, values = _current(tile, cache)
+    _, purges, index = _leased_index(tile, cache)
     return {
         "identity": tile.identity,
         "stream": tile.stream,
         "kind": tile.kind,
         "day": tile.day,
-        "count": len(values),
-        "first_at": values[0][2],
-        "last_at": values[-1][2],
-        "first_due": min(purges[: len(values)]),
+        "count": len(index),
+        "first_at": index[0],
+        "last_at": index[-1],
+        "first_due": min(purges[: len(index)]),
         "frozen": owner_slots.bits(tile.frozen).bit_count(),
     }

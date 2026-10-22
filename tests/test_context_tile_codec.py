@@ -177,3 +177,53 @@ def test_expanded_admission_bound_and_all_slot_order_are_checked_before_publicat
     forged = replace(tile, payload=indexed_frame.pack([values[1], values[0]]))
     with pytest.raises(ValueError, match="Unordered"):
         codec.stats(forged)
+
+
+def test_warmed_index_keeps_current_lease_and_frozen_mask_checks(store):
+    tile = codec.pack(19, [point(i, frozen=i % 3 == 0) for i in range(32)])
+    codec.times(tile, store.cached_bytes)
+    count, anchors, purges = codec._header(tile)
+    anchors[count - 1] += 1
+    purges[count - 1] += 1
+    renewed = replace(
+        tile, leases=numeric_block_codec.counts(tile.identity, anchors, purges, compressed=True)
+    )
+    assert codec.stats(renewed, store.cached_bytes) == codec.stats(renewed)
+    assert codec.monotonic(tile, renewed, store.cached_bytes)
+    assert not codec.monotonic(renewed, tile, store.cached_bytes)
+    mask = owner_slots.mask([i for i in range(32) if i % 3 == 0 and i != 0])
+    removed = replace(renewed, frozen=mask, seal=owner_slots.signature(tile.stream, tile.identity, mask))
+    assert not codec.monotonic(renewed, removed, store.cached_bytes)
+    assert codec.stats(removed, store.cached_bytes) == codec.stats(removed)
+    assert store.reference_cache_bytes <= 1024 * 1024
+
+
+@pytest.mark.parametrize("operation", ["stats", "monotonic"])
+@pytest.mark.parametrize("change", ["stream", "kind", "day", "leases", "seal", "mask", "payload", "point"])
+def test_warmed_index_never_authenticates_changed_headers_or_invalid_payload(store, operation, change):
+    tile = codec.pack(20, [point(i, frozen=i % 3 == 0) for i in range(32)])
+    codec.times(tile, store.cached_bytes)
+    if change == "stream":
+        bad = replace(tile, stream=8, seal=owner_slots.signature(8, tile.identity, tile.frozen))
+    elif change == "kind":
+        bad = replace(tile, kind="instrument")
+    elif change == "day":
+        bad = replace(tile, day=tile.day + 1)
+    elif change == "leases":
+        bad = replace(tile, leases=tile.leases[:-1] + bytes([tile.leases[-1] ^ 1]))
+    elif change == "seal":
+        bad = replace(tile, seal=bytes(32))
+    elif change == "mask":
+        mask = owner_slots.mask([63])
+        bad = replace(tile, frozen=mask, seal=owner_slots.signature(tile.stream, tile.identity, mask))
+    elif change == "payload":
+        bad = replace(tile, payload=tile.payload[:-1] + bytes([tile.payload[-1] ^ 1]))
+    else:
+        values = indexed_frame.all_values(tile.payload)
+        values[-1][4]["available_at_ms"] += 1
+        bad = replace(tile, payload=indexed_frame.pack(values))
+    with pytest.raises(ValueError):
+        if operation == "stats":
+            codec.stats(bad, store.cached_bytes)
+        else:
+            codec.monotonic(bad, bad, store.cached_bytes)

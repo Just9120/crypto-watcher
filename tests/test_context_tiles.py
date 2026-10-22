@@ -55,6 +55,34 @@ def counts(store):
     return {row[0]: tuple(row[1:3]) for row in store.db.execute("SELECT * FROM market_counts")}
 
 
+def test_warmed_timestamp_index_cannot_keep_a_rolled_back_sql_lease(store):
+    keys, refs, _ = setup(store)
+    tiles.publish(store.db, keys)
+    store.db.commit()
+    original = tile(store)
+    codec.times(original, store.cached_bytes)
+
+    def snapshot():
+        return {
+            name: sorted(
+                repr(tuple(row))
+                for row in store.db.execute('SELECT * FROM "' + name.replace('"', '""') + '"')
+            )
+            for (name,) in store.db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+
+    before = snapshot()
+    due = codec.stats(original)["first_due"]
+    with pytest.raises(RuntimeError, match="rollback"), store.db:
+        save_context(store.db, "ticker", "spot/BTCUSDT", values(0), BASE + 7 * DAY)
+        assert codec.stats(tile(store), store.cached_bytes)["first_due"] > due
+        raise RuntimeError("rollback")
+    assert snapshot() == before
+    assert tile(store) == original
+    assert codec.stats(tile(store), store.cached_bytes)["first_due"] == due
+    assert restore(store.db, refs[0]) == encode({"ticker": values(0)}).encode()
+
+
 def test_explicit_install_and_atomic_exact_frozen_publication_reopen_and_legacy(store):
     keys, refs, old = setup(store)
     before = [tiles.lookup(store.db, *key) for key in keys]
