@@ -283,13 +283,13 @@ def test_shared_tail_guards_preserve_reservation_until_real_collection(store, op
     assert list(store.db.iterdump()) == before
 
 
-@pytest.mark.parametrize("validator", ["disk", "compressed"])
+@pytest.mark.parametrize("validator", ["stdlib", "disk", "compressed"])
 def test_full_validation_checks_real_shared_groups_and_classifies_corruption(store, validator):
     import apsw
 
     from cryptowatcher.compressed_validation import QualificationError, full_check
     from cryptowatcher.disk_validation import validated_disk
-    from cryptowatcher.storage import IntegrityError
+    from cryptowatcher.storage import IntegrityError, check_integrity
 
     originals = setup(store)
     selected = prepare(store, originals)
@@ -299,7 +299,11 @@ def test_full_validation_checks_real_shared_groups_and_classifies_corruption(sto
 
     def check():
         deadline = time.monotonic() + 10
-        if validator == "disk":
+        if validator == "stdlib":
+            # A dedicated backup connection has none of Store's SQL functions.
+            with closing(sqlite3.connect(store.path)) as database:
+                check_integrity(database, deadline=deadline)
+        elif validator == "disk":
             with validated_disk(store.path, deadline=deadline):
                 pass
         else:

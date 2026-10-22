@@ -68,6 +68,9 @@ def check_integrity(database: sqlite3.Connection, *, deadline: float) -> None:
         from .catalogue_overlap import install_check as overlap_check
 
         overlap_check(database)
+        from .shared_records import sql_signature as shared_signature
+
+        database.create_function("cw_shared_digest", 5, shared_signature, deterministic=True)
         previous_cache = int(database.execute("PRAGMA cache_size").fetchone()[0])
         mmap_row = database.execute("PRAGMA mmap_size").fetchone()
         previous_mmap = int(mmap_row[0]) if mmap_row is not None else None
