@@ -25,7 +25,7 @@ class FrameSizeError(ValueError):
     """A valid set of records needs more than one bounded compressed frame."""
 
 
-def pack(values: list[Any]) -> bytes:
+def pack(values: list[Any], *, dense: bool = True) -> bytes:
     if not 0 < len(values) <= MAX_RECORDS:
         raise ValueError("Indexed frame cardinality bound")
     parts = []
@@ -38,10 +38,10 @@ def pack(values: list[Any]) -> bytes:
         parts.append(part)
     raw = b"".join(parts)
     compressed = zstandard.ZstdCompressor(level=3, write_checksum=True, threads=0).compress(raw)
-    if len(raw) >= 4096:
-        dense = zstandard.ZstdCompressor(level=19, write_checksum=True, threads=0).compress(raw)
-        if len(dense) < len(compressed):
-            compressed = dense
+    if dense and len(raw) >= 4096:
+        denser = zstandard.ZstdCompressor(level=19, write_checksum=True, threads=0).compress(raw)
+        if len(denser) < len(compressed):
+            compressed = denser
     header = struct.pack(">HI", len(values), len(raw)) + struct.pack(">" + "I" * len(offsets), *offsets)
     checked = header + compressed
     result = MAGIC + hashlib.sha256(checked).digest() + checked
