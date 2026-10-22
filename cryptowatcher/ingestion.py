@@ -135,7 +135,24 @@ class BybitRadar(BybitREST):
         self._scope_revision: int | None = None
         self._scope_lock = asyncio.Lock()
         self._manager_failures: dict[str, Any] = {"count": 0}
+        self._work_timing = {
+            name: {"calls": 0, "failures": 0, "active_seconds": 0.0, "cpu_seconds": 0.0}
+            for name in ("closed_ws_source", "observation")
+        }
         self.on_observation: Callable[[str, list[Candle], float, float, int, bool], None] | None = None
+
+    def _measure(self, name: str, call: Callable[[], Any]) -> Any:
+        value = self._work_timing[name]
+        began, cpu = time.monotonic(), time.thread_time()
+        try:
+            return call()
+        except BaseException:
+            value["failures"] += 1
+            raise
+        finally:
+            value["calls"] += 1
+            value["active_seconds"] += max(0.0, time.monotonic() - began)
+            value["cpu_seconds"] += max(0.0, time.thread_time() - cpu)
 
     def publish_observation(self, stream: str, *, live: bool, through: int | None = None) -> None:
         if self.on_observation is None or stream in self.sources.blocked:
@@ -154,13 +171,18 @@ class BybitRadar(BybitREST):
             candles = [c for c in candles if c.start <= through]
         if not candles:
             return
-        self.on_observation(
-            stream,
-            candles,
-            liquidity,
-            self.instruments[instrument].tick_size,
-            self.server_now(),
-            live,
+        callback = self.on_observation
+        now_ms = self.server_now()
+        self._measure(
+            "observation",
+            lambda: callback(
+                stream,
+                candles,
+                liquidity,
+                self.instruments[instrument].tick_size,
+                now_ms,
+                live,
+            ),
         )
 
     def server_now(self) -> int:
@@ -725,7 +747,9 @@ class BybitRadar(BybitREST):
                 if previous_end and candle.start > previous_end:
                     self.record_gap(stream, previous_end, candle.start - 1)
                 previous = self.sources.windows[stream].get(candle.start)
-                advanced = self.sources.put(stream, [candle], live=fresh)
+                advanced = self._measure(
+                    "closed_ws_source", lambda: self.sources.put(stream, [candle], live=fresh)
+                )
                 if previous is None:
                     self.publish_observation(stream, live=advanced, through=candle.start)
                 if (
@@ -1093,6 +1117,11 @@ class BybitRadar(BybitREST):
                 "components_healthy": self.components_healthy(),
                 "components": [self.task_diagnostic(task) for task in self._tasks],
                 "manager_failures": dict(self._manager_failures),
+                "work_timing": {
+                    "schema": "cryptowatcher.ingestion-work.v1",
+                    "basis": "process-lifetime thread CPU and synchronous wall; excludes wire decoding, discovery, recovery source writes and async waits",
+                    "stages": {name: dict(value) for name, value in self._work_timing.items()},
+                },
                 "scope_synced": self.scope_synced(),
                 "subscriptions": {
                     name: {

@@ -142,6 +142,9 @@ async def test_old_snapshot_cannot_overwrite_concurrent_job_change(tmp_path, mon
     assert await task == 0
     assert history.count("outcome-head:") == 0
     assert history.get(key) == job
+    progress = store.get_runtime("analytics_progress:outcome")
+    assert progress["apply_calls"] == 0
+    assert progress["apply_active_seconds"] == progress["apply_cpu_seconds"] == 0
     store.close()
 
 
@@ -150,6 +153,13 @@ async def test_backlog_batches_drain_and_restart_preserves_completed_sources(tmp
     store, worker, history = seed(tmp_path, 40)
     assert await worker.async_work(lambda: NOW + 5 * MINUTE, batch=32) == 32
     assert await ComparisonWorker(store).async_work(lambda: NOW + 5 * MINUTE, batch=32) == 32
+    for name in ("outcome", "comparison"):
+        progress = store.get_runtime("analytics_progress:" + name)
+        assert progress["apply_calls"] == progress["apply_calls_total"] == 32
+        assert progress["timed_batches_total"] == 1
+        assert progress["read_cpu_seconds"] >= 0
+        assert 0 <= progress["apply_active_seconds"] <= progress["elapsed_seconds"]
+        assert progress["apply_cpu_seconds"] >= 0
     assert history.count("outcome-pending:") == 8
     assert history.count("comparison-pending:") == 8
     before = history.items("outcome:")
@@ -163,7 +173,61 @@ async def test_backlog_batches_drain_and_restart_preserves_completed_sources(tmp
     assert all(history.get(k) == v for k, v in before)
     assert history.count("protected:") == 5
     assert history.count("comparison-head:") == 40
+    for name in ("outcome", "comparison"):
+        progress = store.get_runtime("analytics_progress:" + name)
+        assert progress["apply_calls"] == 8 and progress["apply_calls_total"] == 40
+        assert progress["timed_batches_total"] == 2
     store.close()
+
+
+@pytest.mark.asyncio
+async def test_batch_cpu_attribution_excludes_other_threads_and_interleaved_turns(store, monkeypatch):
+    from collections import defaultdict
+    from types import SimpleNamespace
+
+    from cryptowatcher import analytics_worker
+    from cryptowatcher.queue_health import completed_batch
+
+    wall = [0.0]
+    cpu = defaultdict(float)
+    main_thread = threading.get_ident()
+    monkeypatch.setattr(
+        analytics_worker,
+        "time",
+        SimpleNamespace(monotonic=lambda: wall[0], thread_time=lambda: cpu[threading.get_ident()]),
+    )
+    timing = analytics_worker.BatchTiming()
+
+    def prepare():
+        assert threading.get_ident() != main_thread
+        wall[0] += 3
+        cpu[threading.get_ident()] += 2
+        return "prepared"
+
+    assert await asyncio.to_thread(timing.read, prepare) == "prepared"
+    with timing.applying():
+        wall[0] += 0.5
+        cpu[main_thread] += 0.25
+    await asyncio.sleep(0)
+    wall[0] += 10  # Other tasks run between two independently atomic publications.
+    cpu[main_thread] += 8
+    with timing.applying():
+        wall[0] += 0.75
+        cpu[main_thread] += 0.5
+    completed_batch(store, "outcome", 100, [1, 2], wall[0], read_seconds=3, timing=timing)
+    value = store.get_runtime("analytics_progress:outcome")
+    assert value["read_cpu_seconds"] == value["read_cpu_seconds_total"] == 2
+    assert value["apply_cpu_seconds"] == value["apply_cpu_seconds_total"] == 0.75
+    assert value["apply_active_seconds"] == value["apply_active_seconds_total"] == 1.25
+    assert value["interleaved_seconds"] == value["interleaved_seconds_total"] == 10
+    assert value["apply_calls"] == 2 and value["timed_batches_total"] == 1
+    assert value["apply_seconds"] == 11.25  # Existing wall field keeps its compatibility semantics.
+    completed_batch(store, "outcome", 101, [], 1)
+    unknown = store.get_runtime("analytics_progress:outcome")
+    assert unknown["read_cpu_seconds"] is unknown["apply_cpu_seconds"] is None
+    assert unknown["apply_active_seconds"] is unknown["interleaved_seconds"] is None
+    assert unknown["apply_calls"] is None and unknown["timed_batches_total"] == 1
+    assert unknown["apply_cpu_seconds_total"] == 0.75
 
 
 def test_readonly_worker_rejects_writes_and_diagnostics_do_not_fake_zero(tmp_path, monkeypatch):

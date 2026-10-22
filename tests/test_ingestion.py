@@ -22,6 +22,44 @@ from .test_universe import metadata
 NOW = 1_800_000_000_000
 
 
+def test_sync_work_timing_keeps_results_failures_and_excludes_unrelated_work(store, monkeypatch):
+    radar = BybitRadar(store)
+    wall, cpu = [0.0], [0.0]
+    monkeypatch.setattr(
+        ingestion, "time", SimpleNamespace(monotonic=lambda: wall[0], thread_time=lambda: cpu[0])
+    )
+
+    def source_write():
+        wall[0] += 0.5
+        cpu[0] += 0.25
+        return True
+
+    assert radar._measure("closed_ws_source", source_write) is True
+    wall[0] += 10
+    cpu[0] += 8
+
+    def observation():
+        wall[0] += 0.75
+        cpu[0] += 0.5
+        raise MarketError("original_failure")
+
+    with pytest.raises(MarketError, match="original_failure"):
+        radar._measure("observation", observation)
+    assert radar._work_timing["closed_ws_source"] == {
+        "calls": 1,
+        "failures": 0,
+        "active_seconds": 0.5,
+        "cpu_seconds": 0.25,
+    }
+    assert radar._work_timing["observation"] == {
+        "calls": 1,
+        "failures": 1,
+        "active_seconds": 0.75,
+        "cpu_seconds": 0.5,
+    }
+    assert all(value["calls"] == 0 for value in BybitRadar(store)._work_timing.values())
+
+
 def history(tf="1m", count=256):
     step = int(tf[:-1]) * 60_000
     return [
@@ -136,6 +174,12 @@ async def test_old_frame_outside_memory_window_is_saved_without_empty_observatio
         instance.accept_message("spot", message(), {stream}, received_ms=NOW + 60000)
         instance.on_observation.assert_called_once()
         assert instance.on_observation.call_args.args[1][-1].start == NOW
+        instance.persist_diagnostics()
+        timing = store.get_runtime("ingestion")["work_timing"]
+        assert timing["schema"] == "cryptowatcher.ingestion-work.v1"
+        assert timing["stages"]["closed_ws_source"]["calls"] == 2
+        assert timing["stages"]["observation"]["calls"] == 1
+        assert all(value["failures"] == 0 for value in timing["stages"].values())
     finally:
         await instance.close()
 

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .analytics_worker import BatchTiming
 
 from .events import PREFIX, History
 from .storage import RUNTIME_UPSERT, Store, encode
@@ -98,6 +101,7 @@ def completed_batch(
     elapsed: float,
     *,
     read_seconds: float | None = None,
+    timing: BatchTiming | None = None,
 ) -> None:
     key = "analytics_progress:" + name
     previous = store.get_runtime(key, {})
@@ -119,6 +123,35 @@ def completed_batch(
         else previous.get("last_slo_violation_ms", 0),
         "max_completed_due_lag_ms": max([previous.get("max_completed_due_lag_ms", 0), *lags]),
     }
+    if timing is not None and timing.read_cpu_seconds is not None:
+        measured = {
+            "read_cpu_seconds": timing.read_cpu_seconds,
+            "apply_active_seconds": timing.apply_active_seconds,
+            "apply_cpu_seconds": timing.apply_cpu_seconds,
+            "apply_calls": timing.apply_calls,
+            "interleaved_seconds": max(0.0, elapsed - (read_seconds or 0.0) - timing.apply_active_seconds),
+        }
+        value.update(
+            timing_basis="prepare callback thread CPU excludes connection setup; apply active wall/CPU excludes yields; interleaved wall includes checks/other tasks",
+            timed_batches_total=previous.get("timed_batches_total", 0) + 1,
+            **measured,
+            **{key + "_total": previous.get(key + "_total", 0) + count for key, count in measured.items()},
+        )
+    else:
+        # Legacy/recovery callers do not measure CPU. Never repeat the previous
+        # batch's CPU sample under a new timestamp or pretend it was zero work.
+        value.update(
+            **dict.fromkeys(
+                (
+                    "read_cpu_seconds",
+                    "apply_active_seconds",
+                    "apply_cpu_seconds",
+                    "apply_calls",
+                    "interleaved_seconds",
+                )
+            ),
+            timing_basis="UNMEASURED; legacy wall durations include yields",
+        )
     if store.db.in_transaction:
         store.db.execute(RUNTIME_UPSERT, (key, encode(value)))
     else:

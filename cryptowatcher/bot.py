@@ -1045,28 +1045,24 @@ def application(controller: Controller) -> Application[Any, Any, Any, Any, Any, 
     app.add_error_handler(error_handler)
     if app.job_queue is None:
         raise ConfigError("Telegram job-queue dependency missing")
-    app.job_queue.run_repeating(controller.poll, interval=controller.infrastructure.engine_interval, first=1)
-    app.job_queue.run_repeating(
-        controller.warmup_poll,
-        interval=5,
-        first=2,
-        job_kwargs={"max_instances": 1, "coalesce": True, "misfire_grace_time": 30},
-    )
-    app.job_queue.run_repeating(controller.heartbeat, interval=20, first=1)
-    app.job_queue.run_repeating(controller.deliver, interval=2, first=2)
-    app.job_queue.run_repeating(controller.analytics_job, interval=5, first=5)
-    app.job_queue.run_repeating(
-        controller.repack_job,
-        interval=1,
-        first=3,
-        job_kwargs={"max_instances": 1, "coalesce": True, "misfire_grace_time": 30},
-    )
-    app.job_queue.run_repeating(
-        controller.backfill_job,
-        interval=1,
-        first=4,
-        job_kwargs={"max_instances": 1, "coalesce": True, "misfire_grace_time": 30},
-    )
-    app.job_queue.run_repeating(controller.enrichment_job, interval=2, first=6)
-    app.job_queue.run_repeating(controller.agent_job, interval=2, first=3)
+    # A brief closed-candle burst must not drop heartbeat/delivery under the
+    # scheduler's1s default. Coalesce to one current invocation, never a replay
+    # of every missed interval. Callbacks still check current source/intent age.
+    for callback, interval, first in (
+        (controller.poll, controller.infrastructure.engine_interval, 1),
+        (controller.warmup_poll, 5, 2),
+        (controller.heartbeat, 20, 1),
+        (controller.deliver, 2, 2),
+        (controller.analytics_job, 5, 5),
+        (controller.repack_job, 1, 3),
+        (controller.backfill_job, 1, 4),
+        (controller.enrichment_job, 2, 6),
+        (controller.agent_job, 2, 3),
+    ):
+        app.job_queue.run_repeating(
+            callback,
+            interval=interval,
+            first=first,
+            job_kwargs={"max_instances": 1, "coalesce": True, "misfire_grace_time": 30},
+        )
     return app

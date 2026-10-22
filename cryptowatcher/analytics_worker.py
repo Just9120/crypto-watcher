@@ -4,10 +4,41 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from typing import Any
+from contextlib import contextmanager
+from dataclasses import dataclass
+from typing import Any, Iterator
 
 from .events import History, event_identity
 from .storage import Store
+
+
+@dataclass
+class BatchTiming:
+    """Observe work on its actual thread, without charging asyncio turns to it."""
+
+    read_cpu_seconds: float | None = None
+    apply_active_seconds: float = 0.0
+    apply_cpu_seconds: float = 0.0
+    apply_calls: int = 0
+
+    def read(self, calculate: Callable[[], Any]) -> Any:
+        began = time.thread_time()
+        try:
+            return calculate()
+        finally:
+            self.read_cpu_seconds = max(0.0, time.thread_time() - began)
+
+    @contextmanager
+    def applying(self) -> Iterator[None]:
+        # Use the same clock as the enclosing batch. Mixing perf_counter with
+        # a coarser monotonic clock can report active work above total elapsed.
+        began, cpu = time.monotonic(), time.thread_time()
+        try:
+            yield
+        finally:
+            self.apply_active_seconds += max(0.0, time.monotonic() - began)
+            self.apply_cpu_seconds += max(0.0, time.thread_time() - cpu)
+            self.apply_calls += 1
 
 
 def read_snapshot(path: Any, owner: int, read: Callable[[Store], Any]) -> Any:
