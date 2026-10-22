@@ -58,7 +58,9 @@ def materialize(path: Path, frames: int, groups: int) -> dict[str, Any]:
     if type(groups) is not int or not 0 < groups <= GROUP_COUNT:
         raise ValueError("Shared boundary group count outside finite fixture")
     bucket, body, projection, spans = seed()
-    result = numeric.materialize(path, frames)
+    # The final full integrity/FK below covers every numeric and shared row.
+    # Avoid an identical full numeric scan before appending the owned tables.
+    result = numeric.materialize(path, frames, defer_validation=True)
     started = time.monotonic()
     with closing(Store(path, 233382575)) as store:
         packet_store.install(store.db)

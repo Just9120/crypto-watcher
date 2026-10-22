@@ -51,6 +51,34 @@ def test_actual_last_descriptor_corruption_is_not_hidden_by_full_counts(tmp_path
         boundary.measure(path)
 
 
+@pytest.mark.parametrize("field", ["checksum", "payload"])
+def test_joint_final_checks_numeric_rows_after_deferred_construction(
+    tmp_path: Path, monkeypatch, field
+) -> None:
+    original = boundary.numeric.materialize
+
+    def corrupt_after_build(path, count, **kwargs):
+        result = original(path, count, **kwargs)
+        with closing(Store(path, 233382575)) as store:
+            with store.db.blobopen("market_numeric_frames", field, 1) as blob:
+                old = blob.read(1)
+                blob.seek(0)
+                blob.write(bytes([old[0] ^ 1]))
+        return result
+
+    monkeypatch.setattr(boundary.numeric, "materialize", corrupt_after_build)
+    path = tmp_path / "owned.sqlite3"
+    if field == "checksum":
+        with pytest.raises(ValueError, match="Shared boundary integrity failed"):
+            boundary.materialize(path, 3, 2)
+    else:
+        # Frame payload authentication belongs to the mandatory full runtime
+        # proof, beyond SQLite's structural/CHECK scan. Both remain required.
+        boundary.materialize(path, 3, 2)
+        with pytest.raises(ValueError):
+            boundary.measure(path)
+
+
 def test_exhausted_joint_deadline_never_claims_a_complete_boundary(tmp_path: Path, monkeypatch) -> None:
     path = tmp_path / "owned.sqlite3"
     boundary.materialize(path, 1, 2)

@@ -88,7 +88,15 @@ def schema(db: sqlite3.Connection) -> list[tuple[Any, ...]]:
     ]
 
 
-def materialize(path: Path, count: int) -> dict[str, Any]:
+def materialize(path: Path, count: int, *, defer_validation: bool = False) -> dict[str, Any]:
+    """Build owned rows; the joint builder may defer full CHECK to its final DB.
+
+    Standalone callers retain the original full validation. The canonical joint
+    command always performs full integrity/FK after restoring both schemas;
+    there is no CLI switch to omit that final superset check.
+    """
+    if type(defer_validation) is not bool:
+        raise ValueError("Invalid numeric fixture validation selection")
     if type(count) is not int or not 0 < count <= FRAME_COUNT:
         raise ValueError("Numeric boundary frame count outside finite fixture")
     if path.exists() or any(Path(str(path) + suffix).exists() for suffix in ("-wal", "-shm", "-journal")):
@@ -167,9 +175,9 @@ def materialize(path: Path, count: int) -> dict[str, Any]:
             raise ValueError("Numeric boundary schema was not exactly restored")
         if numeric_blocks.summary(store.db)["live"] != count * metrics:
             raise ValueError("Numeric boundary totals differ from materialized metrics")
-        if store.db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+        if not defer_validation and store.db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
             raise ValueError("Numeric boundary integrity failed")
-        if store.db.execute("PRAGMA foreign_key_check").fetchall():
+        if not defer_validation and store.db.execute("PRAGMA foreign_key_check").fetchall():
             raise ValueError("Numeric boundary foreign keys failed")
         store.db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
     return dict(frames=count, owners=count * 64, metrics=count * metrics, database_bytes=path.stat().st_size)

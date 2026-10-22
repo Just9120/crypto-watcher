@@ -127,6 +127,9 @@ actual numeric bytes и самый крупный SB2 group из owned N20 compo
 groups/descriptors превышает текущий30day scenario, но не является будущей верхней
 границей. При materialization guards временно сняты только в этой owned fixture
 и точно восстановлены до full integrity/FK и чтения. Временная БД удаляется.
+Один итоговый full integrity/FK охватывает обе группы таблиц; прежний числовой
+standalone builder сохраняет собственную проверку, а совместный не повторяет
+ее перед добавлением shared rows. CLI не позволяет пропустить итоговую проверку.
 Проверка не содержит полный public domain graph и не подтверждает независимую
 рыночную entropy, зрелую ёмкость всей БД или live SLO; OS file cache не очищается.
 
