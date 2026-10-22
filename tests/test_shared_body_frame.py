@@ -79,6 +79,32 @@ def test_all_domain_kinds_keep_coordinates_projections_unknown_fields_and_numeri
         blocks.read(blocks.with_shared_body(packets[0], frame, 0), 0, values[1][0][0])
 
 
+def test_large_frame_reuses_only_the_selected_view_and_rechecks_current_bytes(store, monkeypatch):
+    frames = [
+        indexed_frame.pack([{"sample": "x" * 700, "n": i + group * 64} for i in range(64)])
+        for group in range(32)
+    ]
+    frame = shared.pack_frames(frames)
+    assert len(shared.data(frame)[1]) > 1024 * 1024
+    view = shared.view(frame, 128, 64)
+    constructor = zstandard.ZstdDecompressor
+    calls = []
+
+    def decompress(*args, **kwargs):
+        calls.append(1)
+        return constructor(*args, **kwargs)
+
+    monkeypatch.setattr(zstandard, "ZstdDecompressor", decompress)
+    for slot in range(64):
+        assert shared.select(view, slot, store.cached_bytes)["n"] == 128 + slot
+    assert len(calls) == 1
+    assert store.reference_cache_bytes <= 1024 * 1024
+    damaged = view[:-1] + bytes([view[-1] ^ 1])
+    with pytest.raises(ValueError, match="checksum"):
+        shared.select(damaged, 0, store.cached_bytes)
+    assert len(calls) == 1
+
+
 def test_whole_body_replacement_checks_nonselected_original_fields_and_rejects_legacy_packet():
     values = packet_entries(1)
     original = blocks.pack(values)

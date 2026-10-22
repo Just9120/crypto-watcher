@@ -141,14 +141,36 @@ def _view(value: bytes) -> tuple[int, int, bytes, tuple[int, ...], bytes]:
 
 def parts(value: bytes, cache: Any = None) -> list[bytes]:
     first, count, frame, offsets, compressed = _view(value)
-    raw = _data(frame, offsets, compressed, cache)
-    return [raw[offsets[at] : offsets[at + 1]] for at in range(first, first + count)]
+    positions, raw = _selected(value, first, count, frame, offsets, compressed, cache)
+    return [raw[start:end] for start, end in zip(positions, positions[1:])]
+
+
+def _selected(
+    value: bytes,
+    first: int,
+    count: int,
+    frame: bytes,
+    offsets: tuple[int, ...],
+    compressed: bytes,
+    cache: Any,
+) -> tuple[tuple[int, ...], bytes]:
+    start, end = offsets[first], offsets[first + count]
+
+    def read() -> bytes:
+        return _data(frame, offsets, compressed, None)[start:end]
+
+    # Current full frame/header and view coordinates were authenticated in
+    # _view before lookup. Keep only the selected immutable byte range in the
+    # original shared budget, never a large frame or mutable Python objects.
+    raw = read() if cache is None else cache("shared-body-view-v1", "", value, read)
+    if not isinstance(raw, bytes) or len(raw) != end - start:
+        raise ValueError("Invalid pure shared body view cache result")
+    return tuple(at - start for at in offsets[first : first + count + 1]), raw
 
 
 def select(value: bytes, slot: int, cache: Any = None) -> Any:
     first, count, frame, offsets, compressed = _view(value)
     if type(slot) is not int or not 0 <= slot < count:
         raise ValueError("Invalid shared body slot")
-    raw = _data(frame, offsets, compressed, cache)
-    at = first + slot
-    return typed_unpack(raw[offsets[at] : offsets[at + 1]], MAX_BYTES)
+    positions, raw = _selected(value, first, count, frame, offsets, compressed, cache)
+    return typed_unpack(raw[positions[slot] : positions[slot + 1]], MAX_BYTES)

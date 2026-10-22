@@ -210,6 +210,14 @@ def with_shared_body(raw: bytes, frame: bytes, first: int) -> bytes:
     view = shared_body_frame.view(frame, first, count)
     if _body_parts(body) != shared_body_frame.parts(view):
         raise ValueError("Shared body changed immutable domain values")
+    return shared_packet(projection, frame, first, count)
+
+
+def shared_packet(projection: bytes, frame: bytes, first: int, count: int) -> bytes:
+    """Restore logical framing from a stored group/view binding."""
+    if len(indexed_frame.layout(projection)[0]) - 1 != count:
+        raise ValueError("Shared domain projection cardinality mismatch")
+    view = shared_body_frame.view(frame, first, count)
     checked = struct.pack(">I", len(projection)) + projection + view
     result = SHARED_MAGIC + hashlib.sha256(checked).digest() + checked
     if len(result) > MAX_PACKET:
