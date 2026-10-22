@@ -67,11 +67,14 @@ def prepare(
     due: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
     selected: set[str] = set()
 
-    def admit(binding: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    def admit(
+        binding: dict[str, Any], job: dict[str, Any] | None = None
+    ) -> tuple[dict[str, Any], dict[str, Any]] | None:
         identifier = binding[binding_id]
         if identifier in selected or len(due) >= batch:
             return None
-        job = history.get(job_prefix + identifier)
+        if job is None:
+            job = history.get(job_prefix + identifier)
         if job is None or job["next_attempt_ms"] > now_ms:
             return None
         event = history.metadata(f"event:{job['event_id']}:{job['event_revision']:010d}")
@@ -92,7 +95,13 @@ def prepare(
         # Calculations load their own exact source ranges. Expanding the frozen
         # detector window here duplicates hundreds of verified candle reads per
         # horizon; metadata still validates the stored record/settings identity.
-        admitted = admit(binding)
+        admitted = admit(binding, job)
+        if admitted is not None and prefix == "outcome-pending:":
+            # Use the same finite budget for useful calculations as admission.
+            # Prefetching an entire batch can consume the deadline before the
+            # first calculation, repeatedly paying for metadata never used.
+            _, event = admitted
+            prepared.append((job, event, binding, calculate(store, job, event)))
         if admitted is not None and prefix == "comparison-pending:":
             from .detectors import FAMILIES, VERSIONS
 
@@ -117,6 +126,8 @@ def prepare(
                     peer_binding = history.get(candidate["pending_key"])
                     if isinstance(peer_binding, dict) and peer_binding.get(binding_id) == peer:
                         admit(peer_binding)
+    if prefix == "outcome-pending:":
+        return prepared
     if prefix == "comparison-pending:" and due:
         # Calculations are independent and keep their immutable cutoff. Group
         # only this bounded due batch to reuse one population, not a large cache.
