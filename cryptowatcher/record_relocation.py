@@ -38,7 +38,7 @@ def capture(store: Store, coordinate: record_blocks.Coordinate) -> Record:
         packet, slot, parent, expires, current = saved
         raw = packet_store.read(store.db, packet)
         value = record_blocks.read(raw, slot, coordinate, store.cached_bytes)
-        projected = record_blocks.projections(raw)[slot][1]
+        projected = record_blocks.checked_projected(raw, slot, coordinate, store.cached_bytes)
         if parent is not None:
             root = store.db.execute(
                 "SELECT expires FROM market_record_parents WHERE id=?", (parent,)

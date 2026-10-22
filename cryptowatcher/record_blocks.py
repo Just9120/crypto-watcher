@@ -238,6 +238,26 @@ def bodies(raw: bytes) -> list[Any]:
     return values
 
 
+def checked_projected(
+    raw: bytes, slot: int, expected: Coordinate, cache: Any = None
+) -> dict[str, Any] | None:
+    """Validate every projection while caching only a pure immutable-byte result.
+
+    The caller still reads current packet bytes and SQL bindings. This cache
+    owns neither a binding nor a mutable head; selected heads are decoded anew.
+    """
+    frame = frames(raw)[0]
+
+    def validate() -> bytes:
+        projections(raw)
+        return b"validated"
+
+    result = validate() if cache is None else cache("domain-projections-v1", "", frame, validate)
+    if result != b"validated":
+        raise ValueError("Invalid pure projection validation result")
+    return projected(raw, slot, expected, cache)
+
+
 def projected(raw: bytes, slot: int, expected: Coordinate, cache: Any = None) -> dict[str, Any] | None:
     p, b = frames(raw)
     if raw.startswith(MAGIC):

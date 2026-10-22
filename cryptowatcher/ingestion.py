@@ -112,6 +112,8 @@ class BybitRadar(BybitREST):
         candles = sorted(self.sources.windows[stream].values(), key=lambda c: c.start)
         if through is not None:
             candles = [c for c in candles if c.start <= through]
+        if not candles:
+            return
         self.on_observation(
             stream,
             candles,

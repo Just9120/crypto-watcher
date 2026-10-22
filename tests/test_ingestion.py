@@ -100,6 +100,46 @@ def test_confirmed_source_freshness_uses_actual_closed_candles_and_a_bounded_sam
     assert crowded["late_streams"] > 20 and len(crowded["samples"]) == 20 and crowded["samples_truncated"]
 
 
+@pytest.mark.parametrize("bounded", [False, True])
+async def test_old_frame_outside_memory_window_is_saved_without_empty_observation(store, bounded):
+    from cryptowatcher.market_storage import enable, read
+    from cryptowatcher.sources import WINDOW_SIZE, Sources
+
+    if bounded:
+        enable(store.db)
+        store.bounded = True
+    instance = BybitRadar(store)
+    item, _ = classify("spot", metadata(market="spot"))
+    instance.instruments[item.key] = item
+    instance.tickers[item.key] = {"turnover24h": "1000000", "lastPrice": "106"}
+    stream = item.key + "/1m"
+    instance.streams.add(stream)
+    instance.observe_clock(NOW)
+    instance.sources.put(
+        stream,
+        [Candle.parse(row, "1m", "rest", NOW, NOW) for row in history(count=WINDOW_SIZE)],
+        recovery=True,
+    )
+    original = dict(instance.sources.windows[stream])
+    instance.on_observation = Mock(side_effect=lambda *args: args[1][-1])
+    old_start = min(original) - 60000
+    try:
+        instance.accept_message("spot", message(start=old_start), {stream}, received_ms=NOW)
+        instance.on_observation.assert_not_called()
+        assert instance.sources.windows[stream] == original
+        if bounded:
+            persisted = read(store.db, stream, old_start, old_start + 60000, cache=store.cached_bytes)
+            assert len(persisted) == 1 and persisted[0]["close"] == 106
+        else:
+            assert store.get_runtime(Sources.prefix(stream) + f"{old_start:016d}")["close"] == 106
+        instance.observe_clock(NOW + 60000)
+        instance.accept_message("spot", message(), {stream}, received_ms=NOW + 60000)
+        instance.on_observation.assert_called_once()
+        assert instance.on_observation.call_args.args[1][-1].start == NOW
+    finally:
+        await instance.close()
+
+
 def test_persisted_block_diagnostics_are_exact_bounded_and_distinguish_inactive_streams(radar):
     active = sorted(radar.streams)[0]
     radar.sources.blocked = {active: "conflicting_closed_candle"}
