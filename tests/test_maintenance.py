@@ -600,10 +600,26 @@ async def test_maintenance_yields_disk_to_startup_and_live_recovery(store, infra
 def steady_repack(store, infrastructure, monkeypatch):
     radar, _, _, _ = seed(store, monkeypatch, 0)
     controller = Controller(infrastructure, store, radar)
-    wall = time.time()
+    wall = radar.server_now() / 1000
     monkeypatch.setattr("cryptowatcher.bot.time.time", lambda: wall)
     controller.maintenance_started_at = wall - 601
     ready_ingestion(store)
+    store.put_runtime(
+        "ingestion",
+        {
+            **store.get_runtime("ingestion"),
+            "server_ms": radar.server_now(),
+            "active_streams": 1,
+            "confirmed_sources": {
+                "state": "MEASURED",
+                "streams": 1,
+                "unknown_streams": 0,
+                "late_streams": 0,
+                "earliest_deadline_ms": radar.server_now() + 30000,
+                "grace_ms": 30000,
+            },
+        },
+    )
     store.put_runtime("analytics", {"state": "OK", "at_ms": radar.server_now()})
     assert controller.maintenance_ready()
     return controller, radar, wall
@@ -812,6 +828,13 @@ async def test_cancelling_expiry_priority_releases_locks_without_another_expiry_
         "live",
         "working",
         "unknown",
+        "late_sources",
+        "unknown_sources",
+        "missing_sources",
+        "changed_source_scope",
+        "source_clock_mismatch",
+        "source_deadline",
+        "source_deadline_boundary",
     ],
 )
 async def test_repack_boost_keeps_startup_freshness_and_coverage_guards(
@@ -844,6 +867,36 @@ async def test_repack_boost_keeps_startup_freshness_and_coverage_guards(
         radar._working.add("spot/NEWUSDT/1m")
     elif condition == "unknown":
         store.put_runtime("last_poll_status", {"state": "OK", "at": wall, "available": 1})
+    elif condition in (
+        "late_sources",
+        "unknown_sources",
+        "missing_sources",
+        "changed_source_scope",
+        "source_clock_mismatch",
+        "source_deadline",
+        "source_deadline_boundary",
+    ):
+        ingestion = store.get_runtime("ingestion")
+        confirmed = ingestion["confirmed_sources"]
+        if condition == "late_sources":
+            confirmed["late_streams"] = 1
+        elif condition == "unknown_sources":
+            confirmed["unknown_streams"] = 1
+        elif condition == "missing_sources":
+            ingestion.pop("confirmed_sources")
+        elif condition == "changed_source_scope":
+            ingestion["active_streams"] = 2
+        elif condition == "source_clock_mismatch":
+            ingestion["server_ms"] -= 5001
+        else:
+            # The diagnostic itself remains within its5s freshness budget.
+            # Its original earliest deadline must still expire between samples.
+            confirmed["earliest_deadline_ms"] = radar.server_now() + 1000
+            monkeypatch.setattr(
+                "cryptowatcher.bot.time.time",
+                lambda: wall + (2 if condition == "source_deadline" else 1),
+            )
+        store.put_runtime("ingestion", ingestion)
     with (
         patch("cryptowatcher.bot.time.monotonic", return_value=0),
         patch(
@@ -852,9 +905,12 @@ async def test_repack_boost_keeps_startup_freshness_and_coverage_guards(
     ):
         await controller.repack_job(None)
         assert repack.await_count == (
-            4 if condition in ("ready", "warming", "boundary", "coverage_boundary") else 1
+            4
+            if condition in ("ready", "warming", "boundary", "coverage_boundary", "source_deadline_boundary")
+            else 1
         )
         assert all(call.kwargs == {"slices": 1} for call in repack.await_args_list)
+        assert store.get_runtime("repack_worker")["compaction_slices"] == repack.await_count
     assert store.get_runtime("repack_worker")["state"] == "OK"
     await radar.close()
 
@@ -881,7 +937,7 @@ async def test_steady_repack_yields_and_new_live_work_preempts_extra_slices(
     await radar.close()
 
 
-@pytest.mark.parametrize("stop", ["deadline", "complete", "recovery", "coverage", "stale"])
+@pytest.mark.parametrize("stop", ["deadline", "complete", "recovery", "coverage", "stale", "source_lag"])
 async def test_steady_repack_stops_burst_on_deadline_completion_or_lost_readiness(
     store, infrastructure, monkeypatch, stop
 ):
@@ -899,6 +955,10 @@ async def test_steady_repack_stops_burst_on_deadline_completion_or_lost_readines
             )
         elif stop == "stale":
             store.put_runtime("ingestion", {**store.get_runtime("ingestion"), "at": wall - 31})
+        elif stop == "source_lag":
+            ingestion = store.get_runtime("ingestion")
+            ingestion["confirmed_sources"]["late_streams"] = 1
+            store.put_runtime("ingestion", ingestion)
         return {"state": "COMPLETE" if stop == "complete" else "IN_PROGRESS"}
 
     with (

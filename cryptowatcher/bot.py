@@ -793,6 +793,7 @@ class Controller:
                 if not defer_compaction:
                     await self.shared_records.step(self.market.server_now)
                 deadline = time.monotonic() + 0.2
+                compaction_slices = 0
                 for index in range(slices):
                     if (index or retention_slices) and (
                         time.monotonic() >= deadline
@@ -806,6 +807,7 @@ class Controller:
                         slices=1,
                         **({"defer_compaction": True} if defer_compaction else {}),
                     )
+                    compaction_slices += 1
                     if not busy(state):
                         break
                 self.store.put_runtime(
@@ -814,6 +816,8 @@ class Controller:
                         "state": "OK",
                         "at_ms": self.market.server_now(),
                         "compaction_deferred_for_retention": defer_compaction,
+                        "compaction_slices": compaction_slices,
+                        "retention_slices": retention_slices,
                     },
                 )
             except Exception as exc:
@@ -907,18 +911,22 @@ class Controller:
 
     def repack_boost_ready(self) -> bool:
         """Use spare post-startup time, while retaining each40ms checkpoint/yield."""
+        from .capacity import confirmed_source_reason
+
         if not isinstance(self.market, BybitRadar) or time.time() - self.maintenance_started_at < 600:
             return False
         ingestion = self.store.get_runtime("ingestion", {})
         poll = self.store.get_runtime("last_poll_status", {})
         analytics = self.store.get_runtime("analytics", {})
         requested, available = poll.get("requested"), poll.get("available")
+        frame_age = time.time() - ingestion.get("at", 0)
         return (
             type(requested) is int
             and requested > 0
             and type(available) is int
             and available >= requested * 0.95
-            and 0 <= time.time() - ingestion.get("at", 0) <= 5
+            and 0 <= frame_age <= 5
+            and confirmed_source_reason(ingestion, frame_age) is None
             and 0 <= time.time() - poll.get("at", 0) <= 120
             and analytics.get("state") == "OK"
             and 0 <= self.market.server_now() - analytics.get("at_ms", 0) <= 60000
