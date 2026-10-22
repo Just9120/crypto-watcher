@@ -180,6 +180,46 @@ async def test_backlog_batches_drain_and_restart_preserves_completed_sources(tmp
     store.close()
 
 
+def test_outcome_budget_calculates_before_unused_metadata_consumes_deadline(tmp_path, monkeypatch):
+    from cryptowatcher import analytics_worker
+
+    store, worker, history = seed(tmp_path, 8)
+    now = NOW + 5 * MINUTE
+    try:
+        expected = read_snapshot(
+            store.path,
+            store.owner_id,
+            lambda reader: analytics_worker.prepare(
+                reader, "outcome-pending:", "outcome-job:", "outcome_id", now, 8, 10, worker.calculate
+            ),
+        )
+        elapsed = [0.0]
+        metadata = History.metadata
+
+        def read_metadata(reader, key):
+            elapsed[0] += 0.002
+            return metadata(reader, key)
+
+        def calculate(reader, job, event):
+            elapsed[0] += 0.002
+            return worker.calculate(reader, job, event)
+
+        monkeypatch.setattr(History, "metadata", read_metadata)
+        monkeypatch.setattr(analytics_worker.time, "monotonic", lambda: elapsed[0])
+        actual = read_snapshot(
+            store.path,
+            store.owner_id,
+            lambda reader: analytics_worker.prepare(
+                reader, "outcome-pending:", "outcome-job:", "outcome_id", now, 8, 0.010, calculate
+            ),
+        )
+        assert actual == expected[:3]
+        assert len(actual) == 3  # Old admission-first batching calculated only one.
+        assert history.count("outcome-pending:") == 8  # Preparation cannot publish or retire jobs.
+    finally:
+        store.close()
+
+
 @pytest.mark.asyncio
 async def test_batch_cpu_attribution_excludes_other_threads_and_interleaved_turns(store, monkeypatch):
     from collections import defaultdict
