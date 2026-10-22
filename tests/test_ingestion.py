@@ -496,6 +496,84 @@ def test_wide_subscription_shards_preserve_every_tf_and_spot_batch_limits():
     assert all(len(json.dumps([topic(s) for s in group])) <= 20_000 for group in groups)
 
 
+def test_small_universe_changes_keep_full_shards_and_consolidate_only_sparse_groups():
+    streams = {f"spot/C{i:03d}USDT/{tf}" for i in range(100) for tf in TIMEFRAMES}
+    original = ingestion._subscription_groups("spot", streams, {})
+    before = dict(original)
+    added = {f"spot/AAUSDT/{tf}" for tf in TIMEFRAMES}
+    expanded = ingestion._subscription_groups("spot", streams | added, original)
+    assert original == before and all(expanded[name] == group for name, group in original.items())
+    assert len(expanded) == 5
+    removed = {f"spot/C000USDT/{tf}" for tf in TIMEFRAMES}
+    desired = (streams | added) - removed
+    compacted = ingestion._subscription_groups("spot", desired, expanded)
+    changed = {
+        name for name in expanded.keys() | compacted.keys() if expanded.get(name) != compacted.get(name)
+    }
+    assert len(changed) == 2 and len(compacted) == len(shards(list(desired))) == 4
+    assert {s for group in compacted.values() for s in group} == desired
+    assert sum(map(len, compacted.values())) == len(desired)
+    assert ingestion._subscription_groups("spot", desired, compacted) == compacted
+
+
+def test_subscription_churn_keeps_exact_coverage_market_isolation_and_original_byte_bounds():
+    previous = {}
+    for market in ("spot", "linear"):
+        universe = [f"{market}/{'X' * 600}{i:03d}USDT/{tf}" for i in range(28) for tf in TIMEFRAMES]
+        for desired in (
+            set(universe),
+            set(universe[3:]),
+            set(universe[20:]),
+            set(universe[::3]),
+            set(universe),
+            set(),
+        ):
+            groups = ingestion._subscription_groups(market, desired, previous)
+            assert {s for group in groups.values() for s in group} == desired
+            assert sum(map(len, groups.values())) == len(desired)
+            assert len(groups) <= len(shards(list(desired)))
+            assert all(group and len(group) <= 100 for group in groups.values())
+            assert all(len(json.dumps([topic(s) for s in group])) <= 20_000 for group in groups.values())
+            assert all(name.startswith(market + ":") for name in groups)
+            other = {name: group for name, group in previous.items() if not name.startswith(market + ":")}
+            previous = other | groups
+
+
+async def test_universe_prepend_retires_only_partial_socket_and_preserves_other_markets(radar):
+    for i in range(50):
+        item, _ = classify("spot", metadata(f"C{i:03d}USDT"))
+        assert item is not None
+        radar.instruments[item.key] = item
+        radar.tickers[item.key] = {"turnover24h": "1000000", "lastPrice": "106"}
+
+    async def hold(*args):
+        await asyncio.Event().wait()
+
+    radar._session = AsyncMock(side_effect=hold)
+    try:
+        await radar.reconcile(OwnerSettings())
+        await asyncio.sleep(0)
+        before = dict(radar._sessions)
+        assert set(before) == {"spot:0", "spot:1", "spot:2", "linear:0"}
+        item, _ = classify("spot", metadata("AAUSDT"))
+        assert item is not None
+        radar.instruments[item.key] = item
+        radar.tickers[item.key] = {"turnover24h": "1000000", "lastPrice": "106"}
+        await radar.reconcile(OwnerSettings())
+        assert radar._sessions["spot:2"] is not before["spot:2"] and before["spot:2"].cancelled()
+        assert all(
+            radar._sessions[name] is before[name] and not before[name].cancelled()
+            for name in before
+            if name != "spot:2"
+        )
+        assert {f"spot/AAUSDT/{tf}" for tf in TIMEFRAMES} <= radar.streams
+        assert len(radar._pending) <= len(radar.streams)
+        await radar.reconcile(OwnerSettings(alert_universe_mode="custom"))
+        assert not radar._sessions and not radar.streams and not radar._pending
+    finally:
+        await radar.close()
+
+
 class Socket:
     def __init__(self, rejected=False):
         self.messages = asyncio.Queue()
