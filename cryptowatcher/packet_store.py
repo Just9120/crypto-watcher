@@ -15,6 +15,15 @@ from typing import Any, Iterator
 CAPACITY = 1024 * 1024
 MAXIMUM = CAPACITY // 2
 CATEGORIES = frozenset({"detail_packets", "quality_packets"})
+MOVE_GUARD = """CREATE TRIGGER market_packet_move BEFORE UPDATE OF arena,offset,length,sha256 ON market_packets
+                WHEN NEW.length<>OLD.length OR NEW.sha256<>OLD.sha256 OR
+                    (SELECT category FROM market_packet_arenas WHERE id=NEW.arena) IS NOT
+                        (SELECT category FROM market_packet_arenas WHERE id=OLD.arena) OR
+                    (SELECT bucket FROM market_packet_arenas WHERE id=NEW.arena) IS NOT
+                        (SELECT bucket FROM market_packet_arenas WHERE id=OLD.arena) OR
+                    cw_packet_digest(OLD.arena,OLD.offset,OLD.length)<>OLD.sha256 OR
+                    cw_packet_digest(NEW.arena,NEW.offset,NEW.length)<>OLD.sha256 BEGIN
+                SELECT RAISE(ABORT,'Packet relocation changed bytes'); END"""
 
 
 def install_functions(db: sqlite3.Connection) -> None:
@@ -82,15 +91,7 @@ def install(db: sqlite3.Connection) -> None:
                 SELECT CASE WHEN cw_packet_digest(NEW.arena,NEW.offset,NEW.length)<>NEW.sha256
                     THEN RAISE(ABORT,'Packet checksum mismatch') END;
             END;
-            CREATE TRIGGER market_packet_move BEFORE UPDATE OF arena,offset,length,sha256 ON market_packets
-                WHEN NEW.length<>OLD.length OR NEW.sha256<>OLD.sha256 OR
-                    (SELECT category FROM market_packet_arenas WHERE id=NEW.arena) IS NOT
-                        (SELECT category FROM market_packet_arenas WHERE id=OLD.arena) OR
-                    (SELECT bucket FROM market_packet_arenas WHERE id=NEW.arena) IS NOT
-                        (SELECT bucket FROM market_packet_arenas WHERE id=OLD.arena) OR
-                    cw_packet_digest(OLD.arena,OLD.offset,OLD.length)<>OLD.sha256 OR
-                    cw_packet_digest(NEW.arena,NEW.offset,NEW.length)<>OLD.sha256 BEGIN
-                SELECT RAISE(ABORT,'Packet relocation changed bytes'); END;
+            {MOVE_GUARD};
             CREATE TRIGGER market_packet_insert AFTER INSERT ON market_packets BEGIN
                 UPDATE market_packet_arenas SET live_packets=live_packets+1,live_bytes=live_bytes+NEW.length
                     WHERE id=NEW.arena;
