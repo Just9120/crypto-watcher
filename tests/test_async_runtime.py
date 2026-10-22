@@ -180,6 +180,81 @@ async def test_backlog_batches_drain_and_restart_preserves_completed_sources(tmp
     store.close()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["outcome", "comparison"])
+async def test_publication_failure_stops_remaining_results_and_leaves_jobs_restartable(
+    tmp_path, monkeypatch, kind
+):
+    store, outcome_worker, history = seed(tmp_path, 12)
+    worker = outcome_worker if kind == "outcome" else ComparisonWorker(store)
+    original = worker.apply
+    calls = 0
+
+    def fail_third(*args):
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            raise RuntimeError("publication interrupted")
+        original(*args)
+        assert not store.db.in_transaction
+
+    monkeypatch.setattr(worker, "apply", fail_third)
+    try:
+        with pytest.raises(RuntimeError, match="publication interrupted"):
+            await worker.async_work(lambda: NOW + 5 * MINUTE)
+        assert calls == 3
+        assert history.count(kind + "-head:") == 2
+        assert history.count(kind + "-pending:") == 10
+        committed = list(store.db.iterdump())
+        for _ in range(8):
+            await asyncio.sleep(0)
+        assert list(store.db.iterdump()) == committed  # No abandoned publication task may write.
+        monkeypatch.setattr(worker, "apply", original)
+        assert await worker.async_work(lambda: NOW + 5 * MINUTE) == 10
+        assert history.count(kind + "-head:") == 12
+        assert history.count(kind + "-pending:") == 0
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["outcome", "comparison"])
+async def test_cancellation_during_publication_preserves_commits_and_stops_all_lanes(
+    tmp_path, monkeypatch, kind
+):
+    store, outcome_worker, history = seed(tmp_path, 12)
+    worker = outcome_worker if kind == "outcome" else ComparisonWorker(store)
+    original = worker.apply
+    calls = 0
+
+    def cancel_after_commit(*args):
+        nonlocal calls
+        original(*args)
+        assert not store.db.in_transaction
+        calls += 1
+        if calls == 1:
+            task.cancel()
+
+    monkeypatch.setattr(worker, "apply", cancel_after_commit)
+    try:
+        task = asyncio.create_task(worker.async_work(lambda: NOW + 5 * MINUTE))
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert 0 < calls < 12
+        completed = history.items(kind + ":")
+        assert history.count(kind + "-pending:") == 12 - calls
+        committed = list(store.db.iterdump())
+        for _ in range(8):
+            await asyncio.sleep(0)
+        assert list(store.db.iterdump()) == committed
+        monkeypatch.setattr(worker, "apply", original)
+        assert await worker.async_work(lambda: NOW + 5 * MINUTE) == 12 - calls
+        assert history.count(kind + "-pending:") == 0
+        assert all(history.get(key) == value for key, value in completed)
+    finally:
+        store.close()
+
+
 def test_outcome_budget_calculates_before_unused_metadata_consumes_deadline(tmp_path, monkeypatch):
     from cryptowatcher import analytics_worker
 

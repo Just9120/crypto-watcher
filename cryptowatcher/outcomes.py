@@ -354,7 +354,7 @@ class OutcomeWorker:
             }
 
     async def async_work(self, clock: Callable[[], int], batch: int = 256, seconds: float = 2) -> int:
-        from .analytics_worker import BatchTiming, prepare, read_snapshot
+        from .analytics_worker import BatchTiming, prepare, publish, read_snapshot
 
         self.bootstrap(20)
         now_ms = clock()
@@ -380,7 +380,10 @@ class OutcomeWorker:
         read_seconds = time.monotonic() - started
         applied = 0
         completed_lags = []
-        for job, event, binding, result in prepared:
+
+        def apply_prepared(item: Any) -> None:
+            nonlocal applied
+            job, event, binding, result = item
             # Owner operations or a restarted worker cannot be overwritten by an old read.
             if self.history.get("outcome-job:" + job["outcome_id"]) == job:
                 with timing.applying():
@@ -394,7 +397,8 @@ class OutcomeWorker:
                             - job.get("due_ms", event["reference_time_ms"] + job["horizon_min"] * MINUTE),
                         )
                     )
-            await asyncio.sleep(0)
+
+        await publish(prepared, apply_prepared)
         from .queue_health import completed_batch
 
         completed_batch(

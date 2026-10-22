@@ -353,7 +353,7 @@ class ComparisonWorker:
             }
 
     async def async_work(self, clock: Callable[[], int], batch: int = 64, seconds: float = 2) -> int:
-        from .analytics_worker import BatchTiming, prepare, read_snapshot
+        from .analytics_worker import BatchTiming, prepare, publish, read_snapshot
 
         now_ms = clock()
         started = time.monotonic()
@@ -378,7 +378,10 @@ class ComparisonWorker:
         read_seconds = time.monotonic() - started
         applied = 0
         completed_lags = []
-        for job, event, binding, result in prepared:
+
+        def apply_prepared(item: Any) -> None:
+            nonlocal applied
+            job, event, binding, result = item
             if self.history.get("comparison-job:" + event["event_id"]) == job:
                 with timing.applying():
                     self.apply(job, event, binding, result, clock())
@@ -388,7 +391,8 @@ class ComparisonWorker:
                         "due_ms", job.get("recalculation_requested_ms", event["available_at_ms"])
                     )
                     completed_lags.append(max(0, clock() - due_ms))
-            await asyncio.sleep(0)
+
+        await publish(prepared, apply_prepared)
         from .queue_health import completed_batch
 
         completed_batch(
