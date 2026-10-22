@@ -2,14 +2,54 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Iterator
+from typing import Any, Iterator, TypeVar
 
 from .events import History, event_identity
 from .storage import Store
+
+T = TypeVar("T")
+
+
+async def publish(prepared: Sequence[T], apply: Callable[[T], None]) -> None:
+    """Publish a finite batch on the sole writer loop, yielding after each result.
+
+    One coroutine competes with every ready WebSocket session, even when its
+    results are already calculated. Four finite lanes share the same iterator
+    to reduce delay behind the independently ready source sessions without
+    running a longer synchronous callback. SQL never overlaps.
+    Failure/cancellation stops the lanes before returning to the caller.
+    """
+    pending = iter(prepared)
+    stopped = False
+
+    async def lane() -> None:
+        nonlocal stopped
+        try:
+            while not stopped:
+                try:
+                    item = next(pending)
+                except StopIteration:
+                    return
+                apply(item)
+                await asyncio.sleep(0)
+        except BaseException:
+            stopped = True
+            raise
+
+    tasks = [asyncio.create_task(lane()) for _ in range(min(4, len(prepared)))]
+    try:
+        await asyncio.gather(*tasks)
+    finally:
+        stopped = True
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 @dataclass
