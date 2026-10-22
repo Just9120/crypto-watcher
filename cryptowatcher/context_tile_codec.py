@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import struct
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -171,9 +172,51 @@ def _current(tile: Tile, cache: Any = None) -> tuple[list[int], list[int], list[
     return anchors, purges, values
 
 
+class _MissingPayloadCache(Exception):
+    """A pure cache probe must not admit a full value when only times are needed."""
+
+
 def times(tile: Tile, cache: Any = None) -> list[int]:
-    _, _, values = _current(tile, cache)
-    return [value[2] for value in values]
+    if cache is None:
+        _, _, values = _current(tile)
+        return [value[2] for value in values]
+    # These mutable leases/mask/seal and the actual payload header are always
+    # checked before a pure derivative can be reused.
+    count, _, _ = _header(tile)
+
+    def read() -> bytes:
+        def existing(kind: str, key: str, raw: bytes, unused: Any) -> bytes:
+            def missing() -> bytes:
+                raise _MissingPayloadCache
+
+            value = cache(kind, key, raw, missing)
+            if not isinstance(value, bytes):
+                raise ValueError("Invalid pure context tile cache result")
+            return value
+
+        try:
+            # Preserve reuse when stats/points already validated this payload.
+            values = _payload_values(tile.payload, existing)
+        except _MissingPayloadCache:
+            # A times-only miss validates every original point, but keeps no
+            # full JSON copy in the shared1MiB cache.
+            values = _payload_values(tile.payload)
+        return struct.pack(">QB", values[0][0], KINDS.index(values[0][1])) + struct.pack(
+            ">" + "Q" * len(values), *(value[2] for value in values)
+        )
+
+    raw = cache("context-tile-times-only-v1", "", tile.payload, read)
+    if not isinstance(raw, bytes) or len(raw) != 9 + count * 8:
+        raise ValueError("Invalid pure context timestamp index")
+    stream, kind = struct.unpack(">QB", raw[:9])
+    result = list(struct.unpack(">" + "Q" * count, raw[9:]))
+    if kind >= len(KINDS) or (stream, KINDS[kind]) != (tile.stream, tile.kind):
+        raise ValueError("Context timestamp index coordinate mismatch")
+    if any(value >= 2**63 or value // DAY != tile.day for value in result) or any(
+        a >= b for a, b in zip(result, result[1:])
+    ):
+        raise ValueError("Context timestamp index order/day mismatch")
+    return result
 
 
 def monotonic(old: Tile, new: Tile, cache: Any = None) -> bool:

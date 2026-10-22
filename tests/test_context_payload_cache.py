@@ -40,10 +40,36 @@ def test_pure_payload_reuse_keeps_current_leases_masks_and_independent_returned_
     assert count == 64 and store.reference_cache_bytes <= 1024 * 1024
 
 
+def test_times_only_cache_keeps_a_small_index_without_admitting_full_json_values(store, monkeypatch):
+    expected = [point(i, frozen=i % 3 == 0) for i in range(64)]
+    tile = codec.pack(19, expected)
+    decoded = 0
+    original = codec.typed_unpack
+
+    def observed(*args):
+        nonlocal decoded
+        decoded += 1
+        return original(*args)
+
+    monkeypatch.setattr(codec, "typed_unpack", observed)
+    times = codec.times(tile, store.cached_bytes)
+    times[0] = -1
+    for _ in range(3):
+        assert codec.times(tile, store.cached_bytes) == [p.at for p in expected]
+    assert decoded == 64
+    assert not any(key[0] == "bytes/context-tile-values" for key in store.reference_cache)
+    entries = [
+        value for key, value in store.reference_cache.items() if key[0] == "bytes/context-tile-times-only-v1"
+    ]
+    assert len(entries) == 1 and len(entries[0][0]) == 9 + 64 * 8
+    assert store.reference_cache_bytes <= 1024 * 1024
+
+
 @pytest.mark.parametrize("field", ("identity", "stream", "kind", "day", "seal", "leases"))
 def test_warm_payload_does_not_hide_changed_current_header_or_lease(store, field):
     tile = codec.pack(19, [point(0, frozen=True), point(1)])
     codec.stats(tile, store.cached_bytes)
+    codec.times(tile, store.cached_bytes)
     changes = {
         "identity": {"identity": 20},
         "stream": {"stream": 8, "seal": owner_slots.signature(8, 19, tile.frozen)},
@@ -56,10 +82,21 @@ def test_warm_payload_does_not_hide_changed_current_header_or_lease(store, field
         codec.times(replace(tile, **changes[field]), store.cached_bytes)
 
 
+def test_times_probe_never_converts_an_invalid_cached_value_into_bytes():
+    tile = codec.pack(19, [point(0)])
+
+    def invalid(kind, key, raw, read):
+        return 5 if kind == "context-tile-values" else read()
+
+    with pytest.raises(ValueError, match="pure context tile cache result"):
+        codec.times(tile, invalid)
+
+
 @pytest.mark.parametrize("invalid", ("order", "timing", "mixed-stream"))
 def test_new_validly_checksummed_payload_cannot_reuse_old_semantic_validation(store, invalid):
     tile = codec.pack(19, [point(0), point(1)])
     codec.stats(tile, store.cached_bytes)
+    codec.times(tile, store.cached_bytes)
     values = [codec._value(point(0)), codec._value(point(1))]
     if invalid == "order":
         values.reverse()
@@ -70,6 +107,8 @@ def test_new_validly_checksummed_payload_cannot_reuse_old_semantic_validation(st
     payload = indexed_frame.pack(values)
     with pytest.raises(ValueError):
         codec.stats(replace(tile, payload=payload), store.cached_bytes)
+    with pytest.raises(ValueError):
+        codec.times(replace(tile, payload=payload), store.cached_bytes)
 
 
 def test_blobwrite_without_change_counter_is_checked_and_lease_rollback_remains_visible(store):

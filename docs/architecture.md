@@ -252,6 +252,10 @@ Opt-in SB2 восстанавливает исходные typed bytes чере�
 RP1 сохраняет свой frozen SB1 container; shared cache остаётся1MiB. Подготовка заранее
 проверяет полный512KiB DB3 wrapper и уменьшает prefix до staging при переполнении.
 Новый writer по умолчанию выключен до qualification и явной активации.
+Context timestamp projection сохраняет только компактный immutable index в прежнем
+shared1MiB cache. Если stats/points уже проверили full values, индекс использует этот
+результат; отдельный index miss не удерживает full JSON. Каждый вызов вновь проверяет
+актуальные header/leases/mask/seal и payload bytes; объекты и SQL proofs не кэшируются.
 Store/startup не активируют3; current native/image, runtime activation/recovery,
 совместный50s boundary и mature25GB еще требуют qualification перед production.
 Тот же maintenance worker обслуживает конечную initial scan, live eligibility
