@@ -212,6 +212,25 @@ layout/work header. Он не подтверждает full integrity, capacity 
 
 Включение выполняется под existing `.deploy.lock`, после проверки отсутствия
 conflicting delivery/active observer и остановки только identified writer.
+Canonical host orchestration выполняет [enable_shared_storage.py](../../scripts/enable_shared_storage.py):
+проверяет Linux/root/host, exact target SHA/permissions, private env, unit/image/mount
+и единственную successful CD запись. Readonly token сверяется до stop; private
+operation record создается до изменения сервиса, затем atomic phases, image/helper
+hashes, backup и post-check evidence сохраняются в `rehearsals/shared-storage-*`.
+Script и его pure container-arguments dependency `fresh_measurement.py` перед запуском
+сверяются с merged source; reset/fresh/discard functions не вызываются.
+
+```bash
+python3 enable_shared_storage.py --expected-source MERGED_SOURCE_SHA --expected-generation CURRENT_GENERATION_ID --expected-configuration-revision CURRENT_CONFIG_REVISION --expected-private-sha256 CURRENT_PRIVATE_SHA256 --expected-target-sha256 CURRENT_TARGET_SHA256
+```
+
+Host script держит existing deployment lock, отказывает active capacity observer,
+создает только новый backup и private operation record. После ambiguous stop
+сначала читает state. При сбое offline candidate сначала подтверждает его exact
+name/image/отсутствие Compose ownership и stop/absence, затем при необходимости
+запускает тот же identified container. Чужой/неизвестный candidate не останавливает
+и второй writer поверх него не запускает. После failed health/private post-check
+сохраняет FAILED; повторной поставки/сброса и удаления файлов не выполняет.
 Использовать canonical offline container constraints из [поставки](delivery.md):
 exact image/project/data/env/owner, read-only rootfs, no network, CPU1/RAM4GiB,
 без повышения ресурсов и новых расписаний. Весь stop/backup/adoption/start/post-check
