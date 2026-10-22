@@ -90,6 +90,12 @@ class History:
 
     def resolve(self, key: str, value: Any, *, omit_fields: frozenset[str] = frozenset()) -> Any:
         """Read both legacy full heads and identity-checked compact heads."""
+        return self._resolve_with_head(key, value, omit_fields=omit_fields)[0]
+
+    def _resolve_with_head(
+        self, key: str, value: Any, *, omit_fields: frozenset[str] = frozenset()
+    ) -> tuple[Any, bool]:
+        """Return whether this call fully checked a compact head and its record."""
         if isinstance(value, dict) and DECISION_HEAD in value:
             revision = value[DECISION_HEAD]
             if (
@@ -111,7 +117,7 @@ class History:
         if self.store.bounded:
             value = self._expand_services(value)
         if not isinstance(value, dict) or value.get("schema") != HEAD_SCHEMA:
-            return value
+            return value, False
         kind, separator, record_id = key.partition("-head:")
         revision = value.get("revision")
         if (
@@ -135,7 +141,7 @@ class History:
             != encode(value)
         ):
             raise StateError("Missing or conflicting history head revision")
-        return record
+        return record, True
 
     @staticmethod
     def _head(
