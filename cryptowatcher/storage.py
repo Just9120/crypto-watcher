@@ -342,7 +342,7 @@ class Store:
                 "SELECT value FROM market_meta WHERE key='candle_blocks'"
             ).fetchone()
             if source_tiles is not None:
-                if source_tiles[0] != "1":
+                if source_tiles[0] not in ("1", "2"):
                     raise StateError("Unknown source tile layout; database preserved")
                 from .candle_blocks import install_functions as source_tile_functions
 

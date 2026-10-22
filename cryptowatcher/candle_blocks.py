@@ -37,13 +37,34 @@ def install_functions(db: sqlite3.Connection, cache: Any = None) -> None:
     ):
         raise ValueError("Unfinished source expiry authority")
 
+    marker = db.execute("SELECT value FROM market_meta WHERE key='candle_blocks'").fetchone()
+    if (marker is None or marker[0] != "2") and db.execute(
+        "SELECT 1 FROM market_meta WHERE key='candle_column_repack'"
+    ).fetchone():
+        raise ValueError("Source column boundary lacks explicit adoption")
+    if marker is not None and marker[0] == "2":
+        from .source_column_work import checkpoint, guards
+
+        guards(db)
+        checkpoint(db)
+
     def stats(raw: bytes) -> str:
+        if isinstance(raw, bytes) and raw.startswith(codec.COLUMN_MAGIC):
+            from .source_column_work import readable
+
+            readable(db, raw)
+
         def read() -> str:
             return encode(codec.stats(raw))
 
         return read() if cache is None else str(cache("source-tile-stats", "", raw, read))
 
     def change(old: bytes, new: bytes | None) -> int:
+        if new is None:
+            from .source_column_work import _authorized_delete
+
+            if _authorized_delete(db, old):
+                return 1
         removed = codec.rows(old) if new is None else codec.preserved(old, new)
         if removed:
             permit = db.execute("SELECT cutoff FROM market_candle_gc WHERE id=1").fetchone()
@@ -71,7 +92,7 @@ def install(db: sqlite3.Connection, cache: Any = None) -> None:
     install_functions(db, cache)
     marker = db.execute("SELECT value FROM market_meta WHERE key='candle_blocks'").fetchone()
     if marker is not None:
-        if marker[0] != "1" or db.execute("SELECT 1 FROM market_candle_gc LIMIT 1").fetchone():
+        if marker[0] not in ("1", "2") or db.execute("SELECT 1 FROM market_candle_gc LIMIT 1").fetchone():
             raise ValueError("Unknown source tile state; database preserved")
         return
     if db.in_transaction:
@@ -187,6 +208,11 @@ def atomic(db: sqlite3.Connection) -> Iterator[None]:
 
 
 def put(db: sqlite3.Connection, raw: bytes, expected: bytes | None) -> None:
+    if expected is not None and expected.startswith(codec.COLUMN_MAGIC):
+        from .source_column_work import readable
+
+        readable(db, expected)
+        raw = codec.compact(raw)
     sid, tile, step, n, first = codec.stats(raw)
     with atomic(db):
         if expected is None:
@@ -464,6 +490,10 @@ def tile(db: sqlite3.Connection, sid: int, start: int, step: int) -> bytes | Non
     if row is None:
         return None
     raw = bytes(row[0])
+    if raw.startswith(codec.COLUMN_MAGIC):
+        from .source_column_work import readable
+
+        readable(db, raw)
     if codec.header(raw)[:3] != (sid, at, step):
         raise ValueError("Source tile index binding mismatch")
     return raw

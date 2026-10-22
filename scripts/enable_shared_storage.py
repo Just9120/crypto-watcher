@@ -244,11 +244,16 @@ def execute(source: str, generation: str, config: int, private: str, target_sha2
             phase("PREFLIGHT")
             preflight = token()
             record["preflight"] = preflight
-            if preflight.get("layout") == "3":
+            source_columns = preflight.get("source_columns")
+            require(
+                isinstance(source_columns, dict) and type(source_columns.get("enabled")) is bool,
+                "Artifact lacks source-format adoption status",
+            )
+            if preflight.get("layout") == "3" and source_columns["enabled"]:
                 record.update(state="NO_CHANGE", elapsed_seconds=time.monotonic() - started)
                 phase("ALREADY_ENABLED")
                 return record
-            require(preflight.get("layout") in (None, "2"), "Unknown installed shared layout")
+            require(preflight.get("layout") in (None, "2", "3"), "Unknown installed shared layout")
             allocated = sum(
                 Path(str(database) + suffix).stat().st_size
                 for suffix in ("", "-wal")
@@ -308,6 +313,7 @@ def execute(source: str, generation: str, config: int, private: str, target_sha2
                 proof.get("phase") == "COMPLETE" and (proof.get("backup") or {}).get("phase") == "COMPLETE",
                 "Adoption incomplete",
             )
+            require((proof.get("source_columns") or {}).get("enabled") is True, "Source adoption incomplete")
             record["adoption"] = proof
             require(
                 backup.is_file()
@@ -337,6 +343,10 @@ def execute(source: str, generation: str, config: int, private: str, target_sha2
                 time.sleep(min(3, max(0, post_end - time.monotonic())))
             post = token()
             require(post.get("layout") == "3", "Activated layout not observed after restart")
+            require(
+                (post.get("source_columns") or {}).get("enabled") is True,
+                "Source format not observed after restart",
+            )
             require(
                 post.get("history_generation") == preflight.get("history_generation"),
                 "Generation metadata changed",

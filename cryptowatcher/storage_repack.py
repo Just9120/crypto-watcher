@@ -418,6 +418,7 @@ def work(
         packet_bundles,
         parent_affinity,
         quality_frames,
+        source_column_work,
     )
     from .candle_access import installed as source_installed
     from .candle_access import writing as source_writing
@@ -574,6 +575,7 @@ def work(
     frame_maintenance = quality_frames.status(store.db, now_ms)
     context_maintenance = context_tile_maintenance.status(store.db, now_ms)
     numeric_maintenance = numeric_frame_work.status(store.db, now_ms)
+    column_maintenance = source_column_work.status(store.db)
     if (
         state.get("version") == VERSION
         and state.get("state") == "COMPLETE"
@@ -597,6 +599,8 @@ def work(
         and not frame_maintenance["pending_work"]
         and not context_maintenance["pending_work"]
         and not numeric_maintenance["pending_work"]
+        and not column_maintenance["pending_work"]
+        and (not column_maintenance["enabled"] or state.get("source_column_initial_reclaim_complete") is True)
         and cohort_ready(store.db)
         and quality_totals(store.db) is not None
         and namespace_snapshot(store.db) is not None
@@ -828,6 +832,23 @@ def work(
                     now_ms=now_ms,
                     cache=store.cached_bytes,
                 )
+            if (
+                phase == 9
+                and time.monotonic() < deadline
+                and column_maintenance["enabled"]
+                and (not defer_compaction or not state.get("source_column_initial_reclaim_complete"))
+            ):
+                before_columns = source_column_work.checkpoint(store.db)["saved_bytes"]
+                after_columns = source_column_work.advance(
+                    store.db, now_ms, deadline=deadline, batch=min(batch, 8)
+                )
+                saved_columns = after_columns["saved_bytes"] - before_columns
+                state["saved_payload_bytes"] += saved_columns
+                state["saved_categories"]["source_blocks"] = (
+                    state["saved_categories"].get("source_blocks", 0) + saved_columns
+                )
+        column_maintenance = source_column_work.status(store.db)
+        state["source_column_maintenance"] = column_maintenance
         body_complete = (
             all(state.get(k) for k in (*catalogue_repack.PREREQUISITES, "catalogue_complete"))
             and state.get("packet_bundles", {}).get("initial_complete")
@@ -841,6 +862,7 @@ def work(
                 and state.get("context_tiles", {}).get("initial_complete")
                 and state.get("parent_affinity", {}).get("initial_complete")
                 and state.get("numeric_frames", {}).get("initial_complete")
+                and not column_maintenance["pending_work"]
             )
             else "IN_PROGRESS",
             at_ms=now_ms,
@@ -878,5 +900,11 @@ def work(
             and not maintenance["pending_work"]
         ):
             state["numeric_frame_initial_reclaim_complete"] = True
+        if (
+            column_maintenance["enabled"]
+            and not column_maintenance["pending_work"]
+            and not maintenance["pending_work"]
+        ):
+            state["source_column_initial_reclaim_complete"] = True
         store.put_runtime("storage_repack", state)
     return state
