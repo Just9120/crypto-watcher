@@ -342,3 +342,21 @@ def test_shared_catalogue_relocation_releases_members_with_exact_public_and_depe
     assert public(store) == expected and references(store) == leases
     assert not store.db.execute("SELECT 1 FROM market_shared_members").fetchone()
     assert not store.db.execute("PRAGMA foreign_key_check").fetchall()
+
+
+@pytest.mark.parametrize("marker", [None, "unknown"])
+def test_shared_read_refuses_missing_or_unknown_layout_after_pure_cache_hit(store, marker):
+    originals = setup(store)
+    selected = prepare(store, originals)
+    with store.db:
+        store.db.execute("BEGIN IMMEDIATE")
+        shared_records.publish(store.db, selected, store.cached_bytes)
+    identity, old = originals[0]
+    equal(old, domain_packets.read(store.db, identity, store.cached_bytes))
+    with store.db:
+        if marker is None:
+            store.db.execute("DELETE FROM market_meta WHERE key='shared_records'")
+        else:
+            store.db.execute("UPDATE market_meta SET value=? WHERE key='shared_records'", (marker,))
+    with pytest.raises(ValueError):
+        domain_packets.read(store.db, identity, store.cached_bytes)

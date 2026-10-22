@@ -78,7 +78,8 @@ def sql_signature(*values: Any) -> bytes:
 
 def _group(db: sqlite3.Connection, identity: int) -> Any:
     row = db.execute(
-        "SELECT category,bucket,body,projection,digest,initial,refs FROM market_shared_records WHERE id=?",
+        "SELECT category,bucket,body,projection,digest,initial,refs FROM market_shared_records WHERE id=? "
+        "AND (SELECT value FROM market_meta WHERE key='shared_records')='2'",
         (identity,),
     ).fetchone()
     if row is None or signature(row[0], row[1], row[2], row[3], row[5]) != row[4]:
