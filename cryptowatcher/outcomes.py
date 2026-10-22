@@ -354,24 +354,27 @@ class OutcomeWorker:
             }
 
     async def async_work(self, clock: Callable[[], int], batch: int = 256, seconds: float = 2) -> int:
-        from .analytics_worker import prepare, read_snapshot
+        from .analytics_worker import BatchTiming, prepare, read_snapshot
 
         self.bootstrap(20)
         now_ms = clock()
         started = time.monotonic()
+        timing = BatchTiming()
         prepared = await asyncio.to_thread(
             read_snapshot,
             self.store.path,
             self.store.owner_id,
-            lambda store: prepare(
-                store,
-                "outcome-pending:",
-                "outcome-job:",
-                "outcome_id",
-                now_ms,
-                batch,
-                seconds,
-                self.calculate,
+            lambda store: timing.read(
+                lambda: prepare(
+                    store,
+                    "outcome-pending:",
+                    "outcome-job:",
+                    "outcome_id",
+                    now_ms,
+                    batch,
+                    seconds,
+                    self.calculate,
+                )
             ),
         )
         read_seconds = time.monotonic() - started
@@ -380,7 +383,8 @@ class OutcomeWorker:
         for job, event, binding, result in prepared:
             # Owner operations or a restarted worker cannot be overwritten by an old read.
             if self.history.get("outcome-job:" + job["outcome_id"]) == job:
-                self.apply(job, event, binding, result, clock())
+                with timing.applying():
+                    self.apply(job, event, binding, result, clock())
                 applied += 1
                 if result["state"] == "COMPLETE":
                     completed_lags.append(
@@ -400,6 +404,7 @@ class OutcomeWorker:
             completed_lags,
             time.monotonic() - started,
             read_seconds=read_seconds,
+            timing=timing,
         )
         return applied
 

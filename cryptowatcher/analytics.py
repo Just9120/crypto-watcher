@@ -353,23 +353,26 @@ class ComparisonWorker:
             }
 
     async def async_work(self, clock: Callable[[], int], batch: int = 64, seconds: float = 2) -> int:
-        from .analytics_worker import prepare, read_snapshot
+        from .analytics_worker import BatchTiming, prepare, read_snapshot
 
         now_ms = clock()
         started = time.monotonic()
+        timing = BatchTiming()
         prepared = await asyncio.to_thread(
             read_snapshot,
             self.store.path,
             self.store.owner_id,
-            lambda store: prepare(
-                store,
-                "comparison-pending:",
-                "comparison-job:",
-                "event_id",
-                now_ms,
-                batch,
-                seconds,
-                self.calculate,
+            lambda store: timing.read(
+                lambda: prepare(
+                    store,
+                    "comparison-pending:",
+                    "comparison-job:",
+                    "event_id",
+                    now_ms,
+                    batch,
+                    seconds,
+                    self.calculate,
+                )
             ),
         )
         read_seconds = time.monotonic() - started
@@ -377,7 +380,8 @@ class ComparisonWorker:
         completed_lags = []
         for job, event, binding, result in prepared:
             if self.history.get("comparison-job:" + event["event_id"]) == job:
-                self.apply(job, event, binding, result, clock())
+                with timing.applying():
+                    self.apply(job, event, binding, result, clock())
                 applied += 1
                 if result["state"] in ("COMPLETE", "COMPLETE_LIMITED"):
                     due_ms = job.get(
@@ -394,6 +398,7 @@ class ComparisonWorker:
             completed_lags,
             time.monotonic() - started,
             read_seconds=read_seconds,
+            timing=timing,
         )
         return applied
 
