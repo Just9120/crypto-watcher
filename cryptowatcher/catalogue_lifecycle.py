@@ -7,7 +7,7 @@ import sqlite3
 from collections.abc import Generator
 from typing import Any
 
-from . import catalogue_aliases, catalogue_reader, packet_store, record_blocks, record_catalog
+from . import catalogue_aliases, catalogue_reader, domain_packets, record_blocks, record_catalog
 from .storage import StateError, json_payload
 
 
@@ -29,7 +29,7 @@ def parent_expiry(db: sqlite3.Connection, identity: str) -> int | None:
 
 
 def owned_records(
-    db: sqlite3.Connection, event_id: str, cache: Any = None
+    db: sqlite3.Connection, event_id: str, cache: Any = None, binary_cache: Any = None
 ) -> Generator[tuple[record_blocks.Coordinate, bool], None, None]:
     """Read one native parent range and authenticate at most one packet at a time."""
     if (
@@ -55,7 +55,7 @@ def owned_records(
         for packet, slots in cursor:
             if (root[0], slots) not in record_masks.packet_masks(db, packet):
                 raise StateError("Missing retained owner mask")
-            entries = block_entries(db, packet, cache)
+            entries = block_entries(db, packet, cache, binary_cache)
             if owner_slots.bits(slots) >> len(entries):
                 raise StateError("Retained owner slot outside packet")
             for slot, entry in enumerate(entries):
@@ -97,7 +97,7 @@ def expires(db: sqlite3.Connection, key: str) -> int | None:
         if saved is None:
             return None
         # Bind the lease to authenticated bytes and the exact selected coordinate.
-        record_blocks.projected(packet_store.read(db, saved[0]), saved[1], coordinate)
+        record_blocks.projected(domain_packets.read(db, saved[0]), saved[1], coordinate)
         if saved[2] is None:
             return int(saved[3])
         row = db.execute("SELECT expires FROM market_record_parents WHERE id=?", (saved[2],)).fetchone()
@@ -211,7 +211,7 @@ def renew(db: sqlite3.Connection, key: str, deadline: int, *, shorten: bool = Fa
         raise StateError("Conflicting mixed episode lease")
     if episode_deadline(db, point.identity, coordinate.revision) != deadline:
         raise StateError("Episode lease must match retained members")
-    value = record_blocks.read(packet_store.read(db, saved[0]), saved[1], coordinate)
+    value = record_blocks.read(domain_packets.read(db, saved[0]), saved[1], coordinate)
     if not renewable(value):
         raise StateError("Unsupported renewable episode dependencies; retained data preserved")
     changed = db.execute(

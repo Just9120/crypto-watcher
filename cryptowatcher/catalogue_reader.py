@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from heapq import merge
 from typing import Any
 
-from . import catalogue_bounds, packet_store, record_blocks, record_catalog, record_masks
+from . import catalogue_bounds, domain_packets, record_blocks, record_catalog, record_masks
 from .record_blocks import HEAD_SCHEMA, KINDS, Coordinate
 from .storage import StateError, encode
 
@@ -255,7 +255,7 @@ def namespace_rows(
             if version == 3:
                 record_masks.owner(db, packet, slot, expires)
             coordinate = Coordinate(namespace.kind, str(uuid.UUID(bytes=bytes(identity))), revision_number)
-            raw = packet_store.read(db, packet)
+            raw = domain_packets.read(db, packet, cache)
             if namespace.head:
                 value = record_blocks.projected(raw, slot, coordinate, cache)
                 if namespace.kind == "decision":

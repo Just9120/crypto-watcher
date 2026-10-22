@@ -229,6 +229,10 @@ row IDs/shared dimensions/provenance не заменяют внешние event 
 conflict checks/owner expiry. Детали upgrade/rollback boundaries — в [state contract](state_contract.md#storage-extension3-совместимое-уплотнение).
 
 QF1 хранит logical CQ5 packets в shared IF1 containers с exact numeric leases.
+Logical domain consumers читают record packets через `domain_packets.read`;
+generic `packet_store.read` сохраняет opaque physical bytes, hash и binding
+contract для publication/relocation. Пока domain reader — byte-identical
+passthrough; отдельной установки shared record descriptors еще нет.
 Тот же maintenance worker обслуживает конечную initial scan, live eligibility
 queue и partial-slot GC. Открытый expiry-frontier tail остаётся CQ5 до закрытия
 UTC дня; его факты уже доступны. Body initial reclaim сохраняется при upgrade,

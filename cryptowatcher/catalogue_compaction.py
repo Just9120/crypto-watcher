@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import (
+    domain_packets,
     owner_slots,
     packet_bundles,
     packet_store,
@@ -55,7 +56,7 @@ class _Seed:
 
 
 def _live(store: Store, packet: int) -> list[_Seed]:
-    raw = packet_store.read(store.db, packet)
+    raw = domain_packets.read(store.db, packet, store.cached_bytes)
     records = []
     for slot, (coordinate, _) in enumerate(record_blocks.projections(raw)):
         saved = record_catalog.row(store.db, coordinate)
@@ -104,7 +105,7 @@ def _parent(store: Store, parent: int, limit: int) -> list[record_relocation.Rec
     result = []
     size = 0
     for packet, slots, _ in masks:
-        projections = record_blocks.projections(packet_store.read(store.db, packet))
+        projections = record_blocks.projections(domain_packets.read(store.db, packet, store.cached_bytes))
         if owner_slots.bits(slots) >> len(projections):
             raise StateError("Bundle owner slot exceeds its packet")
         for slot, (coordinate, _) in enumerate(projections):
@@ -250,7 +251,9 @@ def compact(store: Store, packet: int, *, upper: int = 2**63 - 1) -> tuple[int, 
                             size += cost
         if not expanded:
             raise StateError("No bounded seed bundle")
-        original_slots = len(record_blocks.projections(packet_store.read(store.db, packet)))
+        original_slots = len(
+            record_blocks.projections(domain_packets.read(store.db, packet, store.cached_bytes))
+        )
         other_packets = {r.binding[0] for r in expanded} - {packet}
         # An intact packet with no fragmented parents is already settled. Do
         # not churn it solely to change ordering or rewrite identical bodies.

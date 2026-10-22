@@ -7,7 +7,7 @@ import uuid
 from collections import defaultdict
 from typing import Any
 
-from . import owner_slots, packet_store, record_blocks
+from . import domain_packets, owner_slots, record_blocks
 
 
 def _tally_values(db: sqlite3.Connection) -> dict[str, int]:
@@ -104,10 +104,12 @@ def owner(db: sqlite3.Connection, packet: int, slot: int, expires: int | None) -
 def event(db: sqlite3.Connection, packet: int, slot: int, cache: Any, binary_cache: Any) -> str | None:
     from .record_ownership import block_entry
 
-    entry = block_entry(db, packet, slot, cache)
+    entry = block_entry(db, packet, slot, cache, binary_cache)
     if entry[0] == "episode":
         coordinate = record_blocks.Coordinate(*entry[:3])
-        value = record_blocks.read(packet_store.read(db, packet), slot, coordinate, binary_cache)
+        value = record_blocks.read(
+            domain_packets.read(db, packet, binary_cache), slot, coordinate, binary_cache
+        )
         return value.get("event_id")
     return entry[5]
 
@@ -162,7 +164,7 @@ def install_functions(db: sqlite3.Connection, cache: Any = None, binary_cache: A
             if type(kind) is not int or not 0 <= kind < len(record_blocks.KINDS):
                 return 0
             expected = [record_blocks.KINDS[kind], str(uuid.UUID(bytes=identity)), revision]
-            if block_entry(db, packet, slot, cache)[:3] != expected:
+            if block_entry(db, packet, slot, cache, binary_cache)[:3] != expected:
                 return 0
             parent = owner(db, packet, slot, expires)
             if parent is None:
@@ -188,7 +190,7 @@ def install_functions(db: sqlite3.Connection, cache: Any = None, binary_cache: A
             removed = owner_slots.bits(before) ^ owner_slots.bits(after)
             for slot in range(64):
                 if removed & (1 << slot):
-                    entry = block_entry(db, packet, slot, cache)
+                    entry = block_entry(db, packet, slot, cache, binary_cache)
                     if db.execute(
                         "SELECT 1 FROM market_records WHERE kind=? AND public_uuid=? AND revision=?",
                         (record_blocks.KINDS.index(entry[0]), uuid.UUID(entry[1]).bytes, entry[2]),

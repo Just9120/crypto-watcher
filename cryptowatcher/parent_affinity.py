@@ -14,7 +14,7 @@ import time
 import uuid
 from typing import Any
 
-from . import packet_store, record_blocks, record_catalog
+from . import domain_packets, packet_store, record_blocks, record_catalog
 from .storage import StateError, encode
 
 DAY = 86_400_000
@@ -74,7 +74,7 @@ def _actual(
     binding = record_catalog.row(db, coordinate)
     if binding is None or binding[:3] != (row[3], row[4], parent):
         raise StateError("Conflicting parent affinity source owner")
-    value = record_blocks.read(packet_store.read(db, row[3]), row[4], coordinate, cache)
+    value = record_blocks.read(domain_packets.read(db, row[3], cache), row[4], coordinate, cache)
     return row[2], row[1] // DAY, native(value)
 
 
