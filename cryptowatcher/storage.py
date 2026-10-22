@@ -346,7 +346,7 @@ class Store:
                     raise StateError("Unknown source tile layout; database preserved")
                 from .candle_blocks import install_functions as source_tile_functions
 
-                source_tile_functions(self.db, self.cached_text)
+                source_tile_functions(self.db, self.cached_text, self.cached_bytes)
             if self.db.execute("SELECT 1 FROM market_meta WHERE key='packet_bundles'").fetchone():
                 from .packet_bundles import validate as validate_bundles
 

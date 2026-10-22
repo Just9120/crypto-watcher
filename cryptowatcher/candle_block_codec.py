@@ -185,6 +185,21 @@ def cached_slots(raw: bytes, frame: bytes, cache: Any) -> list[Any]:
 
 def unpack(raw: bytes, *, validate: bool = True, cache: Any = None) -> tuple[int, int, int, list[Any]]:
     stream, tile, step, frame = header(raw)
+    if validate and cache is not None:
+        import json
+
+        def checked() -> bytes:
+            # Cache only a complete pure validation, bound to the exact frame.
+            # Each caller restores a fresh list; admission may mutate its copy.
+            return encode(unpack(raw)[3]).encode()
+
+        value = cache("source-validated-slots", "", raw, checked)
+        if not isinstance(value, bytes):
+            raise ValueError("Invalid validated source tile cache result")
+        slots = json.loads(value)
+        if not isinstance(slots, list) or len(slots) != SLOTS:
+            raise ValueError("Invalid source slot cardinality")
+        return stream, tile, step, slots
     slots = cached_slots(raw, frame, cache)
     count = 0
     for slot, items in enumerate(slots):
@@ -256,8 +271,8 @@ class Reader:
         return None
 
 
-def rows(raw: bytes) -> list[tuple[int, int, int, int, int, dict[str, Any]]]:
-    sid, tile, step, slots = unpack(raw)
+def rows(raw: bytes, *, cache: Any = None) -> list[tuple[int, int, int, int, int, dict[str, Any]]]:
+    sid, tile, step, slots = unpack(raw, cache=cache)
     return [
         (sid, tile + slot * step, revision, needed, purge, restored(tile, step, slot, tail))
         for slot, items in enumerate(slots)
@@ -282,13 +297,15 @@ def latest(
             yield when, revision, restored(tile, step, slot, tail)
 
 
-def stats(raw: bytes) -> tuple[int, int, int, int, int]:
-    sid, tile, step, slots = unpack(raw)
+def stats(raw: bytes, *, cache: Any = None) -> tuple[int, int, int, int, int]:
+    sid, tile, step, slots = unpack(raw, cache=cache)
     entries = [row for part in slots for row in part]
     return sid, tile, step, len(entries), min(row[2] for row in entries)
 
 
-def preserved(old: bytes, new: bytes) -> list[tuple[int, int, int, int, int, dict[str, Any]]]:
+def preserved(
+    old: bytes, new: bytes, *, cache: Any = None
+) -> list[tuple[int, int, int, int, int, dict[str, Any]]]:
     """Reject changes to an existing source value; return removed coordinates.
 
     The store must separately qualify every removal against current policy and
@@ -297,8 +314,8 @@ def preserved(old: bytes, new: bytes) -> list[tuple[int, int, int, int, int, dic
     old_id = header(old)[:3]
     if header(new)[:3] != old_id:
         raise ValueError("Source block identity changed")
-    before = rows(old)
-    current = {(row[1], row[2]): row for row in rows(new)}
+    before = rows(old, cache=cache)
+    current = {(row[1], row[2]): row for row in rows(new, cache=cache)}
     removed = []
     for row in before:
         actual = current.get((row[1], row[2]))

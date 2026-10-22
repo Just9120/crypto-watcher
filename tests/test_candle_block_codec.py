@@ -62,6 +62,27 @@ def test_pure_source_snapshot_cache_keeps_random_float_bits_integer_types_fresh_
         assert store.reference_cache_bytes <= 1024 * 1024
 
 
+def test_full_validation_cache_never_reuses_unvalidated_slots_or_failed_proofs(store):
+    from cryptowatcher import indexed_frame
+
+    tile, slots = fixture()
+    raw = codec.pack(1, tile, 60000, slots)
+    assert encode(codec.unpack(raw, cache=store.cached_bytes)[3]) == encode(slots)
+    changed = codec.unpack(raw)[3]
+    changed[0][0][3][1] = 1.0  # Authenticated scalar shape, invalid OHLC semantics.
+    checked = struct.pack(">QQQ", 1, tile, 60000) + indexed_frame.pack(changed)
+    invalid = codec.MAGIC + hashlib.sha256(checked).digest() + checked
+    assert codec.unpack(invalid, validate=False, cache=store.cached_bytes)[3] == changed
+    for _ in range(2):
+        with pytest.raises(ValueError, match="Invalid frozen source candle"):
+            codec.unpack(invalid, cache=store.cached_bytes)
+    assert not any(
+        kind == "bytes/source-validated-slots" and frame == invalid
+        for kind, _, frame in store.reference_cache
+    )
+    assert encode(codec.unpack(raw, cache=store.cached_bytes)[3]) == encode(slots)
+
+
 @pytest.mark.parametrize("sid", [1, 2])
 @pytest.mark.parametrize("step", codec.STEPS)
 def test_source_block_keeps_all_fields_types_revisions_gaps_and_lease_metadata(store, sid, step):

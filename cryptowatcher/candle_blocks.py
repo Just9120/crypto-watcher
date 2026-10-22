@@ -30,7 +30,7 @@ def policy(db: sqlite3.Connection) -> tuple[int, int]:
     return days
 
 
-def install_functions(db: sqlite3.Connection, cache: Any = None) -> None:
+def install_functions(db: sqlite3.Connection, cache: Any = None, binary_cache: Any = None) -> None:
     if (
         db.execute("SELECT 1 FROM sqlite_master WHERE name='market_candle_gc'").fetchone()
         and db.execute("SELECT 1 FROM market_candle_gc LIMIT 1").fetchone()
@@ -55,7 +55,7 @@ def install_functions(db: sqlite3.Connection, cache: Any = None) -> None:
             readable(db, raw)
 
         def read() -> str:
-            return encode(codec.stats(raw))
+            return encode(codec.stats(raw, cache=binary_cache))
 
         return read() if cache is None else str(cache("source-tile-stats", "", raw, read))
 
@@ -65,7 +65,11 @@ def install_functions(db: sqlite3.Connection, cache: Any = None) -> None:
 
             if _authorized_delete(db, old):
                 return 1
-        removed = codec.rows(old) if new is None else codec.preserved(old, new)
+        removed = (
+            codec.rows(old, cache=binary_cache)
+            if new is None
+            else codec.preserved(old, new, cache=binary_cache)
+        )
         if removed:
             permit = db.execute("SELECT cutoff FROM market_candle_gc WHERE id=1").fetchone()
             if permit is None:
@@ -86,10 +90,10 @@ def install_functions(db: sqlite3.Connection, cache: Any = None) -> None:
     db.create_function("cw_candle_stream_step", 1, lambda sid: stream_step(db, sid))
 
 
-def install(db: sqlite3.Connection, cache: Any = None) -> None:
+def install(db: sqlite3.Connection, cache: Any = None, binary_cache: Any = None) -> None:
     if db.execute("PRAGMA user_version").fetchone()[0] != 2:
         raise ValueError("Source tiles require the normalized source layout")
-    install_functions(db, cache)
+    install_functions(db, cache, binary_cache)
     marker = db.execute("SELECT value FROM market_meta WHERE key='candle_blocks'").fetchone()
     if marker is not None:
         if marker[0] not in ("1", "2") or db.execute("SELECT 1 FROM market_candle_gc LIMIT 1").fetchone():
@@ -207,13 +211,13 @@ def atomic(db: sqlite3.Connection) -> Iterator[None]:
         db.execute("RELEASE cw_source_operation")
 
 
-def put(db: sqlite3.Connection, raw: bytes, expected: bytes | None) -> None:
+def put(db: sqlite3.Connection, raw: bytes, expected: bytes | None, *, cache: Any = None) -> None:
     if expected is not None and expected.startswith(codec.COLUMN_MAGIC):
         from .source_column_work import readable
 
         readable(db, expected)
         raw = codec.compact(raw)
-    sid, tile, step, n, first = codec.stats(raw)
+    sid, tile, step, n, first = codec.stats(raw, cache=cache)
     with atomic(db):
         if expected is None:
             db.execute(
@@ -319,7 +323,7 @@ def _admit_groups(
                     dirty = True
                 result[index] = (sid, at_start, revision)
             if dirty:
-                put(db, codec.pack(sid, at, step, slots), old)
+                put(db, codec.pack(sid, at, step, slots), old, cache=cache)
     return result
 
 
