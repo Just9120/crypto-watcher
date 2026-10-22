@@ -97,6 +97,56 @@ def test_atomic_history_identity_markets_settings_and_inputs(state):
     assert history.get("event:" + events[0]["event_id"] + ":0000000001") == events[0]
 
 
+def test_observation_context_is_resolved_once_only_for_new_events_and_keeps_every_family_snapshot(state):
+    calls = []
+    context = {"ticker": {"available_at_ms": NOW}, "instrument": {"tick_size": 0.01}}
+    enrichment = {"state": "DISABLED", "optional": True, "detector_input": False}
+
+    def provide():
+        calls.append(NOW)
+        return context, enrichment
+
+    silent = EventEngine(state, selected())
+    silent.observe("spot/BTCUSDT/1m", window(), 1e6, 0.01, NOW, live=True, context_provider=provide)
+    assert not calls and not silent.history.events()
+    engine = EventEngine(state)
+    engine.observe("spot/BTCUSDT/1m", window(), 1e6, 0.01, NOW, live=True, context_provider=provide)
+    events = engine.history.events()
+    assert len(events) == 4 and calls == [NOW]
+    assert all(e["source_context"] == context and e["enrichment"] == enrichment for e in events)
+    engine.observe("spot/BTCUSDT/1m", window(), 1e6, 0.01, NOW, live=True, context_provider=provide)
+    assert calls == [NOW] and engine.history.events() == events
+
+
+@pytest.mark.parametrize("bounded", [False, True])
+def test_context_provider_failure_or_ambiguous_input_preserves_the_whole_transaction(state, bounded):
+    if bounded:
+        from cryptowatcher.market_storage import enable
+
+        enable(state.db)
+        state.bounded = True
+    engine = EventEngine(state)
+
+    def saved():
+        return {
+            name: sorted(repr(tuple(row)) for row in state.db.execute('SELECT * FROM "' + name + '"'))
+            for (name,) in state.db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
+
+    def fail():
+        raise RuntimeError("context unavailable")
+
+    before = saved()
+    with pytest.raises(RuntimeError):
+        engine.observe("spot/BTCUSDT/1m", window(), 1e6, 0.01, NOW, live=True, context_provider=fail)
+    assert saved() == before
+    with pytest.raises(ValueError):
+        engine.observe(
+            "spot/BTCUSDT/1m", window(), 1e6, 0.01, NOW, live=True, source_context={}, context_provider=fail
+        )
+    assert saved() == before
+
+
 def test_transaction_failure_rolls_back_event_episode_and_outbox(state, monkeypatch):
     engine = EventEngine(state)
     original = engine.history.put

@@ -14,7 +14,7 @@ from .storage import encode
 
 def installed(db: sqlite3.Connection) -> bool:
     row = db.execute("SELECT value FROM market_meta WHERE key='candle_blocks'").fetchone()
-    if row is not None and row[0] != "1":
+    if row is not None and row[0] not in ("1", "2"):
         raise ValueError("Unknown source tile layout")
     return row is not None
 
@@ -240,6 +240,10 @@ def read(
         try:
             for stream, tile, saved_step, payload in cursor:
                 raw = bytes(payload)
+                if raw.startswith(codec.COLUMN_MAGIC):
+                    from .source_column_work import readable
+
+                    readable(db, raw)
                 if codec.header(raw)[:3] != (stream, tile, saved_step) or saved_step != step:
                     raise ValueError("Source tile index binding mismatch")
                 yield from codec.latest(raw, start, end, reverse=reverse, cache=cache)

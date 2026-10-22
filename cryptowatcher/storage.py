@@ -252,7 +252,7 @@ class Store:
         )
         from .key_registry import install_functions as registry_functions
 
-        registry_functions(self.db)
+        registry_functions(self.db, self._cached_value)
         from .cohort_meter import install_functions as cohort_functions
 
         cohort_functions(self.db)
@@ -342,7 +342,7 @@ class Store:
                 "SELECT value FROM market_meta WHERE key='candle_blocks'"
             ).fetchone()
             if source_tiles is not None:
-                if source_tiles[0] != "1":
+                if source_tiles[0] not in ("1", "2"):
                     raise StateError("Unknown source tile layout; database preserved")
                 from .candle_blocks import install_functions as source_tile_functions
 

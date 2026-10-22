@@ -1,5 +1,6 @@
 import copy
 import random
+import sqlite3
 import time
 import uuid
 from contextlib import closing
@@ -12,6 +13,73 @@ from cryptowatcher.market_storage import enable
 from cryptowatcher.storage import Store
 from cryptowatcher.storage_lifecycle import body_links, forget
 from tests.test_reference_layout import reference
+
+
+def test_sql_registry_cache_uses_exact_pure_inputs_and_preserves_current_rows_and_rollback(
+    store, monkeypatch
+):
+    original_pack, original_unpack = key_registry.pack, key_registry.unpack
+    calls = []
+
+    def packed(value):
+        calls.append(("pack", value))
+        return original_pack(value)
+
+    def unpacked(value):
+        calls.append(("unpack", value))
+        return original_unpack(value)
+
+    monkeypatch.setattr(key_registry, "pack", packed)
+    monkeypatch.setattr(key_registry, "unpack", unpacked)
+    key = "radar:v1:event:" + str(uuid.UUID(int=1)) + ":0000000001"
+    token = original_pack(key)
+    assert tuple(store.db.execute("SELECT cw_key_pack(?),cw_key_unpack(?)", (key, token)).fetchone()) == (
+        token,
+        key,
+    )
+    count = len(calls)
+    assert tuple(store.db.execute("SELECT cw_key_pack(?),cw_key_unpack(?)", (key, token)).fetchone()) == (
+        token,
+        key,
+    )
+    assert len(calls) == count
+    with store.db:
+        store.db.execute("CREATE TABLE registry_cache_probe(id INTEGER PRIMARY KEY,external)")
+        store.db.execute("INSERT INTO registry_cache_probe VALUES(1,?)", (token,))
+    other_key = key.replace("0000000001", "0000000002")
+    other_token = original_pack(other_key)
+    with pytest.raises(RuntimeError), store.db:
+        store.db.execute("UPDATE registry_cache_probe SET id=2,external=?", (other_token,))
+        assert tuple(
+            store.db.execute("SELECT id,cw_key_unpack(external) FROM registry_cache_probe").fetchone()
+        ) == (2, other_key)
+        raise RuntimeError("Rollback database state, retaining only pure conversions")
+    assert tuple(
+        store.db.execute("SELECT id,cw_key_unpack(external) FROM registry_cache_probe").fetchone()
+    ) == (1, key)
+    for invalid in (None, 1, b"CK1\x00\xff", token[:-1]):
+        for function in ("cw_key_pack", "cw_key_unpack"):
+            with pytest.raises(sqlite3.OperationalError):
+                store.db.execute(f"SELECT {function}(?)", (invalid,)).fetchone()
+
+
+def test_sql_registry_cache_shares_existing_budget_and_plain_connections_keep_frozen_codecs(store):
+    with closing(sqlite3.connect(":memory:")) as plain:
+        key_registry.install_functions(plain)
+        for i in range(2200):
+            key = f"radar:v1:outcome:{uuid.UUID(int=i)}:{i:010d}:" + "МСК/😀" * 8
+            token = key_registry.pack(key)
+            expected = (token, key)
+            assert (
+                tuple(store.db.execute("SELECT cw_key_pack(?),cw_key_unpack(?)", (key, token)).fetchone())
+                == expected
+            )
+            assert (
+                plain.execute("SELECT cw_key_pack(?),cw_key_unpack(?)", (key, token)).fetchone() == expected
+            )
+            assert store.reference_cache_bytes <= 1024 * 1024
+    assert store.reference_cache_bytes == sum(size for _, size in store.reference_cache.values())
+    assert 0 < len(store.reference_cache) < 4400
 
 
 def test_registry_codec_frozen_dictionary_exact_keys_and_bad_frames():

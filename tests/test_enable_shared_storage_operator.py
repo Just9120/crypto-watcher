@@ -85,7 +85,14 @@ def host(tmp_path, monkeypatch):
         State=dict(Running=True, Restarting=False, Health={"Status": "healthy"}, StartedAt="before"),
         Mounts=[dict(Source=str(app / "data"), Destination="/data", RW=True)],
     )
-    state = dict(layout=None, failure=None, stop_unknown=False, bad_post_private=False, observer=False)
+    state = dict(
+        layout=None,
+        source_columns=False,
+        failure=None,
+        stop_unknown=False,
+        bad_post_private=False,
+        observer=False,
+    )
     state.update(candidate=None, wrong_candidate=False, retain_candidate=False, health_late=False)
     state["disappear_candidate"] = False
     calls = []
@@ -102,6 +109,7 @@ def host(tmp_path, monkeypatch):
                 else PRIVATE
             ),
             layout=state["layout"],
+            source_columns={"enabled": state["source_columns"]},
         )
 
     def run(args, **kwargs):
@@ -164,12 +172,13 @@ def host(tmp_path, monkeypatch):
                 return SimpleNamespace(returncode=2, stdout="")
             backup = backups / args[args.index("--destination") + 1].rsplit("/", 1)[1]
             backup.write_bytes(database.read_bytes())
+            state["layout"] = "3"
+            state["source_columns"] = True
             proof = token()
             proof.update(
                 phase="COMPLETE",
                 backup=dict(phase="COMPLETE", sha256=hashlib.sha256(backup.read_bytes()).hexdigest()),
             )
-            state["layout"] = "3"
             output = json.dumps(proof)
         else:
             raise AssertionError("Unexpected external command: " + command)
@@ -213,8 +222,28 @@ def test_target_bound_operation_retains_current_data_records_backup_and_starts_s
 
 def test_installed_layout_returns_no_change_without_stop_or_another_backup(host):
     host.state["layout"] = "3"
+    host.state["source_columns"] = True
     result = operator.execute(*host.args)
     assert result["state"] == "NO_CHANGE" and result["phase"] == "ALREADY_ENABLED"
+    assert not any(call[3] in ("run", "stop", "start") for call in host.calls if call[0] == "docker")
+    assert len(list(host.archive.parent.iterdir())) == 1
+    assert_preserved(host)
+
+
+def test_existing_shared_layout_still_qualifies_source_adoption_with_normal_backup(host):
+    host.state["layout"] = "3"
+    result = operator.execute(*host.args)
+    assert result["state"] == "PASS" and host.state["source_columns"] is True
+    assert result["adoption"]["source_columns"]["enabled"] is True
+    assert len(list(host.archive.parent.iterdir())) == 2
+    assert_preserved(host)
+
+
+@pytest.mark.parametrize("value", [None, 1, "1"])
+def test_unknown_source_adoption_status_refuses_before_stop_backup_or_mutation(host, value):
+    host.state["source_columns"] = value
+    with pytest.raises(RuntimeError, match="lacks source-format adoption status"):
+        operator.execute(*host.args)
     assert not any(call[3] in ("run", "stop", "start") for call in host.calls if call[0] == "docker")
     assert len(list(host.archive.parent.iterdir())) == 1
     assert_preserved(host)

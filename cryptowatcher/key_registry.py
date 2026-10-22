@@ -138,9 +138,27 @@ def unpack(token: Any) -> str:
     return result
 
 
-def install_functions(db: sqlite3.Connection) -> None:
-    db.create_function("cw_key_pack", 1, pack, deterministic=True)
-    db.create_function("cw_key_unpack", 1, unpack, deterministic=True)
+def install_functions(db: sqlite3.Connection, cache: Any = None) -> None:
+    def packed(value: Any) -> str | bytes:
+        if cache is None or not isinstance(value, (str, bytes)):
+            return pack(value)
+        result = cache("registry-pack", "", value, lambda: pack(value))
+        if not isinstance(result, (str, bytes)):
+            raise ValueError("Invalid pure registry pack cache result")
+        return result
+
+    def unpacked(value: Any) -> str:
+        if cache is None or not isinstance(value, (str, bytes)):
+            return unpack(value)
+        result = cache("registry-unpack", "", value, lambda: unpack(value))
+        if not isinstance(result, str):
+            raise ValueError("Invalid pure registry unpack cache result")
+        return result
+
+    # These frozen conversions depend only on the complete input bytes/text.
+    # Share Store's existing pure budget; never cache IDs, rows or leases.
+    db.create_function("cw_key_pack", 1, packed, deterministic=True)
+    db.create_function("cw_key_unpack", 1, unpacked, deterministic=True)
 
 
 def drain(db: sqlite3.Connection, state: dict[str, Any], batch: int, deadline: float) -> bool:

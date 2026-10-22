@@ -544,6 +544,18 @@ def stable_reason(store: Store) -> list[str]:
                 reasons.append("SHARED_RECORD_BACKLOG")
     except (ValueError, StateError, sqlite3.Error):
         reasons.append("SHARED_RECORD_CHECKPOINT_UNKNOWN")
+    if store.bounded:
+        try:
+            from .source_column_work import status as source_column_status
+
+            columns = source_column_status(store.db)
+            if columns["enabled"]:
+                if columns["pending_work"]:
+                    reasons.append("SOURCE_COLUMN_INITIAL_INCOMPLETE")
+                elif repack.get("source_column_initial_reclaim_complete") is not True:
+                    reasons.append("SOURCE_COLUMN_INITIAL_RECLAIM_PENDING")
+        except (ValueError, StateError, sqlite3.Error):
+            reasons.append("SOURCE_COLUMN_CHECKPOINT_UNKNOWN")
     for key in ("repack_worker", "analytics_recovery_worker", "retention_worker", "shared_record_worker"):
         if store.get_runtime(key, {}).get("state") == "FAILED":
             reasons.append(key.upper() + "_FAILED")

@@ -17,6 +17,7 @@ from . import (
     record_catalog,
     shared_record_work,
     shared_records,
+    source_column_work,
 )
 from .lease import RuntimeLease
 from .reset_history import private_state, signature
@@ -54,6 +55,7 @@ def status(store: Store) -> dict[str, Any]:
             "bounded_storage": store.bounded,
             "layout": marker[0] if marker else None,
             "shared_work": shared_record_work.header(store.db) if marker and marker[0] == "3" else None,
+            "source_columns": source_column_work.status(store.db) if store.bounded else {"enabled": False},
             "scope": "identity/schema/work header only; no full integrity/capacity or readiness claim",
         }
     finally:
@@ -74,6 +76,9 @@ def _guard(store: Store, generation: str, revision: int, private: str) -> dict[s
     if record_catalog.layout(store.db) != 3 or not catalogue_reader.reading(store.db):
         raise StateError("Shared activation requires the current owned catalogue")
     packet_bundles.validate(store.db)
+    source_column_work.guards(store.db)
+    if source_column_work.enabled(store.db):
+        source_column_work.checkpoint(store.db)
     marker = store.db.execute("SELECT value FROM market_meta WHERE key='shared_records'").fetchone()
     if marker is not None:
         shared_records.validate(store.db)
@@ -142,7 +147,7 @@ def activate(
             remaining()
             reader.db.execute("BEGIN")
             before = _guard(reader, expected_generation, expected_revision, expected_private)
-            if shared_record_work.enabled(reader.db):
+            if shared_record_work.enabled(reader.db) and source_column_work.enabled(reader.db):
                 shared_record_work.validate(reader.db)
                 state = shared_record_work.header(reader.db)
                 remaining()
@@ -152,6 +157,7 @@ def activate(
                     "source_revision": expected_source,
                     **before,
                     "writer_enabled": state["writer_enabled"],
+                    "source_columns": source_column_work.status(reader.db),
                 }
         if backup.exists() or any(
             Path(str(backup) + suffix).exists() for suffix in ("-wal", "-shm", "-journal")
@@ -171,6 +177,8 @@ def activate(
                 shared_records.install(writer.db, writer.cached_bytes)
                 remaining()
                 shared_record_work.install(writer.db, int(time.time() * 1000), writer.cached_bytes)
+                with writer.db:
+                    source_column_work.enable(writer.db)
                 if _guard(writer, expected_generation, expected_revision, expected_private) != before:
                     raise StateError("Shared activation private state changed; preserve backup and inspect")
             finally:
@@ -182,6 +190,9 @@ def activate(
                 raise StateError("Shared activation reopen identity mismatch")
             shared_record_work.validate(reopened.db)
             state = shared_record_work.header(reopened.db)
+            column_state = source_column_work.status(reopened.db)
+            if not column_state["enabled"]:
+                raise StateError("Source column adoption not observed after reopen")
         remaining()
         return {
             "operation": "ENABLE_SHARED_SB2_STORAGE",
@@ -189,6 +200,7 @@ def activate(
             "source_revision": expected_source,
             **before,
             "writer_enabled": state["writer_enabled"],
+            "source_columns": column_state,
             "backup": proof,
             "elapsed_seconds": time.monotonic() - started,
             "recovery": "FORWARD_COMPATIBLE_ARTIFACT_ONLY; inspect retained layout/files before retry",

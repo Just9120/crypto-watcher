@@ -278,6 +278,9 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         from .candle_blocks import summary as source_summary
 
         source_layout.update(state="MIXED_SOURCE_TILES", **source_summary(store.db))
+        from .source_column_work import status as source_column_status
+
+        source_layout["columns"] = source_column_status(store.db)
         source_layout["total_versions"] = source_layout["legacy_versions"] + source_layout["versions"]
         source_tables = {
             "market_candle_blocks",

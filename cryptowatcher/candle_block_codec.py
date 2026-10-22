@@ -11,11 +11,12 @@ import hashlib
 import struct
 from typing import Any, Iterator
 
-from . import indexed_frame, source_slot_json
+from . import indexed_frame, source_slot_columns, source_slot_json
 from .storage import encode
 
 MAGIC = b"SB1\x00"
 JSON_MAGIC = b"SB2\x00"
+COLUMN_MAGIC = b"SB3\x00"
 SLOTS = 32
 MAX_ROWS = 256
 MAX_BYTES = 512 * 1024
@@ -126,17 +127,34 @@ def pack(stream: int, tile: int, step: int, slots: list[Any]) -> bytes:
     return result
 
 
+def compact(raw: bytes) -> bytes:
+    """Optional exact rewrite; the normal hot writer keeps the frozen codecs."""
+    stream, tile, step, slots = unpack(raw)
+    if raw.startswith(COLUMN_MAGIC):
+        return raw
+    frame = source_slot_columns.pack(slots)
+    if frame is None or len(frame) + 60 >= len(raw):
+        return raw
+    if encode(source_slot_columns.all_values(frame)) != encode(slots):
+        raise ValueError("Source columns changed immutable values")
+    checked = struct.pack(">QQQ", stream, tile, step) + frame
+    return COLUMN_MAGIC + hashlib.sha256(checked).digest() + checked
+
+
 def header(raw: bytes) -> tuple[int, int, int, bytes]:
     if (
         not isinstance(raw, bytes)
-        or not 110 < len(raw) <= MAX_BYTES
-        or not raw.startswith((MAGIC, JSON_MAGIC))
+        or not 66 < len(raw) <= MAX_BYTES
+        or not raw.startswith((MAGIC, JSON_MAGIC, COLUMN_MAGIC))
         or hashlib.sha256(raw[36:]).digest() != raw[4:36]
     ):
         raise ValueError("Source tile checksum mismatch")
     stream, tile, step = struct.unpack(">QQQ", raw[36:60])
     coordinates(stream, tile, step)
     frame = raw[60:]
+    if raw.startswith(COLUMN_MAGIC):
+        source_slot_columns.layout(frame)
+        return stream, tile, step, frame
     offsets, _ = source_slot_json.layout(frame) if raw.startswith(JSON_MAGIC) else indexed_frame.layout(frame)
     if len(offsets) != SLOTS + 1:
         raise ValueError("Source tile cardinality mismatch")
@@ -145,7 +163,13 @@ def header(raw: bytes) -> tuple[int, int, int, bytes]:
 
 def cached_slots(raw: bytes, frame: bytes, cache: Any) -> list[Any]:
     """Pure exact typed-to-JSON transform, sharing the caller's existing budget."""
-    read = source_slot_json.all_values if raw.startswith(JSON_MAGIC) else indexed_frame.all_values
+    read = (
+        source_slot_columns.all_values
+        if raw.startswith(COLUMN_MAGIC)
+        else source_slot_json.all_values
+        if raw.startswith(JSON_MAGIC)
+        else indexed_frame.all_values
+    )
     if cache is None:
         return read(frame)
     import json
@@ -182,14 +206,21 @@ class Reader:
     def __init__(self, raw: bytes, cache: Any = None, *, canonical: bool = False):
         self.stream, self.tile, self.step, frame = header(raw)
         self.text = raw.startswith(JSON_MAGIC)
-        self.slots = cached_slots(raw, frame, cache) if canonical else None
+        self.slots: list[Any] | None
+        if raw.startswith(COLUMN_MAGIC) and not canonical:
+            # Bulk source windows use immutable decompressed bytes, as SB2 does.
+            # Avoid serializing all restored values to JSON and parsing them
+            # again just to fill a cache during a single sequential visit.
+            self.slots = source_slot_columns.all_values(frame, cache)
+        else:
+            self.slots = cached_slots(raw, frame, cache) if canonical else None
         if self.slots is not None and (
             any(not isinstance(items, list) for items in self.slots)
             or not 0 < sum(len(items) for items in self.slots) <= MAX_ROWS
         ):
             raise ValueError("Source tile row bound")
         read = source_slot_json.data if self.text else indexed_frame.data
-        self.offsets, self.data = read(frame, cache) if not canonical else ((), b"")
+        self.offsets, self.data = read(frame, cache) if self.slots is None else ((), b"")
 
     def items(self, slot: int) -> list[Any]:
         from .compact_json import unpack as typed_unpack

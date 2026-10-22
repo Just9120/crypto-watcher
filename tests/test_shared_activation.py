@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from cryptowatcher import shared_activation as activation
-from cryptowatcher import shared_record_work
+from cryptowatcher import shared_record_work, source_column_work
 from cryptowatcher.lease import RuntimeLease
 from cryptowatcher.reset_history import private_state, signature
 from cryptowatcher.storage import StateError, Store
@@ -58,10 +58,15 @@ def test_explicit_backup_upgrade_reopen_preserves_every_original_row_and_repeat_
     assert result["history_generation"]["id"] == GENERATION
     assert result["configuration_revision"] == options["expected_revision"]
     assert result["private_sha256"] == options["expected_private"]
+    assert result["source_columns"]["enabled"]
     assert rows(backup) == before
     after = rows(path)
     for name, original in before.items():
-        if name in ("market_meta", "market_counts"):
+        if name == "market_meta":
+            expected = [(key, "2") if key == "candle_blocks" else (key, value) for key, value in original]
+            assert set(expected).issubset(set(after[name]))
+            assert source_column_work.KEY in dict(after[name])
+        elif name == "market_counts":
             assert set(original).issubset(set(after[name]))
         else:
             assert after[name] == original

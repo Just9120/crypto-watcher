@@ -207,7 +207,9 @@ generation/config/private state, прежние archives и файлы заме�
 На проверенном target сначала прочитать `python -m cryptowatcher shared-storage-status`
 из exact нового image с текущими `--database` и `--owner-id`. Это readonly pinned
 snapshot: source revision, generation, configuration revision, private SHA256 и
-layout/work header. Он не подтверждает full integrity, capacity или readiness.
+layout/work header и `source_columns.enabled`. Он не подтверждает full integrity,
+capacity или readiness. Старый image без typed boolean source status не подходит
+для текущей adoption: operator отказывает до stop/backup.
 Сверить source с image/CD record; сохранить token в private operation record.
 
 Включение выполняется под existing `.deploy.lock`, после проверки отсутствия
@@ -245,16 +247,22 @@ python -m cryptowatcher enable-shared-storage --database /data/sqlite/cryptowatc
 не являются defaults. Destination и sidecars должны отсутствовать; проверить место
 под обычный полный backup. CLI берет exclusive RuntimeLease, отказывает работающему
 writer, сверяет current source/schema/generation/config/private до backup и повторно
-перед DDL. Только COMPLETE backup допускает guarded layout2, затем layout3.
+перед DDL. Только COMPLETE backup допускает guarded layout2, затем layout3
+и source marker2 с конечной initial boundary. Нормальные startup/delivery сохраняют
+существующие markers; source marker2 вводится только этой явной операцией.
 Ни одна прежняя строка/файл не удаляется; исходная history generation не меняется.
 Fresh reopen подтверждает identity и exact schema. Initial scan/publication затем
 продолжаются существующим bounded maintenance worker; baseline их не пропускает.
 
 После неизвестного исхода/ошибки сначала читать layout и operation/backup records.
 Известная частичная layout2 остается читаемой новым artifact; требуется forward
-recovery, без старого image, сброса БД и слепого retry. COMPLETE layout3 повторно
-проверяется и возвращает ALREADY_ENABLED без нового backup/перезаписи и без снятия
-writer switch0. Не удалять incomplete backup. Запускать только тот же проверенный
+recovery, без старого image, сброса БД и слепого retry. COMPLETE layout3 вместе
+с enabled source columns повторно проверяется и возвращает ALREADY_ENABLED
+без нового backup/перезаписи и без снятия writer switch0. Layout3 с прежним
+source marker проходит обычную guarded backup/adoption, а не NO_CHANGE.
+SB3 затем вводится existing bounded worker с полной equality/rowid/lease/CAS
+проверкой, atomic rollback и initial scan/reclaim gate observer.
+Не удалять incomplete backup. Запускать только тот же проверенный
 совместимый image; подтвердить source/private/generation/config, health/readiness,
 работу sources/queues и bounded maintenance. Отсутствующий required post-check не
 считать успешной операцией. Сам CLI не управляет контейнером и не запускает observer.

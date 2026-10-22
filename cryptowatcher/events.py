@@ -448,7 +448,10 @@ class EventEngine:
         live: bool,
         source_context: dict[str, Any] | None = None,
         enrichment: dict[str, Any] | None = None,
+        context_provider: Callable[[], tuple[dict[str, Any], dict[str, Any]]] | None = None,
     ) -> None:
+        if context_provider is not None and (source_context is not None or enrichment is not None):
+            raise ValueError("Choose captured context or a synchronous context provider")
         if not candles:
             return
         snapshot = self.store.snapshot()
@@ -525,6 +528,12 @@ class EventEngine:
                     )
                     if self.history.get("event-head:" + event_id):
                         continue
+                    if context_provider is not None:
+                        # A callback without a new event has no context to save.
+                        # Resolve once in this same synchronous transaction/cutoff;
+                        # all new families keep the same complete snapshots.
+                        source_context, enrichment = context_provider()
+                        context_provider = None
                     is_live = live and ordered and timely
                     active_key = f"active:{instrument}/{direction}"
                     suppressed = is_live and runtime["blocked"]
