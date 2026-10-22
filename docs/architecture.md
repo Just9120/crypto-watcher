@@ -236,9 +236,18 @@ Explicit `shared_records.install` поддерживает DS2 descriptors и im
 RP1/SB1 groups с FK members, full logical transition proof и CAS в существующем
 writer savepoint. Store/startup не устанавливают формат. Резервированный tail
 на retention day отделяет48byte descriptors от обычного packet admission;
-проверки append positions/digests остаются общими. Initial/continuous worker,
-partial-group reclaim, observer accounting и runtime activation/recovery еще
-требуют qualification перед использованием формата в production.
+проверки append positions/digests остаются общими. Явный known2-to3 upgrade
+добавляет конечную discovery scan, live inbox и одну resumable staged group.
+Compression готовит один read-only task; существующий maintenance callback
+переводит по одному пакету с full equality/CAS и сохраняет старый источник до
+атомарного перехода. Pending edges защищают группу от GC. Sparse groups
+возвращаются через обычный catalogue relocation; первые timestamps очереди
+сохраняются. Worker shutdown присоединяет фактический reader без поздней записи.
+Observer различает initial reclaim, live coalesce/service deadline, stale clock,
+missing cleanup checkpoint и writer switch; boundary читает actual DS2 bytes.
+Новые counters/indexes и временный DB2 staging входят в physical storage model.
+Store/startup не активируют3; current native/image, runtime activation/recovery,
+совместный50s boundary и mature25GB еще требуют qualification перед production.
 Тот же maintenance worker обслуживает конечную initial scan, live eligibility
 queue и partial-slot GC. Открытый expiry-frontier tail остаётся CQ5 до закрытия
 UTC дня; его факты уже доступны. Body initial reclaim сохраняется при upgrade,

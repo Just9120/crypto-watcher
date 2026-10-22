@@ -79,7 +79,7 @@ def sql_signature(*values: Any) -> bytes:
 def _group(db: sqlite3.Connection, identity: int) -> Any:
     row = db.execute(
         "SELECT category,bucket,body,projection,digest,initial,refs FROM market_shared_records WHERE id=? "
-        "AND (SELECT value FROM market_meta WHERE key='shared_records')='2'",
+        "AND (SELECT value FROM market_meta WHERE key='shared_records') IN('2','3')",
         (identity,),
     ).fetchone()
     if row is None or signature(row[0], row[1], row[2], row[3], row[5]) != row[4]:
@@ -152,6 +152,9 @@ def install_functions(db: sqlite3.Connection, cache: Any = None) -> None:
     db.create_function("cw_shared_digest", 5, sql_signature, deterministic=True)
     db.create_function("cw_shared_admit", 4, admission)
     db.create_function("cw_shared_transition", 7, transition)
+    from .shared_record_work import install_functions as work_functions
+
+    work_functions(db)
 
 
 MOVE_GUARD = """CREATE TRIGGER market_packet_move BEFORE UPDATE OF arena,offset,length,sha256 ON market_packets
@@ -250,9 +253,9 @@ CREATE TRIGGER market_shared_resize AFTER UPDATE OF length,sha256 ON market_pack
 """
 
 
-def _statements() -> list[str]:
+def _statements(source: str = SCHEMA) -> list[str]:
     result, pending = [], ""
-    for line in SCHEMA.splitlines(keepends=True):
+    for line in source.splitlines(keepends=True):
         pending += line
         if sqlite3.complete_statement(pending):
             result.append(pending.strip().rstrip(";"))
@@ -264,6 +267,11 @@ def _statements() -> list[str]:
 
 def validate(db: sqlite3.Connection) -> None:
     marker = db.execute("SELECT value FROM market_meta WHERE key='shared_records'").fetchone()
+    if marker is not None and marker[0] == "3":
+        from .shared_record_work import validate as work_validate
+
+        work_validate(db)
+        return
     if marker is None or marker[0] != "2":
         raise ValueError("Unknown shared record layout")
     for sql in [*_statements(), MOVE_GUARD]:
@@ -309,7 +317,9 @@ class Prepared:
     projection: bytes
 
 
-def _append_descriptor(db: sqlite3.Connection, bucket: int, raw: bytes) -> tuple[int, int]:
+def _append_descriptor(
+    db: sqlite3.Connection, bucket: int, raw: bytes, *, exclude: int = 0
+) -> tuple[int, int]:
     _descriptor(raw)
     row = db.execute(
         "SELECT t.arena,a.category,a.bucket,a.used FROM market_shared_tails t "
@@ -318,7 +328,7 @@ def _append_descriptor(db: sqlite3.Connection, bucket: int, raw: bytes) -> tuple
     ).fetchone()
     if row is not None and (row[1] != "detail_packets" or row[2] != bucket or type(row[3]) is not int):
         raise ValueError("Missing shared descriptor tail arena")
-    if row is None or row[3] + len(raw) > packet_store.CAPACITY:
+    if row is None or row[0] == exclude or row[3] + len(raw) > packet_store.CAPACITY:
         cursor = db.execute(
             "INSERT INTO market_packet_arenas(category,bucket,payload) VALUES('detail_packets',?,zeroblob(?))",
             (bucket, packet_store.CAPACITY),
@@ -336,6 +346,21 @@ def _append_descriptor(db: sqlite3.Connection, bucket: int, raw: bytes) -> tuple
     else:
         arena = row[0]
     return packet_store.write_segment(db, "detail_packets", bucket, raw, target=arena)
+
+
+def relocate(db: sqlite3.Connection, identity: int, cache: Any = None) -> None:
+    """Evacuate one exact descriptor into its reserved pool, preserving owners."""
+    with packet_store.atomic(db):
+        binding = _binding(db, identity)
+        raw = packet_store.read(db, identity)
+        expand(db, identity, raw, cache)
+        arena, offset = _append_descriptor(db, binding[6], raw, exclude=binding[0])
+        changed = db.execute(
+            "UPDATE market_packets SET arena=?,offset=? WHERE id=? AND arena=? AND offset=? AND length=? AND sha256=? AND refs=?",
+            (arena, offset, identity, *binding[:5]),
+        ).rowcount
+        if changed != 1 or packet_store.read(db, identity) != raw:
+            raise ValueError("Changed shared descriptor relocation source")
 
 
 def _binding(db: sqlite3.Connection, identity: int) -> tuple[Any, ...]:
@@ -391,33 +416,52 @@ def publish(db: sqlite3.Connection, prepared: Prepared, cache: Any = None) -> in
         group = int(cursor.lastrowid or 0)
         first = 0
         for member in prepared.members:
-            db.execute(
-                "INSERT INTO market_shared_members VALUES(?,?,?,?)",
-                (member.identity, group, first, member.count),
-            )
-            raw = descriptor(group, first, member.count, digest)
-            arena, offset = _append_descriptor(db, bucket, raw)
-            changed = db.execute(
-                "UPDATE market_packets SET arena=?,offset=?,length=?,sha256=? WHERE id=? "
-                "AND arena=? AND offset=? AND length=? AND sha256=? AND refs=?",
-                (arena, offset, len(raw), hashlib.sha256(raw).digest(), member.identity, *member.binding[:5]),
-            ).rowcount
-            if changed != 1 or packet_store.read(db, member.identity) != raw:
-                raise ValueError("Shared packet publication CAS changed")
-            if not _equal(member.raw, expand(db, member.identity, raw, cache), cache):
-                raise ValueError("Shared packet publication changed values")
+            publish_member(db, member, group, first, digest, cache)
             first += member.count
         if first != len(shared_body_frame.layout(prepared.body)[0]) - 1:
             raise ValueError("Shared publication cardinality mismatch")
         return group
 
 
+def publish_member(
+    db: sqlite3.Connection, member: Member, group: int, first: int, digest: bytes, cache: Any = None
+) -> None:
+    """One checked transition; caller owns its transaction/savepoint."""
+    if (
+        not db.in_transaction
+        or _binding(db, member.identity) != member.binding
+        or packet_store.read(db, member.identity) != member.raw
+    ):
+        raise ValueError("Stale shared source capture")
+    db.execute(
+        "INSERT INTO market_shared_members VALUES(?,?,?,?)", (member.identity, group, first, member.count)
+    )
+    raw = descriptor(group, first, member.count, digest)
+    arena, offset = _append_descriptor(db, member.binding[6], raw)
+    changed = db.execute(
+        "UPDATE market_packets SET arena=?,offset=?,length=?,sha256=? WHERE id=? "
+        "AND arena=? AND offset=? AND length=? AND sha256=? AND refs=?",
+        (arena, offset, len(raw), hashlib.sha256(raw).digest(), member.identity, *member.binding[:5]),
+    ).rowcount
+    if changed != 1 or packet_store.read(db, member.identity) != raw:
+        raise ValueError("Shared packet publication CAS changed")
+    if not _equal(member.raw, expand(db, member.identity, raw, cache), cache):
+        raise ValueError("Shared packet publication changed values")
+
+
 def collect(db: sqlite3.Connection, batch: int = 32) -> int:
     if type(batch) is not int or not 0 < batch <= 256:
         raise ValueError("Invalid shared collection bound")
     with packet_store.atomic(db):
+        marker = db.execute("SELECT value FROM market_meta WHERE key='shared_records'").fetchone()
+        pending = (
+            " AND NOT EXISTS(SELECT 1 FROM market_shared_pending WHERE group_id=market_shared_records.id)"
+            " AND NOT EXISTS(SELECT 1 FROM market_shared_staging WHERE group_id=market_shared_records.id)"
+            if marker is not None and marker[0] == "3"
+            else ""
+        )
         return db.execute(
             "DELETE FROM market_shared_records WHERE id IN(SELECT id FROM market_shared_records "
-            "WHERE refs=0 ORDER BY id LIMIT ?)",
+            "WHERE refs=0" + pending + " ORDER BY id LIMIT ?)",
             (batch,),
         ).rowcount

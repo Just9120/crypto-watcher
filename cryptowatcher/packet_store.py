@@ -172,7 +172,7 @@ def write_segment(
         raise ValueError("Invalid packet admission")
     if target is None:
         shared = db.execute("SELECT value FROM market_meta WHERE key='shared_records'").fetchone()
-        if shared is not None and shared[0] != "2":
+        if shared is not None and shared[0] not in ("2", "3"):
             raise ValueError("Unknown shared packet reservation")
         reserved = " AND id NOT IN(SELECT arena FROM market_shared_tails)" if shared is not None else ""
         row = db.execute(

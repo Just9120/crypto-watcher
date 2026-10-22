@@ -11,7 +11,7 @@ BUDGET = 25_000_000_000
 QUALITY_CATEGORIES = frozenset(
     {"quality", "quality_numeric", "quality_components", "quality_frames", "quality_numeric_frames"}
 )
-SAMPLE_FORMAT = 11
+SAMPLE_FORMAT = 12
 
 
 def create(db: Any) -> None:
@@ -81,10 +81,16 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
     samples = store.get_runtime("storage_samples", [])
     repack = store.get_runtime("storage_repack", {})
     completed_repack = repack.get("version") if repack.get("state") == "COMPLETE" else None
+    from .shared_record_work import status as shared_status
+
+    shared_layout = shared_status(store.db, now_ms)
+    completed_shared = shared_layout.get("version") if shared_layout.get("initial_reclaim_complete") else None
     current = [
         s
         for s in samples
-        if s.get("format_version") == SAMPLE_FORMAT and s.get("completed_repack_version") == completed_repack
+        if s.get("format_version") == SAMPLE_FORMAT
+        and s.get("completed_repack_version") == completed_repack
+        and s.get("completed_shared_layout") == completed_shared
     ]
     base = current[0] if current else None
     frequency_base = samples[0] if samples else None
@@ -134,7 +140,17 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "bundle_pending",
         "quality_frame_pending",
         "numeric_frame_pending",
+        "shared_record_groups",
+        "shared_record_members",
+        "shared_record_queue",
+        "shared_record_pending",
+        "shared_record_reclaim",
     }
+    if shared_layout.get("installed"):
+        # Ordinary DB2 admissions become transient staging plus DS2 pointers;
+        # shared groups own those same retained bodies. Gross DB2 insertion
+        # flow would count the same immutable values a second time.
+        occupancy.add("detail_packets")
     if store.db.execute(
         "SELECT 1 FROM market_meta WHERE key='record_catalogue_runtime' AND value='1'"
     ).fetchone():
@@ -379,6 +395,16 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
     from .parent_affinity import header as parent_affinity_header
 
     affinity_layout: dict[str, Any] = {"installed": parent_affinity_header(store.db)}
+    if shared_layout["installed"]:
+        source_tables |= {"market_shared_records", "market_shared_members", "market_shared_tails"}
+        if shared_layout.get("work_installed"):
+            source_tables |= {
+                "market_shared_queue",
+                "market_shared_pending",
+                "market_shared_scan",
+                "market_shared_staging",
+                "market_shared_reclaim",
+            }
     if affinity_layout["installed"]:
         source_tables.add("market_parent_affinity")
         affinity_layout.update(counts["parent_affinity"])
@@ -414,6 +440,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "quality_frame_layout": frame_layout,
         "context_tile_layout": context_tile_layout,
         "parent_affinity_layout": affinity_layout,
+        "shared_record_layout": shared_layout,
         "candle_dependency_retention_estimate": {
             "configured_minimum_days": settings.candle_retention_days,
             "detail_days": settings.detail_retention_days,
@@ -512,6 +539,9 @@ def sample(store: Store, now_ms: int) -> None:
             "at_ms": now_ms,
             "working_bytes": value["working_bytes"],
             "format_version": SAMPLE_FORMAT,
+            "completed_shared_layout": value.get("shared_record_layout", {}).get("version")
+            if value.get("shared_record_layout", {}).get("initial_reclaim_complete")
+            else None,
             "completed_repack_version": value["repack"].get("version")
             if value["repack"].get("state") == "COMPLETE"
             else None,
@@ -527,6 +557,7 @@ def sample(store: Store, now_ms: int) -> None:
         and any(
             s.get("format_version") == SAMPLE_FORMAT
             and s.get("completed_repack_version") == samples[-1]["completed_repack_version"]
+            and s.get("completed_shared_layout") == samples[-1]["completed_shared_layout"]
             for s in samples[:-2]
         )
     ):

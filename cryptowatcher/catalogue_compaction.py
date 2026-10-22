@@ -157,11 +157,22 @@ def _episode(store: Store, seed: _Seed, limit: int) -> list[record_relocation.Re
     return [] if len(selected) > limit else selected
 
 
-def compact(store: Store, packet: int, *, upper: int = 2**63 - 1) -> tuple[int, int]:
+def compact(
+    store: Store, packet: int, *, upper: int = 2**63 - 1, reclaim_shared: bool = False
+) -> tuple[int, int]:
     """Return moved records/fallbacks, preserving every unselected live slot."""
     with packet_store.atomic(store.db):
+        if type(reclaim_shared) is not bool:
+            raise StateError("Invalid shared reclaim request")
+        if reclaim_shared:
+            from . import shared_record_work
+
+            if not shared_record_work.enabled(store.db) or shared_record_work.sparse(store.db) != packet:
+                raise StateError("Shared reclaim requires the current sparse group member")
         seed = _live(store, packet)
         if not seed:
+            if reclaim_shared:
+                raise StateError("Sparse shared packet has no catalogue owners; source preserved")
             packet_bundles.checked(store.db, packet)
             return 0, 0
         expanded: list[record_relocation.Record] = []
@@ -257,7 +268,7 @@ def compact(store: Store, packet: int, *, upper: int = 2**63 - 1) -> tuple[int, 
         other_packets = {r.binding[0] for r in expanded} - {packet}
         # An intact packet with no fragmented parents is already settled. Do
         # not churn it solely to change ordering or rewrite identical bodies.
-        if not other_packets and original_slots == len(seed):
+        if not reclaim_shared and not other_packets and original_slots == len(seed):
             packet_bundles.checked(store.db, packet)
             return 0, fallback
         try:
@@ -291,7 +302,14 @@ def evacuate(store: Store) -> int | None:
             if refs == 0:
                 store.db.execute("DELETE FROM market_packets WHERE id=? AND refs=0", (identity,))
             elif not moved:
-                packet_store.relocate(store.db, identity)
+                from . import shared_record_work, shared_records
+
+                if shared_record_work.enabled(store.db) and packet_store.read(store.db, identity).startswith(
+                    shared_records.MAGIC
+                ):
+                    shared_records.relocate(store.db, identity, store.cached_bytes)
+                else:
+                    packet_store.relocate(store.db, identity)
                 moved = True
         return int(moved)
 
