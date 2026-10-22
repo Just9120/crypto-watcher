@@ -252,7 +252,7 @@ class Store:
         )
         from .key_registry import install_functions as registry_functions
 
-        registry_functions(self.db)
+        registry_functions(self.db, self._cached_value)
         from .cohort_meter import install_functions as cohort_functions
 
         cohort_functions(self.db)

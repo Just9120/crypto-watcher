@@ -269,6 +269,28 @@ Context timestamp projection сохраняет только компактны�
 shared1MiB cache. Если stats/points уже проверили full values, индекс использует этот
 результат; отдельный index miss не удерживает full JSON. Каждый вызов вновь проверяет
 актуальные header/leases/mask/seal и payload bytes; объекты и SQL proofs не кэшируются.
+SQL registry pack/unpack используют тот же pure1MiB/FIFO budget для frozen
+преобразований полного ключа. Cached result сохраняет исходный str/bytes type;
+IDs, строки БД, ownership и leases читаются заново. Plain connection без cache
+сохраняет прежние codecs. Observation producer получает ticker/instrument и
+optional enrichment один раз при первом новом событии в синхронном callback,
+с теми же captured cutoff. Все новые families используют этот snapshot;
+пустой/duplicate callback не материализует context. Ошибка provider откатывает
+всю запись observation, прежний eager input продолжает поддерживаться.
+
+После отдельной явной adoption source marker2 разрешает optional SB3 для старых
+source tiles. Normal new/hot writer сохраняет SB1/SB2; последние256bars остаются
+в быстром формате. SB3 хранит все исходные типы/float values/signed zero и leases
+в bounded32slot/256row/512KiB authenticated envelope. Перекодирование выбирается
+только при меньшем размере и полной canonical equality. Private synchronous
+authority разрешает exact CAS delete/reinsert до8проверенных строк с прежними
+rowids; guards/counters/FK действуют, ошибка откатывает весь batch. Прямое удаление
+retained sources по-прежнему запрещено. Normal corrections/lease updates сохраняют
+SB3; mixed old/current readers и обычная expiry policy остаются общими.
+Existing maintenance cadence выполняет конечный initial scan/reclaim и последующие
+проходы; observer отдельно учитывает их незавершённость. Store/startup не меняют
+source marker. Operator backup/token/900s/forward recovery охватывает shared
+и source adoption; current full capacity qualification требуется до её выполнения.
 Store/startup не активируют3; current native/image, runtime activation/recovery,
 Linux/native совместный50s boundary и mature25GB еще требуют qualification перед production.
 Тот же maintenance worker обслуживает конечную initial scan, live eligibility

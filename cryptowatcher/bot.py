@@ -201,8 +201,10 @@ class Controller:
                 tick,
                 now,
                 live=live,
-                source_context=public_context(store, stream.rsplit("/", 1)[0], now),
-                enrichment=self.enrichment_context(stream.rsplit("/", 1)[0], candles[-1].end),
+                context_provider=lambda: (
+                    public_context(store, stream.rsplit("/", 1)[0], now),
+                    self.enrichment_context(stream.rsplit("/", 1)[0], candles[-1].end),
+                ),
             )
 
     def admit_event(self, event: dict[str, Any]) -> None:
