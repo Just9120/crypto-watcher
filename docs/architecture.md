@@ -231,8 +231,14 @@ conflict checks/owner expiry. Детали upgrade/rollback boundaries — в [s
 QF1 хранит logical CQ5 packets в shared IF1 containers с exact numeric leases.
 Logical domain consumers читают record packets через `domain_packets.read`;
 generic `packet_store.read` сохраняет opaque physical bytes, hash и binding
-contract для publication/relocation. Пока domain reader — byte-identical
-passthrough; отдельной установки shared record descriptors еще нет.
+contract для publication/relocation. Legacy read остается byte-identical.
+Explicit `shared_records.install` поддерживает DS2 descriptors и immutable
+RP1/SB1 groups с FK members, full logical transition proof и CAS в существующем
+writer savepoint. Store/startup не устанавливают формат. Резервированный tail
+на retention day отделяет48byte descriptors от обычного packet admission;
+проверки append positions/digests остаются общими. Initial/continuous worker,
+partial-group reclaim, observer accounting и runtime activation/recovery еще
+требуют qualification перед использованием формата в production.
 Тот же maintenance worker обслуживает конечную initial scan, live eligibility
 queue и partial-slot GC. Открытый expiry-frontier tail остаётся CQ5 до закрытия
 UTC дня; его факты уже доступны. Body initial reclaim сохраняется при upgrade,

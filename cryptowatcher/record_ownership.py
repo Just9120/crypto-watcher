@@ -63,6 +63,9 @@ def install_functions(db: sqlite3.Connection, cache: Any = None, binary_cache: A
     from .record_masks import install_functions as install_masks
 
     packet_store.install_functions(db)
+    from .shared_records import install_functions as shared_functions
+
+    shared_functions(db, binary_cache)
     install_masks(db, cache, binary_cache)
 
     def key(kind: int, identity: bytes, revision: int) -> str:
