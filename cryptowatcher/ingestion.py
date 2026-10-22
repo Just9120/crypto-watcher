@@ -728,6 +728,7 @@ class BybitRadar(BybitREST):
         while True:
             self.connections[name] = {
                 "state": "CONNECTING",
+                "phase": "CONNECT",
                 "market": market,
                 "requested": len(streams),
                 "acknowledged": 0,
@@ -743,6 +744,7 @@ class BybitRadar(BybitREST):
                 ) as websocket:
                     ping = asyncio.create_task(self._ping(websocket))
                     try:
+                        self.connections[name]["phase"] = "RECOVERY"
                         for stream in streams:
                             self.sources.live.pop(stream, None)
                             window = self.sources.windows.get(stream, {})
@@ -761,6 +763,7 @@ class BybitRadar(BybitREST):
                         for offset in range(0, len(streams), batch_size):
                             batch = streams[offset : offset + batch_size]
                             request_id = f"cw{offset}"
+                            self.connections[name]["phase"] = "SUBSCRIBE_SEND"
                             await websocket.send(
                                 json.dumps(
                                     {
@@ -771,11 +774,14 @@ class BybitRadar(BybitREST):
                                 )
                             )
                             deadline = time.monotonic() + 15
+                            started, processed = time.monotonic(), 0
+                            self.connections[name]["phase"] = "SUBSCRIBE_ACK"
                             while True:
                                 remaining = deadline - time.monotonic()
                                 if remaining <= 0:
                                     raise TimeoutError("Subscription acknowledgement deadline")
-                                raw = await asyncio.wait_for(websocket.recv(), remaining)
+                                async with asyncio.timeout(remaining):
+                                    raw = await websocket.recv()
                                 received_ms = int(time.time() * 1000)
                                 message = json.loads(raw)
                                 # Subscription responses must not wait for cold source
@@ -807,12 +813,18 @@ class BybitRadar(BybitREST):
                                         raise MarketError("subscription_rejected")
                                     self.connections[name]["acknowledged"] += len(batch)
                                     break
+                                processed += 1
+                                if processed >= 16 or time.monotonic() - started >= 0.005:
+                                    await asyncio.sleep(0)
+                                    started, processed = time.monotonic(), 0
                         self.connections[name]["state"] = "CONNECTED"
+                        self.connections[name]["phase"] = "DEFERRED"
                         backoff = 1.0
                         for message, received_ms in deferred:
                             self.accept_message(market, message, allowed, received_ms=received_ms)
                             await asyncio.sleep(0)
                         deferred.clear()
+                        self.connections[name]["phase"] = "RECEIVE"
                         await self._receive_messages(websocket, name, market, allowed)
                     finally:
                         ping.cancel()

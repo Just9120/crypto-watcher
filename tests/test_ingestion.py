@@ -675,8 +675,29 @@ async def test_continuous_open_updates_cannot_extend_subscription_deadline(radar
     try:
         await wait_condition(lambda: radar.connections.get("spot:0", {}).get("state") == "RECONNECTING")
         assert radar.connections["spot:0"]["reason"] == "TimeoutError"
+        assert radar.connections["spot:0"]["phase"] == "SUBSCRIBE_ACK"
         assert radar.connections["spot:0"]["acknowledged"] == 0
         assert socket.messages.qsize() > 50  # timeout despite recv being continuously ready
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await radar.close()
+
+
+async def test_cancel_at_subscription_ack_completion_is_not_lost(radar):
+    class CancellingAck(Socket):
+        async def recv(self):
+            raw = await super().recv()
+            asyncio.get_running_loop().call_soon(task.cancel)
+            return raw
+
+    socket = CancellingAck()
+    radar.connector = lambda *args, **kwargs: socket
+    task = asyncio.create_task(radar._session("spot:0", "spot", ["spot/BTCUSDT/1m"]))
+    try:
+        done, pending = await asyncio.wait({task}, timeout=0.5)
+        assert done == {task} and not pending and task.cancelled()
+        assert socket.closed
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
