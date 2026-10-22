@@ -246,6 +246,12 @@ Compression готовит один read-only task; существующий mai
 Observer различает initial reclaim, live coalesce/service deadline, stale clock,
 missing cleanup checkpoint и writer switch; boundary читает actual DS2 bytes.
 Новые counters/indexes и временный DB2 staging входят в physical storage model.
+Opt-in SB2 восстанавливает исходные typed bytes через frozen integer-unit transform;
+сжатый вектор размеров каждого slot подтверждает полный прежний allocation bound.
+Выбор slot не требует восстановления остальных записей. SB1/SV1 читаются как прежде,
+RP1 сохраняет свой frozen SB1 container; shared cache остаётся1MiB. Подготовка заранее
+проверяет полный512KiB DB3 wrapper и уменьшает prefix до staging при переполнении.
+Новый writer по умолчанию выключен до qualification и явной активации.
 Store/startup не активируют3; current native/image, runtime activation/recovery,
 совместный50s boundary и mature25GB еще требуют qualification перед production.
 Тот же maintenance worker обслуживает конечную initial scan, live eligibility

@@ -375,7 +375,7 @@ def _binding(db: sqlite3.Connection, identity: int) -> tuple[Any, ...]:
     return tuple(row)
 
 
-def prepare(db: sqlite3.Connection, identities: list[int]) -> Prepared:
+def prepare(db: sqlite3.Connection, identities: list[int], *, scalar_units: bool = False) -> Prepared:
     """Prepare on a bounded read snapshot, before entering the main writer."""
     if not db.in_transaction or not isinstance(identities, list) or not 0 < len(identities) <= 32:
         raise ValueError("Shared preparation requires a snapshot and at most32packets")
@@ -390,8 +390,18 @@ def prepare(db: sqlite3.Connection, identities: list[int]) -> Prepared:
         if not raw.startswith(record_blocks.MAGIC):
             raise ValueError("Shared preparation requires ordinary DB2 packets")
         members.append(Member(identity, binding, raw, len(record_blocks.projections(raw))))
-    body = shared_body_frame.pack_frames([record_blocks.frames(m.raw)[1] for m in members])
+    body = shared_body_frame.pack_frames(
+        [record_blocks.frames(m.raw)[1] for m in members], scalar_units=scalar_units
+    )
     projection = projection_recipes.pack_frames([m.raw for m in members])
+    # Both group frames may fit while their combined logical DB3 wrapper does
+    # not. Reject on the read task so its existing prefix fallback runs before
+    # staging; otherwise one oversized member would permanently block publish.
+    first = 0
+    for member in members:
+        restored = projection_recipes.restore(projection, first, member.count)
+        record_blocks.shared_packet(restored, body, first, member.count)
+        first += member.count
     return Prepared(tuple(members), body, projection)
 
 

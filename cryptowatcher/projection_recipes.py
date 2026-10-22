@@ -132,6 +132,7 @@ def layout(frame: bytes) -> tuple[tuple[int, ...], bytes]:
         not isinstance(frame, bytes)
         or not frame.startswith(MAGIC)
         or len(frame) > shared_body_frame.MAX_COMPRESSED
+        or not frame[4:].startswith(shared_body_frame.MAGIC)
     ):
         raise ValueError("Invalid projection recipe version or bound")
     return shared_body_frame.layout(frame[4:])

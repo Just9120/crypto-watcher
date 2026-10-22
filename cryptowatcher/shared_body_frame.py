@@ -24,9 +24,9 @@ MAX_BYTES = indexed_frame.MAX_BYTES
 MAX_COMPRESSED = indexed_frame.MAX_COMPRESSED
 
 
-def pack_frames(frames: list[bytes]) -> bytes:
+def pack_frames(frames: list[bytes], *, scalar_units: bool = False) -> bytes:
     """Keep every original canonical typed slice, including unknown fields."""
-    if not 0 < len(frames) <= MAX_PACKETS:
+    if type(scalar_units) is not bool or not 0 < len(frames) <= MAX_PACKETS:
         raise ValueError("Shared body packet cardinality bound")
     offsets = [0]
     parts: list[bytes] = []
@@ -48,12 +48,27 @@ def pack_frames(frames: list[bytes]) -> bytes:
     header = struct.pack(">HI", len(parts), len(raw)) + struct.pack(">" + "I" * len(offsets), *offsets)
     checked = header + compressed
     result = MAGIC + hashlib.sha256(checked).digest() + checked
+    if scalar_units:
+        from .scalar_body_frame import pack
+
+        try:
+            candidate = pack(parts)
+        except indexed_frame.FrameSizeError:
+            if len(result) > MAX_COMPRESSED:
+                raise
+        else:
+            if len(candidate) < len(result):
+                result = candidate
     if len(result) > MAX_COMPRESSED:
         raise indexed_frame.FrameSizeError("Shared body compressed bound")
     return result
 
 
 def layout(frame: bytes) -> tuple[tuple[int, ...], bytes]:
+    if isinstance(frame, bytes) and frame.startswith(b"SB2\0"):
+        from .scalar_body_frame import layout as scalar_layout
+
+        return scalar_layout(frame)
     if (
         not isinstance(frame, bytes)
         or not 50 < len(frame) <= MAX_COMPRESSED
@@ -86,6 +101,10 @@ def layout(frame: bytes) -> tuple[tuple[int, ...], bytes]:
 
 
 def data(frame: bytes, cache: Any = None) -> tuple[tuple[int, ...], bytes]:
+    if isinstance(frame, bytes) and frame.startswith(b"SB2\0"):
+        from .scalar_body_frame import data as scalar_data
+
+        return scalar_data(frame, cache)
     offsets, compressed = layout(frame)
     return offsets, _data(frame, offsets, compressed, cache)
 
@@ -157,6 +176,10 @@ def _selected(
     start, end = offsets[first], offsets[first + count]
 
     def read() -> bytes:
+        if frame.startswith(b"SB2\0"):
+            from .scalar_body_frame import parts as scalar_parts
+
+            return b"".join(scalar_parts(frame, first, count))
         return _data(frame, offsets, compressed, None)[start:end]
 
     # Current full frame/header and view coordinates were authenticated in
@@ -172,5 +195,9 @@ def select(value: bytes, slot: int, cache: Any = None) -> Any:
     first, count, frame, offsets, compressed = _view(value)
     if type(slot) is not int or not 0 <= slot < count:
         raise ValueError("Invalid shared body slot")
+    if frame.startswith(b"SB2\0"):
+        from .scalar_body_frame import select as scalar_select
+
+        return typed_unpack(scalar_select(frame, first + slot, cache), MAX_BYTES)
     positions, raw = _selected(value, first, count, frame, offsets, compressed, cache)
     return typed_unpack(raw[positions[slot] : positions[slot + 1]], MAX_BYTES)

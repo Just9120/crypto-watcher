@@ -27,7 +27,9 @@ def _budget(deadline: float) -> None:
         raise TimeoutError("Shared read preparation deadline exceeded")
 
 
-def read_batch(path: Path, owner: int, identities: list[int], now: int) -> shared.Prepared | None:
+def read_batch(
+    path: Path, owner: int, identities: list[int], now: int, *, scalar_units: bool = False
+) -> shared.Prepared | None:
     """One snapshot and maximal original prefix within both expanded bounds."""
     if not 0 < len(identities) <= 32:
         raise ValueError("Invalid shared read preparation bound")
@@ -66,7 +68,7 @@ def read_batch(path: Path, owner: int, identities: list[int], now: int) -> share
         while selected:
             _budget(deadline)
             try:
-                prepared = shared.prepare(store.db, selected)
+                prepared = shared.prepare(store.db, selected, scalar_units=scalar_units)
             except indexed_frame.FrameSizeError:
                 if len(selected) == 1:
                     raise
@@ -78,12 +80,20 @@ def read_batch(path: Path, owner: int, identities: list[int], now: int) -> share
 
 
 class Worker:
-    def __init__(self, store: Store):
+    def __init__(self, store: Store, *, scalar_units: bool = False):
+        if type(scalar_units) is not bool:
+            raise ValueError("Invalid scalar body writer selection")
         self.store = store
+        self.scalar_units = scalar_units
         self.preparing: asyncio.Task[shared.Prepared | None] | None = None
 
     def _record(self, state: str, now: int, header: dict[str, Any]) -> dict[str, Any]:
-        value = {**header, "state": state, "at_ms": now}
+        value = {
+            **header,
+            "state": state,
+            "at_ms": now,
+            "body_codec": "SB2_PREFER" if self.scalar_units else "SB1",
+        }
         self.store.put_runtime("shared_record_worker", value)
         return value
 
@@ -150,8 +160,11 @@ class Worker:
                 self.store.db.execute("BEGIN")
                 selected = work.select(self.store.db, now)
             if selected:
+                options = {"scalar_units": True} if self.scalar_units else {}
                 self.preparing = asyncio.create_task(
-                    asyncio.to_thread(read_batch, self.store.path, self.store.owner_id, selected, now),
+                    asyncio.to_thread(
+                        read_batch, self.store.path, self.store.owner_id, selected, now, **options
+                    ),
                     name="shared-record-prepare",
                 )
                 await asyncio.sleep(0)
