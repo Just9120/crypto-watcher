@@ -1,5 +1,5 @@
 # ruff: noqa: E402
-"""Finite offline NF/NR/NS2 read geometry; never a whole-capacity or live SLO proof.
+"""Finite offline joint numeric/shared read geometry, not capacity or live SLO.
 
 Only an owned temporary database is materialized. Repeated actual metric bytes
 test coordinate counts and full authentication, not independent market entropy.
@@ -203,11 +203,13 @@ def main() -> None:
     resource.setrlimit(resource.RLIMIT_AS, (4 * 1024**3, 4 * 1024**3))
     cache = ROOT / ".cache-g1"
     cache.mkdir(exist_ok=True)
+    from scripts import qualify_shared_boundary as shared
+
     try:
         with tempfile.TemporaryDirectory(prefix="numeric-boundary-", dir=cache) as temporary:
             path = Path(temporary) / "fixture.sqlite3"
-            built = materialize(path, FRAME_COUNT)
-            result = measure(path)
+            built = shared.materialize(path, FRAME_COUNT, shared.GROUP_COUNT)
+            result = shared.measure(path)
         report = dict(
             kind="STRUCTURAL_READ_GEOMETRY_ONLY_NOT_CAPACITY_OR_LIVE_SLO",
             verified_cpu_count=len(os.sched_getaffinity(0)),
@@ -217,8 +219,16 @@ def main() -> None:
             **result,
         )
         print(json.dumps(report), flush=True)
-        if result["measurement"]["state"] != "MEASURED" or result["seconds"] > READ_SECONDS:
-            raise RuntimeError("Complete numeric boundary exceeded its existing 50-second budget")
+        value = result["measurement"]
+        if (
+            value["state"] != "MEASURED"
+            or value["numeric_frames"]["state"] != "MEASURED"
+            or value["numeric_frames"].get("frames") != FRAME_COUNT
+            or value["shared_records"]["state"] != "MEASURED"
+            or value["shared_records"].get("packets_checked") != built["shared_packets"]
+            or result["seconds"] > READ_SECONDS
+        ):
+            raise RuntimeError("Complete joint boundary exceeded its existing 50-second budget")
     finally:
         os.sched_setaffinity(0, affinity)
 
