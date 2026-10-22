@@ -1,8 +1,12 @@
 import dataclasses
 import hashlib
+import json
 import sqlite3
+import subprocess
+import sys
 import time
 from contextlib import closing
+from pathlib import Path
 
 import pytest
 
@@ -285,10 +289,7 @@ def test_shared_tail_guards_preserve_reservation_until_real_collection(store, op
 
 @pytest.mark.parametrize("validator", ["stdlib", "disk", "compressed"])
 def test_full_validation_checks_real_shared_groups_and_classifies_corruption(store, validator):
-    import apsw
-
-    from cryptowatcher.compressed_validation import QualificationError, full_check
-    from cryptowatcher.disk_validation import validated_disk
+    from cryptowatcher.compressed_validation import QualificationError
     from cryptowatcher.storage import IntegrityError, check_integrity
 
     originals = setup(store)
@@ -303,13 +304,47 @@ def test_full_validation_checks_real_shared_groups_and_classifies_corruption(sto
             # A dedicated backup connection has none of Store's SQL functions.
             with closing(sqlite3.connect(store.path)) as database:
                 check_integrity(database, deadline=deadline)
-        elif validator == "disk":
-            with validated_disk(store.path, deadline=deadline):
-                pass
         else:
-            with closing(apsw.Connection(str(store.path))) as database:
-                database.execute("PRAGMA query_only=ON")
-                full_check(database, deadline)
+            # On POSIX separate SQLite libraries cannot coordinate handles to
+            # the same file within one process. Keep the real stdlib WAL writer
+            # open here and use APSW in a different process, as live validation
+            # does. No checkpoint/close of the writer hides the changed WAL.
+            program = """
+import json, sys, time
+from contextlib import closing
+from pathlib import Path
+import apsw
+from cryptowatcher.compressed_validation import full_check
+from cryptowatcher.disk_validation import validated_disk
+from cryptowatcher.storage import IntegrityError
+try:
+    deadline = time.monotonic() + 10
+    if sys.argv[1] == 'disk':
+        with validated_disk(Path(sys.argv[2]), deadline=deadline):
+            pass
+    else:
+        with closing(apsw.Connection(sys.argv[2])) as database:
+            database.execute('PRAGMA query_only=ON')
+            full_check(database, deadline)
+except IntegrityError as error:
+    print(json.dumps({'code': error.code}))
+    raise SystemExit(error.exit_status)
+print(json.dumps({'code': 'PASS'}))
+"""
+            result = subprocess.run(
+                [sys.executable, "-c", program, validator, str(store.path)],
+                cwd=Path(__file__).resolve().parents[1],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            assert result.returncode in (0, 3, 4, 5, 6, 7), result.stderr
+            code = json.loads(result.stdout)["code"]
+            if result.returncode:
+                assert code != "PASS"
+                raise IntegrityError(code, "Isolated full validation refused")
+            assert code == "PASS"
 
     check()
     row = store.db.execute("SELECT id,body FROM market_shared_records").fetchone()
@@ -317,6 +352,7 @@ def test_full_validation_checks_real_shared_groups_and_classifies_corruption(sto
         blob.seek(len(row[1]) - 1)
         blob.write(bytes([row[1][-1] ^ 1]))
     bad = store.db.execute("SELECT body FROM market_shared_records").fetchone()[0]
+    assert bad != row[1] and store.path.with_name(store.path.name + "-wal").stat().st_size > 32
     with pytest.raises((IntegrityError, QualificationError)) as failure:
         check()
     assert failure.value.code == "DATABASE_CORRUPT"

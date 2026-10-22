@@ -386,8 +386,9 @@ def test_full_shared_boundary_checks_actual_descriptors_and_refuses_partial_budg
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("one_page", [False, True])
 async def test_live_coalescing_deadline_and_forecast_boundary_do_not_count_old_admission_twice(
-    store, monkeypatch
+    store, monkeypatch, one_page
 ):
     from cryptowatcher import capacity
     from cryptowatcher.shared_record_worker import Worker
@@ -403,12 +404,39 @@ async def test_live_coalescing_deadline_and_forecast_boundary_do_not_count_old_a
             pass
     instance = Worker(store)
     try:
-        for _ in range(64):
+        if one_page:
+            original = store.db
+
+            class OnePageVacuum:
+                def __getattr__(self, name):
+                    return getattr(original, name)
+
+                def __enter__(self):
+                    original.__enter__()
+                    return self
+
+                def __exit__(self, *args):
+                    return original.__exit__(*args)
+
+                def execute(self, sql, *args, **kwargs):
+                    if sql == "PRAGMA incremental_vacuum(32)":
+                        sql = "PRAGMA incremental_vacuum(1)"
+                    return original.execute(sql, *args, **kwargs)
+
+            monkeypatch.setattr(store, "db", OnePageVacuum())
+        # N is an upper bound, not a promise to free N pages in one call.
+        # Bound the rehearsal by actual file geometry even at one page/step;
+        # the real COMPLETE/free-page criterion and production slice stay exact.
+        maximum_steps = store.db.execute("PRAGMA page_count").fetchone()[0] + 64
+        for _ in range(maximum_steps):
             await instance.step(lambda: NOW)
             if work.header(store.db)["initial_reclaim_complete"]:
                 break
         else:
-            pytest.fail("Initial physical reclaim did not complete")
+            pytest.fail(
+                f"Initial physical reclaim did not complete: {work.header(store.db)}, "
+                f"free_pages={store.db.execute('PRAGMA freelist_count').fetchone()[0]}"
+            )
         # A pre-conversion sample cannot supply steady shared-layout growth.
         assert report(store, NOW + 60000)["sample_seconds"] == 0
         sample(store, NOW + 60000)
