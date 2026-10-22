@@ -98,11 +98,15 @@ python -m cryptowatcher storage
 python -m cryptowatcher storage-indexes
 python -m cryptowatcher capacity
 python -m cryptowatcher capacity --capacity-ledger --capacity-cohorts
+python -m cryptowatcher shared-storage-status
 python -m cryptowatcher state-check
 python -m cryptowatcher health
 ```
 
 Существующий JSON требует explicit migration из [state contract](docs/state_contract.md); обычный startup его не перезаписывает. Владелец `233382575`, bot `7523865123`; sender и delivery chat должны соответствовать private chat владельца. Пустая либо неверная конфигурация закрывает доступ. Старые `ALLOWED_CHAT_IDS`, CMC и reset-baseline настройки не активируют дополнительные chats.
+
+Явная offline активация shared storage с exact identity token, backup и recovery
+описана в [storage процедуре](docs/runbooks/bounded-storage-reset.md#явное-включение-shared-storage-без-сброса-истории).
 
 ## Checks
 

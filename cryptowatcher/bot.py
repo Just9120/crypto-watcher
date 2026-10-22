@@ -170,7 +170,7 @@ class Controller:
         self.repack_lock = asyncio.Lock()
         from .shared_record_worker import Worker as SharedRecordWorker
 
-        self.shared_records = SharedRecordWorker(store)
+        self.shared_records = SharedRecordWorker(store, scalar_units=True)
         self.recovery_lock = asyncio.Lock()
         self.maintenance_started_at = time.time()
         self.first_ready_poll = False

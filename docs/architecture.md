@@ -251,7 +251,14 @@ Opt-in SB2 восстанавливает исходные typed bytes чере�
 Выбор slot не требует восстановления остальных записей. SB1/SV1 читаются как прежде,
 RP1 сохраняет свой frozen SB1 container; shared cache остаётся1MiB. Подготовка заранее
 проверяет полный512KiB DB3 wrapper и уменьшает prefix до staging при переполнении.
-Новый writer по умолчанию выключен до qualification и явной активации.
+Store/startup не устанавливают shared schema. После явной offline активации layout3
+Controller предпочитает SB2, когда он меньше SB1; библиотечный Worker без явного
+параметра сохраняет SB1. Existing writer switch0 сохраняет паузу и при повторной
+операторской команде. Readonly `shared-storage-status` дает согласованный token
+generation/config/private; `enable-shared-storage` требует этот exact token,
+совпадающий source и exclusive RuntimeLease, делает полный обычный backup до DDL,
+проверяет identity/reopen и сохраняет все прежние файлы. Известная частичная layout2
+возобновляется только совместимым artifact; старый image после DDL не является recovery.
 Context timestamp projection сохраняет только компактный immutable index в прежнем
 shared1MiB cache. Если stats/points уже проверили full values, индекс использует этот
 результат; отдельный index miss не удерживает full JSON. Каждый вызов вновь проверяет
