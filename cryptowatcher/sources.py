@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Callable
 
 from . import market_storage
 from .config import TIMEFRAMES
@@ -103,7 +103,21 @@ class Sources:
         self.windows[stream] = window
         # Persisted sources may assist recovery; they never re-enter the live channel.
 
-    def put(self, stream: str, candles: list[Candle], *, live: bool = False, recovery: bool = False) -> bool:
+    def put(
+        self,
+        stream: str,
+        candles: list[Candle],
+        *,
+        live: bool = False,
+        recovery: bool = False,
+        after_write: Callable[[Sources, bool], None] | None = None,
+    ) -> bool:
+        """Commit sources and an optional synchronous consumer atomically.
+
+        The internal consumer must join this transaction without committing or
+        awaiting. Only the prospective view sees new RAM before a successful
+        commit; a failed consumer leaves the published window unchanged.
+        """
         self.load(stream)
         window = self.windows[stream]
         previous = max(window, default=-1)
@@ -121,7 +135,22 @@ class Sources:
             if existing and existing.row() == candle.row():
                 continue
             writes.append((self.prefix(stream) + f"{candle.start:016d}", encode(asdict(candle))))
-        # Save before exposing to the detector/Telegram consumer.
+        prospective = dict(window)
+        for candle in candles:
+            existing = prospective.get(candle.start)
+            if existing is None or existing.row() != candle.row():
+                prospective[candle.start] = candle
+        while len(prospective) > WINDOW_SIZE:
+            del prospective[min(prospective)]
+        ordered = sorted(prospective)
+        latest = max(prospective, default=-1)
+        advanced = latest > previous
+        next_live = None if recovery else self.live.get(stream)
+        next_blocked = None if recovery else self.blocked.get(stream)
+        if live and advanced and latest == max((c.start for c in candles), default=-1):
+            next_live = latest
+        if any(b - a != prospective[b].step for a, b in zip(ordered, ordered[1:])):
+            next_blocked, next_live = "candle_gap", None
         with self.store.db:
             if self.store.bounded:
                 market_storage.admit_many(
@@ -132,23 +161,25 @@ class Sources:
                 )
             else:
                 self.store.db.executemany(RUNTIME_UPSERT, writes)
-        for candle in candles:
-            existing = window.get(candle.start)
-            if existing is None or existing.row() != candle.row():
-                window[candle.start] = candle
-        while len(window) > WINDOW_SIZE:
-            del window[min(window)]
-        if recovery:
+            if after_write is not None:
+                candidate = Sources(self.store)
+                candidate.windows[stream] = prospective
+                if next_live is not None:
+                    candidate.live[stream] = next_live
+                if next_blocked is not None:
+                    candidate.blocked[stream] = next_blocked
+                after_write(candidate, advanced)
+        window.clear()
+        window.update(prospective)
+        if next_live is None:
             self.live.pop(stream, None)
+        else:
+            self.live[stream] = next_live
+        if next_blocked is None:
             self.blocked.pop(stream, None)
-        latest = max(window, default=-1)
-        if live and latest > previous and latest == max((c.start for c in candles), default=-1):
-            self.live[stream] = latest
-        ordered = sorted(window)
-        if any(b - a != window[b].step for a, b in zip(ordered, ordered[1:])):
-            self.blocked[stream] = "candle_gap"
-            self.live.pop(stream, None)
-        return latest > previous
+        else:
+            self.blocked[stream] = next_blocked
+        return advanced
 
     def rows(self, stream: str, count: int) -> list[list[Any]]:
         self.load(stream)

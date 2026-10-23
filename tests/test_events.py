@@ -525,3 +525,17 @@ async def test_compact_notification_full_confirmation_set_and_controls(state):
     transport = TelegramDelivery(state, state.owner_id, notification_text, event_keyboard)
     await transport.send_due(bot, NOW + 2000)
     assert bot.send_message.await_count == 1 and bot.send_message.call_args.args[1] == text
+
+
+def test_joined_observation_requires_transaction_and_does_not_commit_its_producer(state):
+    engine = EventEngine(state)
+    args = ("spot/BTCUSDT/1m", window(), 1e6, 0.01, NOW)
+    with pytest.raises(StateError, match="producer transaction"):
+        engine.observe(*args, live=True, commit=False)
+    assert not engine.history.events()
+    with pytest.raises(RuntimeError, match="producer rollback"), state.db:
+        state.db.execute("BEGIN")
+        engine.observe(*args, live=True, commit=False)
+        assert state.db.in_transaction and engine.history.events()
+        raise RuntimeError("producer rollback")
+    assert not engine.history.events() and not engine.history.items("condition:")

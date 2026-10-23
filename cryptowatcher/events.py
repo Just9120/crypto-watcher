@@ -7,6 +7,7 @@ import json
 import math
 import re
 import uuid
+from contextlib import nullcontext
 from dataclasses import asdict
 from itertools import islice
 from typing import Any, Callable, Iterator
@@ -501,7 +502,10 @@ class EventEngine:
         source_context: dict[str, Any] | None = None,
         enrichment: dict[str, Any] | None = None,
         context_provider: Callable[[], tuple[dict[str, Any], dict[str, Any]]] | None = None,
+        commit: bool = True,
     ) -> None:
+        if type(commit) is not bool or not commit and not self.store.db.in_transaction:
+            raise StateError("Joined observation requires a producer transaction")
         if context_provider is not None and (source_context is not None or enrichment is not None):
             raise ValueError("Choose captured context or a synchronous context provider")
         if not candles:
@@ -522,7 +526,7 @@ class EventEngine:
                 )
             except Exception as exc:
                 outputs.append((family, exc))  # One family never hides another family's observation.
-        with self.store.db, condition_batch(self.history, stream):
+        with self.store.db if commit else nullcontext(), condition_batch(self.history, stream):
             self._close_due(now_ms, instrument)
             for family, result in outputs:
                 diagnostic = f"diagnostic:{stream}:{family}"

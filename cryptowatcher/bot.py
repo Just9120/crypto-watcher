@@ -53,6 +53,7 @@ from .render import (
     settings_text,
 )
 from .source_context import context as public_context
+from .sources import Candle
 from .storage import RevisionConflict, Store
 from .telegram_delivery import TelegramDelivery
 from .telegram_ui import ControlDeck
@@ -194,16 +195,35 @@ class Controller:
         )
         if isinstance(market, BybitRadar) and self.engine is not None:
             engine = self.engine
-            market.on_observation = lambda stream, candles, liquidity, tick, now, live: engine.observe(
-                stream,
-                candles,
-                liquidity,
-                tick,
-                now,
-                live=live,
-                context_provider=lambda: (
-                    public_context(store, stream.rsplit("/", 1)[0], now),
-                    self.enrichment_context(stream.rsplit("/", 1)[0], candles[-1].end),
+
+            def observe(
+                stream: str,
+                candles: list[Candle],
+                liquidity: float,
+                tick: float,
+                now: int,
+                live: bool,
+                *,
+                commit: bool = True,
+            ) -> None:
+                engine.observe(
+                    stream,
+                    candles,
+                    liquidity,
+                    tick,
+                    now,
+                    live=live,
+                    context_provider=lambda: (
+                        public_context(store, stream.rsplit("/", 1)[0], now),
+                        self.enrichment_context(stream.rsplit("/", 1)[0], candles[-1].end),
+                    ),
+                    commit=commit,
+                )
+
+            market.bind_observation(
+                observe,
+                lambda stream, candles, liquidity, tick, now, live: observe(
+                    stream, candles, liquidity, tick, now, live, commit=False
                 ),
             )
 
@@ -751,7 +771,11 @@ class Controller:
             try:
                 started = time.monotonic()
                 processed_outcomes = await self.outcomes.async_work(self.market.server_now)
-                processed_comparisons = await ComparisonWorker(self.store).async_work(self.market.server_now)
+                # Amortize the frozen prior-population preparation before the
+                # reader reopens; the64-result batch and sole writer stay fixed.
+                processed_comparisons = await ComparisonWorker(self.store).async_work(
+                    self.market.server_now, seconds=4
+                )
                 async with self.retention_lock:
                     self.retention_once(now)
                 from .storage_meter import sample

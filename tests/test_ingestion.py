@@ -76,6 +76,40 @@ def history(tf="1m", count=256):
     ]
 
 
+def test_nested_sync_timers_charge_each_stage_once_and_unwind_on_error(store, monkeypatch):
+    radar = BybitRadar(store)
+    wall, cpu = [0.0], [0.0]
+    monkeypatch.setattr(
+        ingestion, "time", SimpleNamespace(monotonic=lambda: wall[0], thread_time=lambda: cpu[0])
+    )
+
+    def observation():
+        wall[0] += 0.75
+        cpu[0] += 0.5
+        raise MarketError("nested failure")
+
+    def source():
+        wall[0] += 0.5
+        cpu[0] += 0.25
+        radar._measure("observation", observation)
+
+    with pytest.raises(MarketError, match="nested failure"):
+        radar._measure("closed_ws_source", source)
+    assert radar._timing_stack == []
+    assert radar._work_timing["closed_ws_source"] == {
+        "calls": 1,
+        "failures": 1,
+        "active_seconds": 0.5,
+        "cpu_seconds": 0.25,
+    }
+    assert radar._work_timing["observation"] == {
+        "calls": 1,
+        "failures": 1,
+        "active_seconds": 0.75,
+        "cpu_seconds": 0.5,
+    }
+
+
 def message(tf="1m", symbol="BTCUSDT", confirm=True, start=NOW, **changes):
     step = int(tf[:-1]) * 60_000
     return {
@@ -100,7 +134,18 @@ def message(tf="1m", symbol="BTCUSDT", confirm=True, start=NOW, **changes):
 
 
 @pytest.fixture
-def radar(store):
+def radar(store, request):
+    layout = getattr(request, "param", "plain")
+    if layout != "plain":
+        from cryptowatcher import candle_blocks
+
+        from .test_bounded_storage import bounded
+
+        bounded(store)
+        if layout == "tiles":
+            candle_blocks.install(store.db, store.cached_text, store.cached_bytes)
+            with store.db:
+                store.db.execute("INSERT INTO market_meta VALUES('candle_block_runtime','1')")
     instance = BybitRadar(store)
     instance.connector = lambda *args, **kwargs: Socket()
     instance.observe_clock(NOW)
@@ -772,7 +817,7 @@ async def test_rejected_subscription_discards_buffer_before_any_candle_write(rad
         await wait_condition(lambda: radar.connections.get("spot:0", {}).get("state") == "RECONNECTING")
         assert radar.connections["spot:0"]["acknowledged"] == 0
         assert {k: v.row() for k, v in radar.sources.windows[stream].items()} == before
-        assert radar.store.get_runtime(radar.sources.prefix(stream) + f"{NOW:016d}") is None
+        assert atomic_source_value(radar.store, stream, NOW) is None
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
@@ -1250,3 +1295,104 @@ async def test_rest_bootstrap_history_never_queues_live(radar, infrastructure):
     assert saved.events() and all(not e["live"] for e in saved.events())
     assert not saved.items("pending:") and not saved.items("active:")
     await radar.close()
+
+
+def atomic_source_value(store, stream, start):
+    if store.bounded:
+        from cryptowatcher.market_storage import read
+
+        rows = read(store.db, stream, start=start, end=start + 60000)
+        return rows[0] if rows else None
+    return store.get_runtime("source:v1:candle:" + stream + ":" + f"{start:016d}")
+
+
+@pytest.mark.parametrize("radar", ["plain", "normalized", "tiles"], indirect=True)
+@pytest.mark.parametrize("agent_enabled", [False, True])
+def test_live_source_and_all_consumers_commit_once_and_are_invisible_until_commit(
+    radar, infrastructure, monkeypatch, agent_enabled
+):
+    monkeypatch.setattr(radar, "server_now", lambda: radar._server_ms)
+    controller = Controller(infrastructure, radar.store, radar)
+    if agent_enabled:
+        controller.agent.enable(True)
+    stream = "spot/BTCUSDT/1m"
+    observer = Store(radar.store.path, radar.store.owner_id, readonly=True)
+    original = controller.engine.on_event
+    callbacks, statements = [], []
+    try:
+
+        def inside(event):
+            assert radar.store.db.in_transaction
+            assert atomic_source_value(radar.store, stream, NOW)["start"] == NOW
+            assert NOW not in radar.sources.windows[stream]
+            assert atomic_source_value(observer, stream, NOW) is None
+            assert History(observer).get("event-head:" + event["event_id"]) is None
+            original(event)
+            if agent_enabled:
+                assert History(radar.store).items("agent:intent:")
+            assert History(radar.store).count("outcome-pending:") > 0
+            callbacks.append(event["event_id"])
+
+        controller.engine.on_event = inside
+        radar.store.db.set_trace_callback(statements.append)
+        radar.accept_message("spot", message("1m"), radar.streams)
+        assert callbacks and statements.count("COMMIT") == 1
+        assert all(History(observer).get("event-head:" + event_id) for event_id in callbacks)
+        assert atomic_source_value(observer, stream, NOW)["start"] == NOW
+        assert radar.sources.windows[stream][NOW].start == NOW
+        assert not radar.store.db.in_transaction
+        before = radar.store.db.total_changes
+        radar.accept_message("spot", message("1m"), radar.streams)
+        assert radar.store.db.total_changes == before
+    finally:
+        radar.store.db.set_trace_callback(None)
+        observer.close()
+
+
+@pytest.mark.parametrize("radar", ["plain", "normalized", "tiles"], indirect=True)
+@pytest.mark.parametrize("agent_enabled", [False, True])
+def test_live_consumer_failure_rolls_back_source_event_and_jobs_before_ram_publication(
+    radar, infrastructure, monkeypatch, agent_enabled
+):
+    monkeypatch.setattr(radar, "server_now", lambda: radar._server_ms)
+    controller = Controller(infrastructure, radar.store, radar)
+    if agent_enabled:
+        controller.agent.enable(True)
+    stream = "spot/BTCUSDT/1m"
+    old_window = dict(radar.sources.windows[stream])
+    old_live, old_blocked = dict(radar.sources.live), dict(radar.sources.blocked)
+    original = controller.engine.on_event
+
+    def fail(event):
+        original(event)
+        if agent_enabled:
+            assert History(radar.store).items("agent:intent:")
+        assert History(radar.store).count("outcome-pending:") > 0
+        raise RuntimeError("consumer after intent admission")
+
+    controller.engine.on_event = fail
+    with pytest.raises(RuntimeError, match="consumer after intent admission"):
+        radar.accept_message("spot", message("1m"), radar.streams)
+    assert radar.sources.windows[stream] == old_window
+    assert radar.sources.live == old_live and radar.sources.blocked == old_blocked
+    assert atomic_source_value(radar.store, stream, NOW) is None
+    h = History(radar.store)
+    assert not h.events() and not h.items("outcome-pending:") and not h.items("comparison-pending:")
+    assert not h.items("condition:") and not h.items("episode-head:")
+    assert not h.items("agent:intent:") and not h.items("agent:intent-due:")
+    assert not radar.store.db.in_transaction and radar._timing_stack == []
+
+
+def test_replaced_observer_retains_standalone_post_commit_semantics(radar, infrastructure):
+    Controller(infrastructure, radar.store, radar)
+    seen = []
+
+    def replacement(stream, candles, liquidity, tick, now, live):
+        assert not radar.store.db.in_transaction
+        assert radar.sources.windows[stream][NOW] == candles[-1]
+        seen.append((stream, live))
+
+    radar.on_observation = replacement
+    radar.accept_message("spot", message("1m"), radar.streams)
+    assert seen == [("spot/BTCUSDT/1m", True)]
+    assert not History(radar.store).events()

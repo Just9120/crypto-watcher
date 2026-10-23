@@ -1,10 +1,64 @@
 import pytest
 
+from cryptowatcher.events import History
 from cryptowatcher.market import MarketError
 from cryptowatcher.sources import WINDOW_SIZE, Candle, Sources
 from cryptowatcher.storage import Store
 
 STEP = 60_000
+
+
+@pytest.mark.parametrize("normalized", [False, True])
+def test_source_consumer_failure_keeps_database_and_published_ram_unchanged(store, normalized):
+    if normalized:
+        from .test_bounded_storage import bounded
+
+        bounded(store)
+    sources = Sources(store)
+    stream = "spot/BTCUSDT/1m"
+    sources.put(stream, [candle(1)], live=True)
+    old = sources.windows[stream]
+    original = dict(old)
+    old_live, old_blocked = dict(sources.live), dict(sources.blocked)
+
+    def fail(candidate, advanced):
+        assert store.db.in_transaction and advanced
+        assert candidate.windows[stream][2 * STEP] == candle(2)
+        assert sources.windows[stream] == original
+        History(store).put("owned-source-consumer", {"source": 2})
+        raise RuntimeError("source and consumer rollback")
+
+    with pytest.raises(RuntimeError, match="source and consumer rollback"):
+        sources.put(stream, [candle(2)], live=True, after_write=fail)
+    assert sources.windows[stream] is old and old == original
+    assert sources.live == old_live and sources.blocked == old_blocked
+    assert History(store).get("owned-source-consumer") is None
+    reopened_sources = Sources(store)
+    reopened_sources.load(stream)
+    assert reopened_sources.windows[stream] == original
+    assert not store.db.in_transaction
+
+
+def test_source_consumer_sees_final_gap_and_recovery_state_before_publication(store):
+    sources = Sources(store)
+    stream = "spot/BTCUSDT/1m"
+    sources.put(stream, [candle(1)], live=True)
+    observed = []
+
+    def capture(candidate, advanced):
+        observed.append((advanced, dict(candidate.blocked), dict(candidate.live)))
+        assert sources.live[stream] == STEP
+
+    sources.put(stream, [candle(3)], live=True, after_write=capture)
+    assert observed == [(True, {stream: "candle_gap"}, {})]
+    assert sources.blocked[stream] == "candle_gap" and not sources.live
+
+    def recovered(candidate, advanced):
+        assert not advanced and not candidate.blocked and not candidate.live
+        assert sources.blocked[stream] == "candle_gap"
+
+    sources.put(stream, [candle(2)], recovery=True, after_write=recovered)
+    assert not sources.blocked and not sources.live
 
 
 def candle(index, close=100, tf="1m"):
