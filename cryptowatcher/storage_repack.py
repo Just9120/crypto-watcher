@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, Callable
 
 from .storage import Store, encode, json_payload
 
@@ -134,7 +134,12 @@ def scan_bounds(store: Store, state: dict[str, Any], kind: str) -> tuple[int, in
 
 
 async def async_work(
-    store: Store, now_ms: int, slices: int = 8, *, defer_compaction: bool = False
+    store: Store,
+    now_ms: int,
+    slices: int = 8,
+    *,
+    defer_compaction: bool = False,
+    measure: Callable[[str, Callable[[], Any]], Any] | None = None,
 ) -> dict[str, Any]:
     """Advance a finite queue without one long transaction or event-loop stall.
 
@@ -148,7 +153,11 @@ async def async_work(
         raise ValueError("Invalid compaction priority")
     state = store.get_runtime("storage_repack", {})
     for _ in range(slices):
-        state = work(store, now_ms, defer_compaction=True) if defer_compaction else work(store, now_ms)
+
+        def advance() -> dict[str, Any]:
+            return work(store, now_ms, defer_compaction=True) if defer_compaction else work(store, now_ms)
+
+        state = measure("storage_repack", advance) if measure else advance()
         from .catalogue_repack import busy
 
         if not busy(state):

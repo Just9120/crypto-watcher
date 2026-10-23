@@ -2,7 +2,7 @@ import copy
 import json
 import sqlite3
 from contextlib import closing
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
@@ -22,6 +22,52 @@ from scripts import observe_capacity as observer
 from scripts.observe_capacity import advance, atomic
 
 from .test_outcomes import DAY, NOW, OutcomeWorker, Retention, Sources, future, observe
+
+
+async def test_repack_sync_measurement_wraps_each_slice_and_preserves_result_and_failure(store):
+    bounded(store)
+    measured = []
+
+    def measure(name, operation):
+        measured.append(name)
+        return operation()
+
+    with patch(
+        "cryptowatcher.storage_repack.work",
+        side_effect=[{"state": "IN_PROGRESS"}, {"state": "COMPLETE"}],
+    ) as advance:
+        assert (await async_work(store, NOW, measure=measure))["state"] == "COMPLETE"
+        assert advance.call_count == 2 and measured == ["storage_repack", "storage_repack"]
+    with patch("cryptowatcher.storage_repack.work", side_effect=RuntimeError("bounded failure")):
+        with pytest.raises(RuntimeError, match="bounded failure"):
+            await async_work(store, NOW, measure=measure)
+    assert measured == ["storage_repack"] * 3
+
+
+async def test_controller_retention_records_actual_sync_work_without_an_additional_runtime_write(
+    store, infrastructure, monkeypatch
+):
+    from cryptowatcher.bot import Controller
+    from cryptowatcher.ingestion import BybitRadar
+
+    radar = BybitRadar(store)
+    controller = Controller(infrastructure, store, radar)
+    writes = Mock(wraps=store.put_runtime)
+    monkeypatch.setattr(store, "put_runtime", writes)
+    try:
+        monkeypatch.setattr(controller.retention, "work", Mock(return_value=None))
+        controller.retention_once(NOW)
+        controller.retention.work.assert_called_once_with(NOW)
+        assert writes.call_count == 1 and writes.call_args.args[0] == "retention_worker"
+        timing = radar._work_timing["retention"]
+        assert timing["calls"] == 1 and timing["failures"] == 0 and timing["cpu_seconds"] >= 0
+        monkeypatch.setattr(controller.retention, "work", Mock(side_effect=RuntimeError("retention failure")))
+        with pytest.raises(RuntimeError, match="retention failure"):
+            controller.retention_once(NOW)
+        assert timing["calls"] == 2 and timing["failures"] == 1
+        assert writes.call_count == 2 and writes.call_args.args[0] == "retention_worker"
+    finally:
+        await radar.close()
 
 
 def bounded(store):

@@ -807,6 +807,7 @@ class Controller:
                         self.store,
                         self.market.server_now(),
                         slices=1,
+                        measure=self.market._measure,
                         **({"defer_compaction": True} if defer_compaction else {}),
                     )
                     compaction_slices += 1
@@ -831,7 +832,10 @@ class Controller:
 
     def retention_once(self, now: int) -> dict[str, Any]:
         try:
-            self.retention.work(now)
+            if isinstance(self.market, BybitRadar):
+                self.market._measure("retention", lambda: self.retention.work(now))
+            else:
+                self.retention.work(now)
         except Exception as exc:
             self.store.put_runtime(
                 "retention_worker", {"state": "FAILED", "error_class": type(exc).__name__, "at_ms": now}

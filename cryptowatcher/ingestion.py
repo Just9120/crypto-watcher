@@ -8,7 +8,8 @@ import random
 import time
 from collections import Counter
 from collections.abc import Callable
-from typing import Any
+from contextlib import contextmanager
+from typing import Any, Iterator
 
 import httpx
 from websockets.asyncio.client import connect
@@ -137,15 +138,28 @@ class BybitRadar(BybitREST):
         self._manager_failures: dict[str, Any] = {"count": 0}
         self._work_timing = {
             name: {"calls": 0, "failures": 0, "active_seconds": 0.0, "cpu_seconds": 0.0}
-            for name in ("closed_ws_source", "observation")
+            for name in (
+                "closed_ws_source",
+                "observation",
+                "recovery_source",
+                "referenced_recovery_response",
+                "storage_repack",
+                "retention",
+            )
         }
         self.on_observation: Callable[[str, list[Candle], float, float, int, bool], None] | None = None
 
     def _measure(self, name: str, call: Callable[[], Any]) -> Any:
+        with self._timed(name):
+            return call()
+
+    @contextmanager
+    def _timed(self, name: str) -> Iterator[None]:
+        """Measure synchronous work only; callers must not await in this scope."""
         value = self._work_timing[name]
         began, cpu = time.monotonic(), time.thread_time()
         try:
-            return call()
+            yield
         except BaseException:
             value["failures"] += 1
             raise
@@ -538,7 +552,7 @@ class BybitRadar(BybitREST):
         oldest = candles[0].start
         if previous_end and previous_end < oldest:
             self.record_gap(stream, previous_end, oldest - 1)
-        self.sources.put(stream, candles, recovery=True)
+        self._measure("recovery_source", lambda: self.sources.put(stream, candles, recovery=True))
         self.publish_observation(stream, live=False)
         if stream in self._history:
             gap = self._history[stream]
@@ -1119,7 +1133,7 @@ class BybitRadar(BybitREST):
                 "manager_failures": dict(self._manager_failures),
                 "work_timing": {
                     "schema": "cryptowatcher.ingestion-work.v1",
-                    "basis": "process-lifetime thread CPU and synchronous wall; excludes wire decoding, discovery, recovery source writes and async waits",
+                    "basis": "process-lifetime thread CPU and synchronous active wall; includes current recovery source writes, referenced response validation/publication, repack slices and retention; excludes wire decoding/discovery, REST/async waits, recovery selection/retirement and shared readonly preparation",
                     "stages": {name: dict(value) for name, value in self._work_timing.items()},
                 },
                 "scope_synced": self.scope_synced(),
