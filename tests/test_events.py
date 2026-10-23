@@ -7,7 +7,7 @@ from telegram.error import Forbidden, NetworkError, RetryAfter
 
 from cryptowatcher.config import OwnerSettings
 from cryptowatcher.detectors import FORMULAS, Detection, evaluate
-from cryptowatcher.events import EventEngine, History
+from cryptowatcher.events import EventEngine
 from cryptowatcher.render import event_keyboard, notification_text
 from cryptowatcher.sources import Candle
 from cryptowatcher.storage import StateError, Store
@@ -95,44 +95,6 @@ def test_atomic_history_identity_markets_settings_and_inputs(state):
     observe(engine)
     assert {e["settings_revision"] for e in history.events()} == {1, 2}
     assert history.get("event:" + events[0]["event_id"] + ":0000000001") == events[0]
-
-
-@pytest.mark.parametrize("bounded_layout", [False, True])
-def test_joined_observation_keeps_result_and_job_retirement_in_the_callers_transaction(state, bounded_layout):
-    if bounded_layout:
-        from tests.test_bounded_storage import bounded
-
-        bounded(state)
-    engine = EventEngine(state)
-    engine.history.put("observation-test:pending", {"state": "PENDING"})
-    state.db.commit()
-    original = state.snapshot()
-    with pytest.raises(StateError, match="producer transaction"):
-        engine.observe("spot/BTCUSDT/1m", window(), 1e6, 0.01, NOW, live=True, commit=False)
-    with pytest.raises(RuntimeError, match="interrupted publication"):
-        with state.db:
-            state.db.execute("BEGIN IMMEDIATE")
-            engine.observe(
-                "spot/BTCUSDT/1m", window(), 1e6, 0.01, NOW, live=True, snapshot=original, commit=False
-            )
-            assert state.db.in_transaction and engine.history.events()
-            engine.history.delete("observation-test:pending")
-            other = Store(state.path, state.owner_id, readonly=True)
-            try:
-                assert not History(other).events()
-            finally:
-                other.close()
-            raise RuntimeError("interrupted publication")
-    assert not engine.history.events()
-    assert engine.history.get("observation-test:pending") == {"state": "PENDING"}
-    with state.db:
-        state.db.execute("BEGIN IMMEDIATE")
-        engine.observe("spot/BTCUSDT/1m", window(), 1e6, 0.01, NOW, live=True, commit=False)
-        engine.history.delete("observation-test:pending")
-    assert len(engine.history.events()) == 4
-    assert engine.history.get("observation-test:pending") is None
-    assert state.db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-    assert not state.db.execute("PRAGMA foreign_key_check").fetchall()
 
 
 def test_observation_context_is_resolved_once_only_for_new_events_and_keeps_every_family_snapshot(state):

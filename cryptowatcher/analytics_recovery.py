@@ -219,75 +219,78 @@ class AnalyticsRecovery:
                         "end": job["cursor_end"] - 1,
                     },
                 )
-                # A live calculation can supersede/extend this job during I/O.
-                # Never resurrect its pending index or overwrite a newer cursor.
-                if self.history.get("analytics-gap:" + job["id"]) != job:
-                    return
-                if (
-                    self.store.bounded
-                    and self.owner_deadline(
-                        job["stream"], job["start"], job["end"], max(now, self.market.server_now())
+                with self.market._timed("referenced_recovery_response"):
+                    # A live calculation can supersede/extend this job during I/O.
+                    # Never resurrect its pending index or overwrite a newer cursor.
+                    if self.history.get("analytics-gap:" + job["id"]) != job:
+                        return
+                    if (
+                        self.store.bounded
+                        and self.owner_deadline(
+                            job["stream"], job["start"], job["end"], max(now, self.market.server_now())
+                        )
+                        is None
+                    ):
+                        self.finish_unowned(job, pending, now)
+                        return
+                    candles = sorted(
+                        (
+                            Candle.parse(
+                                row, tf, "rest-analytics", int(time.time() * 1000), int(response["time"])
+                            )
+                            for row in response["result"]["list"]
+                        ),
+                        key=lambda c: c.start,
                     )
-                    is None
-                ):
-                    self.finish_unowned(job, pending, now)
-                    return
-                candles = sorted(
-                    (
-                        Candle.parse(
-                            row, tf, "rest-analytics", int(time.time() * 1000), int(response["time"])
-                        )
-                        for row in response["result"]["list"]
-                    ),
-                    key=lambda c: c.start,
-                )
-                if (
-                    not candles
-                    or candles[-1].end != job["cursor_end"]
-                    or candles[0].start < job["start"]
-                    or any(b.start - a.start != step for a, b in zip(candles, candles[1:]))
-                ):
-                    raise MarketError("incomplete_referenced_page")
-                writes = []
-                if self.store.bounded:
-                    from .market_storage import read
-
-                    existing_values = read(self.store.db, job["stream"], candles[0].start, job["cursor_end"])
-                    old = {v["start"]: Candle(**v) for v in existing_values}
-                    if any(c.start in old and old[c.start].row() != c.row() for c in candles):
-                        raise MarketError("referenced_source_conflict")
-                for candle in [] if self.store.bounded else candles:
-                    key = Sources.prefix(job["stream"]) + f"{candle.start:016d}"
-                    existing = self.store.db.execute(
-                        "SELECT payload_json FROM runtime WHERE key=?", (key,)
-                    ).fetchone()
-                    if existing is not None:
-                        previous = Candle(**json.loads(existing[0]))
-                        if previous.row() != candle.row():
-                            raise MarketError("referenced_source_conflict")
-                    else:
-                        writes.append((key, encode(asdict(candle))))
-                with self.store.db:
+                    if (
+                        not candles
+                        or candles[-1].end != job["cursor_end"]
+                        or candles[0].start < job["start"]
+                        or any(b.start - a.start != step for a, b in zip(candles, candles[1:]))
+                    ):
+                        raise MarketError("incomplete_referenced_page")
+                    writes = []
                     if self.store.bounded:
-                        from .market_storage import admit
+                        from .market_storage import read
 
-                        for candle in candles:
-                            if candle.start not in old:
-                                admit(self.store.db, job["stream"], asdict(candle))
-                    else:
-                        self.store.db.executemany("INSERT INTO runtime VALUES (?,?)", writes)
-                    job["cursor_end"] = candles[0].start
-                    job["state"] = "COMPLETE" if job["cursor_end"] == job["start"] else "PENDING"
-                    job.pop("reason", None)
-                    self.history.delete(job["pending_key"])
-                    if job["state"] != "COMPLETE":
-                        job["pending_key"] = pending_key(now, job["id"]).replace(
-                            "outcome-pending:", "analytics-gap-pending:", 1
+                        existing_values = read(
+                            self.store.db, job["stream"], candles[0].start, job["cursor_end"]
                         )
-                        self.history.put(job["pending_key"], binding)
-                    self.history.put("analytics-gap:" + job["id"], job)
-                    if job["state"] == "COMPLETE":
-                        self.record_completion(job, max(now, self.market.server_now()))
+                        old = {v["start"]: Candle(**v) for v in existing_values}
+                        if any(c.start in old and old[c.start].row() != c.row() for c in candles):
+                            raise MarketError("referenced_source_conflict")
+                    for candle in [] if self.store.bounded else candles:
+                        key = Sources.prefix(job["stream"]) + f"{candle.start:016d}"
+                        existing = self.store.db.execute(
+                            "SELECT payload_json FROM runtime WHERE key=?", (key,)
+                        ).fetchone()
+                        if existing is not None:
+                            previous = Candle(**json.loads(existing[0]))
+                            if previous.row() != candle.row():
+                                raise MarketError("referenced_source_conflict")
+                        else:
+                            writes.append((key, encode(asdict(candle))))
+                    with self.store.db:
+                        if self.store.bounded:
+                            from .market_storage import admit
+
+                            for candle in candles:
+                                if candle.start not in old:
+                                    admit(self.store.db, job["stream"], asdict(candle))
+                        else:
+                            self.store.db.executemany("INSERT INTO runtime VALUES (?,?)", writes)
+                        job["cursor_end"] = candles[0].start
+                        job["state"] = "COMPLETE" if job["cursor_end"] == job["start"] else "PENDING"
+                        job.pop("reason", None)
+                        self.history.delete(job["pending_key"])
+                        if job["state"] != "COMPLETE":
+                            job["pending_key"] = pending_key(now, job["id"]).replace(
+                                "outcome-pending:", "analytics-gap-pending:", 1
+                            )
+                            self.history.put(job["pending_key"], binding)
+                        self.history.put("analytics-gap:" + job["id"], job)
+                        if job["state"] == "COMPLETE":
+                            self.record_completion(job, max(now, self.market.server_now()))
 
             except (MarketError, KeyError, TypeError, ValueError, OverflowError) as exc:
                 if self.history.get("analytics-gap:" + job["id"]) != job:

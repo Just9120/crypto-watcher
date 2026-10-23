@@ -98,7 +98,7 @@ def lifetime(kind: str, detail_days: int, candle_days: int) -> str:
         return "delete on completion; unfinished bounded by parent event detail TTL"
     if kind in {"analytics-gap", "outbox", "agent", "digest-outbox"}:
         return "terminal receipt1d; retry/pending bounded by event deadline/explicit delivery expiry"
-    if kind in {"condition", "diagnostic", "oi-attempt"}:
+    if kind in {"condition", "condition-state", "diagnostic", "oi-attempt"}:
         return f"per-stream state, candle TTL{candle_days}d renewal, not one retained row per observation"
     return (
         "singleton/per-stream index or parent-bound service; inspect lifecycle, no blanket annual multiplier"
@@ -784,6 +784,8 @@ def interval(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
             else None,
             "work_fraction": delta["work_seconds_total"] / seconds,
             "basis": "wall time including read/calculation/apply/yields; gap durations not measured; not CPU attribution or universal capacity",
+            "admission_scope": "all horizons, including future work; admission minus completion is not due-backlog growth",
+            "due_backlog_basis": "oldest due/blocked state and SLO counters; future horizons are not overdue",
         }
     bp, ap = before.get("physical_snapshot", {}), after.get("physical_snapshot", {})
     if bp.get("state") == ap.get("state") == "PASS":

@@ -7,15 +7,17 @@ import json
 import math
 import re
 import uuid
-from contextlib import nullcontext
 from dataclasses import asdict
+from itertools import islice
 from typing import Any, Callable, Iterator
 
+from .condition_state import batch as condition_batch
+from .condition_state import exposed as exposed_conditions
 from .detector_config import FAMILIES, effective_parameters
 from .detectors import FORMULAS, UNITS, VERSIONS, Detection, DetectorUnavailable, atr14, evaluate, freshness
 from .history_codec import Codec
 from .sources import Candle
-from .storage import RUNTIME_UPSERT, Snapshot, StateError, Store, encode
+from .storage import RUNTIME_UPSERT, StateError, Store, encode
 
 PREFIX = "radar:v1:"
 HEAD_SCHEMA = "cryptowatcher.history-head.v1"
@@ -77,8 +79,18 @@ class History:
     def __init__(self, store: Store) -> None:
         self.store = store
         self.codec = Codec(store.db, binary_cache=store.cached_bytes)
+        self._condition_batch: Any = None
 
     def get(self, key: str, default: Any = None) -> Any:
+        if self.store.bounded and key.startswith("condition:"):
+            from . import condition_state
+
+            value = condition_state.get(self, key, default)
+            if value is not condition_state.MISSING:
+                return value
+        return self._get_raw(key, default)
+
+    def _get_raw(self, key: str, default: Any = None) -> Any:
         return self.resolve(key, self.store.get_runtime(PREFIX + key, default))
 
     def metadata(self, key: str) -> Any:
@@ -210,6 +222,14 @@ class History:
         return {k: self._expand_services(v, depth + 1) for k, v in value.items()}
 
     def put(self, key: str, value: Any) -> None:
+        if self.store.bounded and key.startswith("condition:"):
+            from .condition_state import put
+
+            if put(self, key, value):
+                return
+        self._put_raw(key, value)
+
+    def _put_raw(self, key: str, value: Any) -> None:
         from .storage_lifecycle import TERMINAL_DELIVERY
 
         if (
@@ -257,6 +277,14 @@ class History:
                     sync_job(self, key, value)
 
     def delete(self, key: str) -> None:
+        if self.store.bounded and key.startswith("condition:"):
+            from .condition_state import delete
+
+            if delete(self, key):
+                return
+        self._delete_raw(key)
+
+    def _delete_raw(self, key: str) -> None:
         from .catalogue_write import deletion
 
         with deletion(self.store, PREFIX + key):
@@ -271,16 +299,38 @@ class History:
             self.store.db.execute("DELETE FROM runtime WHERE key=?", (PREFIX + key,))
 
     def items(self, prefix: str, limit: int | None = None, *, reverse: bool = False) -> list[tuple[str, Any]]:
+        if self.store.bounded and ("condition:".startswith(prefix) or prefix.startswith("condition:")):
+            if limit is not None and (type(limit) is not int or limit < 0):
+                raise ValueError("Invalid history scan limit")
+            return list(islice(self.scan(prefix, reverse=reverse), limit))
         return [
             (key[len(PREFIX) :], self.resolve(key[len(PREFIX) :], value))
             for key, value in self.store.scan_runtime(PREFIX + prefix, limit, reverse=reverse)
         ]
 
     def scan(self, prefix: str, *, reverse: bool = False) -> Iterator[tuple[str, Any]]:
+        if self.store.bounded and ("condition:".startswith(prefix) or prefix.startswith("condition:")):
+            from .condition_state import scan
+
+            yield from scan(self, prefix, reverse)
+            return
         for key, value in self.store.scan_runtime(PREFIX + prefix, reverse=reverse):
             yield key[len(PREFIX) :], self.resolve(key[len(PREFIX) :], value)
 
     def count(self, prefix: str) -> int:
+        if self.store.bounded and ("condition:".startswith(prefix) or prefix.startswith("condition:")):
+            from .condition_state import GROUP, validate
+
+            if self._condition_batch is not None:
+                self._condition_batch.flush()
+            count = self.store.count_runtime(PREFIX + prefix)
+            for key, value in self.store.scan_runtime(PREFIX + GROUP):
+                stream = key[len(PREFIX + GROUP) :]
+                value = validate(self.resolve(key[len(PREFIX) :], value))
+                count += sum(
+                    f"condition:{stream}:{member}".startswith(prefix) for member in value["states"]
+                ) - int(key[len(PREFIX) :].startswith(prefix))
+            return count
         return self.store.count_runtime(PREFIX + prefix)
 
     def version(self, kind: str, value: dict[str, Any]) -> None:
@@ -426,7 +476,8 @@ class EventEngine:
             episode["available_at_ms"] = now_ms
             self.history.version("episode", episode)
             if self.on_episode is not None:
-                self.on_episode(episode)
+                with exposed_conditions(self.history):
+                    self.on_episode(episode)
             self.history.delete(key)
             for condition in episode["conditions"]:
                 runtime = self.history.get(condition, {})
@@ -450,16 +501,12 @@ class EventEngine:
         source_context: dict[str, Any] | None = None,
         enrichment: dict[str, Any] | None = None,
         context_provider: Callable[[], tuple[dict[str, Any], dict[str, Any]]] | None = None,
-        snapshot: Snapshot | None = None,
-        commit: bool = True,
     ) -> None:
-        if not commit and not self.store.db.in_transaction:
-            raise StateError("Joined observation requires a producer transaction")
         if context_provider is not None and (source_context is not None or enrichment is not None):
             raise ValueError("Choose captured context or a synchronous context provider")
         if not candles:
             return
-        snapshot = snapshot or self.store.snapshot()
+        snapshot = self.store.snapshot()
         current = candles[-1]
         if self.store.bounded and current.end < self.store.get_runtime("history_generation", {}).get(
             "started_ms", 0
@@ -475,7 +522,7 @@ class EventEngine:
                 )
             except Exception as exc:
                 outputs.append((family, exc))  # One family never hides another family's observation.
-        with self.store.db if commit else nullcontext():
+        with self.store.db, condition_batch(self.history, stream):
             self._close_due(now_ms, instrument)
             for family, result in outputs:
                 diagnostic = f"diagnostic:{stream}:{family}"
@@ -537,7 +584,8 @@ class EventEngine:
                         # A callback without a new event has no context to save.
                         # Resolve once in this same synchronous transaction/cutoff;
                         # all new families keep the same complete snapshots.
-                        source_context, enrichment = context_provider()
+                        with exposed_conditions(self.history):
+                            source_context, enrichment = context_provider()
                         context_provider = None
                     is_live = live and ordered and timely
                     active_key = f"active:{instrument}/{direction}"
@@ -687,9 +735,10 @@ class EventEngine:
                         )
                     self.history.version("episode", episode)
                     if self.on_event is not None:
-                        self.on_event(
-                            event
-                        )  # Source, episode and all consumer intents share the transaction.
+                        with exposed_conditions(self.history):
+                            self.on_event(
+                                event
+                            )  # Source, episode and all consumer intents share the transaction.
 
     def _notify(self, episode: dict[str, Any], event: dict[str, Any], now_ms: int) -> None:
         previous = episode["last_notified"]

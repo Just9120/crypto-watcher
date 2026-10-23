@@ -19,6 +19,33 @@ transaction с удалениями; это counters, не отдельная к
 
 Reset — отдельная разовая процедура с exact market-data allowlist/target и private preservation/restore/equality proof; не startup migration. Owner settings/watchlist/thresholds/notifications/mutes сохраняются; credentials/infra не меняются. Старые market queues/cursors не импортируются; новая generation/start явно показывает нехватку истории и исключает old live replay. Backups/experiments исключены. Обычные backup/CD<=900s и RAM4GiB сохраняются. Формат и проверенная reset процедура определены ниже и в runbook; факт поставки/reset подтверждается только primary Evidence плана, не самим описанием.
 
+### Mutable condition state v1
+
+В schema2 поддерживаемые внутренние `condition:<stream>:<family>:<direction>`
+состояния объединяются в `radar:v1:condition-state:<stream>` с schema
+`cryptowatcher.condition-state.v1`. Запись содержит не более восьми members;
+каждый сохраняет прежний словарь значений и собственный `expires_ms`.
+`History` восстанавливает прежние logical point/prefix/reverse/limited reads,
+counts и delete. Raw runtime rows и его storage counters отражают physical
+representation; они не являются числом логических conditions.
+
+Переход затрагивает только один stream внутри observation transaction.
+Существующие legacy values/expiry проверяются перед удалением старого owner;
+изменившийся owner/membership отклоняет весь переход. Неизвестная legacy shape
+остаётся legacy, неизвестные grouped schema/member/owner сохраняются и вызывают
+ошибку. Callback получает все предыдущие изменения в той же transaction;
+последующие изменения callback перечитываются перед продолжением batch.
+Immutable events/settings/sources, re-arm и consumer intents не меняются.
+
+Expiry index хранит ближайший срок members. Обычный retention удаляет только
+истёкшие members и сохраняет исходные сроки остальных; пустой group удаляется.
+Нового DB/schema installer, job, cache pool или изменения policy нет. После
+первых grouped writes нужен совместимый reader/forward-fix; старый image,
+читающий только отдельные conditions, не является допустимым rollback.
+Backup сохраняет обе representations; полноту проверяют logical readback,
+partial/final expiry, старый pinned snapshot и reopen tests. Этот формат сам по
+себе не доказывает shared-host stability или mature25GB.
+
 ### Storage extension3: совместимое уплотнение
 
 Physical schema остается2; public JSON schemas/IDs не меняются. Writer atomically

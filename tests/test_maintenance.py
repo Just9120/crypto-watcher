@@ -54,6 +54,10 @@ async def test_backfill_batches_retry_restart_and_preserves_exact_sources(store,
     radar._get.side_effect = fail_first
     await recovery.work(NOW + 10 * MINUTE, batch=4, seconds=10)
     assert radar._get.await_count == 4
+    response_timing = radar._work_timing["referenced_recovery_response"]
+    assert response_timing["calls"] == 3  # The failed REST wait is outside synchronous response work.
+    assert response_timing["failures"] == 0
+    assert response_timing["cpu_seconds"] >= 0 and response_timing["active_seconds"] >= 0
     assert h.count("analytics-gap-pending:") == 3
     assert sorted(v["state"] for _, v in h.items("analytics-gap:")) == [
         "COMPLETE",
@@ -592,7 +596,7 @@ async def test_maintenance_yields_disk_to_startup_and_live_recovery(store, infra
     ):
         await controller.repack_job(None)
         await controller.backfill_job(None)
-        repack.assert_awaited_once_with(store, radar.server_now(), slices=1)
+        repack.assert_awaited_once_with(store, radar.server_now(), slices=1, measure=radar._measure)
         backfill.assert_awaited_once()
     await radar.close()
 
@@ -647,7 +651,9 @@ async def test_successful_expiry_only_defers_packing_for_a_real_remaining_due_ba
     ):
         await controller.repack_job(None)
     assert repack.await_args.kwargs == (
-        {"slices": 1, "defer_compaction": True} if deferred else {"slices": 1}
+        {"slices": 1, "defer_compaction": True, "measure": radar._measure}
+        if deferred
+        else {"slices": 1, "measure": radar._measure}
     )
     await radar.close()
 
@@ -699,7 +705,9 @@ async def test_existing_maintenance_prioritizes_expiry_yields_and_keeps_other_wo
     assert repack.await_count == (0 if stop == "live" else 1)
     if repack.await_count:
         assert repack.await_args.kwargs == (
-            {"slices": 1} if stop == "empty" else {"slices": 1, "defer_compaction": True}
+            {"slices": 1, "measure": radar._measure}
+            if stop == "empty"
+            else {"slices": 1, "defer_compaction": True, "measure": radar._measure}
         )
     assert not controller.retention_lock.locked()
     await radar.close()
@@ -909,7 +917,7 @@ async def test_repack_boost_keeps_startup_freshness_and_coverage_guards(
             if condition in ("ready", "warming", "boundary", "coverage_boundary", "source_deadline_boundary")
             else 1
         )
-        assert all(call.kwargs == {"slices": 1} for call in repack.await_args_list)
+        assert all(call.kwargs == {"slices": 1, "measure": radar._measure} for call in repack.await_args_list)
         assert store.get_runtime("repack_worker")["compaction_slices"] == repack.await_count
     assert store.get_runtime("repack_worker")["state"] == "OK"
     await radar.close()

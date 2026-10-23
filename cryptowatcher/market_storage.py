@@ -291,37 +291,6 @@ def read(
     return [public(bytes(r[0])) for r in db.execute(query, args)]
 
 
-def read_points(
-    db: sqlite3.Connection,
-    stream: str,
-    start: int = 0,
-    end: int = 2**63 - 1,
-    limit: int | None = None,
-    *,
-    cache: Any = None,
-) -> list[tuple[int, int, dict[str, Any]]]:
-    """The same latest values as read, retaining their immutable coordinates."""
-    sid = stream_id(db, stream)
-    if sid is None:
-        return []
-    from .candle_access import installed
-    from .candle_access import read_points as mixed_read
-
-    if installed(db):
-        return mixed_read(db, sid, start, end, limit, cache)
-    suffix = " ORDER BY c.start DESC" if limit is not None else " ORDER BY c.start"
-    query = (
-        "SELECT c.start,c.revision,c.payload FROM market_candles c WHERE c.stream=? AND c.start>=? AND c.start<? "
-        "AND c.revision=(SELECT MAX(v.revision) FROM market_candles v WHERE v.stream=c.stream AND v.start=c.start)"
-        + suffix
-    )
-    args: tuple[Any, ...] = (sid, start, end)
-    if limit is not None:
-        query += " LIMIT ?"
-        args += (limit,)
-    return [(row[0], row[1], public(bytes(row[2]))) for row in db.execute(query, args)]
-
-
 def window(
     db: sqlite3.Connection, stream: str, candles: list[dict[str, Any]], expires: int, *, cache: Any = None
 ) -> dict[str, Any]:

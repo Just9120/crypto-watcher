@@ -205,17 +205,6 @@ def read(
     limit: int | None,
     cache: Any = None,
 ) -> list[dict[str, Any]]:
-    return [value for _, _, value in read_points(db, sid, start, end, limit, cache)]
-
-
-def read_points(
-    db: sqlite3.Connection,
-    sid: int,
-    start: int,
-    end: int,
-    limit: int | None,
-    cache: Any = None,
-) -> list[tuple[int, int, dict[str, Any]]]:
     """Merge two indexed ordered cursors, choosing the actual newest revision."""
     if limit is not None and (type(limit) is not int or limit < 0):
         raise ValueError("Invalid source read limit")
@@ -263,12 +252,12 @@ def read_points(
 
     readers = legacy(), cold()
     ordered = heapq.merge(*readers, key=lambda row: row[0], reverse=reverse)
-    result: list[tuple[int, int, dict[str, Any]]] = []
+    result: list[dict[str, Any]] = []
     current: tuple[int, int, dict[str, Any]] | None = None
     try:
         for row in ordered:
             if current is not None and row[0] != current[0]:
-                result.append(current)
+                result.append(current[2])
                 if limit is not None and len(result) == limit:
                     return result
                 current = None
@@ -277,7 +266,7 @@ def read_points(
             elif row[1] == current[1] and encode(row[2]) != encode(current[2]):
                 raise ValueError("Conflicting immutable source revision")
         if current is not None:
-            result.append(current)
+            result.append(current[2])
         return result
     finally:
         for reader in readers:

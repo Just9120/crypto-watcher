@@ -124,6 +124,18 @@ def track(store: Store, key: str, value: Any) -> None:
         or ":" not in name
     ):
         return
+    if name.startswith("condition-state:"):
+        from .condition_state import deadline
+
+        put_expiry(
+            store.db,
+            key,
+            deadline(value, stream=name[len("condition-state:") :]),
+            "condition-state",
+            None,
+        )
+        body_links(store, key, value)
+        return
     now = store.clock_ms()
     event_id = parent_event(store, value, name)
     days = store.snapshot().settings.detail_retention_days
@@ -274,7 +286,18 @@ class BoundedRetention:
 
             service = due_services(store.db, now_ms, batch)
             service_removed = 0
+            condition_members_expired = 0
+            condition_groups_updated = 0
             for row in service:
+                if row[1] == "condition-state":
+                    from .condition_state import expire
+
+                    expired, owner_removed = expire(history, row[0][len(PREFIX) :], now_ms)
+                    condition_members_expired += expired
+                    condition_groups_updated += int(bool(expired) and not owner_removed)
+                    removed += int(owner_removed)
+                    service_removed += int(owner_removed)
+                    continue
                 if row[1] in ("episode", "episode-head"):
                     episode_id = row[0].split(":")[3]
                     prefix = PREFIX + "episode-event:" + episode_id + ":"
@@ -419,6 +442,8 @@ class BoundedRetention:
                 "expired_events": processed,
                 "remaining_due_batch": len(due_keys - retired),
                 "removed_services": service_removed,
+                "condition_members_expired": condition_members_expired,
+                "condition_groups_updated": condition_groups_updated,
                 "removed_candles": len(candles) + removed_source_versions,
                 "removed_context": len(contexts) + removed_context_tiles,
                 "removed_summaries": len(quality),
@@ -437,6 +462,8 @@ class BoundedRetention:
                 "runs": 1,
                 "expired_events": processed,
                 "removed_services": service_removed,
+                "condition_members_expired": condition_members_expired,
+                "condition_groups_updated": condition_groups_updated,
                 "removed_candles": len(candles) + removed_source_versions,
                 "removed_context": len(contexts) + removed_context_tiles,
                 "removed_summary_blocks": len(quality),

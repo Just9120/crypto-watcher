@@ -126,6 +126,23 @@ Delivery readiness требует discovery обоих рынков, успеш�
 
 ## G2B event → episode → consumer
 
+`condition_state.py` объединяет до восьми mutable condition states одного stream
+в одну bounded запись с независимыми member deadlines. Batch живёт только в
+короткой writer transaction, не создаёт cache/thread/job и открывает согласованную
+SQL-видимость перед synchronous callbacks. После callback перечитывается state;
+конфликт legacy/group membership откатывает всю observation. `History` сохраняет
+логический интерфейс, а retention отдельно истекает members. Неизвестные legacy
+shapes не мигрируют. Формат/recovery границы описаны в
+[state contract](state_contract.md#mutable-condition-state-v1).
+
+Существующий ingestion work timing дополнен синхронными стадиями current recovery
+source writes, referenced response validation/publication, repack slices и retention.
+Каждая стадия измеряет active wall/thread CPU и failures без await внутри scope;
+счётчики публикуются в уже существующем diagnostics snapshot. Они исключают REST
+waits, recovery selection/retirement и shared readonly preparation; остаток CPU и
+полный I/O определяются совместно с host/cgroup counters. Это attribution,
+не доказательство steady throughput или нового ресурсного лимита.
+
 Persisted closed observation запускает five detectors на одном settings snapshot. Ошибка family записывает reason/class без sensitive details; другие families продолжаются. Source inputs, immutable outcome reference и provenance сохраняются вместе с event/episode/decision/outbox в короткой transaction. Active episode prefix index ограничивает lifecycle работу текущим instrument; глобальный2s tick читает только active index. Recent history и pending consumers используют indexed prefix ranges; network не удерживает writer.
 
 History всех families независима от Telegram selection/mute. Coalescing2s фиксирует episode snapshot и exact event revisions; text замораживается перед первой попыткой. Новые observations во время I/O остаются в history; после ack reconciliation создаёт meaningful follow-up. Settings revisions не смешиваются в pending payload/normalized-strength baseline. Исторический outcome update в будущем не может изменить уже frozen live context. Telegram batch≤20; retries переиндексируются по следующему attempt time и уступают более ранним ready deliveries.

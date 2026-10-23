@@ -38,6 +38,7 @@ async def test_bounded_recovery_repairs_hole_outside_short_tail_without_live_rep
     radar._get = AsyncMock(side_effect=response)
     try:
         await radar.backfill(stream)
+        assert radar._work_timing["recovery_source"]["calls"] == 1
         assert radar._get.call_args.args[1]["limit"] == WINDOW_SIZE + 2
         assert stream not in radar.sources.blocked and not radar.sources.live
         assert len(radar.sources.windows[stream]) == WINDOW_SIZE
@@ -47,6 +48,7 @@ async def test_bounded_recovery_repairs_hole_outside_short_tail_without_live_rep
         assert fresh.rows(stream, WINDOW_SIZE) == radar.sources.rows(stream, WINDOW_SIZE)
         changes = store.db.total_changes
         await radar.backfill(stream)
+        assert radar._work_timing["recovery_source"]["calls"] == 2
         assert radar._get.call_args.args[1]["limit"] == 24
         assert store.db.total_changes == changes
         assert not radar.sources.live
