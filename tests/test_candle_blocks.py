@@ -15,7 +15,7 @@ DAY = 86400000
 
 def prepare(store):
     bounded(store)
-    blocks.install(store.db, store.cached_text)
+    blocks.install(store.db, store.cached_text, store.cached_bytes)
     with store.db:
         sid = stream_id(store.db, "spot/BTCUSDT/1m", create=True)
     tile, slots = fixture()

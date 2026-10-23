@@ -556,7 +556,7 @@ def work(
     if state.get("version") in (12, 13, 14, 15, 16, 17, 18, 19, 20, 21, VERSION) and not price_active:
         raise ValueError("Missing numeric price writer checkpoint; database preserved")
     if not source_installed(store.db):
-        install_source_tiles(store.db, store.cached_text)
+        install_source_tiles(store.db, store.cached_text, store.cached_bytes)
     source_summary(store.db)
     install_numeric_blocks(store.db, store.cached_bytes)
     numeric_summary(store.db)
