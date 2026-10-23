@@ -353,6 +353,7 @@ class History:
             and any(value[k] != head[k] for k in ("reference_price", "reference_time_ms"))
         ):
             raise StateError("Event outcome reference is immutable")
+        direct = False
         if existing is None:
             if self.store.bounded and kind == "event" and value["revision"] == 1:
                 self.put("event-counter", self.get("event-counter", 0) + 1)
@@ -367,10 +368,15 @@ class History:
                 )
                 self.codec.source_expiry = event["market_observation_ms"]
             try:
-                self.put(version_key, self.codec.pack(value))
+                from .catalogue_write import publish_revision
+
+                packed = self.codec.pack(value)
+                direct = publish_revision(self, kind, value, packed, head)
+                if not direct:
+                    self.put(version_key, packed)
             finally:
                 self.codec.source_stream = None
-        if head is None or value["revision"] > head["revision"]:
+        if not direct and (head is None or value["revision"] > head["revision"]):
             self.put(f"{kind}-head:{key}", self._head(kind, value, version_key, bounded=self.store.bounded))
 
     def prune_pending(self, limit: int = 64) -> int:
