@@ -250,6 +250,22 @@ class Store:
             uri=readonly,
             timeout=5,
         )
+        try:
+            if readonly:
+                # Header/counter validators must see one committed state while
+                # the application keeps writing. Release this snapshot before
+                # returning so callers can start their own fresh transaction.
+                self.db.execute("PRAGMA foreign_keys=ON")
+                self.db.execute("BEGIN")
+            self._configure_connection(path, readonly=readonly)
+            if readonly:
+                self.db.rollback()
+        except BaseException:
+            if readonly:
+                self.db.close()
+            raise
+
+    def _configure_connection(self, path: Path, *, readonly: bool) -> None:
         from .key_registry import install_functions as registry_functions
 
         registry_functions(self.db, self._cached_value)

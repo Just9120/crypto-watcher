@@ -128,6 +128,43 @@ def test_failed_command_does_not_echo_secret_stderr(monkeypatch):
     assert "SECRET" not in str(error.value)
 
 
+@pytest.mark.parametrize("reason", ["ValueError", "private-token=SECRET\udc80"])
+def test_post_check_cli_failure_keeps_only_fixed_attribution(monkeypatch, reason):
+    import hashlib
+
+    active = {"phase": "POST_CHECKS"}
+    monkeypatch.setattr(receiver, "ACTIVE_RECORD", active)
+    failure = "warning with SECRET\n" + json.dumps({"status": "blocked", "reason": reason})
+    monkeypatch.setattr(
+        receiver.subprocess, "run", Mock(return_value=Mock(returncode=2, stderr=failure, stdout=""))
+    )
+    with pytest.raises(receiver.DeploymentError, match="Operation failed"):
+        receiver.run(["docker", "exec", "crypto-watcher", "python", "-m", "cryptowatcher", "diagnostics"])
+    detail = active["post_check_failure"]
+    assert detail == {
+        "command": "diagnostics",
+        "exit_status": 2,
+        "reason_kind": "ValueError" if reason == "ValueError" else "STATE_OR_CONFIGURATION_ERROR",
+        "reason_sha256": hashlib.sha256(reason.encode("utf-8", errors="backslashreplace")).hexdigest(),
+    }
+    assert "SECRET" not in json.dumps(active)
+
+
+def test_post_check_failure_capture_does_not_mask_unstructured_errors_or_other_commands(monkeypatch):
+    active = {"phase": "POST_CHECKS"}
+    monkeypatch.setattr(receiver, "ACTIVE_RECORD", active)
+    result = Mock(returncode=2, stderr="[" * 2000, stdout="")
+    command = ["docker", "exec", "crypto-watcher", "python", "-m", "cryptowatcher", "diagnostics"]
+    receiver.capture_diagnostic_failure(command, result)
+    assert active["post_check_failure"] == {"command": "diagnostics", "exit_status": 2}
+    active.pop("post_check_failure")
+    receiver.capture_diagnostic_failure(["docker", "inspect", "crypto-watcher"], result)
+    assert "post_check_failure" not in active
+    active["phase"] = "BACKUP_AND_VALIDATE_DISK"
+    receiver.capture_diagnostic_failure(command, result)
+    assert "post_check_failure" not in active
+
+
 def test_workflow_trust_boundaries_and_pinned_actions():
     import re
     from pathlib import Path
