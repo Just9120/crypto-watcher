@@ -34,6 +34,7 @@ SUBSCRIPTION_BUFFER_BYTES = 2 * 1024 * 1024
 SUBSCRIPTION_SHARD_TOPICS = 100
 SESSION_SHUTDOWN_SECONDS = 15
 MANAGER_INTERVAL_SECONDS = 5
+ObservationCallback = Callable[[str, list[Candle], float, float, int, bool], None]
 
 
 def topic(stream: str) -> str:
@@ -147,7 +148,14 @@ class BybitRadar(BybitREST):
                 "retention",
             )
         }
-        self.on_observation: Callable[[str, list[Candle], float, float, int, bool], None] | None = None
+        self._timing_stack: list[list[float]] = []
+        self.on_observation: ObservationCallback | None = None
+        self._transaction_observer: tuple[ObservationCallback, ObservationCallback] | None = None
+
+    def bind_observation(self, callback: ObservationCallback, transactional: ObservationCallback) -> None:
+        """Bind the synchronous joined form only while this observer is installed."""
+        self.on_observation = callback
+        self._transaction_observer = callback, transactional
 
     def _measure(self, name: str, call: Callable[[], Any]) -> Any:
         with self._timed(name):
@@ -155,21 +163,39 @@ class BybitRadar(BybitREST):
 
     @contextmanager
     def _timed(self, name: str) -> Iterator[None]:
-        """Measure synchronous work only; callers must not await in this scope."""
+        """Measure exclusive synchronous work; callers must not await here."""
         value = self._work_timing[name]
         began, cpu = time.monotonic(), time.thread_time()
+        children = [0.0, 0.0]
+        self._timing_stack.append(children)
         try:
             yield
         except BaseException:
             value["failures"] += 1
             raise
         finally:
+            elapsed = max(0.0, time.monotonic() - began)
+            used_cpu = max(0.0, time.thread_time() - cpu)
+            self._timing_stack.pop()
+            if self._timing_stack:
+                self._timing_stack[-1][0] += elapsed
+                self._timing_stack[-1][1] += used_cpu
             value["calls"] += 1
-            value["active_seconds"] += max(0.0, time.monotonic() - began)
-            value["cpu_seconds"] += max(0.0, time.thread_time() - cpu)
+            value["active_seconds"] += max(0.0, elapsed - children[0])
+            value["cpu_seconds"] += max(0.0, used_cpu - children[1])
 
-    def publish_observation(self, stream: str, *, live: bool, through: int | None = None) -> None:
-        if self.on_observation is None or stream in self.sources.blocked:
+    def publish_observation(
+        self,
+        stream: str,
+        *,
+        live: bool,
+        through: int | None = None,
+        _source: Sources | None = None,
+        _callback: ObservationCallback | None = None,
+    ) -> None:
+        source = self.sources if _source is None else _source
+        callback = self.on_observation if _callback is None else _callback
+        if callback is None or stream in source.blocked:
             return
         instrument = stream.rsplit("/", 1)[0]
         settings = self.store.snapshot().settings
@@ -180,12 +206,11 @@ class BybitRadar(BybitREST):
         liquidity = finite(self.tickers[instrument]["turnover24h"])
         if liquidity < settings.liquidity_floor_24h:
             return
-        candles = sorted(self.sources.windows[stream].values(), key=lambda c: c.start)
+        candles = sorted(source.windows[stream].values(), key=lambda c: c.start)
         if through is not None:
             candles = [c for c in candles if c.start <= through]
         if not candles:
             return
-        callback = self.on_observation
         now_ms = self.server_now()
         self._measure(
             "observation",
@@ -761,10 +786,30 @@ class BybitRadar(BybitREST):
                 if previous_end and candle.start > previous_end:
                     self.record_gap(stream, previous_end, candle.start - 1)
                 previous = self.sources.windows[stream].get(candle.start)
-                advanced = self._measure(
-                    "closed_ws_source", lambda: self.sources.put(stream, [candle], live=fresh)
-                )
-                if previous is None:
+                observer = self._transaction_observer
+                handled = False
+
+                def after_write(candidate: Sources, advanced: bool) -> None:
+                    nonlocal handled
+                    if observer is not None and self.on_observation is observer[0]:
+                        self.publish_observation(
+                            stream,
+                            live=advanced,
+                            through=candle.start,
+                            _source=candidate,
+                            _callback=observer[1],
+                        )
+                        handled = True
+
+                joined = previous is None and observer is not None and self.on_observation is observer[0]
+
+                def write_source() -> bool:
+                    if joined:
+                        return self.sources.put(stream, [candle], live=fresh, after_write=after_write)
+                    return self.sources.put(stream, [candle], live=fresh)
+
+                advanced = self._measure("closed_ws_source", write_source)
+                if previous is None and not handled:
                     self.publish_observation(stream, live=advanced, through=candle.start)
                 if (
                     stream in self.sources.blocked
@@ -1133,7 +1178,7 @@ class BybitRadar(BybitREST):
                 "manager_failures": dict(self._manager_failures),
                 "work_timing": {
                     "schema": "cryptowatcher.ingestion-work.v1",
-                    "basis": "process-lifetime thread CPU and synchronous active wall; includes current recovery source writes, referenced response validation/publication, repack slices and retention; excludes wire decoding/discovery, REST/async waits, recovery selection/retirement and shared readonly preparation",
+                    "basis": "process-lifetime exclusive thread CPU and synchronous active wall; nested measured stages are subtracted from parents; includes current recovery source writes, referenced response validation/publication, repack slices and retention; excludes wire decoding/discovery, REST/async waits, recovery selection/retirement and shared readonly preparation",
                     "stages": {name: dict(value) for name, value in self._work_timing.items()},
                 },
                 "scope_synced": self.scope_synced(),

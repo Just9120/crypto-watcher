@@ -989,3 +989,48 @@ async def test_completed_initial_repack_continues_pending_live_work_in_the_exist
         await controller.repack_job(None)
         assert repack.call_count == 2
     await radar.close()
+
+
+async def test_analytics_preserves_serial_readers_and_the_finite_comparison_budget(
+    store, infrastructure, monkeypatch
+):
+    controller, radar, _ = steady_repack(store, infrastructure, monkeypatch)
+    order = []
+
+    async def outcomes(clock):
+        order.append("outcome-start")
+        await asyncio.sleep(0)
+        order.append("outcome-done")
+        return 3
+
+    async def comparisons(worker, clock, *, seconds):
+        assert order == ["outcome-start", "outcome-done"]
+        assert seconds == 4
+        order.append("comparison-start")
+        await asyncio.sleep(0)
+        order.append("comparison-done")
+        return 2
+
+    def retention(now):
+        assert controller.retention_lock.locked()
+        order.append("retention")
+
+    monkeypatch.setattr(controller, "retention_once", retention)
+    with (
+        patch.object(controller.outcomes, "async_work", new=outcomes),
+        patch("cryptowatcher.bot.ComparisonWorker.async_work", new=comparisons),
+        patch("cryptowatcher.storage_meter.sample", side_effect=lambda *args: order.append("meter")),
+    ):
+        await controller.analytics_job(None)
+    assert order == [
+        "outcome-start",
+        "outcome-done",
+        "comparison-start",
+        "comparison-done",
+        "retention",
+        "meter",
+    ]
+    value = store.get_runtime("analytics")
+    assert value["state"] == "OK" and value["processed_outcomes"] == 3 and value["processed_comparisons"] == 2
+    assert not controller.analytics_lock.locked() and not controller.retention_lock.locked()
+    await radar.close()

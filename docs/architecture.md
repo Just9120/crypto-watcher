@@ -51,6 +51,22 @@ Binding/activation/recovery — в [agent procedure](runbooks/agent-delivery.md)
 
 Owner configuration loop применяет смену selected source scope независимо от REST discovery/backoff. Reconcile сериализован; завершившийся старый REST refresh перечитывает owner revision и не возвращает прежний scope. Диагностика отдельно показывает revision applied scope, metadata readiness, freshness и completeness.
 
+Штатный WS observer имеет зарегистрированную форму, присоединяющуюся к source
+transaction. Закрытая свеча, EventEngine и consumer intents фиксируются одним
+commit; prospective source window используется только синхронно, без await.
+Опубликованный RAM window/live/gap state меняется после успешного commit.
+Ошибка consumer откатывает эту единицу целиком. Standalone/replaced observers
+сохраняют прежний вызов после source commit. Нового durable queue или формата нет.
+
+Readonly outcome/comparison preparation выполняется последовательно. Controller
+сохраняет256/64result batches и four publication lanes; comparison preparation
+получает4s вместо2s, чтобы использовать уже подготовленную frozen population
+до открытия следующего snapshot. Standalone defaults не меняются. Это soft
+межоперационный deadline: один начатый расчёт по-прежнему может его превысить.
+CPU/active-wall stage counters исключают вложенные measured stages из parent,
+поэтому source и observation work не суммируются дважды. Фактическая устойчивость
+и ресурсный бюджет подтверждаются отдельно по [плану](open_issues.md).
+
 Retirement прежних WS tasks ограничен15s: при timeout ownership/groups сохраняются,
 replacement не запускается до их завершения. Manager и configuration loop повторяют
 незавершённый reconcile даже при уже применённом active stream set/revision.
