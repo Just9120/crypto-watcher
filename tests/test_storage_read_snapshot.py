@@ -1,9 +1,11 @@
+import json
 from contextlib import closing
 
 import pytest
 
 from cryptowatcher import numeric_blocks, numeric_pool
-from cryptowatcher.storage import Store
+from cryptowatcher.storage import RUNTIME_UPSERT, Store, encode
+from tests.test_cli import cli
 from tests.test_numeric_blocks import setup
 from tests.test_quality_packets import metric
 
@@ -56,3 +58,53 @@ def test_readonly_initialization_keeps_corruption_fatal_and_releases_its_snapsho
     assert store.db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0
     with closing(Store(store.path, store.owner_id, readonly=True)) as reader:
         assert numeric_blocks.summary(reader.db)["details"] == 1
+
+
+@pytest.mark.parametrize("bounded", [False, True])
+def test_diagnostics_cli_reads_correlated_records_from_one_committed_state(
+    store, infrastructure, monkeypatch, capsys, bounded
+):
+    from cryptowatcher import diagnostics
+
+    if bounded:
+        setup(store)
+
+    def publish(stamp):
+        with store.db:
+            store.db.executemany(
+                RUNTIME_UPSERT,
+                [
+                    ("heartbeat", encode({"at": stamp, "revision": "a" * 40})),
+                    ("last_poll_status", encode({"at": stamp, "state": "OK", "available": 1})),
+                ],
+            )
+
+    publish(1)
+    original_get = Store.get_runtime
+    original_snapshot = diagnostics.snapshot
+    inside = False
+    published = False
+
+    def interleaved_get(reader, key, default=None):
+        nonlocal published
+        value = original_get(reader, key, default)
+        if reader.readonly and inside and key == "heartbeat" and not published:
+            published = True
+            publish(2)
+        return value
+
+    def snapshot(reader, *args, **kwargs):
+        nonlocal inside
+        inside = True
+        try:
+            return original_snapshot(reader, *args, **kwargs)
+        finally:
+            inside = False
+
+    monkeypatch.setattr(Store, "get_runtime", interleaved_get)
+    monkeypatch.setattr(diagnostics, "snapshot", snapshot)
+    assert cli(monkeypatch, infrastructure, "diagnostics") == 0
+    result = json.loads(capsys.readouterr().out)
+    assert published
+    assert result["heartbeat"]["at"] == result["last_poll"]["at"]
+    assert store.get_runtime("heartbeat")["at"] == 2
