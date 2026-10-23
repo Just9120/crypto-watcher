@@ -4,11 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from . import catalogue_aliases, catalogue_overlap, catalogue_reader, packet_store, record_catalog
+from .expiry_index import hot_binding
+from .indexed_frame import FrameSizeError
 from .record_blocks import KINDS, Coordinate
 from .storage import StateError, Store, encode
+
+if TYPE_CHECKING:
+    from .events import History
 
 
 @contextmanager
@@ -25,6 +30,88 @@ def scope(store: Store) -> Iterator[bool]:
         if not catalogue_reader.reading(store.db):
             raise StateError("Concurrent catalogue activation change")
         yield True
+
+
+def publish_revision(
+    history: History,
+    kind: str,
+    value: dict[str, Any],
+    packed: Any,
+    head: dict[str, Any] | None,
+) -> bool:
+    """Keep supported new results in the final catalogue, inside their writer tx.
+
+    The caller has checked immutable/head identity and normalized all source
+    leases. Unsupported records retain the hot path; no format is installed.
+    """
+    store = history.store
+    if (
+        kind not in ("outcome", "comparison")
+        or value.get("schema") != f"cryptowatcher.{kind}.v1"
+        or not store.bounded
+    ):
+        return False
+    identity = value.get(f"{kind}_id")
+    revision = value.get("revision")
+    event = value.get("event_id")
+    if not isinstance(identity, str) or not isinstance(event, str) or type(revision) is not int:
+        return False
+    coordinate = Coordinate(kind, identity, revision)
+    try:
+        coordinate.validate()
+        Coordinate("event", event, 1).validate()
+    except ValueError:
+        return False  # Older non-canonical namespaces keep their existing path.
+    if not catalogue_reader.reading(store.db):
+        return False
+    if not store.db.in_transaction:
+        raise StateError("Final result publication requires the writer transaction")
+    parent = store.db.execute(
+        "SELECT id,expires FROM market_record_parents WHERE public_uuid=?",
+        (record_catalog.binary(event),),
+    ).fetchone()
+    lease = hot_binding(store.db, f"radar:v1:event-head:{event}")
+    observed = 0
+    if parent is None:
+        if lease is None or lease[1:] != ("event-head", event):
+            return False
+        root = history.metadata("event-head:" + event)
+        if (
+            not isinstance(root, dict)
+            or root.get("event_id") != event
+            or type(root.get("market_observation_ms")) is not int
+        ):
+            return False
+        observed, expiry = root["market_observation_ms"], lease[0]
+    else:
+        if type(parent[0]) is not int or parent[0] < 1 or type(parent[1]) is not int:
+            raise StateError("Invalid frozen result retention anchor")
+        expiry = parent[1]
+        if lease is not None and lease[0] != expiry:
+            raise StateError("Conflicting frozen parent expiry")
+    projected = history._head(kind, value, coordinate.key, bounded=True)
+    current = head is None or value["revision"] > head["revision"]
+    try:
+        with packet_store.atomic(store.db):
+            # The same prepared-parent state is already used by transfer.
+            # Do not publish a history alias or move the retained event here.
+            owner = (
+                parent[0] if parent is not None else record_catalog.parent(store.db, event, observed, expiry)
+            )
+            if current:
+                history._delete_raw(f"{kind}-head:{coordinate.identity}")
+            record_catalog.append(
+                store.db,
+                [(coordinate, packed, projected)],
+                bucket=expiry // 86400000,
+                owners={coordinate: owner},
+                deadlines={coordinate: None},
+                current=[coordinate] if current else [],
+            )
+    except FrameSizeError:
+        # The savepoint restores the old hot/cold head before the fallback.
+        return False
+    return True
 
 
 def checked_write(store: Store, key: str, value: Any) -> bool:
