@@ -1,3 +1,4 @@
+import json
 from contextlib import closing
 from copy import deepcopy
 from dataclasses import asdict
@@ -8,6 +9,7 @@ from cryptowatcher import catalogue_queue, record_catalog
 from cryptowatcher.analytics import ComparisonWorker
 from cryptowatcher.events import PREFIX, History
 from cryptowatcher.expiry_index import _renew_hot, expires
+from cryptowatcher.export import Selection, ndjson
 from cryptowatcher.indexed_frame import FrameSizeError
 from cryptowatcher.market_storage import read
 from cryptowatcher.outcomes import OutcomeWorker
@@ -262,3 +264,62 @@ def test_cold_result_expiry_does_not_extend_detail_retention_or_shorten_candle_r
     assert read(store.db, "spot/BTCUSDT/1m", NOW, NOW + 5 * MINUTE) == [asdict(c) for c in future()]
     assert store.db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     assert not store.db.execute("PRAGMA foreign_key_check").fetchall()
+
+
+@pytest.mark.parametrize("kind", ["outcome", "comparison"])
+@pytest.mark.parametrize("damage", ["packet", "counter", "layout"])
+def test_corruption_rejects_new_revision_without_hot_fallback_or_partial_write(store, kind, damage):
+    history, old = completed(store, kind)
+    coordinate = Coordinate(kind, old[kind + "_id"], old["revision"])
+    # completed() has already read the old value: a warm cache cannot hide damage.
+    with store.db:
+        if damage == "packet":
+            packet = record_catalog.row(store.db, coordinate)[0]
+            arena, offset = store.db.execute(
+                "SELECT arena,offset FROM market_packets WHERE id=?", (packet,)
+            ).fetchone()
+            with store.db.blobopen("market_packet_arenas", "payload", arena) as blob:
+                blob.seek(offset)
+                blob.write(b"bad!")
+        elif damage == "counter":
+            store.db.execute("DELETE FROM market_catalogue_index_counts WHERE name='owners'")
+        else:
+            store.db.execute("UPDATE market_meta SET value='unknown' WHERE key='record_catalogue_runtime'")
+    before = list(store.db.iterdump())
+    with pytest.raises(ValueError, match="checksum|counter|Unknown catalogue"), store.db:
+        history.version(kind, {**deepcopy(old), "revision": old["revision"] + 1})
+    assert list(store.db.iterdump()) == before
+
+
+@pytest.mark.parametrize("cold", [False, True])
+def test_export_restores_direct_results_and_old_revisions_from_a_pinned_snapshot(store, cold):
+    history, old = completed(store, "comparison", cold=cold)
+    original = {
+        (kind, key): value for kind in ("outcome", "comparison") for key, value in history.items(kind + ":")
+    }
+    assert original
+    before = list(store.db.iterdump())
+    with closing(Store(store.path, store.owner_id, readonly=True)) as reader:
+        stream = ndjson(reader, Selection())
+        manifest = json.loads(next(stream))
+        assert manifest["selected_events"] == history.count("event-head:")
+        newer = {**deepcopy(old), "revision": old["revision"] + 1, "unknown_next": [-0.0]}
+        with store.db:
+            history.version("comparison", newer)
+        rows = [json.loads(row) for row in stream]
+        exported = {
+            (
+                row["type"],
+                f"{row['type']}:{row['record'][row['type'] + '_id']}:{row['record']['revision']:010d}",
+            ): row["record"]
+            for row in rows
+            if row["type"] in ("outcome", "comparison")
+        }
+        assert exported.keys() == original.keys()
+        assert all(encode(exported[key]) == encode(value) for key, value in original.items())
+        assert reader.db.in_transaction is False
+        assert history.get("comparison-head:" + old["comparison_id"]) == newer
+        fresh = [json.loads(row) for row in ndjson(reader, Selection())]
+        assert any(row.get("record") == newer for row in fresh)
+        assert reader.db.total_changes == 0
+    assert list(store.db.iterdump()) != before  # Only the deliberate writer revision changed state.
