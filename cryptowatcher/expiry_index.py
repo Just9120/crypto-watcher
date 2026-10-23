@@ -198,6 +198,19 @@ def expires(db: sqlite3.Connection, key: str) -> Any:
     return (cold,)
 
 
+def put(db: sqlite3.Connection, key: str, expiry: int, category: str, event_id: str | None) -> None:
+    """Replace the binding in the caller's transaction without deleting its row."""
+    query = "INSERT INTO market_lifetimes VALUES (?,?,?,?)"
+    if db.execute("SELECT type FROM sqlite_master WHERE name='market_lifetimes'").fetchone()[0] != "view":
+        query += (
+            " ON CONFLICT(key) DO UPDATE SET expires=excluded.expires,"
+            "category=excluded.category,event_id=excluded.event_id"
+        )
+    # The normalized compatibility view already upserts the native binding.
+    # Retain its owner/index guards and avoid artificial delete/insert churn.
+    db.execute(query, (key, expiry, category, event_id))
+
+
 def remove(db: sqlite3.Connection, key: str) -> None:
     if db.execute("SELECT type FROM sqlite_master WHERE name='market_lifetimes'").fetchone()[0] != "view":
         db.execute("DELETE FROM market_lifetimes WHERE key=?", (key,))

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import math
 import os
 import sqlite3
+import sys
 import time
 from contextlib import closing
 from dataclasses import dataclass
@@ -214,6 +216,20 @@ def create_schema(database: sqlite3.Connection) -> None:
     """)
 
 
+def _immutable_size(value: Any) -> int | None:
+    size = sys.getsizeof(value)
+    if type(value) is tuple:
+        for child in value:
+            charge = _immutable_size(child)
+            if charge is None:
+                return None
+            size += charge
+            if size > 1024 * 1024:
+                return None
+        return size
+    return size if type(value) in (str, bytes, int, float, bool, type(None)) else None
+
+
 class Store:
     def __init__(self, path: Path, owner_id: int, *, readonly: bool = False) -> None:
         number(owner_id, "owner_id", integer=True)
@@ -225,7 +241,7 @@ class Store:
         self.comparison_population: tuple[Any, Any] | None = None
         self.analytics_ranges: dict[tuple[str, int, int, int], tuple[tuple[Any, ...], int]] = {}
         self.analytics_range_bytes = 0
-        self.reference_cache: dict[tuple[str, str, str | bytes], tuple[str | bytes, int]] = {}
+        self.reference_cache: dict[tuple[str, str, str | bytes], tuple[str | bytes | OwnerSettings, int]] = {}
         self.reference_cache_bytes = 0
         self.clock_ms = lambda: int(time.time() * 1000)
         if path.exists():
@@ -478,22 +494,50 @@ class Store:
         token = (kind, key, raw)
         cached = self.reference_cache.get(token)
         if cached is not None:
-            return cached[0]
+            value = cached[0]
+            if isinstance(value, OwnerSettings):
+                raise StateError("Invalid pure cache result")
+            return value
         result = read()
         if not isinstance(result, (str, bytes)):
             raise StateError("Invalid pure cache result")
-        import sys
-
         # Unicode can use four bytes per character even when almost all of a
         # JSON string is ASCII. Charge Python objects, not UTF8 lengths.
         size = sys.getsizeof(key) + sys.getsizeof(raw) + sys.getsizeof(result) + 384
+        self._remember(token, result, size)
+        return result
+
+    def _remember(
+        self, token: tuple[str, str, str | bytes], value: str | bytes | OwnerSettings, size: int
+    ) -> None:
         if size <= 1024 * 1024:
             while self.reference_cache and self.reference_cache_bytes + size > 1024 * 1024:
                 removed = self.reference_cache.pop(next(iter(self.reference_cache)))
                 self.reference_cache_bytes -= removed[1]
-            self.reference_cache[token] = (result, size)
+            self.reference_cache[token] = (value, size)
             self.reference_cache_bytes += size
-        return result
+
+    def _parsed_settings(self, raw: str | bytes) -> OwnerSettings:
+        token = ("immutable-owner-settings", "", raw)
+        cached = self.reference_cache.get(token)
+        if cached is not None:
+            value = cached[0]
+            if not isinstance(value, OwnerSettings):
+                raise StateError("Invalid pure owner settings cache")
+        else:
+            value = OwnerSettings.from_payload(json.loads(raw))
+            fields = vars(value)
+            size = sys.getsizeof(raw) + sys.getsizeof(value) + sys.getsizeof(fields) + 384
+            for key, field in fields.items():
+                charge = _immutable_size(field)
+                if charge is None:
+                    break  # A future mutable field must retain uncached validation.
+                size += sys.getsizeof(key) + charge
+            else:
+                self._remember(token, value, size)
+        # The cached object never escapes. Even callers touching __dict__ cannot
+        # mutate the next snapshot; validated fields themselves are immutable.
+        return copy.copy(value)
 
     def initialize(self, defaults: OwnerSettings, *, legacy: Path | None = None) -> None:
         if self.db.execute("SELECT 1 FROM owner_settings").fetchone():
@@ -514,9 +558,7 @@ class Store:
         if row is None:
             raise StateError("Owner configuration missing")
         try:
-            return Snapshot(
-                int(row["revision"]), OwnerSettings.from_payload(json.loads(row["settings_json"]))
-            )
+            return Snapshot(int(row["revision"]), self._parsed_settings(row["settings_json"]))
         except (ValueError, TypeError) as exc:
             raise StateError("Invalid persisted owner configuration") from exc
 

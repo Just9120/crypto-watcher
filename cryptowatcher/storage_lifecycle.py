@@ -8,6 +8,7 @@ from typing import Any
 
 from .expiry_index import expires as saved_expiry
 from .expiry_index import member_deadline
+from .expiry_index import put as put_expiry
 from .expiry_index import remove as remove_expiry
 from .expiry_index import renew as renew_expiry
 from .reference_layout import owner_refs, remove_owner
@@ -154,10 +155,7 @@ def track(store: Store, key: str, value: Any) -> None:
         expiry = now + days * DAY
     elif category in ("condition", "diagnostic", "oi-attempt"):
         expiry = now + store.snapshot().settings.candle_retention_days * DAY
-    # Delete/insert also supports the normalized compatibility view. Both remain
-    # in the caller's transaction, including counter/ref updates and rollback.
-    remove_expiry(store.db, key)
-    store.db.execute("INSERT INTO market_lifetimes VALUES (?,?,?,?)", (key, expiry, category, event_id))
+    put_expiry(store.db, key, expiry, category, event_id)
     if (
         isinstance(value, dict)
         and value.get("state") in TERMINAL_DELIVERY | {"COMPLETE", "EXPIRED_RETENTION_INCOMPLETE"}
