@@ -308,7 +308,12 @@ def main() -> int:
                 else:
                     from .diagnostics import snapshot as diagnostic_snapshot
 
-                    print(json.dumps(diagnostic_snapshot(store)))
+                    store.db.execute("BEGIN")
+                    try:
+                        diagnostic = diagnostic_snapshot(store)
+                    finally:
+                        store.db.rollback()
+                    print(json.dumps(diagnostic))
                 return 0
             finally:
                 store.close()

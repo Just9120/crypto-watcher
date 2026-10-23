@@ -209,9 +209,50 @@ def run(args: list[str], *, env: dict[str, str] | None = None, timeout: int = 12
         raise DeploymentError("Operation time budget exceeded") from exc
     # Never echo subprocess stderr or env-file/config contents into Actions logs.
     if result.returncode != 0:
+        capture_diagnostic_failure(args, result)
         capture_validation_failure(args, result)
     require(result.returncode == 0, f"Operation failed: {args[0]} exit {result.returncode}")
     return result.stdout.strip()
+
+
+def capture_diagnostic_failure(args: list[str], result: Any) -> None:
+    """Keep fixed attribution for the post-check CLI without retaining stderr."""
+    if (
+        ACTIVE_RECORD is None
+        or ACTIVE_RECORD.get("phase") != "POST_CHECKS"
+        or args != ["docker", "exec", "crypto-watcher", "python", "-m", "cryptowatcher", "diagnostics"]
+        or type(result.returncode) is not int
+        or result.returncode == 0
+        or not -255 <= result.returncode <= 255
+    ):
+        return
+    detail: dict[str, Any] = {"command": "diagnostics", "exit_status": result.returncode}
+    stderr = result.stderr
+    if isinstance(stderr, str) and len(stderr) <= 65536:
+        try:
+            lines = stderr.strip().splitlines()
+            failure = json.loads(lines[-1]) if lines else None
+        except (ValueError, TypeError, RecursionError):
+            failure = None
+        if isinstance(failure, dict) and failure.get("status") == "blocked":
+            reason = failure.get("reason")
+            if isinstance(reason, str):
+                allowed = {
+                    "ValueError",
+                    "KeyError",
+                    "TypeError",
+                    "OperationalError",
+                    "DatabaseError",
+                    "MemoryError",
+                    "RecursionError",
+                    "OverflowError",
+                    "IntegrityError",
+                }
+                detail["reason_kind"] = reason if reason in allowed else "STATE_OR_CONFIGURATION_ERROR"
+                detail["reason_sha256"] = hashlib.sha256(
+                    reason.encode("utf-8", errors="backslashreplace")
+                ).hexdigest()
+    ACTIVE_RECORD["post_check_failure"] = detail
 
 
 def capture_validation_failure(args: list[str], result: Any) -> None:
