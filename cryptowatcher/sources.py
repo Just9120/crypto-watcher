@@ -10,7 +10,7 @@ import hashlib
 import json
 from array import array
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Callable
 
 from . import market_storage
 from .config import TIMEFRAMES
@@ -110,7 +110,21 @@ class Sources:
         self.revisions[stream] = revisions
         # Persisted sources may assist recovery; they never re-enter the live channel.
 
-    def put(self, stream: str, candles: list[Candle], *, live: bool = False, recovery: bool = False) -> bool:
+    def put(
+        self,
+        stream: str,
+        candles: list[Candle],
+        *,
+        live: bool = False,
+        recovery: bool = False,
+        after_write: Callable[[Sources, bool], None] | None = None,
+    ) -> bool:
+        """Persist the source and optional durable intent in one transaction.
+
+        The internal callback receives a prospective window after source writes,
+        before commit. It must neither commit nor await. Actual memory/live state
+        is published only after this transaction commits successfully.
+        """
         self.load(stream)
         window = self.windows[stream]
         previous = max(window, default=-1)
@@ -134,6 +148,25 @@ class Sources:
             if existing and existing.row() == candle.row():
                 continue
             writes.append((self.prefix(stream) + f"{candle.start:016d}", encode(asdict(candle))))
+        prospective = dict(window)
+        for candle in candles:
+            existing = prospective.get(candle.start)
+            if existing is None or existing.row() != candle.row():
+                prospective[candle.start] = candle
+        while len(prospective) > WINDOW_SIZE:
+            oldest = min(prospective)
+            del prospective[oldest]
+            revisions.pop(oldest, None)
+        ordered = sorted(prospective)
+        latest = max(prospective, default=-1)
+        advanced = latest > previous
+        next_live = None if recovery else self.live.get(stream)
+        next_blocked = None if recovery else self.blocked.get(stream)
+        if live and advanced and latest == max((c.start for c in candles), default=-1):
+            next_live = latest
+        if any(b - a != prospective[b].step for a, b in zip(ordered, ordered[1:])):
+            next_blocked = "candle_gap"
+            next_live = None
         # Save before exposing to the detector/Telegram consumer.
         admitted: list[tuple[int, int, int]] = []
         with self.store.db:
@@ -146,33 +179,33 @@ class Sources:
                 )
             else:
                 self.store.db.executemany(RUNTIME_UPSERT, writes)
-        written = {start: revision for _, start, revision in admitted}
-        for candle in candles:
-            existing = window.get(candle.start)
-            if existing is None or existing.row() != candle.row():
-                window[candle.start] = candle
-                if self.store.bounded:
-                    revisions[candle.start] = written[candle.start]
-        while len(window) > WINDOW_SIZE:
-            oldest = min(window)
-            del window[oldest]
-            revisions.pop(oldest, None)
-        ordered = sorted(window)
-        self.revisions[stream] = (
-            array("Q", (revisions[start] for start in ordered))
-            if self.store.bounded and all(start in revisions for start in ordered)
-            else array("Q")
-        )
-        if recovery:
+            revisions.update((start, revision) for _, start, revision in admitted if start in prospective)
+            next_revisions = (
+                array("Q", (revisions[start] for start in ordered))
+                if self.store.bounded and all(start in revisions for start in ordered)
+                else array("Q")
+            )
+            if after_write is not None:
+                candidate = Sources(self.store)
+                candidate.windows[stream] = prospective
+                candidate.revisions[stream] = next_revisions
+                if next_blocked is not None:
+                    candidate.blocked[stream] = next_blocked
+                if next_live is not None:
+                    candidate.live[stream] = next_live
+                after_write(candidate, advanced)
+        window.clear()
+        window.update(prospective)
+        self.revisions[stream] = next_revisions
+        if next_live is None:
             self.live.pop(stream, None)
+        else:
+            self.live[stream] = next_live
+        if next_blocked is None:
             self.blocked.pop(stream, None)
-        latest = max(window, default=-1)
-        if live and latest > previous and latest == max((c.start for c in candles), default=-1):
-            self.live[stream] = latest
-        if any(b - a != window[b].step for a, b in zip(ordered, ordered[1:])):
-            self.blocked[stream] = "candle_gap"
-            self.live.pop(stream, None)
-        return latest > previous
+        else:
+            self.blocked[stream] = next_blocked
+        return advanced
 
     def rows(self, stream: str, count: int) -> list[list[Any]]:
         self.load(stream)

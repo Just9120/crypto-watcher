@@ -5,6 +5,7 @@ from dataclasses import asdict
 import pytest
 
 from cryptowatcher import market_storage as market
+from cryptowatcher.events import History
 from cryptowatcher.market import MarketError
 from cryptowatcher.sources import WINDOW_SIZE, Sources
 from cryptowatcher.storage import Store, encode
@@ -137,3 +138,61 @@ def test_chunks_authenticate_every_original_coordinate_independently(source_stat
     invalid["sha256"] = "0" * 64
     with pytest.raises(ValueError, match="hash mismatch"):
         restored(store, invalid)
+
+
+def test_source_and_durable_intent_commit_together_and_never_expose_failed_memory(source_state):
+    store, sources, stream = source_state
+    sources.put(stream, [candle(1)], recovery=True)
+    original = sources.snapshot_reference(stream)
+    captured = []
+
+    def admit(candidate, advanced):
+        assert advanced and store.db.in_transaction
+        assert sources.snapshot_reference(stream) == original
+        reference = candidate.snapshot_reference(stream)
+        assert restored(store, reference) == [asdict(candle(1)), asdict(candle(2))]
+        # A separate observer must see neither the new source nor its intent.
+        other = Store(store.path, store.owner_id, readonly=True)
+        try:
+            assert Sources(other).snapshot_reference(stream) == original
+            assert History(other).get("observation-test:pending") is None
+        finally:
+            other.close()
+        History(store).put("observation-test:pending", {"reference": reference})
+        captured.append(reference)
+
+    def fail_after_admission(candidate, advanced):
+        admit(candidate, advanced)
+        raise RuntimeError("interrupted atomic source intent")
+
+    with pytest.raises(RuntimeError, match="atomic source intent"):
+        sources.put(stream, [candle(2)], live=True, after_write=fail_after_admission)
+    assert sources.snapshot_reference(stream) == original
+    assert History(store).get("observation-test:pending") is None
+    assert Sources(store).snapshot_reference(stream) == original
+    assert not sources.live
+    sources.put(stream, [candle(2)], live=True, after_write=admit)
+    assert sources.live[stream] == 2 * STEP
+    assert sources.snapshot_reference(stream) == captured[-1]
+    other = Store(store.path, store.owner_id, readonly=True)
+    try:
+        assert Sources(other).snapshot_reference(stream) == captured[-1]
+        assert History(other).get("observation-test:pending") == {"reference": captured[-1]}
+        assert other.db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert not other.db.execute("PRAGMA foreign_key_check").fetchall()
+    finally:
+        other.close()
+
+
+def test_atomic_source_callback_sees_final_gap_and_recovery_eligibility(source_state):
+    _, sources, stream = source_state
+    sources.put(stream, [candle(1)], recovery=True)
+    eligibility = []
+
+    def capture(candidate, advanced):
+        eligibility.append((candidate.blocked.get(stream), candidate.live.get(stream), advanced))
+
+    sources.put(stream, [candle(3)], live=True, after_write=capture)
+    assert eligibility[-1] == ("candle_gap", None, True)
+    sources.put(stream, [candle(2)], recovery=True, after_write=capture)
+    assert eligibility[-1] == (None, None, False)

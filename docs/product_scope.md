@@ -20,6 +20,7 @@ CryptoWatcher — личный deterministic market radar владельца д�
 | S07 | Явное поручение владельца16Oct2026: реализовать исправления роста и поставить через CD, сохранив полезную history/analytics/coverage/retention и900s backup/CD | Scope GROW/D24; source epoch не сбрасывается; показать measured post-report относительно20GB |
 | S08 | Поручение владельца16Oct2026 после handoff: сначала реальные источники/cardinality/revisions/comparators/services, затем подтвержденные fixes; controlled retention и автоматический24h замер после стабилизации | Уточнение evidence AC-13, без нового reset, сокращения scope/точности/retention или равенства CI/CD и capacity PASS |
 | S04 | Уточнение владельца 2026-10-10: бот работает на VPS Contabo; Telegram owner — владелец | Deployment context; assertion владельца не доказывает deployed revision или gates |
+| S09 | Уточнение владельца23Oct2026: устойчивый CryptoWatcher на общем Contabo VPS важнее отдельной экономии БД; измерить ресурсы всего host/вклад проекта и normal/recovery/retention/compression/repack, определить бюджет с запасом | Расширяет evidence/DoD текущей CAPACITY25: общая CPU/RAM/I/O нагрузка, DB+sidecars<=25GB, freshness, только просроченные расчёты и Telegram; сохранить функционал/точность/retention, другие проекты и ресурсы VPS не менять; после стабилизации неизменной версии30min/24h, при объективной нехватке представить измерения/варианты |
 
 S01 и последующие явные решения владельца задают intent. Этот файл фиксирует его декомпозицию. State contract описывает current physical schema2 и сохраненную legacy chat-based/import compatibility после консолидации PR41; при противоречии актуальным требованиям приоритет у этого spec. Код сам по себе не создаёт требования. Внешние hyperlinks в repository documentation не добавляются; source IDs и названия позволяют восстановить evidence.
 
@@ -215,9 +216,11 @@ Digest агрегирует существующие events/episodes обоих 
 
 ### E12 — Технические границы, CI/CD и эксплуатация
 
-Requirement `REQ-E12`; трассировка: S01 / ТЕХНИЧЕСКИЙ КОНТУР; DEPLOYMENT; DIAGNOSTICS; S02 AGENTS.
+Requirement `REQ-E12`; трассировка: S01 / ТЕХНИЧЕСКИЙ КОНТУР; DEPLOYMENT; DIAGNOSTICS; S02 AGENTS; S09 shared Contabo resource evidence.
 
 Один deployable Python сервис допустим при подходящей нагрузке; ingestion/detectors/episodes/persistence/analytics/Telegram логически разделены. Docker/VPS и GitHub Actions CI→merge→CD. Никаких придуманных SLO, числа environments или горизонтальных replicas. Перед runtime delivery устанавливаются target/config/artifact/preconditions/recovery/version/health/smoke.
+
+По S09 подходящая нагрузка подтверждается сопоставимыми измерениями всего VPS и CryptoWatcher: CPU, resident/cache memory, physical I/O/pressure и запас соседним проектам. Установившаяся работа отделяется от конечных затрат recovery, штатного expiry, compression/repack и backup; одни lossless disk savings или CI этого не доказывают. Ресурсный бюджет выводится из измерений в текущей Goal, не подменяется слепой CPU quota. Приёмка совместно проверяет объём/рост БД со служебными файлами, свежесть источников, возраст due-only backlog и Telegram freshness/timeliness; future horizons не считаются отставанием. После recovery/repack нужны неизменная revision/config/generation, существующий30min stable gate и полный24h result. Новых AC IDs/процентов или выдуманного абсолютного Telegram SLO это уточнение не создаёт.
 
 | AC | Критерий и способ проверки |
 | --- | --- |

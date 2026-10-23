@@ -7,6 +7,7 @@ import json
 import math
 import re
 import uuid
+from contextlib import nullcontext
 from dataclasses import asdict
 from typing import Any, Callable, Iterator
 
@@ -14,7 +15,7 @@ from .detector_config import FAMILIES, effective_parameters
 from .detectors import FORMULAS, UNITS, VERSIONS, Detection, DetectorUnavailable, atr14, evaluate, freshness
 from .history_codec import Codec
 from .sources import Candle
-from .storage import RUNTIME_UPSERT, StateError, Store, encode
+from .storage import RUNTIME_UPSERT, Snapshot, StateError, Store, encode
 
 PREFIX = "radar:v1:"
 HEAD_SCHEMA = "cryptowatcher.history-head.v1"
@@ -449,12 +450,16 @@ class EventEngine:
         source_context: dict[str, Any] | None = None,
         enrichment: dict[str, Any] | None = None,
         context_provider: Callable[[], tuple[dict[str, Any], dict[str, Any]]] | None = None,
+        snapshot: Snapshot | None = None,
+        commit: bool = True,
     ) -> None:
+        if not commit and not self.store.db.in_transaction:
+            raise StateError("Joined observation requires a producer transaction")
         if context_provider is not None and (source_context is not None or enrichment is not None):
             raise ValueError("Choose captured context or a synchronous context provider")
         if not candles:
             return
-        snapshot = self.store.snapshot()
+        snapshot = snapshot or self.store.snapshot()
         current = candles[-1]
         if self.store.bounded and current.end < self.store.get_runtime("history_generation", {}).get(
             "started_ms", 0
@@ -470,7 +475,7 @@ class EventEngine:
                 )
             except Exception as exc:
                 outputs.append((family, exc))  # One family never hides another family's observation.
-        with self.store.db:
+        with self.store.db if commit else nullcontext():
             self._close_due(now_ms, instrument)
             for family, result in outputs:
                 diagnostic = f"diagnostic:{stream}:{family}"
