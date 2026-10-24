@@ -26,6 +26,14 @@ from scripts.observe_capacity import advance, atomic
 from .test_outcomes import DAY, NOW, OutcomeWorker, Retention, Sources, future, observe
 
 
+@pytest.mark.parametrize("analytics", (None, {}, {"state": "FAILED"}))
+def test_incomplete_repack_and_absent_analytics_report_blockers_without_crashing(store, analytics):
+    store.put_runtime("analytics", analytics)
+    reasons = stable_reason(store)
+    assert "REPACK" in reasons
+    assert "ANALYTICS_NOT_CURRENT" in reasons
+
+
 @pytest.mark.parametrize("working_bytes", (25_000_000_000, 25_340_000_000, 30_000_000_000, 30_000_000_001))
 def test_owner_desired_target_is_advisory_and_complete_thirty_gb_limit_is_inclusive(
     store, monkeypatch, working_bytes
