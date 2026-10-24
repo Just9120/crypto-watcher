@@ -17,14 +17,14 @@ def framed(tmp_path, monkeypatch):
         "owner_id": 233382575,
         "configuration_revision": 5,
         "status": "integrity_ok",
-        "validation_mode": "FRAMED_DISK",
+        "validation_mode": "NATIVE_DISK_FRAMED",
         "legacy_sha256": "a" * 64,
         "settings_sha256": "e" * 64,
         "snapshot_sha256": "b" * 64,
     }
     proof = {
         "phase": "COMPLETE",
-        "validation_mode": "FRAMED_DISK",
+        "validation_mode": "NATIVE_DISK_FRAMED",
         "source_validation": source,
         "sha256": "b" * 64,
         "bytes": 11_000_119_296,
@@ -32,9 +32,13 @@ def framed(tmp_path, monkeypatch):
         "archive_bytes": 4096,
         "archive_sha256": "c" * 64,
         "archive_limit_bytes": 11_000_119_296,
-        "disk_reserve_bytes": 1536 * 1024**2,
-        "sqlite_cache_kib": 2 * 1024 * 1024,
-        "integrity_basis": "FULL_VALIDATED_CAPTURE_AND_INDEPENDENT_EQUAL_RAW_SHA256",
+        "disk_reserve_bytes": 6 * 1024**3,
+        "mmap_limit_bytes": 3 * 1024**3,
+        "temporary_raw_bytes": 11_000_119_296,
+        "raw_snapshot_removed": True,
+        "concurrent_disk_headroom_bytes": 1024**3,
+        "sqlite_cache_kib": 128 * 1024,
+        "integrity_basis": "FULL_NATIVE_DISK_CHECK_AND_INDEPENDENT_EQUAL_RAW_SHA256",
     }
     response = {"status": "backup_integrity_ok", "backup": proof}
 
@@ -47,7 +51,7 @@ def framed(tmp_path, monkeypatch):
         assert args[args.index("--memory-swap") + 1] == str(4 * 1024**3)
         assert args[args.index("--cpus") + 1] == "1"
         saved = json.loads((tmp_path / "record.json").read_text())
-        assert saved["state_validation_method"] == "FRAMED_DISK"
+        assert saved["state_validation_method"] == "NATIVE_DISK_FRAMED"
         assert saved["backup_validation_resources"] == saved["state_validation_resources"]
         return json.dumps(response)
 
@@ -79,6 +83,13 @@ def test_one_large_source_capture_and_persisted_proof_keep_fixed_resources_and_r
         ("source", "status", "partial"),
         ("source", "validation_mode", "COMPRESSED_RAM"),
         ("proof", "phase", "PENDING"),
+        ("proof", "validation_mode", "FRAMED_DISK"),
+        ("proof", "raw_snapshot_removed", False),
+        ("proof", "raw_snapshot_removed", 1),
+        ("proof", "temporary_raw_bytes", True),
+        ("proof", "temporary_raw_bytes", 4096),
+        ("proof", "mmap_limit_bytes", 2 * 1024**3),
+        ("proof", "concurrent_disk_headroom_bytes", 1),
         ("proof", "archive_bytes", True),
         ("proof", "archive_limit_bytes", 1),
         ("proof", "disk_reserve_bytes", 512),
@@ -133,7 +144,7 @@ def test_actions_accepts_exact_full_framed_proof_without_changing_mode_or_leakin
     completed = subprocess.CompletedProcess([], 0, stdout=json.dumps(response).encode(), stderr=b"")
     result, code = delivery_result(completed, revision="d" * 40, digest="f" * 64, build_run=1)
     assert code == 0 and result["state"] == "PASS"
-    assert result["backup_validation"]["validation_mode"] == "FRAMED_DISK"
+    assert result["backup_validation"]["validation_mode"] == "NATIVE_DISK_FRAMED"
     assert result["state_validation"]["snapshot_sha256"] == proof["sha256"]
     assert result["backup_validation"]["phase_seconds"] == {"SOURCE_COPY": 12.0, "FULL_INTEGRITY": 2}
     assert "secret" not in json.dumps(result) and "private-never-export" not in json.dumps(result)

@@ -1,14 +1,17 @@
 """Persistent source/backup identity and negative full-integrity gates."""
 
 import hashlib
+import json
+import os
 import sqlite3
 import time
 from contextlib import closing
+from types import SimpleNamespace
 
 import pytest
 import zstandard
 
-from cryptowatcher import framed_backup
+from cryptowatcher import native_disk_backup as framed_backup
 from cryptowatcher.compressed_validation import QualificationError
 from cryptowatcher.market_storage import enable
 from cryptowatcher.outcomes import OutcomeWorker
@@ -33,12 +36,15 @@ def test_schema2_full_source_and_independent_persisted_backup_equal_every_table(
     proof = framed_backup.backup(
         store.path, destination, scratch, owner=store.owner_id, deadline=time.monotonic() + 20
     )
-    assert proof["phase"] == "COMPLETE" and proof["validation_mode"] == "FRAMED_DISK"
+    assert proof["phase"] == "COMPLETE" and proof["validation_mode"] == framed_backup.MODE
     assert proof["source_validation"]["status"] == "integrity_ok"
     assert proof["source_validation"]["schema"] == 2
     assert proof["source_validation"]["snapshot_sha256"] == proof["sha256"]
     assert proof["archive_sha256"] == hashlib.sha256(destination.read_bytes()).hexdigest()
-    assert proof["sqlite_cache_kib"] == 2 * 1024 * 1024
+    assert proof["sqlite_cache_kib"] == 128 * 1024
+    assert proof["mmap_limit_bytes"] == 3 * 1024**3
+    assert proof["temporary_raw_bytes"] == proof["bytes"] and proof["raw_snapshot_removed"] is True
+    assert not (framed_backup.capture_directory(destination) / "snapshot.sqlite3").exists()
     from cryptowatcher.compressed_validation import validate_closed
 
     compatible = validate_closed(
@@ -58,22 +64,27 @@ def test_schema2_full_source_and_independent_persisted_backup_equal_every_table(
 
 
 def test_framed_backup_records_actual_configured_cache_and_refuses_mismatch(store, tmp_path, monkeypatch):
-    from cryptowatcher import compressed_validation as cv
+    from contextlib import contextmanager
 
     scratch, destination = environment(tmp_path, monkeypatch)
     snapshot = store.snapshot()
 
-    def wrong_cache(database, image):
-        database.execute("PRAGMA cache_size=-8192")
-        return 8192
+    original = framed_backup.validated_disk
 
-    monkeypatch.setattr(cv, "configure_cache", wrong_cache)
+    @contextmanager
+    def wrong_cache(path, *, deadline):
+        with original(path, deadline=deadline) as database:
+            database.execute("PRAGMA cache_size=-8192")
+            yield database
+
+    monkeypatch.setattr(framed_backup, "validated_disk", wrong_cache)
     with pytest.raises(QualificationError, match="SQLITE_VALIDATION_ERROR") as failure:
         framed_backup.backup(
             store.path, destination, scratch, owner=store.owner_id, deadline=time.monotonic() + 20
         )
-    assert failure.value.backup_metrics["phase"] == "SOURCE_METADATA"
-    assert store.snapshot() == snapshot and destination.is_file()
+    assert failure.value.backup_metrics["phase"] == "FULL_INTEGRITY"
+    assert store.snapshot() == snapshot
+    assert (framed_backup.capture_directory(destination) / "snapshot.sqlite3").is_file()
 
 
 def test_existing_archive_is_never_overwritten_after_repeated_request(store, tmp_path, monkeypatch):
@@ -105,9 +116,9 @@ def test_one_closed_file_digest_checks_capture_identity_without_a_duplicate_scan
         store.path, destination, scratch, owner=store.owner_id, deadline=time.monotonic() + 20
     )
     assert proof["phase"] == "COMPLETE"
-    # The captured digest and a distinct, closed-file persisted reader must
-    # match; a third complete scan of the same frozen bytes adds no evidence.
-    assert len(readers) == 2 and readers[0] is not readers[1]
+    # Raw bytes are fingerprinted before CHECK and measured again while encoding;
+    # one separately reopened archive reader proves the persisted representation.
+    assert len(readers) == 1
     assert all(arena.file.closed for arena in readers)
 
 
@@ -142,7 +153,8 @@ def test_corrupt_source_never_has_a_complete_backup_proof(store, tmp_path, monke
             store.path, destination, scratch, owner=store.owner_id, deadline=time.monotonic() + 20
         )
     assert result.value.backup_metrics["phase"] == "FULL_INTEGRITY"
-    assert destination.exists() and list(store.db.iterdump()) == original
+    assert (framed_backup.capture_directory(destination) / "snapshot.sqlite3").exists()
+    assert list(store.db.iterdump()) == original
 
 
 def test_archive_mutation_during_final_fingerprint_cannot_inherit_source_integrity(
@@ -152,8 +164,9 @@ def test_archive_mutation_during_final_fingerprint_cannot_inherit_source_integri
     original = framed_backup.fingerprint
 
     def changed(path, deadline):
-        with path.open("ab") as output:
-            output.write(b"x")
+        if path == destination:
+            with path.open("ab") as output:
+                output.write(b"x")
         return original(path, deadline)
 
     monkeypatch.setattr(framed_backup, "fingerprint", changed)
@@ -206,3 +219,88 @@ def test_wrong_owner_or_expired_deadline_never_creates_a_qualified_destination(s
             store.path, destination, scratch, owner=store.owner_id, deadline=time.monotonic() - 1
         )
     assert not destination.exists()
+
+
+def test_disk_admission_precedes_capture_and_charges_raw_archive_and_concurrent_headroom(
+    store, tmp_path, monkeypatch
+):
+    scratch, destination = environment(tmp_path, monkeypatch)
+    original = list(store.db.iterdump())
+    monkeypatch.setattr(framed_backup.shutil, "disk_usage", lambda path: SimpleNamespace(free=6 * 1024**3))
+    with pytest.raises(QualificationError, match="ARCHIVE_DISK_RESERVE"):
+        framed_backup.backup(
+            store.path, destination, scratch, owner=store.owner_id, deadline=time.monotonic() + 20
+        )
+    assert not destination.exists() and not framed_backup.capture_directory(destination).exists()
+    assert list(store.db.iterdump()) == original
+    raw = 10 * 1024**3
+    free = raw + framed_backup.DISK_RESERVE_BYTES + framed_backup.CONCURRENT_HEADROOM_BYTES + 2 * 1024**3
+    assert framed_backup.capacity(raw, free) == 2 * 1024**3
+
+
+def test_foreign_key_failure_preserves_private_capture_and_never_qualifies_archive(
+    store, tmp_path, monkeypatch
+):
+    scratch, destination = environment(tmp_path, monkeypatch)
+    store.db.executescript(
+        "PRAGMA foreign_keys=OFF; CREATE TABLE parent_proof(id INTEGER PRIMARY KEY); "
+        "CREATE TABLE child_proof(value REFERENCES parent_proof(id)); INSERT INTO child_proof VALUES(7);"
+    )
+    original = list(store.db.iterdump())
+    with pytest.raises(QualificationError, match="DATABASE_CORRUPT"):
+        framed_backup.backup(
+            store.path, destination, scratch, owner=store.owner_id, deadline=time.monotonic() + 20
+        )
+    capture = framed_backup.capture_directory(destination)
+    raw = capture / "snapshot.sqlite3"
+    assert raw.is_file() and not destination.exists()
+    assert json.loads((capture / "receipt.json").read_text())["state"] == "INCOMPLETE_RETAINED"
+    if os.name == "posix":
+        assert capture.stat().st_mode & 0o777 == 0o700
+        assert raw.stat().st_mode & 0o777 == 0o600
+        assert (capture / "receipt.json").stat().st_mode & 0o777 == 0o600
+    assert list(store.db.iterdump()) == original
+
+
+def test_pinned_capture_ignores_later_committed_writes_without_blocking_writer(store, tmp_path, monkeypatch):
+    scratch, destination = environment(tmp_path, monkeypatch)
+    store.put_runtime("pinned-proof", {"value": "before"})
+    original_capacity = framed_backup.capacity
+
+    def later_write(raw_bytes, free):
+        # Admission occurs after BEGIN + the first read, before native backup.
+        store.put_runtime("pinned-proof", {"value": "after"})
+        return original_capacity(raw_bytes, free)
+
+    monkeypatch.setattr(framed_backup, "capacity", later_write)
+    proof = framed_backup.backup(
+        store.path, destination, scratch, owner=store.owner_id, deadline=time.monotonic() + 20
+    )
+    restored = tmp_path / "concurrent-restored.db"
+    with destination.open("rb") as source, restored.open("xb") as output:
+        zstandard.ZstdDecompressor().copy_stream(source, output)
+    assert hashlib.sha256(restored.read_bytes()).hexdigest() == proof["sha256"]
+    with closing(Store(restored, store.owner_id, readonly=True)) as reader:
+        assert reader.get_runtime("pinned-proof") == {"value": "before"}
+    assert store.get_runtime("pinned-proof") == {"value": "after"}
+
+
+def test_mutation_after_full_check_cannot_inherit_integrity_and_preserves_capture(
+    store, tmp_path, monkeypatch
+):
+    scratch, destination = environment(tmp_path, monkeypatch)
+    original_image = framed_backup.Image
+
+    def changed(path, **kwargs):
+        with path.open("r+b") as stream:
+            stream.seek(-1, 2)
+            stream.write(b"x")
+        return original_image(path, **kwargs)
+
+    monkeypatch.setattr(framed_backup, "Image", changed)
+    with pytest.raises(QualificationError, match="BYTE_IDENTITY_MISMATCH"):
+        framed_backup.backup(
+            store.path, destination, scratch, owner=store.owner_id, deadline=time.monotonic() + 20
+        )
+    assert (framed_backup.capture_directory(destination) / "snapshot.sqlite3").is_file()
+    assert destination.exists()

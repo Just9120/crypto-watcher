@@ -40,13 +40,23 @@ def refused(code: str) -> Never:
 class ArchiveArena:
     """Bounded file storage with the same borrowed-buffer interface as RAM frames."""
 
-    def __init__(self, path: Path, *, max_raw_bytes: int, max_archive_bytes: int, deadline: float) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        max_raw_bytes: int,
+        max_archive_bytes: int,
+        deadline: float,
+        reserve_bytes: int = RESERVE_BYTES,
+    ) -> None:
         if (
             type(max_raw_bytes) is not int
             or max_raw_bytes <= 0
             or type(max_archive_bytes) is not int
             or max_archive_bytes <= PREFIX_BYTES
             or not math.isfinite(deadline)
+            or type(reserve_bytes) is not int
+            or reserve_bytes < RESERVE_BYTES
         ):
             refused("INVALID_ARCHIVE_BOUND")
         self.path = path
@@ -54,6 +64,7 @@ class ArchiveArena:
         self.max_raw_bytes = max_raw_bytes
         self.limit = max_archive_bytes
         self.deadline = deadline
+        self.reserve_bytes = reserve_bytes
         self.footer_reserve = (
             8 + HEADER.size + ENTRY.size * ((max_raw_bytes + BLOCK - 1) // BLOCK) + 32 + TAIL.size
         )
@@ -65,7 +76,7 @@ class ArchiveArena:
         self.data: mmap.mmap | None = None
         self.end = PREFIX_BYTES
         self._admit(0)
-        if shutil.disk_usage(self.path.parent).free < RESERVE_BYTES + PREFIX_BYTES:
+        if shutil.disk_usage(self.path.parent).free < self.reserve_bytes + PREFIX_BYTES:
             refused("ARCHIVE_DISK_RESERVE")
         handle = os.open(path, os.O_CREAT | os.O_EXCL | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
         self.file = os.fdopen(handle, "r+b", buffering=0)
@@ -77,7 +88,7 @@ class ArchiveArena:
         budget(self.deadline)
         if additional < 0 or self.end + additional + self.footer_reserve > self.limit:
             refused("ARCHIVE_SIZE_LIMIT")
-        if shutil.disk_usage(self.path.parent).free < RESERVE_BYTES + additional:
+        if shutil.disk_usage(self.path.parent).free < self.reserve_bytes + additional:
             refused("ARCHIVE_DISK_RESERVE")
 
     def __len__(self) -> int:
@@ -297,6 +308,7 @@ class ArchiveArena:
                 max_archive_bytes,
                 deadline,
             )
+            instance.reserve_bytes = RESERVE_BYTES
             instance.end, instance.sealed, instance.header = before.st_size, True, b""
             instance.raw_bytes, instance.raw_sha256 = raw_bytes, raw_hash.hex()
             instance.data = mmap.mmap(instance.file.fileno(), 0, access=mmap.ACCESS_COPY)

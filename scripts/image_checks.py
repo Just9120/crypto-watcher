@@ -505,7 +505,7 @@ s.close()
         print(json.dumps({"image_storage_measurement": measurement}, sort_keys=True))
         for mode, validation_flag in (
             ("COMPRESSED_RAM", "--compressed-validation"),
-            ("FRAMED_DISK", "--framed-archive-validation"),
+            ("NATIVE_DISK_FRAMED", "--framed-archive-validation"),
         ):
             archive_path = f"/data/measured-{mode}.sqlite3.zst"
             restore_path = f"/data/measured-{mode}-restored.db"
@@ -530,9 +530,16 @@ s.close()
             assert archived_schema2["phase"] == "COMPLETE"
             assert archived_schema2["validation_mode"] == mode
             assert archived_schema2["archive_encoding"] == "ZSTD"
-            if mode == "FRAMED_DISK":
+            if mode == "NATIVE_DISK_FRAMED":
                 assert archived_schema2["source_validation"]["status"] == "integrity_ok"
                 assert archived_schema2["source_validation"]["snapshot_sha256"] == archived_schema2["sha256"]
+                assert archived_schema2["integrity_basis"] == (
+                    "FULL_NATIVE_DISK_CHECK_AND_INDEPENDENT_EQUAL_RAW_SHA256"
+                )
+                assert archived_schema2["raw_snapshot_removed"] is True
+                assert archived_schema2["temporary_raw_bytes"] == archived_schema2["bytes"]
+                assert archived_schema2["sqlite_cache_kib"] == 128 * 1024
+                assert archived_schema2["mmap_limit_bytes"] == 3 * 1024**3
             run(
                 args.image,
                 directory,

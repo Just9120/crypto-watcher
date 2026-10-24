@@ -991,7 +991,7 @@ def deploy(revision: str, digest: str, size: int, deadline_epoch: int | None = N
         require(diagnostics["heartbeat"].get("revision") == revision, "Running source mismatch")
         minimum_configuration = before["configuration_revision"]
         source_state = ACTIVE_RECORD.get("state_validation", {})
-        if source_state.get("validation_mode") == "FRAMED_DISK":
+        if source_state.get("validation_mode") in ("FRAMED_DISK", "NATIVE_DISK_FRAMED"):
             minimum_configuration = max(minimum_configuration, source_state["configuration_revision"])
         require(
             diagnostics["configuration_revision"] >= minimum_configuration,
@@ -1178,14 +1178,14 @@ def framed_backup_preflight(
     )
     timeout = int(deadline - time.monotonic())
     require(timeout >= 20, "Insufficient full backup budget")
-    reserve = 1536 * 1024**2
+    reserve = 6 * 1024**3
     require(shutil.disk_usage(APP).free > reserve, "Insufficient backup disk")
     require((APP / "data/sqlite/backups").is_dir(), "Reviewed backup directory missing")
     allocation = validation_resources(before["database"]["snapshot_bytes"], memory_available())
     name = f"pre-{revision}-{int(time.time())}.sqlite3.zst"
     ACTIVE_RECORD.update(
         backup=name,
-        state_validation_method="FRAMED_DISK",
+        state_validation_method="NATIVE_DISK_FRAMED",
         state_validation_resources=allocation,
         backup_validation_resources=allocation,
     )
@@ -1228,7 +1228,7 @@ def framed_backup_preflight(
         and type(state.get("schema")) is int
         and state["schema"] == 2
         and state.get("status") == "integrity_ok"
-        and state.get("validation_mode") == "FRAMED_DISK"
+        and state.get("validation_mode") == "NATIVE_DISK_FRAMED"
         and state.get("legacy_sha256") == receipt["legacy_sha256"]
         and bool(re.fullmatch(r"[0-9a-f]{64}", str(state.get("settings_sha256")))),
         "Full framed source identity missing",
@@ -1236,8 +1236,8 @@ def framed_backup_preflight(
     require(
         result.get("status") == "backup_integrity_ok"
         and proof.get("phase") == "COMPLETE"
-        and proof.get("validation_mode") == "FRAMED_DISK"
-        and proof.get("integrity_basis") == "FULL_VALIDATED_CAPTURE_AND_INDEPENDENT_EQUAL_RAW_SHA256"
+        and proof.get("validation_mode") == "NATIVE_DISK_FRAMED"
+        and proof.get("integrity_basis") == "FULL_NATIVE_DISK_CHECK_AND_INDEPENDENT_EQUAL_RAW_SHA256"
         and proof.get("sha256") == state.get("snapshot_sha256")
         and bool(re.fullmatch(r"[0-9a-f]{64}", str(proof.get("sha256"))))
         and proof.get("archive_encoding") == "ZSTD"
@@ -1254,7 +1254,15 @@ def framed_backup_preflight(
         )
         and proof["archive_bytes"] <= proof["archive_limit_bytes"]
         and proof["disk_reserve_bytes"] >= reserve
-        and proof["sqlite_cache_kib"] == 2 * 1024 * 1024,
+        and proof["sqlite_cache_kib"] == 128 * 1024
+        and proof.get("raw_snapshot_removed") is True
+        and type(proof.get("temporary_raw_bytes")) is int
+        and proof["temporary_raw_bytes"] == proof["bytes"]
+        and type(proof.get("mmap_limit_bytes")) is int
+        and proof["mmap_limit_bytes"] == 3 * 1024**3
+        and proof["disk_reserve_bytes"] >= 6 * 1024**3
+        and type(proof.get("concurrent_disk_headroom_bytes")) is int
+        and proof["concurrent_disk_headroom_bytes"] >= 1024**3,
         "Full persistent framed backup identity missing",
     )
     require(time.monotonic() < deadline, "Insufficient full backup budget")

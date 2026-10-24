@@ -120,7 +120,9 @@ class Image:
         archive_encoding: Literal["GZIP", "ZSTD"] | None = None,
         archive_store: ArchiveArena | None = None,
     ) -> None:
-        if archive_store is not None and (path is not None or limit != archive_store.limit):
+        if archive_store is not None and (
+            limit != archive_store.limit or (path is not None and archive_encoding is not None)
+        ):
             raise QualificationError("INVALID_ARCHIVE_BOUND")
         self.blocks = _FrameArena(limit) if archive_store is None else archive_store
         self.size = 0
@@ -141,9 +143,14 @@ class Image:
         self.before = self.path.lstat()
         if not stat.S_ISREG(self.before.st_mode):
             raise QualificationError("REGULAR_CLOSED_FILE_REQUIRED")
+        if archive_store is not None:
+            target = os.fstat(archive_store.file.fileno())
+            if (target.st_dev, target.st_ino) == (self.before.st_dev, self.before.st_ino):
+                raise QualificationError("INVALID_ARCHIVE_BOUND")
         if any(Path(str(path) + s).exists() for s in ("-wal", "-shm", "-journal")):
             raise QualificationError("CLOSED_FILE_REQUIRED")
         self.hash = hashlib.sha256()
+        released = 0
         with self.source_reader() as source:
             while True:
                 budget(deadline)
@@ -159,16 +166,37 @@ class Image:
                 blob = self.compressor.compress(data)
                 self.retained += sys.getsizeof(blob)
                 if self.retained + sys.getsizeof(self.blocks) + BLOCK + 128 > limit:
-                    raise QualificationError("COMPRESSED_MEMORY_LIMIT")
+                    raise QualificationError(
+                        "COMPRESSED_MEMORY_LIMIT" if archive_store is None else "ARCHIVE_SIZE_LIMIT"
+                    )
                 self.blocks.append(blob)
                 self.size += len(data)
                 self.hash.update(data)
+                if (
+                    archive_store is not None
+                    and hasattr(os, "posix_fadvise")
+                    and (self.size - released >= 1024 * 1024 or self.size == self.before.st_size)
+                ):
+                    # Only this closed private raw capture is consumed here;
+                    # never advise the live source or another project's files.
+                    os.posix_fadvise(
+                        cast(BinaryIO, source).fileno(),
+                        released,
+                        self.size - released,
+                        os.POSIX_FADV_DONTNEED,
+                    )
+                    released = self.size
                 progress(phase="COMPRESS", bytes=self.size, compressed_bytes=self.retained)
         self.assert_source_unchanged()
         if archive_encoding is None and self.size != self.before.st_size:
             raise QualificationError("SOURCE_CHANGED")
         self.sha256 = self.hash.hexdigest()
-        if self.reconstructed_hash() != self.sha256:
+        if archive_store is not None:
+            # The raw stream digest is measured, never supplied by a caller.
+            # Encoding proof requires the independent closed-file reader used
+            # by the disk-capture backup; this seal alone is not that proof.
+            archive_store.finish(self.size, self.sha256)
+        elif self.reconstructed_hash() != self.sha256:
             raise QualificationError("BYTE_IDENTITY_MISMATCH")
 
     @classmethod
