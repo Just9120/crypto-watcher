@@ -34,6 +34,22 @@ def test_incomplete_repack_and_absent_analytics_report_blockers_without_crashing
     assert "ANALYTICS_NOT_CURRENT" in reasons
 
 
+@pytest.mark.parametrize(
+    "stamp", [None, True, {}, [], "now", NOW + 60001, pytest.param(10**400, id="huge-future")]
+)
+def test_malformed_or_future_analytics_timestamp_is_an_actionable_blocker(store, monkeypatch, stamp):
+    monkeypatch.setattr("cryptowatcher.capacity.time.time", lambda: NOW / 1000)
+    store.put_runtime("analytics", {"state": "OK", "at_ms": stamp})
+    assert "ANALYTICS_NOT_CURRENT" in stable_reason(store)
+
+
+@pytest.mark.parametrize("stamp", [NOW - 60000, NOW, float(NOW), NOW + 1000])
+def test_analytics_timestamp_keeps_current_window_and_small_exchange_clock_skew(store, monkeypatch, stamp):
+    monkeypatch.setattr("cryptowatcher.capacity.time.time", lambda: NOW / 1000)
+    store.put_runtime("analytics", {"state": "OK", "at_ms": stamp})
+    assert "ANALYTICS_NOT_CURRENT" not in stable_reason(store)
+
+
 @pytest.mark.parametrize("working_bytes", (25_000_000_000, 25_340_000_000, 30_000_000_000, 30_000_000_001))
 def test_owner_desired_target_is_advisory_and_complete_thirty_gb_limit_is_inclusive(
     store, monkeypatch, working_bytes
