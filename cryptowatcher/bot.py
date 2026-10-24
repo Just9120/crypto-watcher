@@ -7,6 +7,7 @@ import logging
 import time
 import traceback
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +47,7 @@ from .render import (
     enrichment_text,
     event_keyboard,
     menu,
+    notification_entities,
     notification_text,
     outcome_text,
     profiles_keyboard,
@@ -194,6 +196,7 @@ class Controller:
             notification_text,
             event_keyboard,
             self.engine.reconcile_notifications if self.engine else None,
+            emphasis=notification_entities,
         )
         if isinstance(market, BybitRadar) and self.engine is not None:
             engine = self.engine
@@ -315,6 +318,11 @@ class Controller:
             if update.callback_query:
                 await update.callback_query.answer("Нет доступа", show_alert=True)
             return
+        began = time.monotonic()
+        action = "callback" if update.callback_query else "input"
+        outcome = "OK"
+        received = getattr(update.effective_message, "date", None)
+        queued = max(0.0, time.time() - received.timestamp()) if isinstance(received, datetime) else None
         try:
             if update.callback_query:
                 self.ui.cancel()
@@ -334,11 +342,27 @@ class Controller:
                     if await self.ui.input(update, text):
                         return
                     command, raw = "input", text
+                action = command if command in COMMANDS or command in MENU_ACTIONS.values() else "input"
+                logger.info("Telegram UI request command=%s queued_seconds=%s", action, queued)
                 await self.command(update, command, raw)
         except (ConfigError, RevisionConflict) as exc:
+            outcome = type(exc).__name__
             await self.send(update, f"Действие не выполнено: {exc}. Активные значения сохранены.")
-        except (MarketError, TelegramError):
+        except MarketError:
+            outcome = "MarketError"
             await self.send(update, "Данные/доставка временно недоступны. Подробнее в диагностике.")
+        except TelegramError as exc:
+            # A timeout may have delivered the original reply. A second send
+            # creates misleading late errors and extra traffic behind that ACK.
+            outcome = type(exc).__name__
+            logger.warning("Telegram UI reply failed command=%s error_class=%s", action, outcome)
+        finally:
+            logger.info(
+                "Telegram UI finished command=%s outcome=%s elapsed_seconds=%.3f",
+                action,
+                outcome,
+                time.monotonic() - began,
+            )
 
     async def command(self, update: Update, command: str, raw: str = "") -> None:
         if await self.ui.command(update, command, raw):

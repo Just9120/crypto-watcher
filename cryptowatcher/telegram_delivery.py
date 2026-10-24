@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Callable
 
+from telegram import MessageEntity
 from telegram.error import BadRequest, Forbidden, RetryAfter, TelegramError
 
 from .detectors import freshness
@@ -20,6 +21,8 @@ class TelegramDelivery:
         renderer: Callable[[dict[str, Any], dict[str, Any], int], str],
         keyboard: Callable[[dict[str, Any]], Any],
         on_success: Callable[[str, int], None] | None = None,
+        *,
+        emphasis: Callable[[str], list[MessageEntity]] | None = None,
     ) -> None:
         if chat_id != store.owner_id:
             raise ValueError("Telegram target must be the owner's private chat")
@@ -27,6 +30,7 @@ class TelegramDelivery:
         self.history = History(store)
         self.renderer, self.keyboard = renderer, keyboard
         self.on_success = on_success
+        self.emphasis = emphasis
         self.lock = asyncio.Lock()
 
     def finish(self, candidate: dict[str, Any], state: str, now_ms: int) -> None:
@@ -103,6 +107,10 @@ class TelegramDelivery:
                     if "text" not in candidate:
                         candidate["event_id"] = event["event_id"]
                         candidate["text"] = self.renderer(event, candidate, clock())
+                        if self.emphasis is not None:
+                            candidate["text_entities"] = [
+                                entity.to_dict() for entity in self.emphasis(candidate["text"])
+                            ]
                     candidate["state"] = "IN_FLIGHT"
                     candidate["attempts"].append({"at_ms": clock(), "result": "IN_FLIGHT"})
                     self.history.put("outbox:telegram:" + candidate["delivery_id"], candidate)
@@ -112,6 +120,11 @@ class TelegramDelivery:
                         self.chat_id,
                         candidate["text"],
                         reply_markup=self.keyboard(event),
+                        **(
+                            {"entities": MessageEntity.de_list(candidate["text_entities"], bot)}
+                            if "text_entities" in candidate
+                            else {}
+                        ),
                     )
                 except TelegramError as exc:
                     with self.store.db:

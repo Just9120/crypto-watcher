@@ -146,7 +146,7 @@ Telegram — основной интерфейс владельца. Компа�
 
 | AC | Критерий и способ проверки |
 | --- | --- |
-| AC-07-01 — Полный realtime alert | При meaningful live event владелец видит compact instrument/market/type/TF/direction/metrics/strength/freshness; optional context помечен. Проверка: render fixtures, length/parse tests и owner Bot API smoke. |
+| AC-07-01 — Полный realtime alert | При meaningful live event владелец видит compact instrument/market/type/TF/direction/metrics/strength/freshness; optional context помечен. Уточнение владельца24Oct: ключевые значения движения, пробоя, отношений и интенсивности выделяются жирным; исходные числа/единицы и сохранённый текст повторной отправки не меняются. Проверка: render fixtures, UTF16 entity bounds/length/parse tests и owner Bot API smoke. |
 | AC-07-02 — Ссылка на правильный рынок | Spot и Perpetual alerts открывают соответствующий Instrument/Market Type Bybit; открытие ссылки не создаёт ордер. Проверка: URL mapping fixtures и безопасный browser/manual smoke. |
 | AC-07-03 — Control deck | Владелец открывает status/settings/list/add/remove/mute/terms через Telegram controls без запоминания команд; no-op settings не вызывает noisy error. Проверка: keyboard/handler fixtures и no-op exception scenario. |
 | AC-07-04 — Правдивый active status | Status/settings отражают фактические рынки/universe/detectors/TF/thresholds и состояние данных; concurrent settings change не применяет старое решение как новое. Проверка: settings revision race и render/domain tests. |

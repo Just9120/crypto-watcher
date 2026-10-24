@@ -247,7 +247,7 @@ class History:
             value = {
                 k: v
                 for k, v in value.items()
-                if k not in ("intent", "body", "episode_snapshot", "snapshot", "text")
+                if k not in ("intent", "body", "episode_snapshot", "snapshot", "text", "text_entities")
             }
             if parent:
                 value["event_id"] = parent
