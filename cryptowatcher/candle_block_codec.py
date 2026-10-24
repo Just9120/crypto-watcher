@@ -96,7 +96,14 @@ def versions(tile: int, step: int, slot: int, rows: Any, *, validate: bool = Tru
     return rows
 
 
-def pack(stream: int, tile: int, step: int, slots: list[Any]) -> bytes:
+def pack(
+    stream: int,
+    tile: int,
+    step: int,
+    slots: list[Any],
+    *,
+    _lease_encoding: bytes | None = None,
+) -> bytes:
     coordinates(stream, tile, step)
     if not isinstance(slots, list) or len(slots) != SLOTS:
         raise ValueError("Invalid source tile shape")
@@ -110,6 +117,18 @@ def pack(stream: int, tile: int, step: int, slots: list[Any]) -> bytes:
     if not rows:
         raise ValueError("Source tile row bound")
     header = struct.pack(">QQQ", stream, tile, step)
+    if _lease_encoding is not None and (type(_lease_encoding) is not bytes or _lease_encoding != JSON_MAGIC):
+        raise ValueError("Unknown source lease encoding")
+    # The writer supplies this hint only after matching every admitted value to
+    # an existing revision. Extending leases need not construct and discard a
+    # typed candidate for an existing JSON tile. Legacy typed/column tiles keep
+    # the ordinary chooser. All row validation above and SQL preservation guards
+    # still run; unusual allocation cases retain the ordinary fallback.
+    if _lease_encoding is not None:
+        preferred = source_slot_json.pack(slots)
+        if preferred is not None and len(preferred) + 60 <= MAX_BYTES:
+            checked = header + preferred
+            return JSON_MAGIC + hashlib.sha256(checked).digest() + checked
     try:
         frame = indexed_frame.pack(slots)
         text = source_slot_json.pack(slots)
