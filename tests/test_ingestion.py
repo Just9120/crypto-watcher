@@ -248,6 +248,30 @@ def test_confirmed_source_freshness_uses_actual_closed_candles_and_a_bounded_sam
     assert crowded["late_streams"] > 20 and len(crowded["samples"]) == 20 and crowded["samples_truncated"]
 
 
+@pytest.mark.parametrize("tf", TIMEFRAMES)
+async def test_freshness_uses_latest_actual_candle_after_out_of_order_recovery(store, tf):
+    radar = BybitRadar(store)
+    stream = "spot/BTCUSDT/" + tf
+    step = int(tf[:-1]) * 60000
+    boundary = NOW // step * step
+    starts = [boundary - i * step for i in (3, 1, 2, 8)]
+    candles = [Candle.parse([t, 100, 101, 99, 100, 1, 100], tf, "rest", NOW, NOW) for t in starts]
+    try:
+        radar.streams = {stream}
+        radar.sources.put(stream, candles, recovery=True)
+        exact = radar.confirmed_source_diagnostic(boundary + step + 30000)
+        assert exact["earliest_deadline_ms"] == boundary + step + 30000
+        assert exact["late_streams"] == 0
+        late = radar.confirmed_source_diagnostic(boundary + step + 30001)
+        assert late["samples"] == [{"stream": stream, "latest_closed_ms": boundary, "lag_ms": 30001}]
+        radar.sources.remove_window(stream)
+        assert radar.confirmed_source_diagnostic(NOW)["unknown_streams"] == 1
+        radar.sources.load(stream)
+        assert radar.confirmed_source_diagnostic(boundary + step + 30001) == late
+    finally:
+        await radar.close()
+
+
 @pytest.mark.parametrize("bounded", [False, True])
 async def test_old_frame_outside_memory_window_is_saved_without_empty_observation(store, bounded):
     from cryptowatcher.market_storage import enable, read

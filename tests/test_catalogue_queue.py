@@ -1,13 +1,14 @@
 import sqlite3
 import time
 from contextlib import closing
+from types import SimpleNamespace
 
 import pytest
 
 from cryptowatcher import catalogue_queue as queue
 from cryptowatcher import record_catalog
-from cryptowatcher.events import History
-from cryptowatcher.storage import StateError, Store, encode
+from cryptowatcher.events import PREFIX, History
+from cryptowatcher.storage import RUNTIME_UPSERT, StateError, Store, encode
 from tests.test_catalogue_transfer import populated
 from tests.test_outcomes import MINUTE, NOW, OutcomeWorker, observe
 
@@ -56,9 +57,12 @@ def test_pending_queue_tracks_live_work_once_preserves_initial_boundary_and_casc
         assert not reopened.db.execute("PRAGMA foreign_key_check").fetchall()
 
 
-def test_queue_failure_rolls_back_pending_counters_parents_and_partial_publication(store, monkeypatch):
+@pytest.mark.parametrize("next_lane", ["body", "head"])
+def test_queue_failure_rolls_back_pending_counters_parents_and_partial_publication(
+    store, monkeypatch, next_lane
+):
     queued(store)
-    state = {}
+    state = {"next_lane": next_lane}
     before = list(store.db.iterdump())
     actual = record_catalog.append
 
@@ -71,7 +75,7 @@ def test_queue_failure_rolls_back_pending_counters_parents_and_partial_publicati
         store.db.execute("BEGIN IMMEDIATE")
         with pytest.raises(RuntimeError, match="queued publication"):
             queue.advance(store, state, 256, time.monotonic() + 10)
-        assert state == {}
+        assert state == {"next_lane": next_lane}
         assert list(store.db.iterdump()) == before
 
 
@@ -90,6 +94,123 @@ def test_queue_missing_counter_is_never_empty_or_success_and_blocks_cascade(stor
         with pytest.raises(sqlite3.IntegrityError, match="queue counter"):
             store.db.execute("DELETE FROM market_runtime_keys WHERE id=?", (rid,))
     assert list(store.db.iterdump()) == before
+
+
+def retained_alias(store):
+    """A valid old hot alias over its retained cold event, then new arrivals."""
+    from cryptowatcher.expiry_index import put
+
+    queued(store)
+    history = History(store)
+    key, value = history.items("history:", 1, reverse=True)[0]
+    state = {}
+    for _ in range(200):
+        with store.db:
+            store.db.execute("BEGIN IMMEDIATE")
+            queue.advance(store, state, 256, time.monotonic() + 1)
+        if not queue.header(store.db)["count"]:
+            break
+    assert queue.header(store.db)["count"] == 0
+    root = store.db.execute(
+        "SELECT expires FROM market_record_parents WHERE public_uuid=?",
+        (record_catalog.binary(value["event_id"]),),
+    ).fetchone()
+    with store.db:
+        store.db.execute(RUNTIME_UPSERT, (PREFIX + key, encode(value)))
+        put(store.db, PREFIX + key, root[0], "history", value["event_id"])
+    return key, value
+
+
+def test_continuing_body_arrivals_cannot_starve_old_alias_and_turn_survives_reopen(store, monkeypatch):
+    key, value = retained_alias(store)
+    clock = [0.0]
+    prepare = queue.catalogue_transfer.prepare
+
+    def body_uses_quantum(*args):
+        result = prepare(*args)
+        clock[0] += 2  # A legal started body can consume the entire one-second test quantum.
+        return result
+
+    monkeypatch.setattr(queue, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(queue.catalogue_transfer, "prepare", body_uses_quantum)
+    state = {}
+    for turn in range(2):
+        observe(store, OutcomeWorker(store), NOW + (20 + turn) * MINUTE)
+        clock[0] = 0
+        with store.db:
+            store.db.execute("BEGIN IMMEDIATE")
+            queue.advance(store, state, 256, 1)
+            store.db.execute(RUNTIME_UPSERT, ("fairness-checkpoint", encode(state)))
+        if turn == 0:
+            assert state["next_lane"] == "head" and state["bodies_moved"] > 0
+            assert store.db.execute("SELECT 1 FROM runtime WHERE key=?", (PREFIX + key,)).fetchone()
+            with closing(Store(store.path, store.owner_id, readonly=True)) as reopened:
+                state = reopened.get_runtime("fairness-checkpoint")
+                assert state["next_lane"] == "head"
+    assert state["next_lane"] == "body" and state["aliases_moved"] > 0
+    assert not store.db.execute("SELECT 1 FROM runtime WHERE key=?", (PREFIX + key,)).fetchone()
+    assert History(store).get(key) == value
+    assert store.db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    assert not store.db.execute("PRAGMA foreign_key_check").fetchall()
+
+
+@pytest.mark.parametrize("turn", [True, 1, None, "future", []])
+def test_unknown_queue_turn_rejects_before_any_change(store, turn):
+    queued(store)
+    before = list(store.db.iterdump())
+    with store.db:
+        store.db.execute("BEGIN IMMEDIATE")
+        with pytest.raises(StateError, match="queue turn"):
+            queue.advance(store, {"next_lane": turn}, 256, time.monotonic() + 1)
+    assert list(store.db.iterdump()) == before
+
+
+def test_head_first_retains_selected_body_dependencies_until_all_aliases_are_cold(store):
+    queued(store)
+    history = History(store)
+    aliases = [(key, value) for key, value in history.items("history:") if str(NOW + 10 * MINUTE) in key]
+    assert aliases
+    original = [(key, encode(value)) for key, value in history.scan("")]
+    state = {"next_lane": "head"}
+    for _ in range(200):
+        with store.db:
+            store.db.execute("BEGIN IMMEDIATE")
+            queue.advance(store, state, 256, time.monotonic() + 0.01)
+        if not queue.header(store.db)["count"]:
+            break
+    assert queue.header(store.db)["count"] == 0
+    for key, value in aliases:
+        assert not store.db.execute("SELECT 1 FROM runtime WHERE key=?", (PREFIX + key,)).fetchone()
+        assert history.get(key) == value
+    assert [(key, encode(value)) for key, value in history.scan("")] == original
+
+
+def test_empty_queue_keeps_exact_checkpoint_and_performs_no_writes(store):
+    queued(store)
+    state = {}
+    for _ in range(200):
+        with store.db:
+            store.db.execute("BEGIN IMMEDIATE")
+            queue.advance(store, state, 256, time.monotonic() + 1)
+        if not queue.header(store.db)["count"]:
+            break
+    assert queue.header(store.db)["count"] == 0
+    with store.db:
+        store.db.execute(RUNTIME_UPSERT, ("empty-queue-checkpoint", encode(state)))
+    original = encode(state)
+    for _ in range(2):
+        changes = store.db.total_changes
+        with store.db:
+            store.db.execute("BEGIN IMMEDIATE")
+            queue.advance(store, state, 256, time.monotonic() + 1)
+        assert encode(state) == original
+        assert store.db.total_changes == changes
+    with closing(Store(store.path, store.owner_id)) as reopened:
+        saved = reopened.get_runtime("empty-queue-checkpoint")
+        with reopened.db:
+            reopened.db.execute("BEGIN IMMEDIATE")
+            queue.advance(reopened, saved, 256, time.monotonic() + 1)
+        assert encode(saved) == original
 
 
 def test_queue_install_does_not_enqueue_existing_data_or_activate_itself_and_unknown_marker_rejects(store):

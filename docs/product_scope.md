@@ -22,6 +22,7 @@ CryptoWatcher — личный deterministic market radar владельца д�
 | S04 | Уточнение владельца 2026-10-10: бот работает на VPS Contabo; Telegram owner — владелец | Deployment context; assertion владельца не доказывает deployed revision или gates |
 | S09 | Уточнение владельца23Oct2026: устойчивый CryptoWatcher на общем Contabo VPS важнее отдельной экономии БД; измерить ресурсы всего host/вклад проекта и normal/recovery/retention/compression/repack, определить бюджет с запасом | Расширяет evidence/DoD текущей CAPACITY25: общая CPU/RAM/I/O нагрузка, DB+sidecars:25GB desired/30GB hard limit по уточнению24Oct, freshness, только просроченные расчёты и Telegram; сохранить функционал/точность/retention, другие проекты и ресурсы VPS не менять; после стабилизации неизменной версии30min/24h, при объективной нехватке представить измерения/варианты |
 | S10 | Уточнение владельца24Oct2026 в текущем чате: «25 желаемо,30 приемлемо»,30GB как запас | Для той же Goal CAPACITY25 желаемый объём25,000,000,000bytes; допустимый жёсткий предел30,000,000,000bytes включает DB/indexes/free pages/WAL/SHM/journal. Предварительное допущение25.34GB заменено. Функционал/retention/точность/полнота, CPU/RAM/I/O и стабильность/24h gates сохранены |
+| S11 | Ответ владельца24Oct2026 в текущем чате: «Да, увеличить только длительность проверки» | Только конечная полная Linux/native qualification:450CPU seconds/510wall seconds/600outer seconds вместо180/210/270. Один CPU/4GiB/no swap/no network/без production mounts, полный dual-fixture oracle, preflight резервов и стабильность/backlog/24h обязательны; RAM/VPS allocation и900s ordinary delivery gate не изменены |
 
 S01 и последующие явные решения владельца задают intent. Этот файл фиксирует его декомпозицию. State contract описывает current physical schema2 и сохраненную legacy chat-based/import compatibility после консолидации PR41; при противоречии актуальным требованиям приоритет у этого spec. Код сам по себе не создаёт требования. Внешние hyperlinks в repository documentation не добавляются; source IDs и названия позволяют восстановить evidence.
 
@@ -403,3 +404,13 @@ Observer различает future horizons, текущую работу и over
 полным boundary или capacity PASS. Сначала measured mature-population capacity
 при прежней policy, затем clean24h на fixed source/config/generation; обе проверки
 обязательны. Отклонённые/прерванные прежние замеры и их факты сохраняются.
+
+## D28 — Длительность конечной Linux/native проверки (24 октября 2026)
+
+По S11 владелец разрешил увеличить только длительность полной конечной проверки:
+450CPU seconds,510wall seconds,600outer seconds. Сохраняются один CPU/4GiB/no swap,
+изолированные public/default fixtures без сети и production mounts, полный исходный
+point/scan/CHECK/FK/private/hash/fresh-reopen oracle и preflight резервов общего VPS.
+Результаты прежних180CPU failures сохраняются. Это не разрешение повысить ресурсы VPS,
+ослабить проверки данных, заменить исправление backlog или чистое суточное наблюдение.
+900s ordinary delivery gate и25GB desired/30GB hard working limit неизменны.

@@ -19,7 +19,7 @@ from .config import (
 from .events import PREFIX, History
 from .history_codec import Codec
 from .queue_health import snapshot as queue_snapshot
-from .storage import Store, json_payload
+from .storage import StateError, Store, json_payload
 from .storage_meter import measure_indexes, report
 
 DAY_MS = 86_400_000
@@ -424,7 +424,6 @@ def stable_reason(store: Store) -> list[str]:
             parent_affinity,
             quality_frames,
         )
-        from .storage import StateError
 
         try:
             leases = repack.get("numeric_refs", {})
@@ -560,7 +559,15 @@ def stable_reason(store: Store) -> list[str]:
         if store.get_runtime(key, {}).get("state") == "FAILED":
             reasons.append(key.upper() + "_FAILED")
     analytics = store.get_runtime("analytics", {})
-    if analytics.get("state") != "OK" or time.time() * 1000 - analytics.get("at_ms", 0) > 60000:
+    stamp = analytics.get("at_ms") if isinstance(analytics, dict) else None
+    now_ms = time.time() * 1000
+    if (
+        not isinstance(analytics, dict)
+        or analytics.get("state") != "OK"
+        or not isinstance(stamp, (int, float))
+        or isinstance(stamp, bool)
+        or not now_ms - 60000 <= stamp <= now_ms + 60000
+    ):
         reasons.append("ANALYTICS_NOT_CURRENT")
     return reasons
 
