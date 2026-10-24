@@ -19,6 +19,13 @@ transaction с удалениями; это counters, не отдельная к
 
 Reset — отдельная разовая процедура с exact market-data allowlist/target и private preservation/restore/equality proof; не startup migration. Owner settings/watchlist/thresholds/notifications/mutes сохраняются; credentials/infra не меняются. Старые market queues/cursors не импортируются; новая generation/start явно показывает нехватку истории и исключает old live replay. Backups/experiments исключены. Обычные backup/CD<=900s и RAM4GiB сохраняются. Формат и проверенная reset процедура определены ниже и в runbook; факт поставки/reset подтверждается только primary Evidence плана, не самим описанием.
 
+Новые Telegram intents сохраняют необязательный `text_entities` вместе с первым
+замороженным `text`, до отправки. UTF16 offsets относятся к этому неизменному
+тексту; повтор после неизвестного ACK/reopen использует обе сохранённые части.
+Старые intents с готовым plain text без entities остаются plain text. Terminal
+schema2 compaction удаляет entities вместе с text; значения событий, public JSON,
+settings и сроки хранения не меняются. Форматирование не использует parse_mode.
+
 ### Mutable condition state v1
 
 В schema2 поддерживаемые внутренние `condition:<stream>:<family>:<direction>`

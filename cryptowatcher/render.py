@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, MessageEntity, ReplyKeyboardMarkup
 
 from .config import OwnerSettings
 from .detector_config import FAMILIES, effective_parameters
@@ -296,6 +297,30 @@ def notification_text(event: dict[str, Any], candidate: dict[str, Any], now_ms: 
         + (f"\nИз других версий настроек: {other_settings}." if other_settings else "")
         + "\n\nПодробности, исходные данные и последующее движение — по кнопкам."
     )
+
+
+def notification_entities(text: str) -> list[MessageEntity]:
+    """Emphasize signal values without rewriting or interpreting the plain text."""
+    labels = {
+        METRIC[key] for key in ("price_return", "turnover_ratio", "breakout_distance", "volatility_ratio")
+    }
+    entities = []
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        prefix, separator, value = line.rstrip("\r\n").partition(": ")
+        metric = prefix.startswith("• ") and prefix[2:] in labels
+        if separator and (metric or prefix == "Интенсивность"):
+            number = value if metric else value.partition(" от порога")[0]
+            if re.fullmatch(r"[×+\-]?\d[\d., eE+\-]*(?:(?:тыс\.|млн|млрд) )?(?:%|×|USDT)?", number):
+                entities.append(
+                    MessageEntity(
+                        MessageEntity.BOLD,
+                        offset + len((prefix + separator).encode("utf-16-le")) // 2,
+                        len(number.encode("utf-16-le")) // 2,
+                    )
+                )
+        offset += len(line.encode("utf-16-le")) // 2
+    return entities
 
 
 def trade_url(symbol: str, category: str) -> str:
