@@ -152,6 +152,7 @@ def digest_keyboard(enabled: bool) -> InlineKeyboardMarkup:
 
 def outcome_text(event: dict[str, Any], outcomes: list[Any], horizons: tuple[int, ...]) -> str:
     lines = [
+        "📍 Результат наблюдения",
         f"{event['symbol']} · {market_label(OwnerSettings(bybit_category=event['market_type']))}",
         f"{FAMILY[event['detector_id']]} · {event['timeframe']} · результат наблюдения",
         f"Исходное время: {when(event['reference_time_ms'])}",
@@ -164,10 +165,12 @@ def outcome_text(event: dict[str, Any], outcomes: list[Any], horizons: tuple[int
         "EXPIRED": "подробности истекли",
     }
     for horizon, outcome in zip(horizons, outcomes):
+        lines.append("")
         if outcome is None:
             lines.append(f"{horizon} мин: ожидается срок или завершение расчёта; это не нулевой результат.")
             continue
-        lines.append(f"{horizon} мин · {states.get(outcome['state'], outcome['state'])}")
+        marker = "✅" if outcome["state"] == "COMPLETE" else "⏳" if outcome["state"] == "PENDING" else "ℹ️"
+        lines.append(f"{marker} {horizon} мин · {states.get(outcome['state'], outcome['state'])}")
         if outcome["state"] != "COMPLETE":
             lines.append(
                 f"Свечи: {outcome.get('observed_candles', 'неизвестно')}/{outcome.get('expected_candles', 'неизвестно')}; "
@@ -175,7 +178,7 @@ def outcome_text(event: dict[str, Any], outcomes: list[Any], horizons: tuple[int
             )
         else:
             lines.extend(
-                f"{METRIC.get(name, name)}: {amount(value)}%" for name, value in outcome["metrics"].items()
+                f"• {METRIC.get(name, name)}: {amount(value)}%" for name, value in outcome["metrics"].items()
             )
             classification = {
                 "CONTINUATION": "движение продолжилось",
@@ -186,7 +189,7 @@ def outcome_text(event: dict[str, Any], outcomes: list[Any], horizons: tuple[int
             lines.append(f"Оценка: {classification}; граница шума {amount(outcome['noise_threshold_pct'])}%")
         lines.append(f"Методика {outcome['methodology_version']}, версия результата {outcome['revision']}")
     lines.append(
-        "Последующая аналитика не входила в исходное решение. Это не доходность стратегии и не торговая рекомендация."
+        "\nПоследующая аналитика не входила в исходное решение. Это не доходность стратегии и не торговая рекомендация."
     )
     return "\n".join(lines)
 
@@ -200,12 +203,12 @@ def event_text(event: dict[str, Any], now_ms: int) -> str:
     optional = "\n" + enrichment_text(context, now_ms) if context.get("metrics") else ""
     return (
         event_summary(event, now_ms)
-        + "\n\nПодробности исходного наблюдения\n"
+        + "\n\n🔎 Подробности исходного наблюдения\n"
         + metrics
         + f"\nЦена отсчёта: {amount(event['reference_price'])} USDT"
         + f"\nПрофиль: {PROFILE.get(event['profile'], event['profile'])}; версия настроек {event['settings_revision']}"
         + f"\nВерсия детектора: {event['detector_version']}; версия события {event['revision']}"
-        + f"\nEvent ID: {event['event_id']}\nEpisode ID: {event['episode_id']}"
+        + f"\n\nEvent ID: {event['event_id']}\nEpisode ID: {event['episode_id']}"
         + "\nПолные точные значения, исходные свечи и происхождение данных доступны файлом."
         + optional
     )
@@ -230,7 +233,7 @@ def enrichment_text(value: dict[str, Any], now_ms: int) -> str:
         "oi_change_pct_5min": "Изменение OI за 5 мин",
         "oi_change_base_5min": "Изменение OI в монетах за 5 мин",
     }
-    lines = ["Дополнительный контекст деривативов: " + states.get(value["state"], value["state"])]
+    lines = ["🧩 Дополнительный контекст деривативов: " + states.get(value["state"], value["state"])]
     if value.get("metrics"):
         lines.append(f"{value['spot_instrument']} ↔ {value['perpetual_instrument']}")
         for name, metric in value["metrics"].items():
@@ -249,7 +252,7 @@ def enrichment_text(value: dict[str, Any], now_ms: int) -> str:
                 if metric.get("unit") == "UTC_MS"
                 else metric.get("unit", "")
             )
-            lines.append(f"{names.get(name, name)}: {text} {unit} · {states.get(state, state)}")
+            lines.append(f"\n• {names.get(name, name)}: {text} {unit} · {states.get(state, state)}")
             lines.append(
                 f"Источник {metric['source']}, рынок {when(metric.get('market_observation_ms'))}, доступно {when(metric.get('available_at_ms'))}"
             )
@@ -263,8 +266,8 @@ def notification_text(event: dict[str, Any], candidate: dict[str, Any], now_ms: 
     episode = candidate["episode_snapshot"]
     reasons = {
         "first_detection": "Первое уведомление",
-        "new_detector": "Новое семейство подтверждения",
-        "new_timeframe": "Новый подтверждающий TF",
+        "new_detector": "Подтверждение другим детектором",
+        "new_timeframe": "Подтверждение на новом таймфрейме",
         "strengthening": "Усиление эпизода: интенсивность выросла не менее чем в 1,5 раза",
     }
     active = [
@@ -280,15 +283,18 @@ def notification_text(event: dict[str, Any], candidate: dict[str, Any], now_ms: 
         value["settings_revision"] != event["settings_revision"]
         for value in episode["confirmations"].values()
     )
-    confirmations = ", ".join(f"{FAMILY.get(key.split('/')[0], key)} {key.split('/')[-1]}" for key in active)
+    confirmations = "\n".join(
+        f"• {FAMILY.get(key.split('/')[0], key)} · {key.split('/')[-1]}" for key in active
+    )
     return (
-        reasons[candidate["reason"]]
-        + "\n"
+        "🔔 "
+        + reasons[candidate["reason"]]
+        + "\n\n"
         + event_summary(event, now_ms)
-        + f"\nАктуальные подтверждения: {confirmations or 'нет'}."
-        + (f" Устаревших подтверждений этой настройки: {expired}." if expired else "")
-        + (f" Из других версий настроек: {other_settings}." if other_settings else "")
-        + "\nПодробности, исходные данные и последующее движение — по кнопкам."
+        + f"\n\nАктуальные подтверждения:\n{confirmations or 'нет'}."
+        + (f"\nУстаревших подтверждений этой настройки: {expired}." if expired else "")
+        + (f"\nИз других версий настроек: {other_settings}." if other_settings else "")
+        + "\n\nПодробности, исходные данные и последующее движение — по кнопкам."
     )
 
 
@@ -322,7 +328,7 @@ def quote_text(symbol: str, quote: dict[str, Any], settings: OwnerSettings) -> s
         + f"\nСредний оборот ({int(periods)} свечей): {amount(quote['sma_tf_turnover'], compact=True)} USDT"
         + f"\nВсплеск оборота: ×{amount(quote['turnover_spike_ratio'])}"
         + f"\nОборот 24ч: {amount(quote['turnover24h'], compact=True)} USDT"
-        + "\nComposite: "
+        + "\nСовпадение цены и оборота: "
         + ("условия выполнены" if quote["meets_signal"] else "не все пороги достигнуты")
     )
 
@@ -360,10 +366,10 @@ def status_text(snapshot: Snapshot, result: RadarResult, enabled: bool) -> str:
     return (
         "📊 Радар Bybit\n"
         f"Мгновенные уведомления: {'включены' if enabled else 'выключены'}\n"
-        "Разрешены в Telegram: "
+        "Детекторы для уведомлений: "
         + (", ".join(FAMILY[f] for f in s.alert_detectors) or "нет")
         + (
-            f"\nОграничений служебной оценки composite: {len(result.errors)}. Подробнее — «Разбор composite»."
+            f"\nОграничений служебной оценки совпадений: {len(result.errors)}. Подробнее — «Разбор совпадений»."
             if result.errors
             else ""
         )
@@ -371,7 +377,7 @@ def status_text(snapshot: Snapshot, result: RadarResult, enabled: bool) -> str:
 
 
 TERMS = (
-    "Composite: движение цены + спайк оборота + ликвидность.\n"
+    "Совпадение цены и оборота (composite): движение цены + всплеск оборота + ликвидность.\n"
     "Движение цены — изменение close относительно previous close закрытой свечи.\n"
     "Оборот — объём в USDT; объём в базовом asset имеет другую единицу.\n"
     "Спайк — оборот текущей закрытой свечи / средний оборот предыдущих candles.\n"

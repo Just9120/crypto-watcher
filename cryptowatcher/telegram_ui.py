@@ -274,7 +274,7 @@ class ControlDeck:
                 if event:
                     entries.append(event)
         lines = [
-            "История · последние наблюдения" if not cursor else "История · более ранние наблюдения",
+            "🗂 История · последние наблюдения" if not cursor else "🗂 История · более ранние наблюдения",
         ]
         token = uuid.uuid4().hex[:8]
         self.history_contexts = {
@@ -296,7 +296,7 @@ class ControlDeck:
                 lines.append(date + " · " + zone)
                 previous_date = date
             lines.append(
-                f"{index}. {clock} · {event['symbol']} · {market(event['market_type'])}\n"
+                f"\n{index}. {clock} · {event['symbol']} · {market(event['market_type'])}\n"
                 f"{FAMILY[event['detector_id']]} · {event['timeframe']} · {DIRECTION.get(event['direction'], event['direction'])} · ×{amount(round(event['strength'], 2))}\n"
                 + observation_kind(event)
                 + "; Telegram: "
@@ -400,7 +400,7 @@ class ControlDeck:
             await self.c.send(update, "Ввод закрыт. Настройки не изменены.", keyboard([]))
         elif command in ("start", "home"):
             await self.c.send(
-                update, "Радар Bybit\nВыберите раздел. Открытие меню не меняет уведомления.", menu()
+                update, "📡 Радар Bybit\n\nВыберите раздел. Открытие меню не меняет уведомления.", menu()
             )
         elif command in ("help", "help_home"):
             await self.c.send(
@@ -446,7 +446,7 @@ class ControlDeck:
                 + source_summary(snapshot, self.c.store.get_runtime("ingestion", {}), time.time()),
                 keyboard(
                     [
-                        [("Обновить", "ui:status"), ("Разбор composite", "ui:composite")],
+                        [("Обновить", "ui:status"), ("Разбор совпадений", "ui:composite")],
                         [("Охват и список", "ui:radar"), ("Диагностика", "ui:diagnostics")],
                     ]
                 ),
@@ -481,12 +481,12 @@ class ControlDeck:
             text = source_summary(snapshot, self.c.store.get_runtime("ingestion", {}), time.time())
             text += "\n\nМой список:\n" + (
                 "\n".join(
-                    f"{market(key.split('/')[0])}: {key.split('/')[1]}"
+                    f"• {market(key.split('/')[0])}: {key.split('/')[1]}"
                     for key in current[offset : offset + 10]
                 )
                 or "Список пуст"
             )
-            text += f"\nПороги монет списка умножаются на {amount(s.watchlist_multiplier)}; история и доставка — разные подсистемы."
+            text += f"\n\nПороги монет списка умножаются на {amount(s.watchlist_multiplier)}. Сохранённое наблюдение не всегда отправляется в Telegram."
             if len(current) > 10:
                 text += f"\nПоказаны {offset + 1}–{min(offset + 10, len(current))} из {len(current)}."
             pages = []
@@ -597,13 +597,13 @@ class ControlDeck:
         elif command == "outcomes" and not raw:
             await self.c.send(
                 update,
-                "Результаты событий\nВыберите событие, затем нажмите «Результат». Сроки и исходная цена взяты из сохранённого события.",
+                "📍 Результаты событий\n\nВыберите событие, затем нажмите «Результат». Сроки и исходная цена взяты из сохранённого события.",
             )
             await self.history(update)
         elif command == "analytics_home":
             await self.c.send(
                 update,
-                "Аналитика\nРезультаты описывают движение после событий, не доходность стратегии. "
+                "📈 Аналитика\n\nРезультаты описывают движение после событий, не доходность стратегии. "
                 "Малое число наблюдений и неполные данные ограничивают выводы.",
                 keyboard(
                     [
@@ -649,9 +649,10 @@ class ControlDeck:
             enabled = self.c.digest.preference()["enabled"]
             await self.c.send(
                 update,
-                f"Дайджест: {'включён' if enabled else 'выключен'}\n"
-                f"Интервал: {s.digest_interval_min} минут. Независим от мгновенных уведомлений и заглушений. "
-                "После включения — следующий полный интервал UTC.",
+                f"📋 Дайджест: {'включён' if enabled else 'выключен'}\n"
+                f"Интервал: {s.digest_interval_min} минут.\n\n"
+                "• Независим от мгновенных уведомлений и заглушений.\n"
+                "• После включения — следующий полный интервал UTC.",
                 keyboard(
                     [
                         [("Выключить" if enabled else "Включить", "digest:" + ("off" if enabled else "on"))],
@@ -678,7 +679,7 @@ class ControlDeck:
             state = agent_state(d)
             await self.c.send(
                 update,
-                f"Доставка контекста агенту: {state}\nОжидают: {amount(d.get('pending'))}; доставлены: {amount(d.get('delivered'))}.\n"
+                f"📨 Доставка контекста агенту: {state}\nОжидают: {amount(d.get('pending'))}; доставлены: {amount(d.get('delivered'))}.\n\n"
                 "Ручной радар работает независимо. Ключи и подключение настраиваются в проекте агента. "
                 "Просмотр не выполняет доставку повторно.",
                 keyboard(
@@ -705,11 +706,11 @@ class ControlDeck:
                 (time.time(), offset),
             ).fetchall()
             controls = [[("Снять: " + row[0], "ui:unmute:" + row[0])] for row in rows[:10]]
-            text = "Заглушённые монеты\n" + (
-                "\n".join(f"{row[0]} до {when(row[1] * 1000)}" for row in rows[:10])
+            text = "🔕 Заглушённые монеты\n\n" + (
+                "\n".join(f"• {row[0]} до {when(row[1] * 1000)}" for row in rows[:10])
                 or "Нет активных заглушений на этой странице."
             )
-            text += "\nЗаглушение влияет только на Telegram. Расчёт и история продолжаются."
+            text += "\n\nЗаглушение влияет только на Telegram. Расчёт и история продолжаются."
             pages = []
             if offset:
                 pages.append(("← Предыдущие", f"ui:mutespage:{max(offset - 10, 0)}"))
@@ -723,9 +724,9 @@ class ControlDeck:
 
             await self.c.send(
                 update,
-                f"Дополнительный контекст деривативов: {'включён' if s.enrichment_enabled else 'выключен'}\n"
+                f"🧩 Дополнительный контекст деривативов: {'включён' if s.enrichment_enabled else 'выключен'}\n\n"
                 "Добавляет доступные OI (открытый интерес), funding и basis для соответствующей Spot-монеты. "
-                "Это не переключатель основного Perpetual радара. Отсутствие context не блокирует детекторы.",
+                "Это не переключатель основного Perpetual радара. Отсутствие контекста не блокирует детекторы.",
                 enrichment_keyboard(snapshot),
             )
         else:

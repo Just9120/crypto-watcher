@@ -43,6 +43,9 @@ PHASES = {
     "UNSET",
 }
 SUCCESS_FIELDS = {
+    "artifact_id",
+    "artifact_sha256",
+    "artifact_origin",
     "state",
     "source_sha",
     "image_id",
@@ -83,7 +86,9 @@ def parsed_record(value: bytes) -> dict:
     return result if isinstance(result, dict) else {}
 
 
-def delivery_result(result, *, revision: str, digest: str, build_run: int) -> tuple[dict, int]:
+def delivery_result(
+    result, *, revision: str, digest: str, build_run: int, artifact_digest: str | None = None
+) -> tuple[dict, int]:
     success = parsed_record(result.stdout)
     proof = success.get("backup_validation")
     proof = proof if isinstance(proof, dict) else {}
@@ -186,6 +191,15 @@ def delivery_result(result, *, revision: str, digest: str, build_run: int) -> tu
     )
     if (
         result.returncode == 0
+        and (
+            artifact_digest is None
+            or (
+                success.get("artifact_sha256") == artifact_digest
+                and success.get("artifact_origin") == "GITHUB_ACTIONS_RELEASE_BUILD_V1"
+                and type(success.get("artifact_id")) is int
+                and success["artifact_id"] > 0
+            )
+        )
         and success.get("state") == "PASS"
         and success.get("source_sha") == revision
         and success.get("bundle_sha256") == digest
@@ -402,6 +416,9 @@ def deliver(release: Path, ssh_directory: Path, revision: str, build_run: int) -
             manifest = json.loads((release / "manifest.json").read_text())
             if manifest.get("source_sha") != revision or manifest.get("build_run") != build_run:
                 raise ValueError("Invalid build identity")
+            artifact = release / "artifact.zip"
+            with artifact.open("rb") as content:
+                artifact_digest = hashlib.file_digest(content, "sha256").hexdigest()
             command = [
                 "ssh",
                 "-T",
@@ -422,7 +439,7 @@ def deliver(release: Path, ssh_directory: Path, revision: str, build_run: int) -
                 "-o",
                 "ServerAliveCountMax=4",
                 "root@167.86.68.98",
-                f"cryptowatcher-deploy {revision} {digest} {bundle.stat().st_size}",
+                f"cryptowatcher-deploy {revision} {artifact_digest} {artifact.stat().st_size}",
             ]
             deadline = os.environ.get("CW_DELIVERY_DEADLINE")
             if deadline is not None:
@@ -432,7 +449,7 @@ def deliver(release: Path, ssh_directory: Path, revision: str, build_run: int) -
                 ):
                     raise ValueError("Invalid delivery deadline")
                 command[-1] += " " + deadline
-            with bundle.open("rb") as stream:
+            with artifact.open("rb") as stream:
                 result = subprocess.run(
                     command,
                     stdin=stream,
@@ -441,7 +458,11 @@ def deliver(release: Path, ssh_directory: Path, revision: str, build_run: int) -
                     **({"timeout": max(1, int(deadline) - time.time() + 10)} if deadline else {}),
                 )
             payload, exit_status = delivery_result(
-                result, revision=revision, digest=digest, build_run=build_run
+                result,
+                revision=revision,
+                digest=digest,
+                build_run=build_run,
+                artifact_digest=artifact_digest,
             )
         except Exception:
             # Neither local exception text nor raw SSH stderr belongs in an artifact or log.

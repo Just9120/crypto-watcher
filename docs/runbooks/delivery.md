@@ -1,5 +1,38 @@
 # CryptoWatcher — delivery and recovery
 
+## Независимое происхождение release и ограничение receiver
+
+Production transport сохраняет точный ZIP `actions/upload-artifact`, а не заново
+упакованные файлы. [download_release.py](../../scripts/download_release.py) сверяет
+его размер и digest с записью GitHub; receiver независимо читает публичные записи
+фиксированного repository и `release.yml`: source main SHA, repository IDs, ref,
+event, run, успешный build и exact artifact digest/size. Проверка выполняется до
+распаковки, `docker load` и запуска candidate с production env/data. Самоподписанные
+manifest hashes и image labels подтверждают только внутреннюю согласованность.
+Недоступность или неоднозначность независимой записи блокирует поставку.
+
+SSH grammar сохраняется; передаваемые digest/bytes теперь относятся к ZIP.
+`bundle_sha256` в итоговой квитанции остаётся hash внутреннего `bundle.tar`;
+дополнительные `artifact_id`, `artifact_sha256`, `artifact_origin` фиксируют
+независимую привязку. Старый receiver не поддерживает ZIP: перед merge применить
+существующую hash-bound процедуру operator update ниже, без перезапуска приложения.
+Повтор существующего release directory по-прежнему запрещён.
+
+Compose принимается только при exact SHA256 root-owned policy в receiver.
+Изменение его структуры/authority требует отдельной review и синхронного обновления
+policy; service overrides, include/extends, namespaces/devices и другие YAML формы
+не являются разрешёнными параметрами deployment key. Динамическими остаются только
+проверенные image/revision и root-owned target paths из действующей процедуры.
+
+До материализации tar metadata проверяются physical headers, expanded bytes,
+число записей, размеры extension payloads и имён. Image inspection выполняется
+отдельным процессом: Linux hard limits512MiB/30CPU-seconds,45s wall, без core dumps;
+до2GiB expanded bytes,4096headers,64KiB на extension,8MiB extension metadata,
+1MiB суммарных имён и128layers. Обычные Docker/OCI identities и exact rootfs
+bindings остаются обязательными. Те же проверки используются при packaging в CI;
+непригодный artifact не должен доходить до production. Эти parser bounds не
+меняют900s delivery budget, backup/integrity/recovery или runtime resource policy.
+
 Текущий runtime — physical schema2. Routine source integrity/backup на диске,
 resource/deadline/space gates и отдельный уже выполненный test-history reset
 определены в [действующей storage процедуре](bounded-storage-reset.md).

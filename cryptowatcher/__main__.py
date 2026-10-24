@@ -205,13 +205,16 @@ def main() -> int:
                         ndjson(store, selection) if args.format == "ndjson" else csv_summary(store, selection)
                     )
                     output = (
-                        args.destination.open("x", encoding="utf-8", newline="")
+                        os.fdopen(
+                            os.open(args.destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600),
+                            "w",
+                            encoding="utf-8",
+                            newline="",
+                        )
                         if args.destination
                         else sys.stdout
                     )
                     try:
-                        if args.destination and os.name != "nt":
-                            args.destination.chmod(0o600)
                         for chunk in stream:
                             output.write(chunk)
                     finally:

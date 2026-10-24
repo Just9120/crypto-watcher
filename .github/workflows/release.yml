@@ -79,7 +79,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REVISION: ${{ github.sha }}
           RUN_ID: ${{ github.run_id }}
-        run: gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" --name "cryptowatcher-$REVISION-$RUN_ID" --dir release
+        run: python scripts/download_release.py "$REVISION" "$RUN_ID"
       - name: Deliver only after reviewed first migration and credentials setup
         if: vars.DEPLOY_ENABLED == 'true'
         env:

@@ -78,6 +78,61 @@ def test_export_cli_rejects_invalid_period_and_required_causal_cutoff(
     assert "cutoff-ms" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("format_name", ["csv", "ndjson"])
+def test_export_is_private_at_creation_and_refuses_links(
+    monkeypatch, infrastructure, store, tmp_path, format_name
+):
+    import os
+    import stat
+
+    import cryptowatcher.__main__ as command
+
+    destination = tmp_path / ("private." + format_name)
+    original_open = os.open
+    calls = []
+
+    def inspect_creation(path, flags, mode=0o777, **kwargs):
+        descriptor = original_open(path, flags, mode, **kwargs)
+        if path == destination:
+            calls.append((flags, mode))
+            assert flags & os.O_EXCL and flags & os.O_CREAT
+            assert mode == 0o600
+            if os.name != "nt":
+                assert stat.S_IMODE(os.fstat(descriptor).st_mode) == 0o600
+            assert os.fstat(descriptor).st_size == 0
+        return descriptor
+
+    monkeypatch.setattr(command.os, "open", inspect_creation)
+    previous = os.umask(0)
+    try:
+        assert (
+            cli(
+                monkeypatch,
+                infrastructure,
+                "export",
+                "--format",
+                format_name,
+                "--destination",
+                str(destination),
+            )
+            == 0
+        )
+    finally:
+        os.umask(previous)
+    assert len(calls) == 1
+    original = destination.read_bytes()
+    assert (
+        cli(monkeypatch, infrastructure, "export", "--format", format_name, "--destination", str(destination))
+        == 2
+    )
+    assert destination.read_bytes() == original
+    if os.name != "nt":
+        link = tmp_path / "dangling"
+        link.symlink_to(tmp_path / "absent")
+        assert cli(monkeypatch, infrastructure, "export", "--destination", str(link)) == 2
+        assert not (tmp_path / "absent").exists()
+
+
 @pytest.mark.parametrize(
     ("code", "exit_status"),
     [

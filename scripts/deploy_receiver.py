@@ -7,6 +7,7 @@ state import, data restore, SSH configuration or unrelated service operations.
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import math
@@ -20,6 +21,7 @@ import tarfile
 import tempfile
 import time
 import urllib.request
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +35,8 @@ TARGET = Path("/etc/cryptowatcher/deploy-target.json")
 NEW_WRITE_PERMIT = Path("/etc/cryptowatcher/new-write-permit.json")
 NEW_WRITE_POLICY = "OWNER_APPROVED_NEW_WRITES_ONLY_V1"
 MAX_BUNDLE = 1024 * 1024 * 1024
+# Exact reviewed policy; update only with a reviewed receiver deployment.
+COMPOSE_POLICY_SHA256 = "ea65dee50177bb939b4e5bd831e01c1e07b768d3980fbc3775fb7de0daea4379"
 MEMBERS = {"manifest.json", "image.tar.gz", "docker-compose.yml"}
 ACTIVE_RECORD: dict[str, Any] | None = None
 ACTIVE_PATH: Path | None = None
@@ -166,6 +170,7 @@ def command_arguments(command: str) -> tuple[str, str, int]:
 
 
 def extract_bundle(bundle: Path, destination: Path) -> dict[str, Any]:
+    inspect_tar_headers(bundle, compressed=False, maximum=MAX_BUNDLE + 1024 * 1024)
     with tarfile.open(bundle, "r:") as archive:
         members = archive.getmembers()
         require(len(members) == 3 and {item.name for item in members} == MEMBERS, "Invalid bundle members")
@@ -309,7 +314,66 @@ def capture_validation_failure(args: list[str], result: Any) -> None:
             ACTIVE_RECORD.setdefault("failure_validation_metrics", durations)
 
 
+def inspect_tar_headers(path: Path, *, compressed: bool, maximum: int = 2 * 1024**3) -> None:
+    """Bound physical headers and extension payloads before tarfile materializes them."""
+    opened = gzip.open(path, "rb") if compressed else path.open("rb")
+    expanded = metadata = names = count = 0
+    with opened as stream:
+        while True:
+            header = stream.read(512)
+            expanded += len(header)
+            require(expanded <= maximum, "Expanded archive exceeds limit")
+            require(len(header) == 512, "Truncated archive header")
+            if not any(header):
+                # Also charge trailing blocks; no concatenated hidden archive is accepted.
+                while block := stream.read(65536):
+                    expanded += len(block)
+                    require(expanded <= maximum and not any(block), "Invalid archive trailer")
+                return
+            count += 1
+            require(count <= 4096, "Archive header count exceeds limit")
+            try:
+                member = tarfile.TarInfo.frombuf(header, "utf-8", "strict")
+            except (tarfile.TarError, UnicodeError, ValueError) as exc:
+                raise DeploymentError("Invalid archive header") from exc
+            names += len(member.name.encode("utf-8"))
+            require(names <= 1024 * 1024 and len(member.name) <= 4096, "Archive names exceed limit")
+            extension = member.type in (tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.GNUTYPE_LONGNAME)
+            require(member.isfile() or member.isdir() or extension, "Unsupported archive member")
+            require(member.size >= 0, "Invalid archive member size")
+            if extension:
+                metadata += member.size
+                require(member.size <= 65536 and metadata <= 8 * 1024**2, "Archive metadata exceeds limit")
+            padded = (member.size + 511) // 512 * 512
+            require(expanded + padded <= maximum, "Expanded archive exceeds limit")
+            remaining = padded
+            while remaining:
+                block = stream.read(min(65536, remaining))
+                require(bool(block), "Truncated archive member")
+                remaining -= len(block)
+                expanded += len(block)
+
+
 def archive_image_identity(path: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    """Inspect in an isolated bounded worker, also usable by release packaging."""
+    result = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve()), "--inspect-image", str(path.resolve())],
+        input=json.dumps(manifest),
+        text=True,
+        capture_output=True,
+        timeout=45,
+        check=False,
+    )
+    require(
+        result.returncode == 0 and len(result.stdout) <= 65536, "Image inspection resource limit or failure"
+    )
+    value = json.loads(result.stdout)
+    require("error" not in value, value.get("error", "Image inspection failed"))
+    value["identities"] = set(value["identities"])
+    return value
+
+
+def _archive_image_identity(path: Path, manifest: dict[str, Any]) -> dict[str, Any]:
     """Derive config and OCI identities from the verified single-image archive.
 
     Classic Docker addresses config digests; containerd addresses manifest
@@ -320,10 +384,15 @@ def archive_image_identity(path: Path, manifest: dict[str, Any]) -> dict[str, An
     require(bool(re.fullmatch(r"[0-9a-f]{40}", str(revision))), "Invalid source identity")
     require(type(build_run) is int and build_run > 0, "Invalid build identity")
     image_ref = f"cryptowatcher:{revision}"
+    inspect_tar_headers(path, compressed=True)
     with tarfile.open(path, "r:gz") as archive:
         members = archive.getmembers()
         require(len({m.name for m in members}) == len(members), "Duplicate image archive member")
         by_name = {m.name: m for m in members}
+        require(
+            len(members) <= 4096 and sum(len(m.name) for m in members) <= 1024 * 1024,
+            "Image archive members exceed limit",
+        )
 
         def read(name: str) -> bytes:
             member = by_name.get(name)
@@ -373,6 +442,7 @@ def archive_image_identity(path: Path, manifest: dict[str, Any]) -> dict[str, An
         diff_ids = config.get("rootfs", {}).get("diff_ids")
         require(
             isinstance(layers, list)
+            and len(layers) <= 128
             and isinstance(diff_ids, list)
             and len(layers) == len(diff_ids) > 0
             and all(isinstance(d, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", d) for d in diff_ids)
@@ -448,6 +518,93 @@ def main_revision() -> str:
     revision = payload["object"]["sha"]
     require(bool(re.fullmatch(r"[0-9a-f]{40}", revision)), "Invalid main record")
     return revision
+
+
+def github_record(path: str) -> dict[str, Any]:
+    request = urllib.request.Request(
+        "https://api.github.com/repos/Just9120/crypto-watcher/" + path,
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "CryptoWatcher-CD"},
+    )
+    with urllib.request.urlopen(request, timeout=15) as response:
+        data = response.read(1024 * 1024 + 1)
+    require(len(data) <= 1024 * 1024, "GitHub provenance record exceeds limit")
+    value = json.loads(data)
+    require(isinstance(value, dict), "Invalid GitHub provenance record")
+    return value
+
+
+def trusted_artifact(revision: str, digest: str, size: int) -> dict[str, Any]:
+    """Bind bytes to independent GitHub metadata, never caller-provided labels/hashes."""
+    workflow = github_record("actions/workflows/release.yml")
+    workflow_id = workflow.get("id")
+    require(
+        type(workflow_id) is int and workflow.get("path") == ".github/workflows/release.yml",
+        "Unknown trusted release workflow",
+    )
+    runs = github_record(f"actions/workflows/{workflow_id}/runs?head_sha={revision}&per_page=10")
+    for run_info in runs.get("workflow_runs", [])[:10]:
+        run_id = run_info.get("id")
+        if not (
+            type(run_id) is int
+            and run_id > 0
+            and run_info.get("workflow_id") == workflow_id
+            and run_info.get("path") == ".github/workflows/release.yml"
+            and run_info.get("event") in ("push", "workflow_dispatch")
+            and run_info.get("head_sha") == revision
+            and run_info.get("head_branch") == "main"
+            and run_info.get("repository", {}).get("id") == 1210326462
+            and run_info.get("head_repository", {}).get("id") == 1210326462
+        ):
+            continue
+        artifacts = github_record(f"actions/runs/{run_id}/artifacts?per_page=100")
+        require(artifacts.get("total_count", 101) <= 100, "Release artifact listing exceeds limit")
+        for artifact in artifacts.get("artifacts", []):
+            binding = artifact.get("workflow_run", {})
+            if not (
+                artifact.get("name") == f"cryptowatcher-{revision}-{run_id}"
+                and artifact.get("expired") is False
+                and artifact.get("digest") == "sha256:" + digest
+                and artifact.get("size_in_bytes") == size
+                and binding.get("id") == run_id
+                and binding.get("repository_id") == 1210326462
+                and binding.get("head_repository_id") == 1210326462
+                and binding.get("head_sha") == revision
+                and binding.get("head_branch") == "main"
+            ):
+                continue
+            jobs = github_record(f"actions/runs/{run_id}/jobs?per_page=100")
+            require(jobs.get("total_count", 101) <= 100, "Release job listing exceeds limit")
+            build = [j for j in jobs.get("jobs", []) if j.get("name") == "build"]
+            require(
+                len(build) == 1
+                and build[0].get("status") == "completed"
+                and build[0].get("conclusion") == "success",
+                "Trusted release build is not successful",
+            )
+            return {"build_run": run_id, "artifact_id": artifact["id"], "artifact_sha256": digest}
+    raise DeploymentError("Artifact has no trusted release provenance")
+
+
+def extract_trusted_artifact(path: Path, destination: Path) -> None:
+    # Called only after the complete ZIP matches GitHub's independent immutable digest.
+    with zipfile.ZipFile(path) as archive:
+        members = archive.infolist()
+        require(
+            len(members) == 3
+            and {m.filename for m in members} == {"bundle.tar", "bundle.sha256", "manifest.json"},
+            "Invalid release ZIP members",
+        )
+        for member in members:
+            limit = MAX_BUNDLE if member.filename == "bundle.tar" else 65536
+            require(0 < member.file_size <= limit and not member.flag_bits & 1, "Invalid release ZIP size")
+            with archive.open(member) as source, (destination / member.filename).open("xb") as output:
+                shutil.copyfileobj(source, output, 65536)
+    bundle = destination / "bundle.tar"
+    require(
+        (destination / "bundle.sha256").read_text().strip() == fingerprint(bundle), "Invalid trusted bundle"
+    )
+    # extract_bundle owns the authoritative manifest; avoid overwriting an existing path.
+    (destination / "manifest.json").rename(destination / "artifact-manifest.json")
 
 
 def new_write_permit(revision: str) -> dict[str, Any] | None:
@@ -639,8 +796,8 @@ def deploy(revision: str, digest: str, size: int, deadline_epoch: int | None = N
         ACTIVE_PATH = release / "deployment.json"
         ACTIVE_RECORD = {"state": "PRE_SWITCH", "source_sha": revision, "bundle_sha256": digest}
         record_phase("RECEIVE_ARTIFACT")
-        bundle = release / "bundle.tar"
-        with bundle.open("xb") as output:
+        artifact = release / "artifact.zip"
+        with artifact.open("xb") as output:
             remaining = size
             while remaining:
                 chunk = sys.stdin.buffer.read(min(1024 * 1024, remaining))
@@ -648,9 +805,24 @@ def deploy(revision: str, digest: str, size: int, deadline_epoch: int | None = N
                 output.write(chunk)
                 remaining -= len(chunk)
             require(not sys.stdin.buffer.read(1), "Unexpected trailing bundle data")
-        require(fingerprint(bundle) == digest, "Bundle hash mismatch")
+        require(fingerprint(artifact) == digest, "Artifact hash mismatch")
         record_phase("VERIFY_ARTIFACT")
+        provenance = trusted_artifact(revision, digest, size)
+        ACTIVE_RECORD.update(provenance)
+        ACTIVE_RECORD["artifact_origin"] = "GITHUB_ACTIONS_RELEASE_BUILD_V1"
+        extract_trusted_artifact(artifact, release)
+        bundle = release / "bundle.tar"
+        ACTIVE_RECORD["bundle_sha256"] = fingerprint(bundle)
         manifest = extract_bundle(bundle, release)
+        require(
+            (release / "manifest.json").read_bytes() == (release / "artifact-manifest.json").read_bytes(),
+            "Trusted release manifests disagree",
+        )
+        require(manifest.get("build_run") == provenance["build_run"], "Trusted build binding mismatch")
+        require(
+            fingerprint(release / "docker-compose.yml") == COMPOSE_POLICY_SHA256,
+            "Compose differs from root-owned runtime policy",
+        )
         require(manifest.get("source_sha") == revision, "Source identity mismatch")
         require(manifest.get("architecture") == target["architecture"], "Target architecture mismatch")
         reset_permit = reset_delivery.load_permit(APP, TARGET, revision, run, require)
@@ -1238,4 +1410,24 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "--inspect-image":
+        if sys.platform != "win32":
+            import resource
+
+            resource.setrlimit(resource.RLIMIT_AS, (512 * 1024**2, 512 * 1024**2))
+            resource.setrlimit(resource.RLIMIT_CPU, (30, 30))
+            resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+        try:
+            request = sys.stdin.read(65537)
+            require(len(request) <= 65536, "Image inspection request exceeds limit")
+            identity = _archive_image_identity(Path(sys.argv[2]), json.loads(request))
+            identity["identities"] = sorted(identity["identities"])
+            print(json.dumps(identity))
+        except Exception as exc:
+            print(
+                json.dumps(
+                    {"error": str(exc) if isinstance(exc, DeploymentError) else "Invalid image archive"}
+                )
+            )
+        raise SystemExit(0)
     raise SystemExit(main())
