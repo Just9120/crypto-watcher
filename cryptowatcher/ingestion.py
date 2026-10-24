@@ -997,6 +997,8 @@ class BybitRadar(BybitREST):
         quotes: dict[str, dict[str, Any]] = {}
         errors: dict[str, str] = {}
         now_ms = self.server_now()
+        listed = frozenset(settings.instruments())
+        derived: dict[tuple[str, str, bool], OwnerSettings] = {}
         for instrument in active:
             market, symbol = instrument.market, instrument.symbol
             for tf in TIMEFRAMES:
@@ -1010,14 +1012,20 @@ class BybitRadar(BybitREST):
                         raise MarketError("bootstrap_pending")
                     if stream in self.sources.blocked:
                         raise MarketError(self.sources.blocked[stream])
-                    parameters = effective_parameters(settings, instrument.key)
-                    effective = settings.changed(
-                        bybit_category=market,
-                        signal_timeframe=tf,
-                        price_move_min=parameters[f"price_{tf}"],
-                        turnover_spike_min=parameters["turnover_ratio"],
-                        sma_periods=parameters["turnover_lookback"],
-                    )
+                    cohort = market, tf, instrument.key in listed
+                    effective = derived.get(cohort)
+                    if effective is None:
+                        parameters = effective_parameters(settings, instrument.key)
+                        effective = settings.changed(
+                            bybit_category=market,
+                            signal_timeframe=tf,
+                            price_move_min=parameters[f"price_{tf}"],
+                            turnover_spike_min=parameters["turnover_ratio"],
+                            sma_periods=parameters["turnover_lookback"],
+                        )
+                        # Validated immutable settings live only for this synchronous
+                        # snapshot; every quote below still receives a fresh payload.
+                        derived[cohort] = effective
                     payload = evaluate_composite(
                         self.sources.rows(stream, effective.sma_periods + 2),
                         self.tickers[instrument.key],

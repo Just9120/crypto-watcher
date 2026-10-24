@@ -1082,6 +1082,99 @@ async def test_watchlist_effective_thresholds_do_not_rewrite_custom_owner_values
     assert radar.store.snapshot() == before
 
 
+def snapshot_population(radar):
+    for market in ("spot", "linear"):
+        for symbol in ("ETHUSDT", "ADAUSDT"):
+            item, reason = classify(market, metadata(symbol, market))
+            assert reason == "eligible"
+            radar.instruments[item.key] = item
+            radar.tickers[item.key] = {"turnover24h": "2000000", "lastPrice": "106"}
+            for tf in TIMEFRAMES:
+                stream = f"{item.key}/{tf}"
+                radar.streams.add(stream)
+                radar.sources.windows[stream] = dict(radar.sources.windows[f"{market}/BTCUSDT/{tf}"])
+
+
+@pytest.mark.parametrize("radar", ["plain", "tiles"], indirect=True)
+@pytest.mark.parametrize("mode", ["top", "custom", "legacy", "unit-multiplier"])
+async def test_snapshot_settings_stay_exact_for_each_market_tf_and_watchlist_cohort(radar, mode):
+    snapshot_population(radar)
+    radar.server_now = lambda: NOW
+    parameters = (
+        ("price_1m", 1.125),
+        ("price_3m", 2.625),
+        ("price_5m", 3.125),
+        ("price_15m", 4.875),
+        ("turnover_ratio", 3.625),
+        ("turnover_lookback", 14),
+    )
+    settings = OwnerSettings(
+        detector_parameters=parameters,
+        bybit_category="linear",
+        watchlist=() if mode == "legacy" else ("spot/BTCUSDT", "linear/ETHUSDT"),
+        custom_pairs=("BTCUSDT", "ETHUSDT") if mode == "legacy" else (),
+        alert_universe_mode="custom" if mode == "custom" else "top",
+        watchlist_multiplier=1.0 if mode == "unit-multiplier" else 0.75,
+    )
+    before = radar.store.snapshot()
+    changes = radar.store.db.total_changes
+    try:
+        result = await radar.snapshot(settings)
+        assert not result.errors
+        assert len(result.quotes) == result.requested == (8 if mode == "custom" else 24)
+        for stream, quote in result.quotes.items():
+            market, symbol, tf = stream.split("/")
+            multiplier = (
+                settings.watchlist_multiplier if f"{market}/{symbol}" in settings.instruments() else 1
+            )
+            actual = quote["effective_settings"]
+            assert (
+                float(actual["price_move_min"]).hex()
+                == float(dict(parameters)[f"price_{tf}"] * multiplier).hex()
+            )
+            assert float(actual["turnover_spike_min"]).hex() == float(3.625 * multiplier).hex()
+            assert actual["sma_periods"] == 14
+            assert actual["signal_timeframe"] == tf and actual["bybit_category"] == market
+            assert actual["watchlist"] == settings.watchlist
+        payloads = [q["effective_settings"] for q in result.quotes.values()]
+        assert len({id(value) for value in payloads}) == len(payloads)
+        untouched = [dict(value) for value in payloads[1:]]
+        payloads[0]["profile"] = "caller mutation"
+        payloads[0]["price_move_min"] = -100
+        assert payloads[1:] == untouched
+        assert radar.store.snapshot() == before and radar.store.db.total_changes == changes
+    finally:
+        await radar.close()
+
+
+@pytest.mark.parametrize("radar", ["plain", "tiles"], indirect=True)
+async def test_snapshot_rederives_after_owner_revision_and_keeps_per_stream_failures(radar):
+    snapshot_population(radar)
+    radar.server_now = lambda: NOW
+    before = radar.store.snapshot()
+    try:
+        first = await radar.snapshot(before.settings)
+        updated = radar.store.update(
+            before.revision,
+            before.settings.changed(
+                watchlist=("spot/ETHUSDT",), watchlist_multiplier=0.8, price_move_min=3.25
+            ),
+        )
+        updated = radar.store.snapshot()
+        assert updated.revision == before.revision + 1
+        radar.sources.blocked["spot/ADAUSDT/3m"] = "original_source_error"
+        radar.sources.remove_window("linear/ADAUSDT/5m")
+        second = await radar.snapshot(updated.settings)
+        assert second.errors["spot/ADAUSDT/3m"] == "original_source_error"
+        assert second.errors["linear/ADAUSDT/5m"] == "bootstrap_pending"
+        assert second.quotes["spot/ETHUSDT/1m"]["effective_settings"]["price_move_min"] == 2.6
+        assert second.quotes["spot/BTCUSDT/1m"]["effective_settings"]["price_move_min"] == 3.25
+        assert first.quotes["spot/BTCUSDT/1m"]["effective_settings"]["price_move_min"] == 2
+        assert radar.store.snapshot() == updated
+    finally:
+        await radar.close()
+
+
 async def test_universe_delta_keeps_unchanged_market_session(radar):
     async def hold(*args):
         await asyncio.Event().wait()
