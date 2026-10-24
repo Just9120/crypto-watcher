@@ -947,7 +947,7 @@ def deploy(revision: str, digest: str, size: int, deadline_epoch: int | None = N
             "build_image_id": manifest["image_id"],
             "image_config_digest": identity["config_digest"],
             "image_manifest_digest": identity["manifest_digest"],
-            "bundle_sha256": digest,
+            "bundle_sha256": ACTIVE_RECORD["bundle_sha256"],
             "build_run": manifest["build_run"],
             "at": time.time(),
             "previous_image": previous["Image"],

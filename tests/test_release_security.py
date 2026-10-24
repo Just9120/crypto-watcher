@@ -68,6 +68,155 @@ def test_exact_public_release_artifact_has_independent_identity(monkeypatch):
     }
 
 
+@pytest.mark.parametrize("compression", [zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED])
+def test_complete_receiver_preserves_distinct_zip_and_bundle_identities(tmp_path, monkeypatch, compression):
+    from subprocess import CompletedProcess
+
+    from scripts.deliver_release import delivery_result
+
+    compose = (
+        (Path(__file__).resolve().parents[1] / "docker-compose.yml").read_bytes().replace(b"\r\n", b"\n")
+    )
+    image = "sha256:" + "c" * 64
+    image_bytes = b"isolated image stub; image validation has separate tests"
+    manifest = {
+        "schema": "cryptowatcher.release.v1",
+        "database_schema": 1,
+        "migration_class": "NONE",
+        "source_sha": SOURCE,
+        "build_run": RUN,
+        "architecture": "amd64",
+        "image_id": image,
+        "compose_sha256": hashlib.sha256(compose).hexdigest(),
+        "image_archive_sha256": hashlib.sha256(image_bytes).hexdigest(),
+    }
+    inner = io.BytesIO()
+    with tarfile.open(fileobj=inner, mode="w") as archive:
+        for name, data in {
+            "manifest.json": json.dumps(manifest).encode(),
+            "docker-compose.yml": compose,
+            "image.tar.gz": image_bytes,
+        }.items():
+            item = tarfile.TarInfo(name)
+            item.size = len(data)
+            archive.addfile(item, io.BytesIO(data))
+    bundle = inner.getvalue()
+    bundle_digest = hashlib.sha256(bundle).hexdigest()
+    outer = io.BytesIO()
+    with zipfile.ZipFile(outer, "w", compression=compression) as archive:
+        archive.writestr("bundle.tar", bundle)
+        archive.writestr("bundle.sha256", bundle_digest)
+        archive.writestr("manifest.json", json.dumps(manifest))
+    artifact = outer.getvalue()
+    artifact_digest = hashlib.sha256(artifact).hexdigest()
+    assert artifact_digest != bundle_digest
+    monkeypatch.setitem(sys.modules, "fcntl", types.SimpleNamespace(flock=lambda *a: None, LOCK_EX=2))
+    monkeypatch.setattr(receiver.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(receiver, "APP", tmp_path)
+    for name in ("ACTIVE_RECORD", "ACTIVE_PATH", "OPERATION_DEADLINE", "HARD_DEADLINE"):
+        monkeypatch.setattr(receiver, name, None)
+    monkeypatch.setattr(receiver.signal, "setitimer", lambda *a: None, raising=False)
+    monkeypatch.setattr(receiver.signal, "ITIMER_REAL", 0, raising=False)
+    monkeypatch.setattr(receiver.signal, "SIGALRM", 0, raising=False)
+    monkeypatch.setattr(receiver.signal, "signal", lambda *a: None)
+    monkeypatch.setattr(receiver.sys, "stdin", types.SimpleNamespace(buffer=io.BytesIO(artifact)))
+    data_dir = tmp_path / "data"
+    (data_dir / "sqlite").mkdir(parents=True)
+    (data_dir / "sqlite/cryptowatcher.sqlite3").write_bytes(b"isolated database stub")
+    target = {
+        "architecture": "amd64",
+        "compose_project": "crypto_watcher",
+        "env_file": str(tmp_path / ".env"),
+        "data_dir": str(data_dir),
+    }
+    monkeypatch.setattr(receiver, "target_config", lambda: target)
+    monkeypatch.setattr(receiver, "main_revision", lambda: SOURCE)
+    monkeypatch.setattr(receiver.shutil, "disk_usage", lambda p: types.SimpleNamespace(free=10 * 1024**3))
+    trust = Mock(return_value={"build_run": RUN, "artifact_id": 111, "artifact_sha256": artifact_digest})
+    monkeypatch.setattr(receiver, "trusted_artifact", trust)
+    monkeypatch.setattr(receiver.reset_delivery, "load_permit", lambda *a: None)
+    monkeypatch.setattr(receiver, "new_write_permit", lambda *a: None)
+    monkeypatch.setattr(
+        receiver, "archive_image_identity", lambda *a: {"config_digest": image, "manifest_digest": image}
+    )
+    monkeypatch.setattr(receiver, "loaded_image_id", lambda *a: image)
+    diagnostics = {
+        "configuration_revision": 5,
+        "heartbeat": {"revision": SOURCE},
+        "last_poll": {"state": "OK", "at": receiver.time.time() + 10, "available": 1, "requested": 1},
+    }
+    service = {
+        "crypto_watcher": {
+            "image": image,
+            "container_name": "crypto-watcher",
+            "read_only": True,
+            "volumes": [{"source": str(data_dir), "target": "/data"}],
+        }
+    }
+    container = {
+        "Image": image,
+        "State": {"Health": {"Status": "healthy"}},
+        "Config": {
+            "Labels": {
+                "com.docker.compose.project": "crypto_watcher",
+                "com.docker.compose.service": "crypto_watcher",
+            }
+        },
+    }
+    calls = []
+
+    def docker(command, **kwargs):
+        calls.append(command)
+        if command[:2] == ["docker", "inspect"]:
+            return json.dumps([container])
+        if command[-3:] == ["config", "--format", "json"]:
+            return json.dumps({"services": service})
+        if command[-1] == "diagnostics":
+            return json.dumps(diagnostics)
+        assert command[:2] == ["docker", "load"] or command[-1] in ("check-config", "crypto_watcher")
+        return ""
+
+    monkeypatch.setattr(receiver, "run", docker)
+
+    def backup(*args):
+        receiver.ACTIVE_RECORD.update(
+            state_validation={"schema": 2, "status": "integrity_ok"},
+            state_validation_resources={},
+            backup_validation_resources={},
+        )
+        return "isolated.sqlite3", {
+            "phase": "COMPLETE",
+            "validation_mode": "DISK_STREAMING",
+            "bytes": 4096,
+            "sha256": "f" * 64,
+        }
+
+    monkeypatch.setattr(receiver, "full_backup_preflight", backup)
+    result = receiver.deploy(SOURCE, artifact_digest, len(artifact))
+    trust.assert_called_once_with(SOURCE, artifact_digest, len(artifact))
+    primary = tmp_path / "releases" / f"{SOURCE}-{artifact_digest[:16]}" / "deployment.json"
+    assert json.loads(primary.read_text()) == result
+    assert result["bundle_sha256"] == bundle_digest
+    assert result["artifact_sha256"] == artifact_digest
+    assert result["state"] == "PASS" and result["phase"] == "COMPLETE"
+    assert sum("up" in call for call in calls) == 1
+    complete = CompletedProcess([], 0, json.dumps(result).encode(), b"")
+    assert (
+        delivery_result(
+            complete, revision=SOURCE, digest=bundle_digest, build_run=RUN, artifact_digest=artifact_digest
+        )[1]
+        == 0
+    )
+    # Neither digest may be substituted for the other, even with a valid origin.
+    for bad_bundle, bad_artifact in ((artifact_digest, artifact_digest), (bundle_digest, bundle_digest)):
+        assert (
+            delivery_result(
+                complete, revision=SOURCE, digest=bad_bundle, build_run=RUN, artifact_digest=bad_artifact
+            )[1]
+            != 0
+        )
+
+
 @pytest.mark.parametrize(
     "variation",
     [
