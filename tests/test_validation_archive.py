@@ -213,6 +213,41 @@ def test_later_file_mutation_invalidates_open_readback(tmp_path):
         reopened.close()
 
 
+@pytest.mark.parametrize("reserve", [True, 0, 1024])
+def test_custom_disk_reserve_cannot_weaken_existing_minimum(tmp_path, reserve):
+    path = tmp_path / "invalid-reserve.zst"
+    with pytest.raises(QualificationError, match="INVALID_ARCHIVE_BOUND"):
+        ArchiveArena(
+            path,
+            max_raw_bytes=BLOCK,
+            max_archive_bytes=8 * BLOCK,
+            deadline=time.monotonic() + 20,
+            reserve_bytes=reserve,
+        )
+    assert not path.exists()
+
+
+def test_raw_disk_encoder_rejects_alias_and_independently_restores_complete_bytes(tmp_path):
+    from cryptowatcher.compressed_validation import Image
+
+    path = tmp_path / "encoded.zst"
+    target = arena(path, raw=BLOCK)
+    try:
+        with pytest.raises(QualificationError, match="INVALID_ARCHIVE_BOUND"):
+            Image(path, limit=target.limit, deadline=target.deadline, archive_store=target)
+        raw = tmp_path / "private-raw.db"
+        content = b"original" * (BLOCK // 8)
+        raw.write_bytes(content)
+        image = Image(raw, limit=target.limit, deadline=target.deadline, archive_store=target)
+        assert image.sha256 == hashlib.sha256(content).hexdigest()
+    finally:
+        target.close()
+    with path.open("rb") as source:
+        restored = io.BytesIO()
+        zstandard.ZstdDecompressor().copy_stream(source, restored)
+    assert restored.getvalue() == content and raw.read_bytes() == content
+
+
 def test_actual_live_sqlite_snapshot_is_standard_archive_with_exact_rows_and_private(store, tmp_path):
     import sqlite3
     from contextlib import closing

@@ -152,21 +152,29 @@ deployment record сохраняются для readback; повтор посл�
 
 Source и persistent backup остаются обязательными full integrity gates до switch.
 Текущий large-schema2 path описан в [bounded-storage-reset](bounded-storage-reset.md):
-один standard ZSTD disk-backed snapshot, полный scan и независимое readback/raw+archive
-SHA доказательство тех же неизменных bytes; CPU1/RAM4GiB/900s и1536MiB disk reserve
-сохраняются. Explicit flag `--framed-archive-validation` применяется только к
-`backup --archive-backup` с private validation directory. Format и обычное ZSTD
-восстановление совместимы; рабочая DB/settings/generation этим CLI не меняются.
-Режим FRAMED_DISK не удерживает весь encoded snapshot в anonymous RAM. Его64KiB
-index records содержат64KiB frames; прежние multipart4/8/16KiB archives остаются
-readable. SQLite cache2GiB и decoder используют прежний общий4GiB hard cap,
-а не дополнительную память. Full source/CHECK/index/freelist/heads и оба SHA gates
-сохранены. Поздний результат integrity сначала проверяется на deadline, затем на
-corruption. Fresh closed-file readback выполняет и обязательный exit SHA gate: полный
-digest сравнивается с captured digest после full SQL; повторный проход по тем же
-frozen bytes объединён с этим независимым чтением. RAM path сохраняет exit scan.
-Proof содержит фактический cache setting; смена строгого receiver
-требует existing exact reviewed pre-merge operator procedure.
+`NATIVE_DISK_FRAMED` сначала создаёт один pinned native SQLite snapshot в приватной
+дисковой папке `<destination>.capture` (0700), файл `snapshot.sqlite3` — 0600.
+Затем logical read/write handle с query_only выполняет полный CHECK/index/freelist/
+current-head scan и foreign_key_check; cache128MiB, mmap3GiB находятся внутри прежнего
+общего cap4GiB/CPU1/no swap. Это не настройки работающего бота.
+До full SQL измеряется raw SHA256, при кодировании закрытого снимка SHA измеряется
+повторно. Стандартный ZSTD archive с64KiB frames и checked index закрывается и
+открывается независимым reader: проверяются весь decoded output/raw SHA и encoded
+archive SHA. Старые64KiB records с4/8/16KiB subframes остаются readable.
+Только после всех checks удаляется новый byte-identical raw duplicate; receipt
+сохраняется. Failed raw/partial archive/receipt сохраняются unqualified, без reset,
+перезаписи или удаления старых backups. Для повторной операции нужен новый путь.
+Временные raw bytes учитываются явно: archive admission ограничен меньшим из raw
+size+format overhead и free−raw−6GiB reserve−1GiB concurrent headroom. Free space
+проверяется и при capture, и при encoding; все этапы делят прежний остаток900s.
+Это добавляет временные запись/чтение диска: достаточность места и общий эффект
+на VPS требуют фактической проверки, успешный маленький fixture этого не доказывает.
+`--framed-archive-validation` остаётся только для `backup --archive-backup` с private
+validation directory. Формат восстановления совместим; DB/settings/generation не
+меняются. Proof содержит фактические cache/mmap/temp bytes/cleanup/reserves и basis
+`FULL_NATIVE_DISK_CHECK_AND_INDEPENDENT_EQUAL_RAW_SHA256`; receiver и Actions требуют
+их строгого совпадения, незавершённая проверка не допускает switch.
+Смена receiver требует existing exact reviewed pre-merge operator procedure.
 Ниже описан сохранённый RAM path schema1; schema2 до3GiB использует disk validation.
 Проверочные контейнеры имеют отдельный private tmpfs `/validation`, UID/GID10001,
 read-only root, network none, cap-drop ALL, CPU1 и memory-swap=memory (без swap).

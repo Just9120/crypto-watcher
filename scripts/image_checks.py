@@ -505,7 +505,7 @@ s.close()
         print(json.dumps({"image_storage_measurement": measurement}, sort_keys=True))
         for mode, validation_flag in (
             ("COMPRESSED_RAM", "--compressed-validation"),
-            ("FRAMED_DISK", "--framed-archive-validation"),
+            ("NATIVE_DISK_FRAMED", "--framed-archive-validation"),
         ):
             archive_path = f"/data/measured-{mode}.sqlite3.zst"
             restore_path = f"/data/measured-{mode}-restored.db"
@@ -530,9 +530,16 @@ s.close()
             assert archived_schema2["phase"] == "COMPLETE"
             assert archived_schema2["validation_mode"] == mode
             assert archived_schema2["archive_encoding"] == "ZSTD"
-            if mode == "FRAMED_DISK":
+            if mode == "NATIVE_DISK_FRAMED":
                 assert archived_schema2["source_validation"]["status"] == "integrity_ok"
                 assert archived_schema2["source_validation"]["snapshot_sha256"] == archived_schema2["sha256"]
+                assert archived_schema2["integrity_basis"] == (
+                    "FULL_NATIVE_DISK_CHECK_AND_INDEPENDENT_EQUAL_RAW_SHA256"
+                )
+                assert archived_schema2["raw_snapshot_removed"] is True
+                assert archived_schema2["temporary_raw_bytes"] == archived_schema2["bytes"]
+                assert archived_schema2["sqlite_cache_kib"] == 128 * 1024
+                assert archived_schema2["mmap_limit_bytes"] == 3 * 1024**3
             run(
                 args.image,
                 directory,
@@ -551,6 +558,23 @@ s.close()
                 "assert list(a.db.iterdump())==list(b.db.iterdump()); "
                 "assert a.snapshot()==b.snapshot(); a.close(); b.close()",
             )
+            if mode == "NATIVE_DISK_FRAMED":
+                # The real capture directory must remain private to UID10001.
+                # Remove only this complete disposable receipt as that UID;
+                # the host runner cannot traverse the required 0700 directory.
+                run(
+                    args.image,
+                    directory,
+                    "-c",
+                    "import json,stat; from pathlib import Path; "
+                    f"p=Path({archive_path + '.capture'!r}); r=p/'receipt.json'; "
+                    "assert p.resolve()==p and stat.S_IMODE(p.stat().st_mode)==0o700; "
+                    "assert stat.S_IMODE(r.stat().st_mode)==0o600; "
+                    "assert sorted(x.name for x in p.iterdir())==['receipt.json']; "
+                    "v=json.loads(r.read_text()); "
+                    "assert v['state']=='COMPLETE' and v['raw_snapshot_removed'] is True; "
+                    "r.unlink(); p.rmdir(); assert not p.exists()",
+                )
         # Qualify the actual old layout/CW2 -> mixed views/CW3 transition with
         # product Python/SQLite, full disk backup and restart. No API requests.
         run(

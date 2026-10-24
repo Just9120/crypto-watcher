@@ -161,40 +161,29 @@ zero data writes; это snapshot текущего размера, не обещ
 будущей базы и не доказательство capacity в текущем допустимом пределе30GB. Failed attempt сохраняется; повтор
 делается после исправления через новый validated artifact, без bypass/reset.
 
-Для schema2 выше3GiB routine receiver выбирает один дисковый frozen capture через
+Для schema2 выше3GiB routine receiver выбирает `NATIVE_DISK_FRAMED` через
 `backup --archive-backup --framed-archive-validation --validation-directory`.
-Source transaction фиксирует точные page_count/page_size и закрывается после copy.
-Постоянный стандартный ZSTD stream содержит64KiB frames, reserved header и checked
-index в skippable frames. Native reader тем же API также читает прежние64KiB records
-с независимыми4/8/16KiB subframes, проверяя границы/размер до регистрации. Python reader ограничивает окно
-декодера64KiB и проверяет каждый frame/CRC и весь output без скрытых trailing bytes.
-Обычный stream reader объединяет короткие чтения перед созданием64KiB records. Полный CHECK/index/freelist/current-head scan проверяет
-все bytes этого согласованного snapshot. Независимый closed-file reopen проверяет
-index, каждый decoded byte/raw SHA256 и encoded archive SHA256. Этот fresh reader
-выполняет также обязательный exit byte-identity check snapshot: его полный digest
-сравнивается с captured digest после full SQL и освобождения native borrows.
-Повторный digest тех же frozen bytes не нужен; default RAM path сохраняет свой
-exit scan. Source/backup proof
-ссылаются на один неизменный raw SHA; повторного live capture нет. Обычный ZSTD
-restore возвращает точно исходные SQLite bytes, включая последний partial block.
-Режим FRAMED_DISK перераспределяет SQLite cache до2GiB внутри прежнего жёсткого
-4GiB cgroup cap/CPU1/no swap; file mapping остаётся reclaimable. Runtime cache бота,
-малый disk path и прежний RAM path этим не меняются. Proof читает фактический
-PRAGMA cache_size; receiver/Actions требуют точный2GiB setting и прежние resources. Archive bound — min(raw size+format overhead,
-free bytes−1536MiB); резерв проверяется при записи, файл и parent fsync обязательны.
-Всё укладывается в один остаток prep budget с прежним резервом210s на
-switch/recovery/post-checks внутри900s. Неизвестный порядок snapshot writes,
-нехватка места/времени, повреждение или неполное доказательство запрещают switch;
-partial archive сохраняется unqualified. Schema2 до3GiB сохраняет disk path,
-schema1 — прежний RAM path с cap3GiB, без автоматического fallback.
-Метод/resources сохраняются до запуска; фиксированные failure_detail_code
-различают memory/size/reserve/index и другие отказы, сырые stderr/body не пишутся.
-Cleanup timeout не заменяет первую причину. TimeoutExpired остаётся
-TIME_BUDGET_EXCEEDED. После PRAGMA integrity_check/current-head query deadline
-перепроверяется до verdict: native read failure после deadline может вернуться
-как integrity rows и не является доказательством corruption.
-Выбор метода не является доказательством его времени на произвольной базе;
-actual ordinary CD и полный backup остаются обязательны.
+Pinned source transaction фиксирует page_count/page_size; native incremental backup
+пишет приватный disk snapshot, не compressed VFS. Source transaction закрывается
+сразу после copy. Raw SHA измеряется до полного logical-RW/query_only integrity
+CHECK/index/freelist/current-head и foreign_key_check, cache128MiB/mmap3GiB внутри
+прежнего4GiB cgroup/CPU1/no swap. Неполная/просроченная проверка блокирует switch.
+Закрытый raw snapshot кодируется в standard ZSTD64KiB frames с checked index в
+skippable frames; digest измеряется повторно. Независимый closed-file reopen
+декодирует все bytes и сравнивает raw SHA; отдельно измеряется archive SHA.
+Старые64KiB records с4/8/16KiB subframes читаются прежним API; bounds/CRC/весь output
+без trailing bytes проверяются. Обычный ZSTD restore возвращает точные SQLite bytes.
+Новый raw duplicate удаляется только после полной сверки и проверки его identity;
+private receipt остаётся. При failure сохраняются raw/partial archive/receipt;
+source, private settings, generation и старые archives не меняются.
+Admission явно включает raw bytes: archive bound — min(raw+format overhead,
+free−raw−6GiB reserve−1GiB concurrent headroom). Reserve контролируется при copy и
+encoding. Этот путь требует временного диска и полного измерения CPU/file/anon/I/O
+на VPS; уменьшение cache само по себе не является proof стабильности.
+Receiver/Actions требуют truthful mode/basis/cache/mmap/raw bytes/cleanup/reserves.
+Все этапы делят прежний prep deadline с резервом210s на switch/recovery/post-checks
+внутри900s, без fallback или ослабления integrity. Schema2 до3GiB сохраняет disk
+path, schema1 — RAM path с cap3GiB. Бот не получает новых resource settings.
 
 ## Явное включение shared storage без сброса истории
 

@@ -131,14 +131,14 @@ def delivery_result(
     )
     framed_backup = (
         proof.get("phase") == "COMPLETE"
-        and proof.get("validation_mode") == "FRAMED_DISK"
+        and proof.get("validation_mode") == "NATIVE_DISK_FRAMED"
         and proof.get("archive_encoding") == "ZSTD"
-        and proof.get("integrity_basis") == "FULL_VALIDATED_CAPTURE_AND_INDEPENDENT_EQUAL_RAW_SHA256"
+        and proof.get("integrity_basis") == "FULL_NATIVE_DISK_CHECK_AND_INDEPENDENT_EQUAL_RAW_SHA256"
         and proof.get("source_validation") == state_proof
         and state_proof.get("status") == "integrity_ok"
         and type(state_proof.get("schema")) is int
         and state_proof["schema"] == 2
-        and state_proof.get("validation_mode") == "FRAMED_DISK"
+        and state_proof.get("validation_mode") == "NATIVE_DISK_FRAMED"
         and type(state_proof.get("owner_id")) is int
         and state_proof["owner_id"] > 0
         and type(state_proof.get("configuration_revision")) is int
@@ -164,8 +164,15 @@ def delivery_result(
             )
         )
         and proof["archive_bytes"] <= proof["archive_limit_bytes"]
-        and proof["disk_reserve_bytes"] >= 1536 * 1024**2
-        and proof["sqlite_cache_kib"] == 2 * 1024 * 1024
+        and proof["disk_reserve_bytes"] >= 6 * 1024**3
+        and proof["sqlite_cache_kib"] == 128 * 1024
+        and proof.get("raw_snapshot_removed") is True
+        and type(proof.get("temporary_raw_bytes")) is int
+        and proof["temporary_raw_bytes"] == proof["bytes"]
+        and type(proof.get("mmap_limit_bytes")) is int
+        and proof["mmap_limit_bytes"] == 3 * 1024**3
+        and type(proof.get("concurrent_disk_headroom_bytes")) is int
+        and proof["concurrent_disk_headroom_bytes"] >= 1024**3
     )
     reset_proof = success.get("reset_proof", {})
     reset = (
@@ -302,6 +309,10 @@ def delivery_result(
                         "archive_limit_bytes",
                         "disk_reserve_bytes",
                         "sqlite_cache_kib",
+                        "mmap_limit_bytes",
+                        "temporary_raw_bytes",
+                        "raw_snapshot_removed",
+                        "concurrent_disk_headroom_bytes",
                     )
                 }
             )

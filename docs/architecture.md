@@ -121,7 +121,11 @@ availability и обе delivery — отдельные diagnostics. Runtime hard
 не назначены без измеренного основания.
 
 Routine schema2 delivery выполняет full source integrity и SQLite online backup
-на диске, full backup integrity и streaming SHA256. Вся DB в RAM/tmpfs не копируется.
+на диске, full backup integrity и streaming SHA256. Large-schema2 использует
+приватный native disk capture с полным CHECK/FK перед encoding и независимым
+readback стандартного ZSTD archive. Временный raw duplicate и disk reserves
+входят в admission; failed capture сохраняется, qualified duplicate удаляется
+после proof. Вся DB в RAM/tmpfs не копируется.
 Resource/deadline/space failure блокирует switch; downgrade, restore поверх live
 и снижение checks не выполняются. Канонические limits, disk reserve, exact-target
 reset и recovery — в [текущей процедуре](runbooks/bounded-storage-reset.md),
