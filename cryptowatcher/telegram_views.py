@@ -350,7 +350,8 @@ def diagnostic_section(data: dict[str, Any], section: str) -> str:
         lines = ["Хранение — факт и модель", "Снимок: " + when(value.get("at_ms"))]
         for key, label in (
             ("working_bytes", "База и журналы сейчас"),
-            ("budget_bytes", "Ориентир"),
+            ("target_bytes", "Желаемый объём"),
+            ("budget_bytes", "Допустимый предел"),
             ("projected_working_bytes", "Модель заполненной базы"),
         ):
             lines.append(

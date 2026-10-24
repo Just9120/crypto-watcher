@@ -1,7 +1,9 @@
 import copy
 import json
+import os
 import sqlite3
 from contextlib import closing
+from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -22,6 +24,40 @@ from scripts import observe_capacity as observer
 from scripts.observe_capacity import advance, atomic
 
 from .test_outcomes import DAY, NOW, OutcomeWorker, Retention, Sources, future, observe
+
+
+@pytest.mark.parametrize("working_bytes", (25_000_000_000, 25_340_000_000, 30_000_000_000, 30_000_000_001))
+def test_owner_desired_target_is_advisory_and_complete_thirty_gb_limit_is_inclusive(
+    store, monkeypatch, working_bytes
+):
+    from cryptowatcher.storage_meter import report
+
+    enable(store.db)
+    store.bounded = True
+    original_stat = Path.stat
+    sidecars = sum(
+        path.stat().st_size
+        for suffix in ("-wal", "-shm", "-journal")
+        if (path := Path(str(store.path) + suffix)).exists()
+    )
+
+    def stat(path, *args, **kwargs):
+        value = original_stat(path, *args, **kwargs)
+        if path == store.path:
+            fields = list(value)
+            fields[6] = working_bytes - sidecars
+            return os.stat_result(fields)
+        return value
+
+    monkeypatch.setattr(Path, "stat", stat)
+    changes = store.db.total_changes
+    value = report(store, 1_800_000_000_000)
+    assert value["working_bytes"] == working_bytes == sum(value["files"].values())
+    assert value["target_bytes"] == 25_000_000_000
+    assert value["budget_bytes"] == 30_000_000_000
+    assert value["target_exceeded"] is (working_bytes > 25_000_000_000)
+    assert (value["state"] == "BUDGET_EXCEEDED") is (working_bytes > 30_000_000_000)
+    assert store.db.total_changes == changes
 
 
 async def test_repack_sync_measurement_wraps_each_slice_and_preserves_result_and_failure(store):
