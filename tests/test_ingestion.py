@@ -162,6 +162,71 @@ def radar(store, request):
     yield instance
 
 
+@pytest.mark.parametrize("radar", ["plain", "tiles"], indirect=True)
+async def test_status_snapshot_timing_preserves_full_quotes_settings_and_readonly_behavior(radar):
+    radar.server_now = lambda: NOW
+    settings = radar.store.snapshot()
+    changes = radar.store.db.total_changes
+    try:
+        first = await radar.snapshot(settings.settings)
+        await asyncio.sleep(0)
+        second = await radar.snapshot(settings.settings)
+        assert first == second
+        assert len(first.quotes) == first.requested == 8
+        assert radar.store.snapshot() == settings and radar.store.db.total_changes == changes
+        stage = radar._work_timing["status_snapshot"]
+        assert stage["calls"] == 2 and stage["failures"] == 0
+        assert 0 <= stage["cpu_seconds"] <= stage["active_seconds"] + 0.05
+        assert radar._timing_stack == []
+    finally:
+        await radar.close()
+
+
+@pytest.mark.parametrize("radar", ["plain", "tiles"], indirect=True)
+async def test_ticker_persistence_timer_keeps_commit_and_rollback_without_charging_async_wait(
+    radar, monkeypatch
+):
+    radar.server_now = lambda: NOW
+    monkeypatch.setattr(
+        radar,
+        "_get",
+        AsyncMock(
+            return_value={
+                "time": NOW,
+                "result": {"list": [{"symbol": "BTCUSDT", "turnover24h": "2000000", "lastPrice": "107"}]},
+            }
+        ),
+    )
+    try:
+        await radar.refresh_tickers("spot", max_age=0)
+        assert radar.tickers["spot/BTCUSDT"]["lastPrice"] == "107"
+        before = list(radar.store.db.iterdump())
+        memory = dict(radar.tickers)
+        original = ingestion.save
+
+        def failing_save(*args, **kwargs):
+            original(*args, **kwargs)
+            raise MarketError("original_persistence_failure")
+
+        monkeypatch.setattr(ingestion, "save", failing_save)
+        with pytest.raises(MarketError, match="original_persistence_failure"):
+            await radar.refresh_tickers("spot", max_age=0)
+        assert list(radar.store.db.iterdump()) == before
+        assert radar.tickers == memory and not radar.store.db.in_transaction
+        stage = radar._work_timing["ticker_persistence"]
+        assert stage["calls"] == 2 and stage["failures"] == 1
+        assert radar._timing_stack == []
+        unchanged = dict(stage)
+        await asyncio.sleep(0.01)
+        assert stage == unchanged
+        radar.persist_diagnostics()
+        assert stage == unchanged
+        assert radar._work_timing["diagnostics"]["calls"] == 1
+        assert radar._work_timing["diagnostics"]["failures"] == 0
+    finally:
+        await radar.close()
+
+
 def test_confirmed_source_freshness_uses_actual_closed_candles_and_a_bounded_sample(radar):
     at_boundary = radar.confirmed_source_diagnostic(NOW + 90000)
     assert at_boundary["state"] == "MEASURED" and at_boundary["streams"] == len(radar.streams)

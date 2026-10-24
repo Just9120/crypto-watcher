@@ -146,6 +146,10 @@ class BybitRadar(BybitREST):
                 "referenced_recovery_response",
                 "storage_repack",
                 "retention",
+                "ticker_persistence",
+                "discovery_persistence",
+                "status_snapshot",
+                "diagnostics",
             )
         }
         self._timing_stack: list[list[float]] = []
@@ -292,7 +296,7 @@ class BybitRadar(BybitREST):
                         )
                         for key, reason in quarantine.items()
                     ]
-                    with self.store.db:
+                    with self._timed("discovery_persistence"), self.store.db:
                         self.store.db.executemany(RUNTIME_UPSERT, records)
                         for key, value in instruments.items():
                             save(
@@ -340,7 +344,7 @@ class BybitRadar(BybitREST):
                 if key in tickers:
                     raise MarketError("duplicate_ticker")
                 tickers[key] = row
-            with self.store.db:
+            with self._timed("ticker_persistence"), self.store.db:
                 for key, row in tickers.items():
                     if key not in self.instruments:
                         continue
@@ -986,6 +990,9 @@ class BybitRadar(BybitREST):
                 raise ConfigError("Instrument below liquidity floor; list unchanged")
 
     async def snapshot(self, settings: OwnerSettings) -> RadarResult:
+        return self._measure("status_snapshot", lambda: self._snapshot(settings))
+
+    def _snapshot(self, settings: OwnerSettings) -> RadarResult:
         active, excluded = active_instruments(self.instruments, self.tickers, settings)
         quotes: dict[str, dict[str, Any]] = {}
         errors: dict[str, str] = {}
@@ -1148,6 +1155,9 @@ class BybitRadar(BybitREST):
         }
 
     def persist_diagnostics(self) -> None:
+        self._measure("diagnostics", self._persist_diagnostics)
+
+    def _persist_diagnostics(self) -> None:
         self.store.put_runtime(
             "ingestion",
             {
@@ -1178,7 +1188,7 @@ class BybitRadar(BybitREST):
                 "manager_failures": dict(self._manager_failures),
                 "work_timing": {
                     "schema": "cryptowatcher.ingestion-work.v1",
-                    "basis": "process-lifetime exclusive thread CPU and synchronous active wall; nested measured stages are subtracted from parents; includes current recovery source writes, referenced response validation/publication, repack slices and retention; excludes wire decoding/discovery, REST/async waits, recovery selection/retirement and shared readonly preparation",
+                    "basis": "process-lifetime exclusive thread CPU and synchronous active wall; nested stages are subtracted from parents; includes source/observation/recovery writes, referenced response, repack/retention, ticker/metadata persistence including commit, status snapshot and diagnostics; excludes wire parsing, discovery requests/processing outside persistence, REST/async waits, recovery selection/retirement and shared readonly preparation; current diagnostic call completes after its counter snapshot",
                     "stages": {name: dict(value) for name, value in self._work_timing.items()},
                 },
                 "scope_synced": self.scope_synced(),
