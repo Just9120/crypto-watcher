@@ -10,7 +10,7 @@ from . import catalogue_aliases, catalogue_overlap, catalogue_reader, packet_sto
 from .expiry_index import hot_binding
 from .indexed_frame import FrameSizeError
 from .record_blocks import KINDS, Coordinate
-from .storage import StateError, Store, encode
+from .storage import StateError, Store, encode, json_payload
 
 if TYPE_CHECKING:
     from .events import History
@@ -89,7 +89,11 @@ def publish_revision(
         expiry = parent[1]
         if lease is not None and lease[0] != expiry:
             raise StateError("Conflicting frozen parent expiry")
-    projected = history._head(kind, value, coordinate.key, bounded=True)
+    # The original hot route crosses the canonical JSON wire before transfer.
+    # Incomplete calculations contain tuple ranges; the typed final codec must
+    # receive the same JSON arrays/types rather than those Python containers.
+    packed = json_payload(encode(packed))
+    projected = json_payload(encode(history._head(kind, value, coordinate.key, bounded=True)))
     current = head is None or value["revision"] > head["revision"]
     try:
         with packet_store.atomic(store.db):

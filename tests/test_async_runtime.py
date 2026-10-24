@@ -6,6 +6,7 @@ import pytest
 
 from cryptowatcher.analytics import ComparisonWorker, as_of
 from cryptowatcher.analytics_worker import read_snapshot
+from cryptowatcher.bot import Controller
 from cryptowatcher.config import OwnerSettings
 from cryptowatcher.detector_config import effective_parameters
 from cryptowatcher.diagnostics import snapshot
@@ -16,6 +17,59 @@ from cryptowatcher.sources import Candle, Sources
 from cryptowatcher.storage import Store
 
 NOW = 1_800_000_000_000
+
+
+@pytest.mark.parametrize("phase", ["OUTCOMES", "COMPARISONS", "RETENTION", "STORAGE_SAMPLE"])
+async def test_worker_failure_identifies_phase_and_bounded_code_frames_without_private_values(
+    infrastructure, store, monkeypatch, caplog, phase
+):
+    from cryptowatcher import storage_meter
+
+    market = BybitRadar(store)
+    market.server_now = lambda: NOW
+    controller = Controller(infrastructure, store, market)
+    secret = "SENTINEL_PRIVATE_CALLBACK_VALUE"
+
+    def failing():
+        local_private = secret
+        raise ValueError(local_private)
+
+    async def outcomes(*args, **kwargs):
+        if phase == "OUTCOMES":
+            failing()
+        return 0
+
+    async def comparisons(*args, **kwargs):
+        if phase == "COMPARISONS":
+            failing()
+        return 0
+
+    def retention(*args):
+        if phase == "RETENTION":
+            failing()
+
+    def sample(*args):
+        if phase == "STORAGE_SAMPLE":
+            failing()
+
+    monkeypatch.setattr(controller.outcomes, "async_work", outcomes)
+    monkeypatch.setattr(ComparisonWorker, "async_work", comparisons)
+    monkeypatch.setattr(controller, "retention_once", retention)
+    monkeypatch.setattr(storage_meter, "sample", sample)
+    try:
+        await controller.analytics_job(None)
+        state = store.get_runtime("analytics")
+        assert state["state"] == "FAILED" and state["error_class"] == "ValueError"
+        assert state["phase"] == phase
+        assert 1 <= len(state["error_frames"]) <= 8
+        assert all(set(frame) == {"module", "function", "line"} for frame in state["error_frames"])
+        assert state["error_frames"][-1]["function"] == "failing"
+        assert secret not in str(state) and secret not in caplog.text
+        assert all(
+            "/" not in frame["module"] and "\\" not in frame["module"] for frame in state["error_frames"]
+        )
+    finally:
+        await market.close()
 
 
 def seed(tmp_path, count=1):

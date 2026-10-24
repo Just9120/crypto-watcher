@@ -54,6 +54,54 @@ def completed(store, kind, *, cold=True):
     return history, value
 
 
+@pytest.mark.parametrize("cold", [False, True])
+def test_due_incomplete_results_publish_with_the_original_retry_and_source_state(store, cold):
+    worker, history = prepared(store, cold=cold)
+    settings = store.snapshot()
+    private = signature(private_state(store))
+    sources = read(store.db, "spot/BTCUSDT/1m", NOW, NOW + 5 * MINUTE)
+    worker.work(NOW + 61 * MINUTE, batch=100)
+    incomplete = [value for _, value in history.items("outcome-head:") if value["state"] == "INCOMPLETE"]
+    assert incomplete
+    for value in incomplete:
+        assert value["observed_candles"] < value["expected_candles"]
+        job = history.get("outcome-job:" + value["outcome_id"])
+        assert job["state"] == "INCOMPLETE" and job["next_attempt_ms"] == NOW + 62 * MINUTE
+        coordinate = Coordinate("outcome", value["outcome_id"], value["revision"])
+        assert record_catalog.row(store.db, coordinate) is not None
+        assert encode(history.get(coordinate.key)) == encode(value)
+        assert value["missing_ranges"] and all(isinstance(gap, list) for gap in value["missing_ranges"])
+    heads = history.items("outcome-head:")
+    revisions = store.db.execute("SELECT count(*) FROM market_records").fetchone()[0]
+    worker.work(NOW + 62 * MINUTE, batch=100)
+    assert history.items("outcome-head:") == heads
+    assert store.db.execute("SELECT count(*) FROM market_records").fetchone()[0] == revisions
+    for value in incomplete:
+        assert history.get("outcome-job:" + value["outcome_id"])["next_attempt_ms"] == NOW + 63 * MINUTE
+    assert read(store.db, "spot/BTCUSDT/1m", NOW, NOW + 5 * MINUTE) == sources
+    assert store.snapshot() == settings and signature(private_state(store)) == private
+    assert store.db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+@pytest.mark.parametrize("kind", ["outcome", "comparison"])
+def test_final_results_keep_the_original_json_wire_for_nested_tuple_extensions(store, kind):
+    history, old = completed(store, kind)
+    original = {
+        **deepcopy(old),
+        "revision": old["revision"] + 1,
+        "future_extension": {"ranges": ((-0.0, 1.0000000000000002), (True, None, "extra"))},
+    }
+    expected = json.loads(encode(original))
+    with store.db:
+        history.version(kind, original)
+    coordinate = Coordinate(kind, original[kind + "_id"], original["revision"])
+    assert record_catalog.row(store.db, coordinate) is not None
+    assert encode(history.get(coordinate.key)) == encode(expected)
+    assert encode(history.get(kind + "-head:" + coordinate.identity)) == encode(expected)
+    with closing(Store(store.path, store.owner_id, readonly=True)) as reader:
+        assert encode(History(reader).get(coordinate.key)) == encode(expected)
+
+
 @pytest.mark.parametrize("kind", ["outcome", "comparison"])
 @pytest.mark.parametrize("cold", [False, True])
 def test_result_sources_heads_scans_reopen_and_frozen_parent_expiry(store, kind, cold):
