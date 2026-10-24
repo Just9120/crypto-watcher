@@ -2,8 +2,8 @@ FROM gcc:13.3.0-bookworm@sha256:1d71f0f3450214bef38fe09e6f610fb6cca90cf97b43f4ce
 WORKDIR /build
 COPY native/ ./native/
 RUN cd native/vendor/yyjson \
-    && echo '175867c5493a5df648cec566717fa1c29aa2f6096f5f0cf1efad0b65e1f6d7b3  yyjson.h' | sha256sum -c - \
-    && echo 'ac2e9bbb2e2d9149d90878d40506a1d624fa0b33c979a11b61075c54782c6d6a  yyjson.c' | sha256sum -c - \
+    && echo '175a74d7013149c736d2e59d6fd372e01d360dde9b583ba9063ac8037f4dbf8b  yyjson.h' | sha256sum -c - \
+    && echo '5b368f298311b1f3f107e685bddf218d607dee6227c1340405974040f7c7e4ca  yyjson.c' | sha256sum -c - \
     && gcc -std=c99 -O3 -fPIC -shared -I. yyjson.c ../../history_extract.c -lm -o /build/history.so
 RUN bash native/build_vfs.sh /build/compressed_vfs.so
 RUN bash native/build_numeric.sh /build/numeric_frame.so
