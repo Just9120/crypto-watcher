@@ -185,6 +185,34 @@ def test_head_first_retains_selected_body_dependencies_until_all_aliases_are_col
     assert [(key, encode(value)) for key, value in history.scan("")] == original
 
 
+def test_empty_queue_keeps_exact_checkpoint_and_performs_no_writes(store):
+    queued(store)
+    state = {}
+    for _ in range(200):
+        with store.db:
+            store.db.execute("BEGIN IMMEDIATE")
+            queue.advance(store, state, 256, time.monotonic() + 1)
+        if not queue.header(store.db)["count"]:
+            break
+    assert queue.header(store.db)["count"] == 0
+    with store.db:
+        store.db.execute(RUNTIME_UPSERT, ("empty-queue-checkpoint", encode(state)))
+    original = encode(state)
+    for _ in range(2):
+        changes = store.db.total_changes
+        with store.db:
+            store.db.execute("BEGIN IMMEDIATE")
+            queue.advance(store, state, 256, time.monotonic() + 1)
+        assert encode(state) == original
+        assert store.db.total_changes == changes
+    with closing(Store(store.path, store.owner_id)) as reopened:
+        saved = reopened.get_runtime("empty-queue-checkpoint")
+        with reopened.db:
+            reopened.db.execute("BEGIN IMMEDIATE")
+            queue.advance(reopened, saved, 256, time.monotonic() + 1)
+        assert encode(saved) == original
+
+
 def test_queue_install_does_not_enqueue_existing_data_or_activate_itself_and_unknown_marker_rejects(store):
     populated(store)
     queue.install(store.db)

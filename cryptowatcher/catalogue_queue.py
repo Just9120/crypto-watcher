@@ -229,6 +229,9 @@ def _advance(store: Store, state: dict[str, Any], batch: int, deadline: float) -
         "SELECT p.id,p.rid,CASE WHEN length(CAST(k.external AS BLOB))<=8192 THEN k.external END FROM market_record_pending p JOIN market_runtime_keys k ON k.id=p.rid ORDER BY p.id LIMIT ?",
         (batch,),
     ).fetchall()
+    if not rows:
+        state.setdefault("queue_rows_examined", 0)
+        return  # Idle/reopened checkpoints must not alternate or write new state.
     # A body flush can consume the whole quantum. Persist which lane starts
     # next so that continuous arrivals cannot keep old heads/aliases waiting.
     first = state.get("next_lane", "body")
