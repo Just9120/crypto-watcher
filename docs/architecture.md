@@ -63,6 +63,15 @@ Readonly outcome/comparison preparation выполняется последов�
 получает4s вместо2s, чтобы использовать уже подготовленную frozen population
 до открытия следующего snapshot. Standalone defaults не меняются. Это soft
 межоперационный deadline: один начатый расчёт по-прежнему может его превысить.
+Live catalogue inbox обслуживает тела revisions и deferred heads/aliases по
+очереди: durable next_lane сохраняет первую очередь следующего40ms slice. Обе
+части используют общий прежний deadline,256unique rows и прежний buffer bound.
+Один начатый body/flush может превысить soft deadline; следующая очередь получает
+первый ход после commit/restart. Head/alias, чей выбранный body ещё ожидает transfer,
+сохраняется в inbox; CAS/private equality/retention и atomic rollback неизменны.
+Диагностика freshness читает актуальную свечу по максимальному validated start
+в source window одного TF; новый deadline не кешируется.
+
 CPU/active-wall stage counters исключают вложенные measured stages из parent,
 поэтому source и observation work не суммируются дважды. Фактическая устойчивость
 и ресурсный бюджет подтверждаются отдельно по [плану](open_issues.md).

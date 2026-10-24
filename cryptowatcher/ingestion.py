@@ -1141,7 +1141,10 @@ class BybitRadar(BybitREST):
             if not window:
                 unknown += 1
                 continue
-            latest = max(c.end for c in window.values())
+            # Sources keys are validated candle starts for this one timeframe.
+            # Read the actual latest candle; no cached deadline can go stale
+            # after recovery, rollback, eviction or out-of-order insertion.
+            latest = window[max(window)].end
             step = int(stream.rsplit("/", 1)[1][:-1]) * 60_000
             deadline = latest + step + CLOSED_CANDLE_GRACE_MS
             earliest = deadline if earliest is None else min(earliest, deadline)

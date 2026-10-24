@@ -23,7 +23,7 @@ from . import (
 )
 from .events import DECISION_HEAD, HEAD_SCHEMA
 from .expiry_index import hot_binding
-from .key_registry import unpack
+from .key_registry import pack, unpack
 from .storage import StateError, Store, encode, json_payload
 
 CATEGORY = "record_pending"
@@ -42,6 +42,8 @@ def validate(state: dict[str, Any]) -> None:
         value = state.get(name, 0)
         if type(value) is not int or value < 0:
             raise StateError("Invalid catalogue queue progress; data preserved")
+    if state.get("next_lane", "body") not in ("body", "head"):
+        raise StateError("Invalid catalogue queue turn; data preserved")
     visits = state.get("fallback_visits", {})
     if not isinstance(visits, dict) or any(
         not isinstance(key, str) or type(value) is not int or value < 0 for key, value in visits.items()
@@ -155,7 +157,7 @@ def through(db: sqlite3.Connection, upper: int) -> bool:
     return db.execute("SELECT 1 FROM market_record_pending WHERE id<=? LIMIT 1", (upper,)).fetchone() is None
 
 
-def _head(store: Store, key: str, raw: str | bytes, state: dict[str, Any]) -> bool:
+def _head(store: Store, key: str, raw: str | bytes, state: dict[str, Any]) -> bool | None:
     selected = catalogue_reader.point(key)
     assert selected is not None and selected.revision is None
     value = json_payload(raw)
@@ -163,7 +165,7 @@ def _head(store: Store, key: str, raw: str | bytes, state: dict[str, Any]) -> bo
     coordinate = record_blocks.Coordinate(selected.kind, selected.identity, revision)
     saved = record_catalog.row(store.db, coordinate)
     if saved is None:
-        return False
+        return None
     body = record_catalog.read(store.db, coordinate, store.cached_bytes)
     if body is None:
         raise StateError("Missing queued immutable body")
@@ -227,50 +229,84 @@ def _advance(store: Store, state: dict[str, Any], batch: int, deadline: float) -
         "SELECT p.id,p.rid,CASE WHEN length(CAST(k.external AS BLOB))<=8192 THEN k.external END FROM market_record_pending p JOIN market_runtime_keys k ON k.id=p.rid ORDER BY p.id LIMIT ?",
         (batch,),
     ).fetchall()
+    # A body flush can consume the whole quantum. Persist which lane starts
+    # next so that continuous arrivals cannot keep old heads/aliases waiting.
+    first = state.get("next_lane", "body")
+    state["next_lane"] = "head" if first == "body" else "body"
+    consumed = visited = 0
+    for index, lane in enumerate((first, state["next_lane"])):
+        if index and time.monotonic() >= deadline:
+            break
+        if lane == "body":
+            charge, count = _bodies(store, state, rows, consumed, deadline)
+        else:
+            charge, count = _deferred(store, state, rows, consumed, deadline)
+        consumed += charge
+        visited += count
+    state["queue_rows_examined"] = state.get("queue_rows_examined", 0) + visited
+
+
+def _bodies(
+    store: Store, state: dict[str, Any], rows: list[Any], consumed: int, deadline: float
+) -> tuple[int, int]:
     entries: list[catalogue_transfer.Prepared] = []
-    deferred: list[tuple[int, str | None]] = []
-    buffered = consumed = visited = 0
-    for sequence, rid, token in rows:
-        if visited and time.monotonic() >= deadline:
+    buffered = charged = visited = 0
+    for index, (sequence, rid, token) in enumerate(rows):
+        if index and time.monotonic() >= deadline:
             break
         key = unpack(token) if token is not None else None
         point = catalogue_reader.point(key) if key is not None else None
         if point is None or point.revision is None:
-            deferred.append((sequence, key))
+            continue
+        assert key is not None
+        saved = store.db.execute(
+            "SELECT length(CAST(payload_json AS BLOB)) FROM runtime WHERE key=?", (key,)
+        ).fetchone()
+        if (
+            saved is not None
+            and consumed + charged + saved[0] > catalogue_transfer.MAX_BUFFER
+            and (visited or consumed)
+        ):
+            break
+        raw = store.db.execute(
+            "SELECT payload_json FROM runtime WHERE key=? AND length(CAST(payload_json AS BLOB))<=?",
+            (key, catalogue_transfer.MAX_BUFFER),
+        ).fetchone()
+        if raw is not None:
+            charged += len(raw[0].encode() if isinstance(raw[0], str) else raw[0])
+        entry = catalogue_transfer.prepare(store, key, raw[0], state) if raw is not None else None
+        if entry is not None:
+            cost = len(encode(entry.body).encode()) + len(encode(entry.projection).encode()) + 128
+            if entries and (
+                len(entries) == 64
+                or buffered + cost > catalogue_transfer.MAX_GROUP
+                or entries[0].expires // 86400000 != entry.expires // 86400000
+            ):
+                catalogue_transfer._flush(store, entries, state)
+                entries, buffered = [], 0
+            entries.append(entry)
+            buffered += cost
         else:
-            assert key is not None
-            saved = store.db.execute(
-                "SELECT length(CAST(payload_json AS BLOB)) FROM runtime WHERE key=?", (key,)
-            ).fetchone()
-            if saved is not None and consumed + saved[0] > catalogue_transfer.MAX_BUFFER and visited:
-                break
-            raw = store.db.execute(
-                "SELECT payload_json FROM runtime WHERE key=? AND length(CAST(payload_json AS BLOB))<=?",
-                (key, catalogue_transfer.MAX_BUFFER),
-            ).fetchone()
-            if raw is not None:
-                consumed += len(raw[0].encode() if isinstance(raw[0], str) else raw[0])
-            entry = catalogue_transfer.prepare(store, key, raw[0], state) if raw is not None else None
-            if entry is not None:
-                cost = len(encode(entry.body).encode()) + len(encode(entry.projection).encode()) + 128
-                if entries and (
-                    len(entries) == 64
-                    or buffered + cost > catalogue_transfer.MAX_GROUP
-                    or entries[0].expires // 86400000 != entry.expires // 86400000
-                ):
-                    catalogue_transfer._flush(store, entries, state)
-                    entries, buffered = [], 0
-                entries.append(entry)
-                buffered += cost
-            else:
-                if raw is None and saved is not None:
-                    catalogue_transfer._fallback(state, "oversized_body_envelope")
-                store.db.execute("DELETE FROM market_record_pending WHERE id=?", (sequence,))
+            if raw is None and saved is not None:
+                catalogue_transfer._fallback(state, "oversized_body_envelope")
+            store.db.execute("DELETE FROM market_record_pending WHERE id=?", (sequence,))
         visited += 1
     catalogue_transfer._flush(store, entries, state)
-    for sequence, key in deferred:
-        if time.monotonic() >= deadline:
+    return charged, visited
+
+
+def _deferred(
+    store: Store, state: dict[str, Any], rows: list[Any], consumed: int, deadline: float
+) -> tuple[int, int]:
+    charged = visited = 0
+    selected = {token for _, _, token in rows if token is not None}
+    for index, (sequence, rid, token) in enumerate(rows):
+        if index and time.monotonic() >= deadline:
             break
+        key = unpack(token) if token is not None else None
+        point = catalogue_reader.point(key) if key is not None else None
+        if point is not None and point.revision is not None:
+            continue
         if not store.db.execute("SELECT 1 FROM market_record_pending WHERE id=?", (sequence,)).fetchone():
             continue
         size = (
@@ -280,32 +316,48 @@ def _advance(store: Store, state: dict[str, Any], batch: int, deadline: float) -
             if key is not None
             else None
         )
-        if size is not None and consumed + size[0] > catalogue_transfer.MAX_BUFFER:
-            if consumed:
+        if size is not None and consumed + charged + size[0] > catalogue_transfer.MAX_BUFFER:
+            if consumed or charged:
                 break
             catalogue_transfer._fallback(state, "oversized_head_envelope")
             store.db.execute("DELETE FROM market_record_pending WHERE id=?", (sequence,))
+            visited += 1
             continue
         row = (
             store.db.execute("SELECT payload_json FROM runtime WHERE key=?", (key,)).fetchone()
             if key is not None
             else None
         )
+        visited += 1
         if row is not None and key is not None:
             assert size is not None
-            consumed += size[0]
+            charged += size[0]
             if catalogue_transfer._large_envelope(row[0]):
                 catalogue_transfer._fallback(state, "oversized_head_expansion")
                 store.db.execute("DELETE FROM market_record_pending WHERE id=?", (sequence,))
                 continue
             point = catalogue_reader.point(key)
             if point is not None:
-                if not _head(store, key, row[0], state):
+                matched = _head(store, key, row[0], state)
+                if matched is None:
+                    revision = catalogue_reader.revision(json_payload(row[0]), point)
+                    coordinate = record_blocks.Coordinate(point.kind, point.identity, revision)
+                    body_key = catalogue_reader.PREFIX + coordinate.key
+                    if body_key in selected or pack(body_key) in selected:
+                        continue  # Its selected body still has this or the next turn.
+                if not matched:
                     catalogue_transfer._fallback(state, "retained_hot_head")
-            elif catalogue_aliases.point(key) is not None and catalogue_aliases.publish(
-                store.db, key, json_payload(row[0]), store.cached_bytes
-            ):
-                catalogue_transfer._drop(store, key, row[0])
-                state["aliases_moved"] = state.get("aliases_moved", 0) + 1
+            else:
+                alias = catalogue_aliases.point(key)
+                if alias is not None:
+                    if catalogue_aliases.publish(store.db, key, json_payload(row[0]), store.cached_bytes):
+                        catalogue_transfer._drop(store, key, row[0])
+                        state["aliases_moved"] = state.get("aliases_moved", 0) + 1
+                    else:
+                        body_key = (
+                            catalogue_reader.PREFIX + record_blocks.Coordinate("event", alias.event, 1).key
+                        )
+                        if body_key in selected or pack(body_key) in selected:
+                            continue  # Preserve the original body-before-alias dependency.
         store.db.execute("DELETE FROM market_record_pending WHERE id=?", (sequence,))
-    state["queue_rows_examined"] = state.get("queue_rows_examined", 0) + visited
+    return charged, visited
