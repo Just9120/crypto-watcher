@@ -7,7 +7,8 @@ from typing import Any
 
 from .storage import Store
 
-BUDGET = 25_000_000_000
+TARGET = 25_000_000_000
+BUDGET = 30_000_000_000
 QUALITY_CATEGORIES = frozenset(
     {"quality", "quality_numeric", "quality_components", "quality_frames", "quality_numeric_frames"}
 )
@@ -58,7 +59,7 @@ def create(db: Any) -> None:
 
 def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
     if not store.bounded:
-        return {"state": "LEGACY_UNMETERED", "budget_bytes": BUDGET}
+        return {"state": "LEGACY_UNMETERED", "target_bytes": TARGET, "budget_bytes": BUDGET}
     now_ms = now_ms if now_ms is not None else int(time.time() * 1000)
     page = store.db.execute("PRAGMA page_size").fetchone()[0]
     pages = store.db.execute("PRAGMA page_count").fetchone()[0]
@@ -439,6 +440,8 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "at_ms": now_ms,
         "history_generation": store.get_runtime("history_generation", {}),
         "budget_bytes": BUDGET,
+        "target_bytes": TARGET,
+        "target_exceeded": actual > TARGET,
         "catalogue_layout": catalogue_layout,
         "quality_frame_layout": frame_layout,
         "context_tile_layout": context_tile_layout,
@@ -505,7 +508,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
             "Aggregate service occupancy extrapolates positive net growth conservatively; terminal1d and stream-scoped state are not multiplied by gross turnover",
             "Additional retained methodology/comparator versions can increase cost beyond the single-method fixture",
             "Retained used inputs may exceed raw TTL; forecast is a baseline, not an upper bound",
-            "25GB target includes indexes and working journals; no silent scope/retention reduction",
+            "25GB desired target and30GB acceptable limit include indexes and working journals; no silent scope/retention reduction",
         ],
         "options": [
             "Review largest category and repeated values",

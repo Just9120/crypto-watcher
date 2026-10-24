@@ -667,7 +667,7 @@ def snapshot(store: Store, *, deep: bool = False, cohorts: bool = False) -> dict
             "prospective_cohorts": prospective_cohorts(store) if cohorts else {"state": "NOT_REQUESTED"},
             "physical_snapshot": measure_indexes(store, seconds=10) if deep else {"state": "NOT_REQUESTED"},
             "backups_and_experiments": "EXCLUDED_FROM_WORKING_TOTAL; separate operator inventory",
-            "capacity_verdict": "UNPROVEN; tests/CD success does not establish25GB fit",
+            "capacity_verdict": "UNPROVEN; tests/CD success does not establish fit within the30GB acceptable limit;25GB remains desired",
         }
         value["forecast_explanation"] = explain_forecast(storage, value["runtime_ledger"])
         if deep:
