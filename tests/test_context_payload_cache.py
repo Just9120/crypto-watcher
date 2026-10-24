@@ -12,6 +12,106 @@ from tests.test_context_tile_codec import BASE, point
 from tests.test_context_tiles import setup
 
 
+def test_hot_guard_and_cold_lookup_share_only_the_authenticated_immutable_timestamp_index(store, monkeypatch):
+    keys, _, _ = setup(store, 64, freeze=False)
+    tiles.publish(store.db, keys)
+    payload = bytes(store.db.execute("SELECT payload FROM market_context_tiles WHERE id=1").fetchone()[0])
+    store.reference_cache.clear()
+    store.reference_cache_bytes = 0
+    decoded = 0
+    original = codec.typed_unpack
+
+    def observed(*args):
+        nonlocal decoded
+        decoded += 1
+        return original(*args)
+
+    monkeypatch.setattr(codec, "typed_unpack", observed)
+    monkeypatch.setattr(indexed_frame, "typed_unpack", observed)
+    for at in (keys[0][2], keys[-1][2], keys[-1][2] + 1, keys[0][2] - 1):
+        assert store.db.execute("SELECT cw_context_tile_contains(?,?)", (payload, at)).fetchone()[0] == int(
+            at in {key[2] for key in keys}
+        )
+    assert decoded == 64
+    assert tiles.cold(store.db, *keys[0]) is not None
+    assert decoded == 64
+    assert not any(key[0] == "bytes/context-tile-values" for key in store.reference_cache)
+    assert store.reference_cache_bytes <= 1024 * 1024
+    corrupted = payload[:-1] + bytes([payload[-1] ^ 1])
+    with pytest.raises(sqlite3.OperationalError):
+        store.db.execute("SELECT cw_context_tile_contains(?,?)", (corrupted, keys[0][2])).fetchone()
+    assert store.db.execute("SELECT cw_context_tile_contains(?,?)", (payload, keys[0][2])).fetchone()[0] == 1
+
+
+def test_shared_guard_keeps_exact_misses_nearest_lookup_and_hot_points_between_retained_times(store):
+    from cryptowatcher.market_storage import save_context
+    from tests.test_context_tiles import values
+
+    keys, _, _ = setup(store, 8)
+    tiles.publish(store.db, keys[::2])
+    assert tiles.cold(store.db, *keys[-1]) is None
+    nearest = tiles.lookup(store.db, *keys[-1], exact=False)
+    assert nearest.at == keys[-1][2]
+    assert tiles.cold(store.db, *keys[1]) is None
+    assert tiles.lookup(store.db, *keys[1]).at == keys[1][2]
+    with store.db:
+        save_context(store.db, "ticker", "spot/BTCUSDT", values(9), BASE)
+    assert (
+        tiles.lookup(store.db, keys[0][0], "ticker", values(9)["available_at_ms"]).at
+        == values(9)["available_at_ms"]
+    )
+    assert store.db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+@pytest.mark.parametrize("invalid", ("order", "timing", "mixed-stream"))
+def test_hot_ownership_guard_rejects_a_new_malformed_payload_after_a_warm_index(store, invalid):
+    tile = codec.pack(19, [point(0), point(1)])
+    store.db.execute("SELECT cw_context_tile_contains(?,?)", (tile.payload, point(0).at)).fetchone()
+    values = [codec._value(point(0)), codec._value(point(1))]
+    if invalid == "order":
+        values.reverse()
+    elif invalid == "timing":
+        values[1][4]["available_at_ms"] += 1
+    else:
+        values[1][0] += 1
+    with pytest.raises(sqlite3.OperationalError):
+        store.db.execute(
+            "SELECT cw_context_tile_contains(?,?)", (indexed_frame.pack(values), point(0).at)
+        ).fetchone()
+
+
+def test_hot_ownership_guard_also_works_without_an_optional_cache(store):
+    keys, _, _ = setup(store, 8)
+    tiles.publish(store.db, keys)
+    tiles.install_functions(store.db)
+    payload = bytes(store.db.execute("SELECT payload FROM market_context_tiles WHERE id=1").fetchone()[0])
+    assert store.db.execute("SELECT cw_context_tile_contains(?,?)", (payload, keys[0][2])).fetchone()[0] == 1
+    assert (
+        store.db.execute("SELECT cw_context_tile_contains(?,?)", (payload, keys[-1][2] + 1)).fetchone()[0]
+        == 0
+    )
+
+
+@pytest.mark.parametrize("field", ("payload", "leases"))
+def test_exact_miss_still_checks_current_frame_and_lease_bytes_after_a_warm_read(store, field):
+    keys, _, _ = setup(store, 8)
+    tiles.publish(store.db, keys)
+    assert tiles.cold(store.db, *keys[0]) is not None
+    original = bytes(store.db.execute(f"SELECT {field} FROM market_context_tiles WHERE id=1").fetchone()[0])
+    changes = store.db.total_changes
+    with store.db.blobopen("market_context_tiles", field, 1) as blob:
+        blob.write(original[:-1] + bytes([original[-1] ^ 1]))
+    assert store.db.total_changes == changes
+    try:
+        with pytest.raises(ValueError):
+            tiles.cold(store.db, keys[0][0], "ticker", keys[-1][2] + 1)
+    finally:
+        with store.db.blobopen("market_context_tiles", field, 1) as blob:
+            blob.write(original)
+    assert tiles.cold(store.db, keys[0][0], "ticker", keys[-1][2] + 1) is None
+    assert store.db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
 def test_pure_payload_reuse_keeps_current_leases_masks_and_independent_returned_values(store, monkeypatch):
     expected = [point(i, frozen=i % 3 == 0) for i in range(64)]
     tile = codec.pack(19, expected)

@@ -147,9 +147,10 @@ def install_functions(db: sqlite3.Connection, cache: Any = None) -> None:
         )
 
     def contains(payload: bytes, at: int) -> int:
-        from . import indexed_frame
-
-        return int(any(row[2] == at for row in indexed_frame.all_values(bytes(payload))))
+        # Validate the actual immutable frame on every call. The same small
+        # pure index serves cold lookup and hot duplicate guards, with no SQL
+        # row/header/lease cached and no second full ticker-body decode.
+        return int(at in codec._payload_times(bytes(payload), cache)[2])
 
     def times(payload: bytes) -> str:
         from . import indexed_frame

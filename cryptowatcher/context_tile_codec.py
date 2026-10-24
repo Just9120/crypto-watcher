@@ -176,13 +176,9 @@ class _MissingPayloadCache(Exception):
     """A pure cache probe must not derive or admit a missing value."""
 
 
-def times(tile: Tile, cache: Any = None) -> list[int]:
-    if cache is None:
-        _, _, values = _current(tile)
-        return [value[2] for value in values]
-    # These mutable leases/mask/seal and the actual payload header are always
-    # checked before a pure derivative can be reused.
-    count, _, _ = _header(tile)
+def _payload_times(payload: bytes, cache: Any = None) -> tuple[int, str, list[int]]:
+    offsets, _ = indexed_frame.layout(payload)
+    count = len(offsets) - 1
 
     def read() -> bytes:
         def existing(kind: str, key: str, raw: bytes, unused: Any) -> bytes:
@@ -196,25 +192,39 @@ def times(tile: Tile, cache: Any = None) -> list[int]:
 
         try:
             # Preserve reuse when stats/points already validated this payload.
-            values = _payload_values(tile.payload, existing)
+            values = _payload_values(payload, existing if cache is not None else None)
         except _MissingPayloadCache:
             # A times-only miss validates every original point, but keeps no
             # full JSON copy in the shared1MiB cache.
-            values = _payload_values(tile.payload)
+            values = _payload_values(payload)
         return struct.pack(">QB", values[0][0], KINDS.index(values[0][1])) + struct.pack(
             ">" + "Q" * len(values), *(value[2] for value in values)
         )
 
-    raw = cache("context-tile-times-only-v1", "", tile.payload, read)
+    raw = read() if cache is None else cache("context-tile-times-only-v1", "", payload, read)
     if not isinstance(raw, bytes) or len(raw) != 9 + count * 8:
         raise ValueError("Invalid pure context timestamp index")
     stream, kind = struct.unpack(">QB", raw[:9])
     result = list(struct.unpack(">" + "Q" * count, raw[9:]))
-    if kind >= len(KINDS) or (stream, KINDS[kind]) != (tile.stream, tile.kind):
+    if not 0 < stream < 2**63 or kind >= len(KINDS):
         raise ValueError("Context timestamp index coordinate mismatch")
-    if any(value >= 2**63 or value // DAY != tile.day for value in result) or any(
+    if any(value >= 2**63 or value // DAY != result[0] // DAY for value in result) or any(
         a >= b for a, b in zip(result, result[1:])
     ):
+        raise ValueError("Context timestamp index order/day mismatch")
+    return stream, KINDS[kind], result
+
+
+def times(tile: Tile, cache: Any = None) -> list[int]:
+    if cache is None:
+        _, _, values = _current(tile)
+        return [value[2] for value in values]
+    # Current leases/mask/seal are not part of the immutable payload cache.
+    count, _, _ = _header(tile)
+    stream, kind, result = _payload_times(tile.payload, cache)
+    if (stream, kind) != (tile.stream, tile.kind):
+        raise ValueError("Context timestamp index coordinate mismatch")
+    if len(result) != count or any(value // DAY != tile.day for value in result):
         raise ValueError("Context timestamp index order/day mismatch")
     return result
 
