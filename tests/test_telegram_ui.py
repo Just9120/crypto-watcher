@@ -519,7 +519,34 @@ def test_notification_separates_old_settings_from_expired_confirmations(deck):
     }
     original = json.dumps(delivery, sort_keys=True)
     shown = notification_text(event, delivery, NOW)
-    assert "Актуальные подтверждения: Движение цены 1m." in shown
+    assert "Актуальные подтверждения:\n• Движение цены · 1m." in shown
     assert "Устаревших подтверждений этой настройки: 1" in shown
     assert "Из других версий настроек: 1" in shown
     assert json.dumps(delivery, sort_keys=True) == original
+
+
+def test_notification_full_confirmation_grid_fits_without_mutating_event(deck):
+    from copy import deepcopy
+
+    from cryptowatcher.events import EventEngine
+    from cryptowatcher.render import notification_text
+    from cryptowatcher.telegram_views import FAMILY
+
+    from .test_events import NOW, candidate, observe
+
+    engine = EventEngine(deck.store)
+    observe(engine)
+    delivery = deepcopy(candidate(engine.history))
+    event = deepcopy(engine.history.get("event-head:" + delivery["event_ids"][0]))
+    confirmation = next(iter(delivery["episode_snapshot"]["confirmations"].values()))
+    delivery["episode_snapshot"]["confirmations"] = {
+        family + "/" + tf: {**confirmation, "settings_revision": event["settings_revision"]}
+        for family in FAMILY
+        for tf in ("1m", "3m", "5m", "15m")
+    }
+    original = json.dumps([event, delivery], sort_keys=True)
+    shown = notification_text(event, delivery, NOW)
+    assert shown.startswith("🔔 ") and "Время наблюдения:" in shown
+    assert len(shown.encode("utf-16-le")) // 2 < 4096
+    assert "<b>" not in shown and "**" not in shown
+    assert json.dumps([event, delivery], sort_keys=True) == original

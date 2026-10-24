@@ -6297,7 +6297,8 @@ yyjson_doc *yyjson_read_fp(FILE *file,
     yyjson_alc alc = alc_ptr ? *alc_ptr : YYJSON_DEFAULT_ALC;
     yyjson_doc *doc;
 
-    long file_size = 0, file_pos;
+    long file_end = 0, file_pos;
+    usize file_size = 0;
     void *buf = NULL;
     usize buf_size = 0;
 
@@ -6309,17 +6310,20 @@ yyjson_doc *yyjson_read_fp(FILE *file,
     file_pos = ftell(file);
     if (file_pos != -1) {
         /* get total file size, may fail */
-        if (fseek(file, 0, SEEK_END) == 0) file_size = ftell(file);
+        if (fseek(file, 0, SEEK_END) == 0) file_end = ftell(file);
         /* reset to original position, may fail */
-        if (fseek(file, file_pos, SEEK_SET) != 0) file_size = 0;
+        if (fseek(file, file_pos, SEEK_SET) != 0) file_end = 0;
         /* get file size from current postion to end */
-        if (file_size > 0) file_size -= file_pos;
+        if (file_end > file_pos) file_size = (usize)(file_end - file_pos);
     }
 
     /* read file */
     if (file_size > 0) {
         /* read the entire file in one call */
-        buf_size = (usize)file_size + YYJSON_PADDING_SIZE;
+        if (file_size > (usize)-1 - YYJSON_PADDING_SIZE) {
+            return_err(MEMORY_ALLOCATION, MSG_MALLOC);
+        }
+        buf_size = file_size + YYJSON_PADDING_SIZE;
         buf = alc.malloc(alc.ctx, buf_size);
         if (buf == NULL) {
             return_err(MEMORY_ALLOCATION, MSG_MALLOC);
@@ -6351,7 +6355,10 @@ yyjson_doc *yyjson_read_fp(FILE *file,
             }
             tmp = ((u8 *)buf) + buf_size - YYJSON_PADDING_SIZE - chunk_now;
             read_size = fread_safe(tmp, chunk_now, file);
-            file_size += (long)read_size;
+            if (read_size > (usize)-1 - file_size - YYJSON_PADDING_SIZE) {
+                return_err(MEMORY_ALLOCATION, MSG_MALLOC);
+            }
+            file_size += read_size;
             if (read_size != chunk_now) break;
 
             chunk_now *= 2;

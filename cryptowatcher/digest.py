@@ -95,21 +95,23 @@ def text(snapshot: dict[str, Any]) -> str:
         "Оба рынка; сохранённые наблюдения включают исторические и без уведомлений.",
     ]
     lines += [
-        f"{market(r['market'])} · {FAMILY.get(r['detector'], r['detector'])}: {r['events']} событий / {r['instruments']} инструментов"
+        f"• {market(r['market'])} · {FAMILY.get(r['detector'], r['detector'])}: {r['events']} событий / {r['instruments']} инструментов"
         for r in snapshot["groups"]
     ]
-    lines.append("Самые активные инструменты · число сохранённых наблюдений:")
-    lines += [f"{v['instrument']} · {v['events']}" for v in snapshot.get("most_active_instruments", [])]
-    lines.append("Самые сильные эпизоды периода:")
+    lines.append("\n📊 Самые активные инструменты · число сохранённых наблюдений:")
     lines += [
-        f"{e['instrument']} · {DIRECTION.get(e['direction'], e['direction'])} · интенсивность ×{amount(round(e['strength'], 2))} · наблюдений {e['events']}"
+        f"• {v['instrument']} · {v['events']}" for v in snapshot.get("most_active_instruments", [])
+    ] or ["Нет наблюдений за период."]
+    lines.append("\n📈 Самые сильные эпизоды периода:")
+    lines += [
+        f"• {e['instrument']} · {DIRECTION.get(e['direction'], e['direction'])} · интенсивность ×{amount(round(e['strength'], 2))} · наблюдений {e['events']}"
         for e in snapshot["strongest_episodes"]
-    ]
-    lines.append("Продолжающиеся эпизоды на момент сборки:")
+    ] or ["Нет эпизодов за период."]
+    lines.append("\n⏳ Продолжающиеся эпизоды на момент сборки:")
     lines += [
-        f"{e['instrument']} · {DIRECTION.get(e['direction'], e['direction'])} · интенсивность ×{amount(round(e['strength'], 2))}"
+        f"• {e['instrument']} · {DIRECTION.get(e['direction'], e['direction'])} · интенсивность ×{amount(round(e['strength'], 2))}"
         for e in snapshot["ongoing_episodes"]
-    ]
+    ] or ["Нет продолжающихся эпизодов."]
     return "\n".join(lines)
 
 

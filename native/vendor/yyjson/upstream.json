@@ -3,9 +3,27 @@
   "version": "0.12.0",
   "revision": "8b4a38dc994a110abaec8a400615567bd996105f",
   "files": {
-    "yyjson.h": "175867c5493a5df648cec566717fa1c29aa2f6096f5f0cf1efad0b65e1f6d7b3",
-    "yyjson.c": "ac2e9bbb2e2d9149d90878d40506a1d624fa0b33c979a11b61075c54782c6d6a",
+    "yyjson.h": "175a74d7013149c736d2e59d6fd372e01d360dde9b583ba9063ac8037f4dbf8b",
+    "yyjson.c": "5b368f298311b1f3f107e685bddf218d607dee6227c1340405974040f7c7e4ca",
     "LICENSE": "45e384d3d52c73cba3a64d6e6c25d47cd738cd8a55c30629e3201046eda62947"
   },
-  "scope": "Source-pinned native helper for isolated history conversion; runtime radar keeps Python Codec"
+  "scope": "Source-pinned native helper for isolated history conversion; runtime radar keeps Python Codec",
+  "local_patches": [
+    {
+      "file": "yyjson.c",
+      "findings": [
+        "CWSEC-005"
+      ],
+      "upstream_sha256": "ac2e9bbb2e2d9149d90878d40506a1d624fa0b33c979a11b61075c54782c6d6a",
+      "patched_sha256": "5b368f298311b1f3f107e685bddf218d607dee6227c1340405974040f7c7e4ca"
+    },
+    {
+      "file": "yyjson.h",
+      "findings": [
+        "CWSEC-006"
+      ],
+      "upstream_sha256": "175867c5493a5df648cec566717fa1c29aa2f6096f5f0cf1efad0b65e1f6d7b3",
+      "patched_sha256": "175a74d7013149c736d2e59d6fd372e01d360dde9b583ba9063ac8037f4dbf8b"
+    }
+  ]
 }

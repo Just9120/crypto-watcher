@@ -326,6 +326,7 @@ FASTCOVER_ctx_init(FASTCOVER_ctx_t* ctx,
 
     /* Checks */
     if (totalSamplesSize < MAX(d, sizeof(U64)) ||
+        trainingSamplesSize < MAX(d, sizeof(U64)) ||
         totalSamplesSize >= (size_t)FASTCOVER_MAX_SAMPLES_SIZE) {
         DISPLAYLEVEL(1, "Total samples size is too large (%u MB), maximum size is %u MB\n",
                     (unsigned)(totalSamplesSize >> 20), (FASTCOVER_MAX_SAMPLES_SIZE >> 20));

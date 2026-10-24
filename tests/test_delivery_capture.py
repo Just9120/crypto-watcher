@@ -41,6 +41,10 @@ def test_failed_delivery_artifact_is_nonempty_safe_and_retains_strict_transport(
     bundle = b"fixture immutable artifact"
     digest = hashlib.sha256(bundle).hexdigest()
     (tmp_path / "bundle.tar").write_bytes(bundle)
+    # Transport is the exact Actions ZIP, distinct from the inner bundle digest.
+    artifact = b"fixture immutable Actions ZIP"
+    artifact_digest = hashlib.sha256(artifact).hexdigest()
+    (tmp_path / "artifact.zip").write_bytes(artifact)
     (tmp_path / "bundle.sha256").write_text(digest)
     (tmp_path / "manifest.json").write_text(json.dumps({"source_sha": REVISION, "build_run": RUN}))
 
@@ -48,11 +52,11 @@ def test_failed_delivery_artifact_is_nonempty_safe_and_retains_strict_transport(
         # Even during the transfer an interrupted job has a non-green, readable artifact.
         assert json.loads((tmp_path / "deployment.json").read_text())["state"] == "UNCONFIRMED"
         assert json.loads((tmp_path / "deployment.json").read_text())["attempted_source_sha"] == REVISION
-        assert kwargs["stdin"].read() == bundle
+        assert kwargs["stdin"].read() == artifact
         assert kwargs["capture_output"] and not kwargs["check"]
         assert command[-2:] == [
             "root@167.86.68.98",
-            f"cryptowatcher-deploy {REVISION} {digest} {len(bundle)}",
+            f"cryptowatcher-deploy {REVISION} {artifact_digest} {len(artifact)}",
         ]
         for option in ("StrictHostKeyChecking=yes", "IdentitiesOnly=yes", "BatchMode=yes"):
             assert option in command
@@ -118,6 +122,22 @@ def test_backup_and_memory_proof_reject_unknown_secret_fields():
     value, status = delivery_result(raw, revision=REVISION, digest=DIGEST, build_run=RUN)
     assert status == 0 and value["state_validation_resources"] == {"snapshot_bytes": 4096}
     assert "fixture-secret" not in json.dumps(value)
+
+
+@pytest.mark.parametrize("valid", [False, True])
+def test_current_delivery_requires_independent_origin_receipt(valid):
+    payload = success()
+    if valid:
+        payload.update(
+            artifact_id=111, artifact_sha256="f" * 64, artifact_origin="GITHUB_ACTIONS_RELEASE_BUILD_V1"
+        )
+    raw = CompletedProcess([], 0, stdout=json.dumps(payload).encode(), stderr=b"")
+    value, status = delivery_result(
+        raw, revision=REVISION, digest=DIGEST, build_run=RUN, artifact_digest="f" * 64
+    )
+    assert (status == 0) is valid
+    if valid:
+        assert value["artifact_id"] == 111
 
 
 @pytest.mark.parametrize(

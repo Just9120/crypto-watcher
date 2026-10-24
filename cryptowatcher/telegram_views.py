@@ -176,10 +176,12 @@ def settings_summary(snapshot: Snapshot) -> str:
     prices = " · ".join(f"{tf}: {amount(p['price_' + tf])}%" for tf in TIMEFRAMES)
     return (
         "⚙️ Настройки радара\n"
-        f"Профиль: {PROFILE[s.profile]}\nЦена: {prices}\n"
+        f"Профиль: {PROFILE[s.profile]}\n\n"
+        "🎚 Пороги срабатывания\n"
+        f"Цена: {prices}\n"
         f"Оборот: ×{amount(p['turnover_ratio'])}; среднее за {int(p['turnover_lookback'])} свечей\n"
         f"Минимальный оборот 24ч: {amount(s.liquidity_floor_24h, compact=True)} USDT\n"
-        f"Режим: {'Весь подходящий рынок' if s.alert_universe_mode == 'top' else 'Мой список: ' + str(len(s.instruments()))}\n"
+        f"\nРежим: {'Весь подходящий рынок' if s.alert_universe_mode == 'top' else 'Мой список: ' + str(len(s.instruments()))}\n"
         "Возможности: Spot USDT + USDT Perpetual · 1m / 3m / 5m / 15m · 5 детекторов\n"
         "Параметры каждого детектора и технические значения доступны ниже."
     )
@@ -189,13 +191,13 @@ def parameters_text(snapshot: Snapshot) -> str:
     s = snapshot.settings
     p = effective_parameters(s)
     return (
-        "Параметры детекторов\n"
-        + "\n".join(f"{FIELDS.get(key, key)}: {amount(value)}" for key, value in p.items())
-        + f"\nМой список: множитель {amount(s.watchlist_multiplier)} к порогам, окна неизменны."
+        "🎚 Параметры детекторов\n"
+        + "\n".join(f"• {FIELDS.get(key, key)}: {amount(value)}" for key, value in p.items())
+        + f"\n\nМой список: множитель {amount(s.watchlist_multiplier)} к порогам, окна неизменны."
         + f"\nСлужебная сводка: каждые {s.radar_poll_sec} с; это не частота WebSocket и не TF."
         + f"\nКарточка/рынок ввода без префикса: {market(s.bybit_category)}, {s.signal_timeframe}."
         + "\nВсе четыре TF работают одновременно. Выбор карточки не отключает другие TF."
-        + f"\nВерсия настроек: {snapshot.revision}\nТочные ключи: "
+        + f"\n\nВерсия настроек: {snapshot.revision}\nТочные ключи: "
         + ", ".join(f"{key}={value!r}" for key, value in p.items())
     )
 
@@ -204,8 +206,8 @@ def profile_text(snapshot: Snapshot, name: str | None = None) -> str:
     s = snapshot.settings
     if name is None:
         return (
-            f"Профили чувствительности\nАктивен: {PROFILE[s.profile]}\n"
-            "Обычный — базовые пороги.\nСтрогий — пороги ×1,5.\nЧувствительный — пороги ×0,75.\n"
+            f"🎛 Профили чувствительности\nАктивен: {PROFILE[s.profile]}\n\n"
+            "• Обычный — базовые пороги.\n• Строгий — пороги ×1,5.\n• Чувствительный — пороги ×0,75.\n\n"
             "Выбор сначала показывает значения. Применение заменяет пороги и окна формул всех пяти детекторов. "
             "Если активны свои пороги, перед применением они сохраняются для возврата. "
             "Чувствительность не означает прибыльность."
@@ -232,6 +234,7 @@ def event_summary(event: dict[str, Any], now_ms: int) -> str:
     lines = [
         f"{event['symbol']} · {market(event['market_type'])}",
         f"{FAMILY.get(event['detector_id'], event['detector_id'])} · {event['timeframe']} · {direction}",
+        "",
     ]
     for key, value in event["metrics"].items():
         if key.endswith(("threshold", "floor")) or key in ("atr14", "range_high", "range_low"):
@@ -239,13 +242,14 @@ def event_summary(event: dict[str, Any], now_ms: int) -> str:
         unit = event.get("units", {}).get(key, "")
         display_value = round(value, 2) if unit in ("%", "ratio") and abs(value) >= 0.01 else value
         lines.append(
-            f"{METRIC.get(key, key)}: {amount(display_value, compact=unit == 'USDT')} {'×' if unit == 'ratio' else unit}".rstrip()
+            f"• {METRIC.get(key, key)}: {amount(display_value, compact=unit == 'USDT')} {'×' if unit == 'ratio' else unit}".rstrip()
         )
     lines += [
         f"Интенсивность: ×{amount(round(event['strength'], 2))} от порога",
-        f"{FRESHNESS.get(freshness(event, now_ms), 'свежесть неизвестна')} · "
+        "",
+        f"Свежесть: {FRESHNESS.get(freshness(event, now_ms), 'свежесть неизвестна')} · "
         + ("данные полные" if event.get("completeness") == "COMPLETE" else "данные неполные"),
-        when(event.get("market_observation_ms")),
+        "Время наблюдения: " + when(event.get("market_observation_ms")),
     ]
     context = event.get("enrichment", {})
     if context.get("metrics"):
@@ -296,8 +300,9 @@ def diagnostic_summary(data: dict[str, Any]) -> str:
     storage = data.get("storage", {})
     agent = data.get("agent_delivery", {})
     lines = [
-        "Диагностика — сводка",
+        "🩺 Диагностика — сводка",
         f"Снята: {when(data.get('at_ms'))}",
+        "",
         f"Источники: {STATE.get(ingestion.get('diagnostic_state'), 'неизвестно')}, возраст {amount(ingestion.get('diagnostic_age_seconds'))} с",
         f"Потоки: {amount(ingestion.get('active_streams'))}; пробелы: {amount(ingestion.get('historical_gaps_pending'))}",
         f"Последний цикл аналитики: {STATE.get(analytics.get('state'), 'неизвестно')}; {when(analytics.get('at_ms'))}",
@@ -319,6 +324,7 @@ def diagnostic_summary(data: dict[str, Any]) -> str:
             "Есть сообщения о недоступных расчётах детекторов; это не обязательно сбой подключения. См. полный отчёт."
         )
     lines += [
+        "",
         "Контекст деривативов (необязательно): " + toggle_state(data.get("enrichment", {}).get("enabled")),
         "Доставка агенту: " + agent_state(agent),
         "Дайджест: " + toggle_state(data.get("digest", {}).get("preferences", {}).get("enabled")),
@@ -407,19 +413,19 @@ def diagnostic_section(data: dict[str, Any], section: str) -> str:
 
 
 HELP = (
-    "Помощь\nРадар находит необычную активность; он не выставляет ордера.\n"
-    "Статус — работа источников и доставки. Радар — охват и мой список. "
-    "История — сохранённые наблюдения и их результаты. Аналитика — статистика и дайджест. "
-    "Настройки — профили, пороги и уведомления.\n"
+    "❔ Помощь\nРадар находит необычную активность; он не выставляет ордера.\n\n"
+    "• Статус — работа источников и доставки.\n• Радар — охват и мой список.\n"
+    "• История — сохранённые наблюдения и их результаты.\n• Аналитика — статистика и дайджест.\n"
+    "• Настройки — профили, пороги и уведомления.\n\n"
     "Начните с примера или выберите понятие. Команды остаются дополнительным способом управления."
 )
 TERMS_SHORT = (
-    "Как читать сигналы\n"
-    "Цена: изменение закрытой свечи к предыдущей; рост и падение различаются.\n"
-    "Всплеск оборота: обычно 100 тыс. USDT, сейчас 300 тыс. — это ×3. База — предыдущие свечи, текущая исключена.\n"
-    "Пробой: цена закрылась за прежним диапазоном с отступом от обычной волатильности.\n"
-    "Расширение диапазона: свеча необычно широкая; само по себе не задаёт направление.\n"
-    "Совпадение: одновременно выполнены условия цены, оборота и минимального оборота 24ч.\n"
+    "📖 Как читать сигналы\n\n"
+    "• Цена: изменение закрытой свечи к предыдущей; рост и падение различаются.\n"
+    "• Всплеск оборота: обычно 100 тыс. USDT, сейчас 300 тыс. — это ×3. База — предыдущие свечи, текущая исключена.\n"
+    "• Пробой: цена закрылась за прежним диапазоном с отступом от обычной волатильности.\n"
+    "• Расширение диапазона: свеча необычно широкая; само по себе не задаёт направление.\n"
+    "• Совпадение: одновременно выполнены условия цены, оборота и минимального оборота 24ч.\n\n"
     "Интенсивность ×2: превышение порога вдвое, не вероятность успеха.\n"
     "Эпизод объединяет подтверждения. Новое семейство/TF или усиление объясняют повторное уведомление.\n"
     "Свежесть: для обычного события 1m свежее окно — 1 минута, истечение через 2; для пробоя — 2/4 минуты. "

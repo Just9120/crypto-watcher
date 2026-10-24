@@ -9,6 +9,26 @@ from cryptowatcher.events import History, identity
 from cryptowatcher.outcomes import MINUTE
 
 
+def test_empty_digest_distinguishes_absent_observations_from_zero_return():
+    from cryptowatcher.digest import text
+
+    shown = text(
+        {
+            "start_ms": 1_800_000_000_000,
+            "end_ms": 1_800_003_600_000,
+            "event_count": 0,
+            "active_instruments": 0,
+            "groups": [],
+            "most_active_instruments": [],
+            "strongest_episodes": [],
+            "ongoing_episodes": [],
+        }
+    )
+    assert "Нет наблюдений за период." in shown and "Нет эпизодов за период." in shown
+    assert "Нет продолжающихся эпизодов." in shown
+    assert "доходность 0" not in shown
+
+
 def records(store, start):
     history = History(store)
     with store.db:

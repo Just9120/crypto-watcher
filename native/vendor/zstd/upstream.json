@@ -70,7 +70,7 @@
     "lib/decompress/huf_decompress_amd64.S": "7fe53316261517a8f877b793f3bfba8305a3f9ff05c5947f1d709aaff346f1dc",
     "lib/decompress/zstd_ddict.c": "38bf812283d61f4cd1f6aea30f84b43317418257c4e6fc198b09b436bd484397",
     "lib/decompress/zstd_ddict.h": "a97a250fd2f956e3ae419ddde68ae1f9fe4025bc0373254058d31bbd352fa71c",
-    "lib/decompress/zstd_decompress.c": "029580818b7e9cd38d9d07c63516b00ceaa943ffcfbd099fc5ccbe3628fa362f",
+    "lib/decompress/zstd_decompress.c": "9f920d70fe948daac4a0b4b1008843681e51dcaae7dac4cc5b7b357c60169178",
     "lib/decompress/zstd_decompress_block.c": "9cb8bcb07aeb87e4717a9c8a86d20832dc525dde2c1b72efdaaab7c937f43b87",
     "lib/decompress/zstd_decompress_block.h": "62ee0c6ae3f7353020538397f436b59743da8acb922068841b346f480f7078ac",
     "lib/decompress/zstd_decompress_internal.h": "73217b49a644c0fcf567b70677cae31449ba9f50a235ef3b681001c3f36dc56d",
@@ -82,7 +82,7 @@
     "lib/dictBuilder/cover.h": "6e2906e7e5c486a5b7f479f60210ff67d068b2c58744ad6a936ba5a9f4a23755",
     "lib/dictBuilder/divsufsort.c": "2081acb08865f623857d2c0dcb0e79fce9489f01416528c30cfee7097915c616",
     "lib/dictBuilder/divsufsort.h": "14c16c2f67019875a2ea6cd07a4e803adfadce448e0b80351c51e5f910230d38",
-    "lib/dictBuilder/fastcover.c": "0b8b511e6370e89cb257d1a4b4d8e77add5537ffb999cfe5e7e59e454c93f38f",
+    "lib/dictBuilder/fastcover.c": "cc3251936ced2a34945fdac1d45dfbf8ebb1544180df6e3472a0c5466166ce26",
     "lib/dictBuilder/zdict.c": "dbe57910c9d446bbf2195f31bdba5cffef2c80b93c0325e9df8c9ffa744b0aa3",
     "lib/legacy/zstd_legacy.h": "90ecc3816d28da0e0537c610fe99209fb9603b1ecdb764bd1228a5226f5c7484",
     "lib/legacy/zstd_v01.c": "8f439ec4d83f13caaa4ee86d8de74660a38cade89b48bedf3943a9315b98e167",
@@ -107,5 +107,23 @@
   "omitted": [
     "lib/README.md",
     "lib/dll/example/README.md"
+  ],
+  "local_patches": [
+    {
+      "file": "lib/decompress/zstd_decompress.c",
+      "findings": [
+        "CWSEC-004"
+      ],
+      "upstream_sha256": "029580818b7e9cd38d9d07c63516b00ceaa943ffcfbd099fc5ccbe3628fa362f",
+      "patched_sha256": "9f920d70fe948daac4a0b4b1008843681e51dcaae7dac4cc5b7b357c60169178"
+    },
+    {
+      "file": "lib/dictBuilder/fastcover.c",
+      "findings": [
+        "CWSEC-008"
+      ],
+      "upstream_sha256": "0b8b511e6370e89cb257d1a4b4d8e77add5537ffb999cfe5e7e59e454c93f38f",
+      "patched_sha256": "cc3251936ced2a34945fdac1d45dfbf8ebb1544180df6e3472a0c5466166ce26"
+    }
   ]
 }

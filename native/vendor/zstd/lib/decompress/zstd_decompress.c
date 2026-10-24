@@ -106,6 +106,7 @@ static size_t ZSTD_DDictHashSet_emplaceDDict(ZSTD_DDictHashSet* hashSet, const Z
     const U32 dictID = ZSTD_getDictID_fromDDict(ddict);
     size_t idx = ZSTD_DDictHashSet_getIndex(hashSet, dictID);
     const size_t idxRangeMask = hashSet->ddictPtrTableSize - 1;
+    size_t probes = 0;
     RETURN_ERROR_IF(hashSet->ddictPtrCount == hashSet->ddictPtrTableSize, GENERIC, "Hash set is full!");
     DEBUGLOG(4, "Hashed index: for dictID: %u is %zu", dictID, idx);
     while (hashSet->ddictPtrTable[idx] != NULL) {
@@ -115,8 +116,8 @@ static size_t ZSTD_DDictHashSet_emplaceDDict(ZSTD_DDictHashSet* hashSet, const Z
             hashSet->ddictPtrTable[idx] = ddict;
             return 0;
         }
-        idx &= idxRangeMask;
-        idx++;
+        idx = (idx + 1) & idxRangeMask;
+        RETURN_ERROR_IF(++probes == hashSet->ddictPtrTableSize, GENERIC, "Hash set is full!");
     }
     DEBUGLOG(4, "Final idx after probing for dictID %u is: %zu", dictID, idx);
     hashSet->ddictPtrTable[idx] = ddict;
@@ -156,6 +157,7 @@ static size_t ZSTD_DDictHashSet_expand(ZSTD_DDictHashSet* hashSet, ZSTD_customMe
 static const ZSTD_DDict* ZSTD_DDictHashSet_getDDict(ZSTD_DDictHashSet* hashSet, U32 dictID) {
     size_t idx = ZSTD_DDictHashSet_getIndex(hashSet, dictID);
     const size_t idxRangeMask = hashSet->ddictPtrTableSize - 1;
+    size_t probes = 0;
     DEBUGLOG(4, "Hashed index: for dictID: %u is %zu", dictID, idx);
     for (;;) {
         size_t currDictID = ZSTD_getDictID_fromDDict(hashSet->ddictPtrTable[idx]);
@@ -163,8 +165,8 @@ static const ZSTD_DDict* ZSTD_DDictHashSet_getDDict(ZSTD_DDictHashSet* hashSet, 
             /* currDictID == 0 implies a NULL ddict entry */
             break;
         } else {
-            idx &= idxRangeMask;    /* Goes to start of table when we reach the end */
-            idx++;
+            idx = (idx + 1) & idxRangeMask;
+            if (++probes == hashSet->ddictPtrTableSize) return NULL;
         }
     }
     DEBUGLOG(4, "Final idx after probing for dictID %u is: %zu", dictID, idx);
