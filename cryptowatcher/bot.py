@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import traceback
 import uuid
+from pathlib import Path
 from typing import Any
 
 from telegram import BotCommand, BotCommandScopeChat, InlineKeyboardMarkup, Update
@@ -768,18 +770,22 @@ class Controller:
         if now <= 0:
             return
         async with self.analytics_lock:
+            phase = "OUTCOMES"
             try:
                 started = time.monotonic()
                 processed_outcomes = await self.outcomes.async_work(self.market.server_now)
                 # Amortize the frozen prior-population preparation before the
                 # reader reopens; the64-result batch and sole writer stay fixed.
+                phase = "COMPARISONS"
                 processed_comparisons = await ComparisonWorker(self.store).async_work(
                     self.market.server_now, seconds=4
                 )
+                phase = "RETENTION"
                 async with self.retention_lock:
                     self.retention_once(now)
                 from .storage_meter import sample
 
+                phase = "STORAGE_SAMPLE"
                 sample(self.store, now)
                 self.store.put_runtime(
                     "analytics",
@@ -792,10 +798,29 @@ class Controller:
                     },
                 )
             except Exception as exc:
+                # Keep actionable code locations without exception text,
+                # source lines, full paths or locals from private callbacks.
+                frames = [
+                    {
+                        "module": Path(frame.filename).stem[:80],
+                        "function": frame.name[:80],
+                        "line": frame.lineno,
+                    }
+                    for frame in traceback.extract_tb(exc.__traceback__, limit=-8)
+                ]
                 self.store.put_runtime(
-                    "analytics", {"state": "FAILED", "error_class": type(exc).__name__, "at_ms": now}
+                    "analytics",
+                    {
+                        "state": "FAILED",
+                        "phase": phase,
+                        "error_class": type(exc).__name__,
+                        "at_ms": now,
+                        "error_frames": frames,
+                    },
                 )
-                logger.error("Analytics worker failure: %s", type(exc).__name__)
+                logger.error(
+                    "Analytics worker failure: %s phase=%s frames=%s", type(exc).__name__, phase, frames
+                )
 
     async def repack_job(self, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not isinstance(self.market, BybitRadar) or self.repack_lock.locked():
