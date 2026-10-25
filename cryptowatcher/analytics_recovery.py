@@ -8,7 +8,7 @@ import time
 from dataclasses import asdict
 from typing import Any
 
-from .events import History, identity
+from .events import PREFIX, History, identity
 from .ingestion import BybitRadar
 from .market import MarketError
 from .outcomes import MINUTE, pending_key
@@ -198,7 +198,9 @@ class AnalyticsRecovery:
             ):
                 self.finish_unowned(job, pending, now)
                 return
-            if self.complete_locally(job["stream"], job["start"], job["cursor_end"]):
+            if job.get("closed_data_ready") is True or self.complete_locally(
+                job["stream"], job["start"], job["cursor_end"]
+            ):
                 self.finish_local(job, pending, now)
                 return
             if job["next_attempt_ms"] > now:
@@ -288,9 +290,10 @@ class AnalyticsRecovery:
                                 "outcome-pending:", "analytics-gap-pending:", 1
                             )
                             self.history.put(job["pending_key"], binding)
-                        self.history.put("analytics-gap:" + job["id"], job)
                         if job["state"] == "COMPLETE":
-                            self.record_completion(job, max(now, self.market.server_now()))
+                            self.finish_local(job, job["pending_key"], max(now, self.market.server_now()))
+                        else:
+                            self.history.put("analytics-gap:" + job["id"], job)
 
             except (MarketError, KeyError, TypeError, ValueError, OverflowError) as exc:
                 if self.history.get("analytics-gap:" + job["id"]) != job:
@@ -311,13 +314,75 @@ class AnalyticsRecovery:
 
     def finish_local(self, job: dict[str, Any], pending: str, now: int) -> None:
         with self.store.db:
+            # Reuse this existing gap job for bounded owner wakeup. A previous
+            # version can ignore these optional fields and safely check/refetch
+            # the original range, rather than seeing a zero-length REST cursor.
+            job["closed_data_ready"] = True
+            if not self.wake_outcomes(job, now):
+                job.setdefault("closed_data_cursor", job["cursor_end"])
+                job["cursor_end"] = job["end"]
+                job["state"] = "PENDING"
+                self.history.put(pending, {"id": job["id"]})
+                self.history.put("analytics-gap:" + job["id"], job)
+                return
             self.history.delete(pending)
             job.update(state="COMPLETE", completed_ms=now, completion="LOCAL_CLOSED_DATA")
             job.pop("reason", None)
+            job.pop("outcome_wake_after", None)
+            job.pop("closed_data_ready", None)
+            job["cursor_end"] = job.pop("closed_data_cursor", job["cursor_end"])
             # No consumer refers to the job bytes. Keep a one-day terminal
             # receipt for duplicate requests; actual source revisions stay intact.
             self.history.put("analytics-gap:" + job["id"], job)
             self.record_completion(job, now)
+
+    def wake_outcomes(self, recovered: dict[str, Any], now: int) -> bool:
+        """Wake retained due owners after real source progress, without a scan.
+
+        Read at most65 consecutive primary-key entries of this stream's existing
+        hold index; process at most64/25ms. No new queue/index/arrival is created.
+        The gap's durable cursor covers large fanout and restart. Future jobs,
+        other streams, completed jobs and stale/missing pending bindings stay put.
+        """
+        if not self.store.bounded:
+            return True
+        prefix = PREFIX + "hold:" + recovered["stream"] + ":"
+        cursor = recovered.get("outcome_wake_after", prefix)
+        if not isinstance(cursor, str) or not cursor.startswith(prefix):
+            raise ValueError("Invalid recovery owner cursor")
+        rows = self.store.db.execute(
+            "SELECT key,start,end,expires FROM market_holds WHERE key>? AND key<? ORDER BY key LIMIT 65",
+            (cursor, prefix + "~"),
+        ).fetchall()
+        deadline = time.monotonic() + 0.025
+        for index, (key, start, end, expires) in enumerate(rows[:64]):
+            if index and time.monotonic() >= deadline:
+                return False
+            recovered["outcome_wake_after"] = key
+            if expires <= now or start >= recovered["end"] or end <= recovered["start"]:
+                continue
+            outcome_id = key[len(prefix) :]
+            job_key = "outcome-job:" + outcome_id
+            job = self.history.get(job_key)
+            if (
+                job is None
+                or job.get("state") != "INCOMPLETE"
+                or job.get("stream") != recovered["stream"]
+                or job.get("hold_key") != key[len(PREFIX) :]
+                or type(job.get("due_ms", end)) is not int
+                or job.get("due_ms", end) > now
+                or job.get("next_attempt_ms", now) <= now
+            ):
+                continue
+            binding = {"outcome_id": outcome_id}
+            if self.history.get(job["pending_key"]) != binding:
+                continue
+            self.history.delete(job["pending_key"])
+            job["next_attempt_ms"] = now
+            job["pending_key"] = pending_key(now, outcome_id)
+            self.history.put(job["pending_key"], binding)
+            self.history.put(job_key, job)
+        return len(rows) <= 64
 
     def record_completion(self, job: dict[str, Any], now: int) -> None:
         from .queue_health import completed_batch
@@ -352,7 +417,9 @@ class AnalyticsRecovery:
                     self.history.delete(pending)
             elif self.owner_deadline(job["stream"], job["start"], job["end"], now) is None:
                 self.finish_unowned(job, pending, now)
-            elif self.complete_locally(job["stream"], job["start"], job["cursor_end"]):
+            elif job.get("closed_data_ready") is True or self.complete_locally(
+                job["stream"], job["start"], job["cursor_end"]
+            ):
                 self.finish_local(job, pending, now)
             cursor = row[0]
             await asyncio.sleep(0)

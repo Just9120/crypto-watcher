@@ -421,9 +421,14 @@ class OutcomeWorker:
         now_ms: int,
     ) -> None:
         reason = None
+        locally_ready = False
         if result["state"] == "INCOMPLETE" and self.request_gap is not None:
+            locally_ready = bool(result["missing_ranges"])
             for missing_start, missing_end in result["missing_ranges"]:
-                reason = self.request_gap(job["stream"], missing_start, missing_end)
+                gap_reason = self.request_gap(job["stream"], missing_start, missing_end)
+                locally_ready = locally_ready and gap_reason is None
+                if gap_reason:
+                    reason = gap_reason
         if reason:
             result["recovery_reason"] = reason
         result.update(
@@ -452,7 +457,12 @@ class OutcomeWorker:
                 self.history.delete(job["hold_key"])
                 job.update(state="COMPLETE", completed_ms=now_ms)
             else:
-                job.update(state=result["state"], next_attempt_ms=now_ms + MINUTE)
+                # A readonly calculation can predate a candle already committed
+                # before publication. Re-admit on the existing worker cadence;
+                # do not spend another synchronous full calculation here.
+                job.update(
+                    state=result["state"], next_attempt_ms=now_ms if locally_ready else now_ms + MINUTE
+                )
                 job["pending_key"] = pending_key(job["next_attempt_ms"], job["outcome_id"])
                 self.history.put(job["pending_key"], binding)
             if self.store.bounded and result["state"] == "COMPLETE":

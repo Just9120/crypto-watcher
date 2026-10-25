@@ -15,7 +15,7 @@ from typing import Any
 
 import zstandard
 
-from . import source_slot_json
+from . import frozen_codec_native, source_slot_json
 from .storage import encode
 
 SLOTS = 32
@@ -185,6 +185,24 @@ def all_values(frame: bytes, cache: Any = None) -> list[Any]:
     ):
         raise ValueError("Source columns cardinality mismatch")
     at = 4 + metadata_size
+    if frozen_codec_native.available():
+        kinds = []
+        values = []
+        for descriptor in descriptors:
+            if not isinstance(descriptor, list) or len(descriptor) != 2:
+                raise ValueError("Invalid source column descriptor")
+            kind, length = descriptor
+            if kind not in ("i", "d", "v") or type(length) is not int or not 0 < length <= len(raw) - at:
+                raise ValueError("Invalid source column descriptor")
+            kinds.append(kind)
+            values.append(json_value(raw[at : at + length]))
+            at += length
+        if at != len(raw):
+            raise ValueError("Trailing source column bytes")
+        frozen = frozen_codec_native.column_values(counts, kinds, values, count)
+        if frozen is not None:
+            return frozen
+        at = 4 + metadata_size
     columns = []
     for descriptor in descriptors:
         if not isinstance(descriptor, list) or len(descriptor) != 2:
