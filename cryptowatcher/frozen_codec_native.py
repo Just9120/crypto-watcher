@@ -115,6 +115,10 @@ def _source_call(name: str, tile: int, step: int, *bodies: tuple[tuple[int, ...]
     _coordinates(tile, step)
     arguments: list[bytes] = []
     for offsets, raw in bodies:
+        if isinstance(raw, bytes) and type(raw) is not bytes:
+            # Existing pure-cache callers accept immutable bytes subclasses.
+            # Keep their portable semantics instead of narrowing that contract.
+            return NotImplemented
         if (
             type(raw) is not bytes
             or not 0 < len(raw) <= 512 * 1024

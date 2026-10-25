@@ -228,3 +228,21 @@ def test_column_native_public_path_fresh_objects_input_lifetime_and_original_par
     decimal = kinds.index("d")
     invalid[decimal][2] = 1 << count
     assert original(counts, kinds, invalid, count) is NotImplemented
+
+
+def test_immutable_bytes_subclass_cache_retains_portable_source_reader_contract(accelerator):
+    class ImmutableBytes(bytes):
+        pass
+
+    tile, slots = fixture()
+    raw = frame(tile, 60000, slots)
+    offsets, expanded = source_slot_json.data(raw[60:])
+    assert native.source_values(tile, 60000, offsets, ImmutableBytes(expanded)) is None
+
+    def cache(kind, key, value, read):
+        return ImmutableBytes(read())
+
+    reader = codec.Reader(raw, cache)
+    assert reader.frozen is None
+    for slot in range(32):
+        assert encode(reader.items(slot)) == encode(slots[slot])
