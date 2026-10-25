@@ -39,48 +39,6 @@ def test_unsupported_scalar_encoding_keeps_exact_typed_source_without_truncation
     raw = codec.pack(1, tile, 60000, values)
     assert raw.startswith(codec.MAGIC)
     assert encode(codec.unpack(raw)[3]) == encode(values)
-    # A renewal hint is advisory: unsupported scalar tails keep the ordinary
-    # lossless encoding, rather than becoming a refused or truncated source.
-    hinted = codec.pack(1, tile, 60000, values, _lease_encoding=codec.JSON_MAGIC)
-    assert hinted == raw
-
-
-def test_lease_renewal_keeps_values_revision_and_retention_without_unused_typed_encoding(store, monkeypatch):
-    from contextlib import closing
-
-    from cryptowatcher.storage import Store
-
-    stream, tile, public = prepare(store)
-    with store.db:
-        original = candle_blocks.admit_many(store.db, stream, public)
-    before = candle_blocks.tile(store.db, stream, tile, 60000)
-    assert before.startswith(codec.JSON_MAGIC)
-    anchor = tile + 40 * 86400000
-
-    def unused_encoding(*args, **kwargs):
-        raise AssertionError("Lease-only JSON renewal constructed an unused typed candidate")
-
-    with monkeypatch.context() as patch:
-        patch.setattr(indexed_frame, "pack", unused_encoding)
-        with store.db:
-            assert candle_blocks.admit_many(store.db, stream, public, anchor) == original
-    renewed = candle_blocks.tile(store.db, stream, tile, 60000)
-    assert renewed.startswith(codec.JSON_MAGIC)
-    for value in public:
-        point, needed, purge = codec.point(renewed, stream, value["start"], 0)
-        assert encode(point) == encode(value)
-        assert (needed, purge) == (anchor, anchor + 30 * 86400000)
-    assert codec.preserved(before, renewed) == []
-    # A new immutable correction still takes the ordinary validated chooser.
-    corrected = {**public[0], "close": 102.0}
-    with store.db:
-        assert candle_blocks.admit_many(store.db, stream, [corrected], anchor)[0][2] == 1
-    with closing(Store(store.path, store.owner_id, readonly=True)) as reader:
-        raw = candle_blocks.tile(reader.db, stream, tile, 60000)
-        assert encode(codec.point(raw, stream, tile, 0)[0]) == encode(public[0])
-        assert encode(codec.point(raw, stream, tile, 1)[0]) == encode(corrected)
-        assert reader.db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-        assert not reader.db.execute("PRAGMA foreign_key_check").fetchall()
 
 
 def test_legacy_sql_tile_can_be_recoded_renewed_and_corrected_with_rollback_and_old_values_preserved(store):

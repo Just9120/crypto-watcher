@@ -306,7 +306,6 @@ def _admit_groups(
                 else [[] for _ in range(32)]
             )
             dirty = False
-            leases_only = old is not None
             for index, slot, tail in items:
                 at_start = at + slot * step
                 expiry = max(at_start + step + candle_days * 86400000, anchor + detail_days * 86400000)
@@ -319,25 +318,12 @@ def _admit_groups(
                         existing[1:3] = [needed, purge]
                         dirty = True
                 else:
-                    leases_only = False
                     revision = (slots[slot][-1][0] if slots[slot] else -1) + 1
                     slots[slot].append([revision, anchor, expiry, tail])
                     dirty = True
                 result[index] = (sid, at_start, revision)
             if dirty:
-                preference = (
-                    codec.JSON_MAGIC
-                    if leases_only and old is not None and old.startswith(codec.JSON_MAGIC)
-                    else None
-                )
-                put(
-                    db,
-                    codec.pack(sid, at, step, slots, _lease_encoding=preference)
-                    if preference is not None
-                    else codec.pack(sid, at, step, slots),
-                    old,
-                    cache=cache,
-                )
+                put(db, codec.pack(sid, at, step, slots), old, cache=cache)
     return result
 
 
