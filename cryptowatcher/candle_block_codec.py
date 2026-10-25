@@ -96,7 +96,7 @@ def versions(tile: int, step: int, slot: int, rows: Any, *, validate: bool = Tru
     return rows
 
 
-def pack(stream: int, tile: int, step: int, slots: list[Any]) -> bytes:
+def pack(stream: int, tile: int, step: int, slots: list[Any], *, _prefer_json: bool = False) -> bytes:
     coordinates(stream, tile, step)
     if not isinstance(slots, list) or len(slots) != SLOTS:
         raise ValueError("Invalid source tile shape")
@@ -110,6 +110,17 @@ def pack(stream: int, tile: int, step: int, slots: list[Any]) -> bytes:
     if not rows:
         raise ValueError("Source tile row bound")
     header = struct.pack(">QQQ", stream, tile, step)
+    if type(_prefer_json) is not bool:
+        raise ValueError("Invalid source encoding preference")
+    if _prefer_json:
+        # The current authenticated tile is already SB2. Every new value and
+        # lease above is fully validated; keep this lossless encoding without
+        # constructing a discarded typed competitor. Unsupported/allocation
+        # cases retain the original complete chooser and fallback.
+        preferred = source_slot_json.pack(slots)
+        if preferred is not None and len(preferred) + 60 <= MAX_BYTES:
+            checked = header + preferred
+            return JSON_MAGIC + hashlib.sha256(checked).digest() + checked
     try:
         frame = indexed_frame.pack(slots)
         text = source_slot_json.pack(slots)
@@ -298,6 +309,14 @@ def latest(
 
 
 def stats(raw: bytes, *, cache: Any = None) -> tuple[int, int, int, int, int]:
+    if isinstance(raw, bytes) and raw.startswith(JSON_MAGIC):
+        from . import source_guard_native
+
+        if source_guard_native.available():
+            sid, tile, step, frame = header(raw)
+            result = source_guard_native.stats(tile, step, *source_slot_json.data(frame, cache))
+            if result is not None:
+                return sid, tile, step, *result
     sid, tile, step, slots = unpack(raw, cache=cache)
     entries = [row for part in slots for row in part]
     return sid, tile, step, len(entries), min(row[2] for row in entries)
@@ -311,9 +330,20 @@ def preserved(
     The store must separately qualify every removal against current policy and
     holds. This function never grants expiry or deletion by itself.
     """
-    old_id = header(old)[:3]
-    if header(new)[:3] != old_id:
+    old_header, new_header = header(old), header(new)
+    old_id = old_header[:3]
+    if new_header[:3] != old_id:
         raise ValueError("Source block identity changed")
+    if old.startswith(JSON_MAGIC) and new.startswith(JSON_MAGIC):
+        from . import source_guard_native
+
+        if source_guard_native.available() and source_guard_native.preserved(
+            old_header[1],
+            old_header[2],
+            source_slot_json.data(old_header[3], cache),
+            source_slot_json.data(new_header[3], cache),
+        ):
+            return []
     before = rows(old, cache=cache)
     current = {(row[1], row[2]): row for row in rows(new, cache=cache)}
     removed = []

@@ -323,7 +323,12 @@ def _admit_groups(
                     dirty = True
                 result[index] = (sid, at_start, revision)
             if dirty:
-                put(db, codec.pack(sid, at, step, slots), old, cache=cache)
+                packed = (
+                    codec.pack(sid, at, step, slots, _prefer_json=True)
+                    if old is not None and old.startswith(codec.JSON_MAGIC)
+                    else codec.pack(sid, at, step, slots)
+                )
+                put(db, packed, old, cache=cache)
     return result
 
 

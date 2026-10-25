@@ -61,6 +61,11 @@ def main() -> None:
         ],
         check=True,
     )
+    source_guard = args.output.with_name("source_guard.so")
+    subprocess.run(
+        ["bash", str(ROOT / "native/build_source_guard.sh"), str(source_guard.resolve()), args.compiler],
+        check=True,
+    )
     print(
         json.dumps(
             {
@@ -68,6 +73,7 @@ def main() -> None:
                 "upstream": metadata["revision"],
                 "artifact_sha256": hashlib.sha256(args.output.read_bytes()).hexdigest(),
                 "numeric_frame_sha256": hashlib.sha256(numeric.read_bytes()).hexdigest(),
+                "source_guard_sha256": hashlib.sha256(source_guard.read_bytes()).hexdigest(),
             }
         )
     )

@@ -189,6 +189,11 @@ def main() -> None:
             "import time; assert available(); "
             "from cryptowatcher.numeric_frame_native import available as nf_available,transpose; "
             "assert nf_available(); assert transpose(bytes([2,1,3]),b'acdbef')==b'abcdef'; "
+            "from cryptowatcher import source_guard_native as sg; from itertools import accumulate; "
+            "assert sg.available(); "
+            "parts=[b'[[0,0,1,[1.0,2.0,0.5,1.5,0.0,1.0,\"image\",0,60000]]]']+[b'[]']*31; "
+            "body=(tuple(accumulate(map(len,parts),initial=0)),b''.join(parts)); "
+            "assert sg.stats(0,60000,*body)==(1,1); assert sg.preserved(0,60000,body,body); "
             "i=Image(Path('/data/ram-restore.db'),limit=MAX_COMPRESSED_BYTES,deadline=time.monotonic()+30); "
             "v=frozen_vfs(i,Path('/tmp/native-sentinel.sqlite3')); "
             "assert v.stats()['vfs_backend']=='native'; v.unregister()",
