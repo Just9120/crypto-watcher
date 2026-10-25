@@ -59,6 +59,18 @@ artifact работает portable path; повреждённый installed arti
 чтение. Linux CI и image checks требуют корректный artifact, byte-exact parity
 и полный finite structural read в прежнем50s budget.
 
+Сборка также создаёт `frozen_codec.so` для чистых операций над прежними
+NR1/NR2, CJ3, SB2/JS1 и SB3: чтение leases, typed JSON и source values,
+проверка новых source bytes и неизменности сохранённых revisions. Python minor
+и размер указателя проверяются до загрузки Python objects; headers берутся из
+того же pinned runtime image. Formats, SQL ownership/CAS/retention guards и
+размеры caches сохраняются. Отсутствие helper или неподдержанный fast-path
+вход оставляют полный portable путь; повреждённый installed artifact закрывает
+операцию. Linux tests проверяют exact bytes/types/float bits, malformed inputs,
+fresh mutable outputs и reference lifetime, а ASAN/UBSAN — фактические CPython
+materialization paths. Эти проверки не заменяют whole-service throughput,
+shared-VPS capacity и непрерывное наблюдение.
+
 Конвертер также читает сохранённые gzip/Zstandard archives через bounded compressed
 image без дополнительной raw source copy. Explicit encoding/byte cap и полный набор
 source/candidate проверок описаны в [процедуре конвертации](docs/runbooks/delivery.md#изолированная-конвертация-legacy-history-backup).

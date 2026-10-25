@@ -11,6 +11,8 @@ import re
 import struct
 from typing import Any
 
+from . import frozen_codec_native
+
 # Frozen v3 token dictionary. Never change/reorder without a new format version.
 WORDS = tuple(
     """schema event_id outcome_id episode_id comparison_id revision event_revision
@@ -54,6 +56,9 @@ def integer(value: int) -> bytes:
 
 
 def pack(value: Any) -> bytes:
+    native = frozen_codec_native.typed_pack(value, WORD_IDS)
+    if native is not None:
+        return native
     out = bytearray()
     nodes = 0
 
@@ -122,6 +127,9 @@ def unpack(raw: bytes, maximum: int) -> Any:
     length = len(raw)
     if not 0 < length <= maximum:
         raise ValueError("Typed JSON size")
+    native = frozen_codec_native.typed_unpack(raw, WORDS)
+    if native is not NotImplemented:
+        return native
     collection_limit = min(MAX_NODES, length)
     pos = 0
     nodes = 0

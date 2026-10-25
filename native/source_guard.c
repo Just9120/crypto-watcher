@@ -10,11 +10,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef CW_SOURCE_PYTHON
 extern double PyOS_string_to_double(const char *, char **, void *);
 extern void *PyErr_Occurred(void);
 extern void PyErr_Clear(void);
 extern int PyErr_ExceptionMatches(void *);
 extern void *PyExc_MemoryError;
+#endif
 
 #define SG_API __attribute__((visibility("default")))
 #define SG_BYTES (512u * 1024u)
@@ -31,6 +33,7 @@ typedef struct { size_t used; int failed; } budget;
 typedef struct {
     uint64_t revision, needed, purge, received, server;
     double values[6];
+    unsigned integer_mask;
     const char *source;
     size_t source_length;
 } source_row;
@@ -96,14 +99,19 @@ static int unsigned63(yyjson_val *value, uint64_t *out) {
     *out = n; return 1;
 }
 
-static int floating(yyjson_val *value, double *out) {
+static int floating(yyjson_val *value, double *out, int allow_integer, unsigned *integer) {
     if (!yyjson_is_raw(value)) return SG_PORTABLE;
     const char *text = yyjson_get_raw(value); size_t length = yyjson_get_len(value);
     if (!length || length > 128) return SG_PORTABLE;
     int is_float = 0;
     for (size_t i = 0; i < length; i++)
         if (text[i] == '.' || text[i] == 'e' || text[i] == 'E') is_float = 1;
-    if (!is_float) return SG_PORTABLE; /* Preserve all integer semantics in Python. */
+    if (!is_float) {
+        uint64_t n;
+        if (!allow_integer || !unsigned63(value, &n) || n > UINT64_C(9007199254740992))
+            return SG_PORTABLE;
+        *out = (double)n; *integer = 1; return SG_VALID;
+    }
     char token[129]; memcpy(token, text, length); token[length] = 0;
     char *end = NULL; double number = PyOS_string_to_double(token, &end, NULL);
     if (PyErr_Occurred()) {
@@ -120,9 +128,9 @@ static void release_snapshot(snapshot *value) {
     free(value);
 }
 
-static int parse_snapshot(const char *data, size_t length,
+static int parse_snapshot_common(const char *data, size_t length,
                           const unsigned char *offsets, size_t offset_bytes,
-                          uint64_t tile, uint64_t step, snapshot *out) {
+                          uint64_t tile, uint64_t step, snapshot *out, int allow_integer) {
     if (!data || !offsets || !length || length > SG_BYTES || offset_bytes != 132)
         return SG_ARGUMENT;
     if ((step != 60000 && step != 180000 && step != 300000 && step != 900000) ||
@@ -154,8 +162,10 @@ static int parse_snapshot(const char *data, size_t length,
             yyjson_val *tail = yyjson_arr_get(row, 3);
             if (!yyjson_is_arr(tail) || yyjson_arr_size(tail) != 9) return SG_PORTABLE;
             for (size_t n = 0; n < 6; n++) {
-                int status = floating(yyjson_arr_get(tail, n), &saved->values[n]);
+                unsigned integer = 0;
+                int status = floating(yyjson_arr_get(tail, n), &saved->values[n], allow_integer, &integer);
                 if (status != SG_VALID) return status;
+                saved->integer_mask |= integer << n;
             }
             yyjson_val *source = yyjson_arr_get(tail, 6);
             if (!yyjson_is_str(source) ||
@@ -173,6 +183,29 @@ static int parse_snapshot(const char *data, size_t length,
     }
     out->first[SG_SLOTS] = out->count;
     return out->count ? SG_VALID : SG_PORTABLE;
+}
+
+static int parse_snapshot(const char *data, size_t length,
+                          const unsigned char *offsets, size_t offset_bytes,
+                          uint64_t tile, uint64_t step, snapshot *out) {
+    return parse_snapshot_common(data, length, offsets, offset_bytes, tile, step, out, 0);
+}
+
+static int snapshot_preserved(snapshot *before, snapshot *after) {
+    for (size_t slot = 0; slot < SG_SLOTS; slot++) {
+        size_t j = after->first[slot];
+        for (size_t i = before->first[slot]; i < before->first[slot + 1]; i++) {
+            source_row *a = &before->rows[i];
+            while (j < after->first[slot + 1] && after->rows[j].revision < a->revision) j++;
+            if (j == after->first[slot + 1]) return SG_PORTABLE;
+            source_row *b = &after->rows[j++];
+            if (a->revision != b->revision || a->received != b->received || a->server != b->server ||
+                a->source_length != b->source_length || memcmp(a->source, b->source, a->source_length) ||
+                a->integer_mask != b->integer_mask || memcmp(a->values, b->values, sizeof(a->values)) ||
+                b->needed < a->needed || b->purge < a->purge) return SG_PORTABLE;
+        }
+    }
+    return SG_VALID;
 }
 
 SG_API unsigned cw_source_guard_abi(void) {
@@ -202,21 +235,7 @@ SG_API int cw_source_guard_preserved(const char *old, size_t old_length,
     if (status != SG_VALID) goto done;
     status = parse_snapshot(current, current_length, current_offsets, current_offset_bytes, tile, step, after);
     if (status != SG_VALID) goto done;
-    for (size_t slot = 0; slot < SG_SLOTS; slot++) {
-        size_t j = after->first[slot];
-        for (size_t i = before->first[slot]; i < before->first[slot + 1]; i++) {
-            source_row *a = &before->rows[i];
-            while (j < after->first[slot + 1] && after->rows[j].revision < a->revision) j++;
-            if (j == after->first[slot + 1]) { status = SG_PORTABLE; goto done; }
-            source_row *b = &after->rows[j++];
-            if (a->revision != b->revision || a->received != b->received || a->server != b->server ||
-                a->source_length != b->source_length || memcmp(a->source, b->source, a->source_length) ||
-                memcmp(a->values, b->values, sizeof(a->values)) ||
-                b->needed < a->needed || b->purge < a->purge) {
-                status = SG_PORTABLE; goto done;
-            }
-        }
-    }
+    status = snapshot_preserved(before, after);
 done:
     release_snapshot(before); release_snapshot(after); return status;
 }

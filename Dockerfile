@@ -1,6 +1,9 @@
+FROM python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce AS python-headers
+
 FROM gcc:13.3.0-bookworm@sha256:1d71f0f3450214bef38fe09e6f610fb6cca90cf97b43f4ce845bfc32a4168818 AS native-builder
 WORKDIR /build
 COPY native/ ./native/
+COPY --from=python-headers /usr/local/include/python3.11/ /build/python-include/
 RUN cd native/vendor/yyjson \
     && echo '175a74d7013149c736d2e59d6fd372e01d360dde9b583ba9063ac8037f4dbf8b  yyjson.h' | sha256sum -c - \
     && echo '5b368f298311b1f3f107e685bddf218d607dee6227c1340405974040f7c7e4ca  yyjson.c' | sha256sum -c - \
@@ -8,6 +11,7 @@ RUN cd native/vendor/yyjson \
 RUN bash native/build_vfs.sh /build/compressed_vfs.so
 RUN bash native/build_numeric.sh /build/numeric_frame.so
 RUN bash native/build_source_guard.sh /build/source_guard.so
+RUN bash native/build_frozen.sh /build/frozen_codec.so gcc /build/python-include
 
 FROM python:3.11-slim@sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce
 
@@ -28,6 +32,7 @@ COPY --from=native-builder /build/history.so ./cryptowatcher/_native/history.so
 COPY --from=native-builder /build/compressed_vfs.so ./cryptowatcher/_native/compressed_vfs.so
 COPY --from=native-builder /build/numeric_frame.so ./cryptowatcher/_native/numeric_frame.so
 COPY --from=native-builder /build/source_guard.so ./cryptowatcher/_native/source_guard.so
+COPY --from=native-builder /build/frozen_codec.so ./cryptowatcher/_native/frozen_codec.so
 COPY --from=native-builder /build/native/vendor/yyjson/LICENSE ./cryptowatcher/_native/LICENSE.yyjson
 COPY --from=native-builder /build/native/vendor/zstd/LICENSE ./cryptowatcher/_native/LICENSE.zstd
 COPY --from=native-builder /build/native/vendor/sqlite/LICENSE ./cryptowatcher/_native/LICENSE.sqlite

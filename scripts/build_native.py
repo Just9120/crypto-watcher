@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import subprocess
+import sysconfig
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -66,6 +67,17 @@ def main() -> None:
         ["bash", str(ROOT / "native/build_source_guard.sh"), str(source_guard.resolve()), args.compiler],
         check=True,
     )
+    frozen = args.output.with_name("frozen_codec.so")
+    subprocess.run(
+        [
+            "bash",
+            str(ROOT / "native/build_frozen.sh"),
+            str(frozen.resolve()),
+            args.compiler,
+            sysconfig.get_path("include"),
+        ],
+        check=True,
+    )
     print(
         json.dumps(
             {
@@ -74,6 +86,7 @@ def main() -> None:
                 "artifact_sha256": hashlib.sha256(args.output.read_bytes()).hexdigest(),
                 "numeric_frame_sha256": hashlib.sha256(numeric.read_bytes()).hexdigest(),
                 "source_guard_sha256": hashlib.sha256(source_guard.read_bytes()).hexdigest(),
+                "frozen_codec_sha256": hashlib.sha256(frozen.read_bytes()).hexdigest(),
             }
         )
     )

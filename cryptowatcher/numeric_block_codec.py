@@ -190,6 +190,11 @@ def leases(raw: bytes, block: int) -> tuple[list[int], list[int]]:
         if len(expanded) != size:
             raise ValueError("Invalid expanded numeric lease size")
         body = body[:8] + expanded
+    from .frozen_codec_native import leases as native_leases
+
+    decoded = native_leases(body[8:])
+    if decoded is not None:
+        return decoded
     values = []
     offset = 8
     for _ in range(SLOTS * 2):
