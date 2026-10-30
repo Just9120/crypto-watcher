@@ -180,6 +180,15 @@ Restart восстанавливает episodes, per-direction conditions и pen
 
 ## LIGHT-RADAR: episode analytics (текущая implementation-ветка)
 
+Новые owner writes используют general candle window3days/72h и detail retention30d;
+outcome horizons>4320min отклоняются до изменения state. Исторические snapshots
+остаются читаемыми. Store.initialize не мигрирует существующий private state.
+Только явный light transition сохраняет original private recovery, независимо
+проверяет restore и меняет policy fields в candidate. Used source leases сохраняют
+необходимые inputs до expiry details; general candles/context удаляются на72h.
+Критические boundaries и полный72h outcome проверены controlled-clock tests.
+
+
 Persisted active_detectors управляет domain admission отдельно от Telegram
 alert_detectors. Settings содержит отдельный экран explicit on/off с owner access
 и CAS revision; старые detector:* callbacks остаются notification-only.
@@ -219,7 +228,7 @@ SQL aggregates и CSV/NDJSON используют одинаковые episode u
 method versions и comparator distributions. Их наличие не разрешает новый N20:
 автоматический admission и runtime worker удалены. Старые manual commands/callbacks
 ведут к описательной статистике, не создавая jobs. Compatibility helpers в scripts
-сохраняются до их отдельной сверки; они не описывают новый capacity profile. General candle TTL72h, unified capacity forecast и весь offered/saved/due/delivery benchmark
+сохраняются до их отдельной сверки; они не описывают новый capacity profile. Unified capacity forecast и весь offered/saved/due/delivery benchmark
 ещё требуют завершения; этот раздел не подтверждает их поставку или приёмку VPS.
 
 ## G3 legacy analytics и independent digest

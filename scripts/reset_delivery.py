@@ -38,6 +38,12 @@ def load_permit(
     if value.get("state") in ("SWITCHED", "CONSUMED"):
         return None
     require(value.get("state") == "ARMED", "Reset permit not armed")
+    if value.get("light_radar_transition"):
+        require(
+            value["light_radar_transition"] is True
+            and re.fullmatch("[0-9a-f]{32}", value.get("expected_generation", "")) is not None,
+            "Invalid light transition permit",
+        )
     require(
         value.get("target_sha256") == hashlib.sha256(target.read_bytes()).hexdigest(), "Reset target changed"
     )
@@ -178,6 +184,16 @@ def prepare(
                 str(OWNER),
                 "--receipt",
                 relative + "/candidate.json",
+                *(
+                    [
+                        "--discard-test-history",
+                        "--light-radar-transition",
+                        "--expected-generation",
+                        permit["expected_generation"],
+                    ]
+                    if permit.get("light_radar_transition")
+                    else []
+                ),
             ],
             timeout=135,
         )
@@ -191,6 +207,14 @@ def prepare(
     require(
         proof.get("private_source_sha256") == permit["private_sha256"], "Owner settings changed before reset"
     )
+    if permit.get("light_radar_transition"):
+        require(
+            proof.get("light_radar_transition") is True
+            and proof.get("previous_generation_id") == permit["expected_generation"]
+            and proof.get("generation", {}).get("model") == "EPISODE_ORIGIN_V2_72H"
+            and set(proof.get("configuration_changes", {})) <= {"candle_retention_days", "active_detectors"},
+            "Light transition candidate policy mismatch",
+        )
     candidate = directory / "fresh.sqlite3"
     require(
         candidate.is_file()

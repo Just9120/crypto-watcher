@@ -5,6 +5,33 @@
 Сначала приведен действующий market layout; последующий compact schema1 раздел
 сохраняет historical compatibility и не задает routine schema2 backup/retention.
 
+## LIGHT-RADAR policy (30Oct2026)
+
+Current writes требуют72h general candles,30d details и outcome horizons≤4320min;
+неизменные historical settings прежней policy читаются без скрытой миграции.
+Существующий256-bar source limit сохраняется и на15m строже72h. Invalid current
+startup/update не создаёт private rows и не меняет revision. Actual used candles/
+context имеют отдельную detail lease; неиспользованные inputs не получают30d TTL.
+Граница72h и полный4320-candle outcome с исключением следующей свечи проверяются
+controlled-clock fixtures; это не elapsed production observation.
+
+Новые event records фиксируют outcome_unit=EPISODE/outcome_methodology_version=2.
+Один numeric result наepisode/horizon/method и immutable origin; meaningful
+memberships могут попадать в несколько групп, но внутри группы N уникален.
+После detail expiry schema2 additive marker episode_summary=1 обозначает:
+market_episode_results, market_episode_members, market_episode_provenance.
+Results/members immutable; provenance deduplicated по content hash, FK/refcounts
+и bounded GC освобождают неиспользуемые definitions/settings. Ни исходных свечей,
+ни decision contexts в12month summaries нет. Legacy market_quality layouts/readers
+сохраняются для прежних records; runtime не запускает N20 workers.
+
+Light transition — отдельный exact-generation режим из
+[runbook](runbooks/bounded-storage-reset.md), а не Store.open/initialize или
+обычный restart. Private bytes сначала независимо восстанавливаются; только
+explicit policy fields нормализуются в candidate и отражаются в receipt.
+Новая model generation не допускает повторного reset даже через legacy discard.
+Source market history не архивируется/конвертируется; чужие данные не затрагиваются.
+
 ## Новая policy хранения и разовый reset (D22)
 
 Updated S01/owner request2026-10-16 отменяют raw90d и бессрочное хранение event/outcome/comparator inputs. Актуальные сроки/AC: [E13](product_scope.md#e13--компактное-хранение-сроки-и-новый-период-истории). Implementation state и gates: [Current Goal](open_issues.md). Полная конвертация прежней тестовой market history больше не задача. Описания прежних converter/qualification tools относятся к историческому tooling и не являются precondition нового reset.

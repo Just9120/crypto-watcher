@@ -739,9 +739,9 @@ def test_split_retention_batches_keep_pending_versions_and_do_not_expand_expired
     assert "source_inputs" not in h.metadata("comparison-head:" + cid)["samples"][0]
     for _ in range(20):
         Retention(store).work(NOW + 31 * DAY, batch=1)
-        if not h.events(1):
+        if not h.count("event-head:"):
             break
-    assert not h.events(1) and list(cohort_rows(store)) == before
+    assert h.count("event-head:") == 0 and list(cohort_rows(store)) == before
     rows = store.db.execute("SELECT dimensions FROM market_quality").fetchall()
     assert any(json_payload(r[0])["methodology_version"] == "original-pending" for r in rows)
 

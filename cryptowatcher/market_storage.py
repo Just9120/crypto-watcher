@@ -226,7 +226,7 @@ def admit_many(
     for candle, c in zip(candles, validated, strict=True):
         value = encoded([candle[f] for f in FIELDS])
         expiry = max(
-            c.end + settings.get("candle_retention_days", 35) * DAY,
+            c.end + settings.get("candle_retention_days", 3) * DAY,
             needed_until + settings.get("detail_retention_days", 30) * DAY,
         )
         result.append(admit_value(db, int(sid), c.start, needed_until, expiry, value))
@@ -435,7 +435,7 @@ def save_context(
     when = value["available_at_ms"]
     settings = json.loads(db.execute("SELECT settings_json FROM owner_settings LIMIT 1").fetchone()[0])
     expires = max(
-        when + settings.get("candle_retention_days", 35) * DAY,
+        when + settings.get("candle_retention_days", 3) * DAY,
         anchor + settings.get("detail_retention_days", 30) * DAY,
     )
     from . import context_tile_codec, context_tiles

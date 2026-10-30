@@ -24,7 +24,7 @@ def policy(db: sqlite3.Connection) -> tuple[int, int]:
     if row is None:
         raise ValueError("Missing source retention policy")
     value = json.loads(row[0])
-    days = value.get("candle_retention_days", 35), value.get("detail_retention_days", 30)
+    days = value.get("candle_retention_days", 3), value.get("detail_retention_days", 30)
     if any(type(v) is not int or v < 1 for v in days):
         raise ValueError("Invalid source retention policy")
     return days

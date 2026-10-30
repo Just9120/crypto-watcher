@@ -79,7 +79,7 @@ class OwnerSettings:
     digest_interval_min: int = 60
     enrichment_enabled: bool = False
     detail_retention_days: int = 30
-    candle_retention_days: int = 35
+    candle_retention_days: int = 3
 
     def __post_init__(self) -> None:
         if (
@@ -94,11 +94,9 @@ class OwnerSettings:
                 or not 1 <= getattr(self, key) <= (2**63 - 1 - 253402300799999) // 86400000
             ):
                 raise ConfigError("Invalid " + key)
-        if (
-            self.candle_retention_days < 29
-            or self.candle_retention_days < max(self.outcome_horizons) / 1440 + 1
-        ):
-            raise ConfigError("Candle retention incompatible with comparator/lookback/horizons")
+        # Historical snapshots remain typed/readable. Current admission policy
+        # is validated separately; referenced outcome inputs can outlive the
+        # general candle window, so horizons do not require a global archive.
         if max(self.outcome_horizons) >= self.detail_retention_days * 1440:
             raise ConfigError("Detail retention incompatible with outcome horizons")
         if self.bybit_category not in ("spot", "linear"):

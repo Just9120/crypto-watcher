@@ -1,5 +1,57 @@
 # Ограниченное хранение и разовый reset market history
 
+## Текущий переход LIGHT-RADAR (30Oct2026)
+
+Владелец разрешил в Goal1 один переход с прежней тестовой market history без
+архива/конвертации. Общая policy:72h candles,30d details,12month numeric summaries;
+рабочий набор≤35GB и отдельный physical backup/temp reserve. Нормативный scope —
+[product scope](../product_scope.md), текущие gates — [план](../open_issues.md).
+
+Используется существующий receiver/reset flow, не отдельный reset после обычного
+CD. После required checks exact PR head installer запускается сначала read-only
+preflight с параметрами: `--base BASE_SHA --head HEAD_SHA --pr PR_NUMBER
+--receiver-sha256 NEW_RECEIVER_SHA --helper-sha256 NEW_HELPER_SHA
+--light-radar-transition --expected-generation LIVE_GENERATION
+--expected-runtime-revision LIVE_SOURCE_SHA
+--expected-receiver-sha256 INSTALLED_RECEIVER_SHA`; при существующем helper также
+`--expected-helper-sha256 INSTALLED_HELPER_SHA`. Значения берутся из primary Git/CI
+records и свежего scoped VPS readback, не из примера. Проверяются fixed target
+hash, source inode/generation/private signature, env, host/account и отсутствие
+конфликтующей операции. Перед execute рассчитывается полный disk peak.
+
+После совпадающего preflight `--execute --approve-reset-test-history` устанавливает
+reviewed receiver/helper и arm permit. Существующий известный CONSUMED permit и
+helper сохраняются в bootstrap record; ARMED/неизвестные records не заменяются.
+Installer не меняет БД и не останавливает бот. Повторная проверка проходит под
+неблокирующим deploy lock. Required gates/target/host verification не обходятся.
+
+Только matching merged artifact/tree запускает reset в новой image до старта
+нового runtime. Передаются `--discard-test-history --light-radar-transition
+--expected-generation EXACT_GENERATION`. Новый режим не запускается через helper
+в старой image: для него нужны новые config/storage APIs.
+
+Original private0600 recovery и independent restore сохраняют прежние bytes.
+В fresh candidate разрешены только candle_retention_days→3 и добавление persisted
+active_detectors (при отсутствии — все5; существующий выбор сохраняется);
+configuration revision растёт на1 только при изменении. Thresholds/watchlist/
+notification selection/mutes/private preferences не меняются. Horizons/lookbacks
+вне новой policy блокируют подготовку до решения владельца, не обрезаются молча.
+Receipt содержит exact configuration_changes и исходную/новую private signatures.
+Post-start verify_private проверяет эту детерминированную allowlist по generation
+model, кроме ранее разрешённого advancing digest cursor. Любая другая private
+правка оставляет post-check незавершённым.
+
+Fresh generation получает model=EPISODE_ORIGIN_V2_72H. Повторный reset такой истории
+запрещён и новым, и generic legacy discard режимом. Старые working files удаляются
+только по исходным identity checks после всех обязательных post-checks; backups,
+experiments, другие проекты и TA/Paper не затрагиваются. Private recovery остаётся.
+При неуспехе применяется существующий recovery flow; failed post-check не разрешает
+удаление прежних working files. Windows tests не заменяют Linux installer/image
+checks и runtime delivery evidence.
+
+Ниже сохранены исторические D22 процедуры и compatibility paths; они не заменяют
+новую policy и не разрешают повторный reset валидной light history.
+
 ## Основание и границы
 
 Поручение владельца2026-10-16 разрешает удалить старую тестовую рыночную историю CryptoWatcher после исправлений и проверок. Это EXPLICITLY_GATED операция, не startup migration. Старый full-history conversion отменен. Правила хранения заданы в [D22](../product_scope.md#d22--новое-накопление-и-bounded-retention-2026-10-16).

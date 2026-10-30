@@ -10,6 +10,50 @@ from pathlib import Path
 OWNER = "233382575"
 
 
+LIGHT_TRANSITION_FIXTURE = """
+import json
+from contextlib import closing
+from pathlib import Path
+from cryptowatcher.storage import Store, StateError, encode
+from cryptowatcher.reset_history import LIGHT_POLICY, prepare, private_state, verify_private
+owner=233382575
+source=Path('/data/light-legacy.db')
+with closing(Store(Path('/data/fresh.db'),owner,readonly=True)) as original:
+    original.backup(source)
+with closing(Store(source,owner)) as legacy:
+    payload=legacy.snapshot().settings.payload()
+    payload['candle_retention_days']=35
+    payload.pop('active_detectors')
+    with legacy.db:
+        legacy.db.execute('UPDATE owner_settings SET settings_json=?',(encode(payload),))
+    generation=legacy.get_runtime('history_generation')['id']
+    preserved=private_state(legacy)
+recovery=Path('/data/light-private.json')
+candidate=Path('/data/light-fresh.db')
+proof=prepare(source,candidate,recovery,owner,expected_generation=generation,
+              discard_test_history=True,light_radar_transition=True)
+assert proof['state']=='PASS' and proof['private_restore']=='PASS'
+assert set(proof['configuration_changes'])=={'candle_retention_days','active_detectors'}
+assert json.loads(recovery.read_bytes())==preserved
+assert verify_private(candidate,recovery,owner)['state']=='PASS'
+with closing(Store(candidate,owner,readonly=True)) as current:
+    assert current.snapshot().settings.candle_retention_days==3
+    assert len(current.snapshot().settings.active_detectors)==5
+    assert current.snapshot().settings.price_move_min==7 and not current.enabled()
+    assert current.get_runtime('history_generation')['model']==LIGHT_POLICY
+    generation=current.get_runtime('history_generation')['id']
+try:
+    prepare(candidate,Path('/data/light-repeat.db'),Path('/data/light-repeat.json'),
+            owner,expected_generation=generation,discard_test_history=True)
+except StateError:
+    pass
+else:
+    raise AssertionError('Valid light history reset was not rejected')
+assert not Path('/data/light-repeat.db').exists()
+print(json.dumps({'state':'PASS','model':LIGHT_POLICY}))
+"""
+
+
 def run(
     image: str,
     directory: Path,
@@ -498,6 +542,8 @@ s.close()
         )["backup"]
         assert disk["phase"] == "COMPLETE" and disk["validation_mode"] == "DISK_STREAMING"
         assert disk["bytes"] > 0 and len(disk["sha256"]) == 64
+        light = json.loads(run(args.image, directory, "-B", "-c", LIGHT_TRANSITION_FIXTURE))
+        assert light == {"state": "PASS", "model": "EPISODE_ORIGIN_V2_72H"}
         # Execute the same canonical fixture with the actual product SQLite/codecs.
         # Only this disposable source file is mounted; no production data or APIs.
         (directory / "measure.py").write_bytes(
