@@ -62,6 +62,8 @@ Goal1 fixes F26,F49–F56 и кодовая частьF22/F38, использо�
 
 | T-LEG01 | Self-review: untagged v1 сохраняет собственную reference/method, new EP требуетявныйorigin; metadata-only bootstrap не создаёт старые per-candle jobs. Already-admitted v1 обслуживается прежней declared definition; numeric calculate AST равенb254e6e (SHA8af4425c…). Unknown definition→INVALID_SOURCE без relabel; missing/unknown admission fail-closed.105compatibility/profile tests PASS8.58s+1native skip;62focused final cases PASS7.10s+1skip;quality PASS | Legacy cohort fixtures теперь явноmethod1; current unique-episode path проверяется отдельными new-unit fixtures. Linux/native и full requiredPR пока pending |
 
+| T-REV01 | Final local review/profile:100analytics-recovery/async/activation/Telegram/episode scenarios PASS; единственный failure — прежнее expectation30GB для отсутствующего budget, исправлено на согласованный35GB и повторено отдельно. Freshorigin/main b254 unchanged; open draftPR57 сохранён, protections ci-required strict/admins, approvals0/conversation resolution | Это не primaryLinuxCI. Initialpush/единственныйGoal1PR ещё предстоят; бюджет/observation/VPS не изменялись |
+
 
 Proof archive: локальный light-radar-20261030, включая F26-release-metadata/F26-lock-trust-check/F26-tests-01 и policy-storage-next/policy-boundary/policy-installer/quality-policy records и light-replay-comparison.json. Обе CLI replayDB и extracted main source/ZIP удалены после сохранения hashes/harness; освобождено12,809,356bytes. Остальные owned pytest temp/cache dirs пока ожидают финальную очистку. Новые schedules/платные операции не создавались.
 
