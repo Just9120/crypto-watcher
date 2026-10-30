@@ -17,7 +17,7 @@ import httpx
 
 from .agent_contract import envelope
 from .events import PREFIX, History, identity
-from .storage import StateError, Store, encode, json_payload
+from .storage import StateError, Store, encode
 
 
 @dataclass(frozen=True)
@@ -155,15 +155,13 @@ class AgentDelivery:
         event = self.history.get("event-head:" + event_id)
         if event is None:
             raise ValueError("Unknown event identity")
-        start = PREFIX + "outcome-head:"
-        outcomes = [
-            self.history.resolve(row[0][len(PREFIX) :], json_payload(row[1]))
-            for row in self.store.db.execute(
-                "SELECT key,payload_json FROM runtime WHERE key>=? AND key<? "
-                "AND json_extract(cw_record_json(payload_json),'$.event_id')=? ORDER BY key LIMIT 32",
-                (start, start + "~", event_id),
-            )
-        ]
+        from .outcomes import episode_results
+
+        origin, _, outcomes = episode_results(self.history, event)
+        if origin is None:
+            raise ValueError("Episode origin detail is unavailable")
+        event = origin
+        outcomes = [value for value in outcomes if value is not None]
         with self.store.db:
             self._intent(
                 self.history.get("episode-head:" + event["episode_id"]),

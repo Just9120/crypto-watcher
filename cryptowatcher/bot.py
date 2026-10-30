@@ -478,7 +478,7 @@ class Controller:
                 update,
                 "Сроки оценки результата, минут: "
                 + ", ".join(map(str, self.store.snapshot().settings.outcome_horizons))
-                + "\nИзменение применяется только к новым событиям; исходная цена, время и настройки прежних событий сохраняются.",
+                + "\nИзменение применяется только к новым эпизодам; исходная цена, время и настройки прежних эпизодов сохраняются.",
             )
         elif command == "outcomes":
             if raw:
@@ -493,18 +493,15 @@ class Controller:
                 await self.send(update, self.history_notice() + "История пока пуста или событие не найдено.")
             else:
                 for event in events:
-                    from .config import OwnerSettings
-                    from .events import identity
-                    from .outcomes import METHOD
+                    from .outcomes import episode_results
 
-                    horizons = OwnerSettings.from_payload(event["settings_snapshot"]).outcome_horizons
-                    outcomes = [
-                        self.history.get(
-                            "outcome-head:" + identity(f"outcome/{event['event_id']}/{h}/{METHOD}")
-                        )
-                        for h in horizons
-                    ]
-                    await self.send(update, outcome_text(event, outcomes, horizons), event_keyboard(event))
+                    origin, horizons, outcomes = episode_results(self.history, event)
+                    body = (
+                        outcome_text(origin, outcomes, horizons)
+                        if origin is not None
+                        else "Исходные подробности episode уже недоступны в сроке хранения."
+                    )
+                    await self.send(update, body, event_keyboard(event))
         elif command == "enrichment":
             if raw:
                 if raw.lower() not in ("on", "off"):

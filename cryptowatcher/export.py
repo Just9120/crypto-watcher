@@ -85,6 +85,8 @@ def ndjson(store: Store, selection: Selection) -> Iterator[str]:
                     "type": "manifest",
                     "snapshot_at_ms": int(time.time() * 1000),
                     "selected_events": total,
+                    "outcome_units_by_method": {"1": "EVENT_REFERENCE", "2": "EPISODE_ORIGIN"},
+                    "episode_origin_included": True,
                     "filters": selection.__dict__,
                     "period": "[start,end)",
                     "transport_state_included": False,
@@ -104,7 +106,7 @@ def ndjson(store: Store, selection: Selection) -> Iterator[str]:
         relations = {
             "event": "json_extract(cw_record_json(r.payload_json),'$.event_id') IN (SELECT json_extract(cw_record_json(payload_json),'$.event_id') FROM selected)",
             "episode": "json_extract(cw_record_json(r.payload_json),'$.episode_id') IN (SELECT json_extract(cw_record_json(payload_json),'$.episode_id') FROM selected)",
-            "outcome": "json_extract(cw_record_json(r.payload_json),'$.event_id') IN (SELECT json_extract(cw_record_json(payload_json),'$.event_id') FROM selected)",
+            "outcome": "(json_extract(cw_record_json(r.payload_json),'$.event_id') IN (SELECT json_extract(cw_record_json(payload_json),'$.event_id') FROM selected) OR json_extract(cw_record_json(r.payload_json),'$.episode_id') IN (SELECT json_extract(cw_record_json(payload_json),'$.episode_id') FROM selected))",
             "comparison": "json_extract(cw_record_json(r.payload_json),'$.event_id') IN (SELECT json_extract(cw_record_json(payload_json),'$.event_id') FROM selected)",
         }
         for kind, relation in relations.items():
@@ -120,6 +122,13 @@ def ndjson(store: Store, selection: Selection) -> Iterator[str]:
             )
             for row in paged(rows):
                 record = history.resolve(row[0][len(PREFIX) :], json_payload(row[1]))
+                if kind == "episode" and record.get("origin_event_id"):
+                    # Export the causal reference too when a filter selects a later confirmation.
+                    # This is a projection only; storage keeps the shared immutable reference.
+                    record = {
+                        **record,
+                        "outcome_origin": history.get(f"event:{record['origin_event_id']}:0000000001"),
+                    }
                 counts[kind] = counts.get(kind, 0) + 1
                 yield encode({"schema": SCHEMA, "type": kind, "record": record}) + "\n"
         # Historical settings are frozen in every selected revision; export them independently too.

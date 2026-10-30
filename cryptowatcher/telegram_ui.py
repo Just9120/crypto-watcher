@@ -72,9 +72,7 @@ class ControlDeck:
     async def show_event(
         self, update: Update, event_id: str, token: str = "", *, result: bool = False
     ) -> None:
-        from .config import OwnerSettings
-        from .events import identity
-        from .outcomes import METHOD
+        from .outcomes import episode_results
         from .render import event_keyboard, event_text, outcome_text
 
         try:
@@ -93,12 +91,12 @@ class ControlDeck:
             )
             return
         if result:
-            horizons = OwnerSettings.from_payload(event["settings_snapshot"]).outcome_horizons
-            outcomes = [
-                self.c.history.get("outcome-head:" + identity(f"outcome/{event_id}/{h}/{METHOD}"))
-                for h in horizons
-            ]
-            body = outcome_text(event, outcomes, horizons)
+            origin, horizons, outcomes = episode_results(self.c.history, event)
+            body = (
+                outcome_text(origin, outcomes, horizons)
+                if origin is not None
+                else "Исходные подробности episode уже недоступны в сроке хранения."
+            )
         else:
             body = (
                 event_text(event, int(time.time() * 1000))

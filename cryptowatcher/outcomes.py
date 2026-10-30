@@ -184,6 +184,37 @@ def pending_key(due: int, outcome_id: str) -> str:
     return f"outcome-pending:{len(value):04d}:{value}:{outcome_id}"
 
 
+def episode_origin(history: History, event: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the frozen first observation, never today's settings or a later update."""
+    episode = history.get("episode-head:" + event["episode_id"])
+    if not episode or "origin_event_id" not in episode:
+        return event  # Retained v1 data had a separate reference for each event.
+    return history.get(f"event:{episode['origin_event_id']}:0000000001")
+
+
+def episode_results(
+    history: History, event: dict[str, Any]
+) -> tuple[dict[str, Any] | None, tuple[int, ...], list[Any]]:
+    """Small point lookups only; all updates read the original frozen horizon set."""
+    from .catalogue_sql import read_snapshot
+
+    with read_snapshot(history.store):
+        origin = episode_origin(history, event)
+        if origin is None:
+            return None, (), []
+        horizons = OwnerSettings.from_payload(origin["settings_snapshot"]).outcome_horizons
+        results = []
+        for horizon in horizons:
+            result = history.get(
+                "outcome-head:" + identity(f"outcome/{origin['episode_id']}/{horizon}/{METHOD}")
+            )
+            if result is None:
+                # Original method1 used event identity. Keep old immutable results readable.
+                result = history.get("outcome-head:" + identity(f"outcome/{origin['event_id']}/{horizon}/1"))
+            results.append(result)
+        return origin, horizons, results
+
+
 class OutcomeWorker:
     def __init__(
         self,
@@ -393,6 +424,7 @@ class OutcomeWorker:
             schema="cryptowatcher.outcome.v1",
             outcome_id=job["outcome_id"],
             event_id=job["event_id"],
+            episode_id=event["episode_id"],
             event_revision=job["event_revision"],
             horizon_min=job["horizon_min"],
             methodology_version=job.get("methodology_version", "1"),
