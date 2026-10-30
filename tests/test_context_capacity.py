@@ -83,8 +83,10 @@ def test_latest_selector_has_only_one_old_predecessor_per_kind_after_retention(s
     days, originals = prepare(store, cold=cold, gap=gap)
     expire(store)
     retained = remaining(store)
-    raw_days = {day for day in days if day > 45}
-    expected_days = raw_days | ({20} if gap else set())
+    settings = store.snapshot().settings
+    raw_days = {day for day in days if day > 80 - settings.candle_retention_days}
+    used_days = {day for day in days if day >= 80 - settings.detail_retention_days}
+    expected_days = raw_days | used_days | ({20} if gap else set())
     for kind in KINDS:
         assert set(retained[kind]) == {START + day * DAY for day in expected_days}
         assert len([at for at in retained[kind] if at <= START + 45 * DAY]) == int(gap)
@@ -169,7 +171,13 @@ def test_normal_comparison_keeps_historical_context_beyond_raw35_days(store, col
         for row in measured["forecast"]
         if row["category"] in ("context", "context_bodies", "context_integrity", "context_tiles")
     ]
-    assert context_rows and all(row["retention_days_for_estimate"] == 58 for row in context_rows)
-    assert measured["context_dependency_retention_estimate"]["days_for_estimate"] == 58
+    estimate = measured["context_dependency_retention_estimate"]
+    assert estimate["comparator_prior_days"] == 0
+    assert estimate["days_for_estimate"] == 30
+    assert estimate["used_inputs"]["share"] == pytest.approx(0.5)
+    assert estimate["effective_days_for_estimate"] == pytest.approx(16.5)
+    assert context_rows and all(
+        row["retention_days_for_estimate"] == pytest.approx(16.5) for row in context_rows
+    )
     assert measured["context_dependency_retention_estimate"]["limitations"]
     assert not store.db.execute("PRAGMA foreign_key_check").fetchall()

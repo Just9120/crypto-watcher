@@ -1,7 +1,7 @@
 import json
 from contextlib import closing
 from copy import deepcopy
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 import pytest
 
@@ -303,13 +303,21 @@ def test_cold_result_expiry_does_not_extend_detail_retention_or_shorten_candle_r
     store.clock_ms = lambda: deadline - 1
     retention.work(deadline - 1, batch=100)
     assert history.items("outcome-head:") == before
+    assert read(store.db, "spot/BTCUSDT/1m", NOW, NOW + 5 * MINUTE) == [asdict(c) for c in future()]
+    shift = 29 * 86400000
+    recent = [
+        replace(c, start=c.start + shift, received_ms=c.received_ms + shift, server_ms=c.server_ms + shift)
+        for c in future()
+    ]
+    Sources(store).put("spot/BTCUSDT/1m", recent, recovery=True)
     store.clock_ms = lambda: deadline + 1
     for _ in range(40):
         retention.work(deadline + 1, batch=100)
         if history.count("event-head:") == 0:
             break
     assert history.count("event-head:") == history.count("outcome-head:") == 0
-    assert read(store.db, "spot/BTCUSDT/1m", NOW, NOW + 5 * MINUTE) == [asdict(c) for c in future()]
+    assert read(store.db, "spot/BTCUSDT/1m", NOW, NOW + 5 * MINUTE) == []
+    assert read(store.db, "spot/BTCUSDT/1m", recent[0].start, recent[-1].end) == [asdict(c) for c in recent]
     assert store.db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     assert not store.db.execute("PRAGMA foreign_key_check").fetchall()
 

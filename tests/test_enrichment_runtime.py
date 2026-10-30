@@ -256,6 +256,13 @@ def test_explicit_recompare_keeps_old_revision_and_original_event_settings(store
     h = History(store)
     event = h.events(10)[0]
     comparator = ComparisonWorker(store)
+    # Reproduce an already-admitted legacy job without restoring runtime admission.
+    with store.db:
+        h.put(
+            "comparison-job:" + event["event_id"],
+            {"event_id": event["event_id"], "event_revision": event["revision"], "pending_key": ""},
+        )
+    assert comparator.requeue(event["event_id"], NOW) == "PENDING"
     while h.count("comparison-pending:"):
         comparator.work(NOW)
     key = identity(f"comparison/{event['event_id']}/1")

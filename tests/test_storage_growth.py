@@ -28,6 +28,7 @@ from cryptowatcher.sources import Candle, Sources
 from cryptowatcher.storage import Store, encode
 from cryptowatcher.storage_repack import work
 
+from .test_bounded_storage import legacy_method  # noqa: F401
 from .test_outcomes import DAY, MINUTE, NOW, future, observe
 
 
@@ -245,6 +246,7 @@ def test_forecast_does_not_turn_balanced_queue_churn_into_thirty_day_growth(stor
         assert row["net_bytes_per_day_excluding_repack"] == 0
 
 
+@pytest.mark.usefixtures("legacy_method")
 def test_legacy_quality_rows_normalize_without_changing_exports_or_twelve_month_expiry(store, monkeypatch):
     from cryptowatcher.export import Selection, ndjson
     from cryptowatcher.market_storage import encoded

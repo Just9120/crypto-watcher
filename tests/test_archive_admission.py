@@ -20,9 +20,12 @@ from cryptowatcher.outcomes import DEFINITION
 from cryptowatcher.storage import Store, encode, json_payload
 from cryptowatcher.storage_lifecycle import BoundedRetention
 from cryptowatcher.storage_repack import work
-from tests.test_bounded_storage import bounded
+from tests.test_bounded_storage import bounded, legacy_method  # noqa: F401
 from tests.test_catalogue_repack import complete
 from tests.test_outcomes import DAY, MINUTE, NOW, OutcomeWorker, observe
+
+# Frozen v1 storage qualification; current EPISODE summaries have separate coverage.
+pytestmark = pytest.mark.usefixtures("legacy_method")
 
 
 def prepare(store, count=12, *, collision=False, future=False, wide=False):
