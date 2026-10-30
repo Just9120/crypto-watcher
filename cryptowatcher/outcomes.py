@@ -15,10 +15,10 @@ from .storage import StateError, Store, encode, json_payload
 
 MINUTE = 60_000
 DAY = 86_400_000
-METHOD = "1"
+METHOD = "2"
 DEFINITION = {
     "version": METHOD,
-    "reference": "immutable event observation time and reference close",
+    "reference": "immutable first episode observation time and reference close",
     "window": "complete subsequent closed 1m candles; exact horizon end",
     "return": "100*(target_close/reference_price-1)",
     "directed_return": "return*direction_sign; neutral has no directed labels",
@@ -205,12 +205,15 @@ class OutcomeWorker:
 
     def admit(self, event: dict[str, Any]) -> None:
         """Called inside the event producer's or initial-admission transaction."""
+        episode = self.history.get("episode-head:" + event["episode_id"])
+        if episode and episode.get("origin_event_id", event["event_id"]) != event["event_id"]:
+            return
         settings = OwnerSettings.from_payload(event["settings_snapshot"])
         native = f"{event['market_type']}/{event['symbol']}/{event['timeframe']}"
         stream = native.rsplit("/", 1)[0] + "/1m"
         protect(self.history, native, event["source_inputs"])
         for horizon in settings.outcome_horizons:
-            outcome_id = identity(f"outcome/{event['event_id']}/{horizon}/{METHOD}")
+            outcome_id = identity(f"outcome/{event['episode_id']}/{horizon}/{METHOD}")
             key = "outcome-job:" + outcome_id
             if self.history.get(key) is not None or (
                 self.store.bounded
@@ -239,51 +242,6 @@ class OutcomeWorker:
             arrival(self.store, "outcome")
             self.history.put(pending, {"outcome_id": outcome_id})
             self.history.put(hold, {"start": event["reference_time_ms"], "end": due})
-        comparison = "comparison-job:" + event["event_id"]
-        from .analytics import COMPARATOR_VERSION
-
-        comparison_id = identity(f"comparison/{event['event_id']}/{COMPARATOR_VERSION}")
-        if self.history.get(comparison) is None and not (
-            self.store.bounded
-            and self.history.get("comparison-head:" + comparison_id, {}).get("state")
-            in ("COMPLETE", "COMPLETE_LIMITED")
-        ):
-            comparison_pending = pending_key(event["available_at_ms"], event["event_id"]).replace(
-                "outcome-pending:", "comparison-pending:", 1
-            )
-            self.history.put(
-                comparison,
-                {
-                    "event_id": event["event_id"],
-                    "event_revision": event["revision"],
-                    "state": "PENDING",
-                    "methodology_version": COMPARATOR_VERSION,
-                    "pending_key": comparison_pending,
-                    "next_attempt_ms": event["available_at_ms"],
-                    "due_ms": event["available_at_ms"],
-                },
-            )
-            self.history.put(comparison_pending, {"event_id": event["event_id"]})
-            from .queue_health import arrival
-
-            arrival(self.store, "comparison")
-            lookback = max(
-                16,
-                int(max(v for k, v in event["effective_parameters"].items() if k.endswith("lookback"))) + 2,
-            )
-            for held_stream in (native, stream):
-                self.history.put(
-                    f"hold:{held_stream}:comparison:{event['event_id']}",
-                    {
-                        "start": max(
-                            0,
-                            event["reference_time_ms"]
-                            - 28 * DAY
-                            - lookback * int(event["timeframe"][:-1]) * MINUTE,
-                        ),
-                        "end": event["reference_time_ms"],
-                    },
-                )
 
     def bootstrap(self, batch: int = 20) -> None:
         admission = self.history.get("outcome-admission", {"cursor": "", "complete": False})

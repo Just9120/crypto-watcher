@@ -353,6 +353,13 @@ class History:
             and any(value[k] != head[k] for k in ("reference_price", "reference_time_ms"))
         ):
             raise StateError("Event outcome reference is immutable")
+        if kind == "episode" and head:
+            previous_episode = self.get(f"episode-head:{key}")
+            if any(
+                field in previous_episode and value.get(field) != previous_episode[field]
+                for field in ("origin_event_id", "reference_price", "reference_time_ms")
+            ):
+                raise StateError("Episode outcome reference is immutable")
         direct = False
         if existing is None:
             if self.store.bounded and kind == "event" and value["revision"] == 1:
@@ -473,7 +480,10 @@ class EventEngine:
         for key, binding in self.history.items(prefix):
             episode = self.history.get("episode-head:" + binding["episode_id"])
             max_life = now_ms - episode["started_ms"] >= 3_600_000
-            inactive = now_ms - episode["last_observation_ms"] >= 2 * episode["longest_tf_ms"]
+            inactive = (
+                now_ms - binding.get("last_observation_ms", episode["last_observation_ms"])
+                >= 2 * episode["longest_tf_ms"]
+            )
             if not (max_life or inactive):
                 continue
             episode.update(
@@ -590,13 +600,6 @@ class EventEngine:
                     )
                     if self.history.get("event-head:" + event_id):
                         continue
-                    if context_provider is not None:
-                        # A callback without a new event has no context to save.
-                        # Resolve once in this same synchronous transaction/cutoff;
-                        # all new families keep the same complete snapshots.
-                        with exposed_conditions(self.history):
-                            source_context, enrichment = context_provider()
-                        context_provider = None
                     is_live = live and ordered and timely
                     active_key = f"active:{instrument}/{direction}"
                     suppressed = is_live and runtime["blocked"]
@@ -608,6 +611,34 @@ class EventEngine:
                         reason = "historical_observation"
                     else:
                         reason = "live_observation"
+                    if episode is not None and binding is not None:
+                        # Liveness is mutable stream state, not a research revision.
+                        self.history.put(
+                            active_key,
+                            {
+                                "episode_id": episode["episode_id"],
+                                "last_observation_ms": max(
+                                    binding.get("last_observation_ms", episode["last_observation_ms"]),
+                                    current.end,
+                                ),
+                            },
+                        )
+                        previous = episode["confirmations"].get(f"{family}/{tf}")
+                        same_parameters = previous and previous["settings_revision"] == snapshot.revision
+                        if previous and not same_parameters:
+                            prior_event = self.history.get(
+                                f"event:{previous['event_id']}:{previous['revision']:010d}"
+                            )
+                            same_parameters = prior_event["effective_parameters"] == effective_parameters(
+                                snapshot.settings, instrument
+                            )
+                        if previous and same_parameters and result.strength < episode["strength"] * 1.5:
+                            continue
+                    if context_provider is not None:
+                        # Only meaningful updates freeze context and admit downstream work.
+                        with exposed_conditions(self.history):
+                            source_context, enrichment = context_provider()
+                        context_provider = None
                     if episode is None:
                         episode_id = identity(f"episode/{event_id}")
                         episode = {
@@ -621,6 +652,9 @@ class EventEngine:
                             if suppressed
                             else "HISTORICAL",
                             "started_ms": current.end,
+                            "origin_event_id": event_id,
+                            "reference_time_ms": current.end,
+                            "reference_price": current.close,
                             "last_observation_ms": current.end,
                             "longest_tf_ms": current.step,
                             "strength": 0.0,
@@ -690,8 +724,8 @@ class EventEngine:
                         "detection_ms": now_ms,
                         "receipt_ms": current.received_ms,
                         "available_at_ms": now_ms,
-                        "reference_price": current.close,
-                        "reference_time_ms": current.end,
+                        "reference_price": episode.get("reference_price", current.close),
+                        "reference_time_ms": episode.get("reference_time_ms", current.end),
                         "freshness_policy_version": "1",
                         "fresh_until_ms": current.end + multiplier * current.step,
                         "expires_at_ms": current.end + 2 * multiplier * current.step,
