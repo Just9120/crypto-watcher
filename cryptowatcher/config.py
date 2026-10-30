@@ -73,6 +73,7 @@ class OwnerSettings:
     sma_periods: int = 12
     profile: str = "custom"
     detector_parameters: tuple[tuple[str, float], ...] = ()
+    active_detectors: tuple[str, ...] = FAMILIES
     alert_detectors: tuple[str, ...] = ("composite",)
     outcome_horizons: tuple[int, ...] = (5, 15, 30, 60)
     digest_interval_min: int = 60
@@ -136,12 +137,14 @@ class OwnerSettings:
             raise ConfigError(str(exc)) from exc
         if self.profile != "custom" and dict(self.detector_parameters) != dict(preset(self.profile)):
             raise ConfigError("Profile parameters do not match preset")
-        if (
-            not isinstance(self.alert_detectors, tuple)
-            or any(not isinstance(x, str) or x not in FAMILIES for x in self.alert_detectors)
-            or len(set(self.alert_detectors)) != len(self.alert_detectors)
-        ):
-            raise ConfigError("Invalid alert_detectors")
+        for key in ("active_detectors", "alert_detectors"):
+            selection = getattr(self, key)
+            if (
+                not isinstance(selection, tuple)
+                or any(not isinstance(x, str) or x not in FAMILIES for x in selection)
+                or len(set(selection)) != len(selection)
+            ):
+                raise ConfigError("Invalid " + key)
         if (
             not isinstance(self.outcome_horizons, tuple)
             or not self.outcome_horizons
@@ -167,7 +170,7 @@ class OwnerSettings:
         if set(values) - set(fields):
             raise ConfigError("Unknown owner settings field")
         parsed = dict(values)
-        for key in ("custom_pairs", "watchlist", "alert_detectors", "outcome_horizons"):
+        for key in ("custom_pairs", "watchlist", "active_detectors", "alert_detectors", "outcome_horizons"):
             if key in parsed:
                 if not isinstance(parsed[key], (list, tuple)):
                     raise ConfigError(f"Invalid {key}")

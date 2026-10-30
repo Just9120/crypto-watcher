@@ -525,7 +525,7 @@ class EventEngine:
         market, symbol, tf = stream.split("/")
         instrument = f"{market}/{symbol}"
         outputs: list[tuple[str, Detection | Exception]] = []
-        for family in FAMILIES:
+        for family in snapshot.settings.active_detectors:
             try:
                 outputs.append(
                     (family, self.detector(family, candles, snapshot.settings, instrument, liquidity))

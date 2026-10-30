@@ -1,14 +1,46 @@
 # CryptoWatcher — delivery plan
 
-## Current Goal и текущее поручение
+## Current Goal и утверждённая последовательность
 
-**CAPACITY25 — CANCELLED владельцем 30Oct2026.** Не возобновлять её автоматически. Встроенная Goal отсутствует (get_goal=null); новая Goal не активирована. Дальнейшую implementation Goal выбирает владелец.
+**LIGHT-RADAR — ACTIVE, Goal 1**, явно поручена владельцем30Oct2026 после выхода из Plan Mode. Отменённую CAPACITY25 не возобновлять. После DoD Goal1 последовательно выполнить Goal2 — Telegram visual/остаточные findings/backup и30min/24h приёмка. Встроенная Goal1 активирована; одновременно Goal2 не активировать.
 
-Текущее поручение — полный AUDIT обновлённых требований через project-workflow. Разрешены root instructions, актуализация существующих spec/plan, изолированные local checks и ограниченный read-only VPS/Grafana snapshot, локальный commit. Runtime исправления/поставка/reset/очистка/нагрузка/schedules/push/PR/merge не входят. Telegram функциональность входит; visual/layout исключены.
+Baseline origin/main b254e6e1851dc5662cfcd1156ef13aec31d2e2a8; ветка codex/light-radar-20261030, checkout .cache-g1/git-recovery-20261024. Main/remote/protections/PR/worktrees проверены30Oct: strict ci-required/admins, required approvals0, ранее открытый draftPR57 сохранён. Audit commits dab39e3/6227a5d перенесены как d759311/fd48355 без отдельного docs PR. Прежняя двух-writer ветка ae270373 и материалы аудита внеGit сохранены.
 
-Baseline: fresh origin/main b254e6e1851dc5662cfcd1156ef13aec31d2e2a8; основной код/runtime проверены по этой revision. Ветка аудита codex/audit-requirements-20261030, base b254e6e1851dc5662cfcd1156ef13aec31d2e2a8, checkout .cache-g1/git-recovery-20261024. Прежняя codex/capacity25-writer-service-20261025 ae27037382665bca0eccc0c8f787e84daa9a95a4 сохранена:110files,+19317/−664, не учтена в готовности main. До первого изменения Git/GitHub/worktrees/protections проверены; unrelated state сохранён.
+### Scope/AC и DoD Goal1
 
-Новые root instructions29Oct приняты byte-for-byte локальным commit dab39e3. Spec/plan консолидированы по S12–S16/D29: стабильные IDs/источники/прошлые findings сохранены, многошаговый дневник отменённой Goal не наращивается. Исходные research/checkpoint материалы доступны в истории Git и локальном audit-20261030/sources/baseline-open_issues.md вне Git. Ни один незакрытый finding не удалён по отсутствию в новом отчёте.
+18 исходно неготовыхAC:04-06,05-02,06-01/02/05,07-04/06,08-01/04,09-02/06,11-01,12-04/05,13-02/03/04/06. Кодовая часть13-06 входит вGoal1; полная эксплуатационная приёмка остаётсяGoal2. Сохраняются50READYинвариантов прошлого snapshot; проценты во время реализации не пересчитывать.
+
+Результат: independent persisted active_detectors (migration all5; Telegram families отдельно), meaningful episode updates, immutable first origin и один outcome set, uniqueN/digest/aggregates, отсутствиеautomaticN20,72h/30d/12m/finite dependencies, compatible v2/commands/callbacks/export, безопасные dependencies и full no-CD profile. Один основной PR, required checks/review, merge/CD, exact-target discard прежней тестовой market history без архива/конвертации; private/settings/watchlist/credentials/infra иTA/Paper сохранены. Failed post-check — штатный rollback, не продвижение дальше.
+
+Non-goals Goal1: visual polish (Goal2), receiver activation/стратегии/LLM/execution, полный перенос двух writer, новые external schedules, изменения соседних проектов/VPS expansion. Старые archives и уникальные experiments удалять только согласованным точным списком. Working≤35GB и отдельный physical peak обязательны, CPU throttling не заменяет обработку.
+
+### Validation Plan LIGHT-RADAR
+
+| Риск/этап | Проверка/ожидание | Команда/среда | Gate |
+| --- | --- | --- | --- |
+| Settings/activation | Roundtrip/defaultmigration/CAS/invalid/disabled0history/jobs; delivery mute независимо | Existing config/storage/events/bot tests + существенные regressions; isolated Windows tempDB | REQUIRED local |
+| Full processing | Оба рынка/4TF/5families, одинаковый offered→saved→episode→due→delivery ledger, immutable origin/math/retry/expiry/causality | Minimal complete controlled replay locally; real wall/CPU отдельно от accelerated retention clock | REQUIRED before initial push |
+| Retention/stats | 72h/30d/12month boundaries, used-input ownership/terminal cleanup, uniqueN по overlapping groups, exact export | Profiled existing outcomes/analytics/export/lifecycle fixtures | REQUIRED local/CI |
+| Code quality | Docs/Ruff/format/mypy, targeted tests | Python scripts/checks.py quality изroot; temporary local caches | REQUIRED local |
+| Linux/native/image | Current required CI, source-pinned native/security/recovery/image/qualification | Existing PR CI и trusted release наточнойrevision; Windows неLinux | REQUIRED premerge/CD |
+| Contracts/security | Owner negativeaccess/CAS/corruptstate/HMAC/strictACK/frozen retry/legacycallback/secret hygiene | Existing contract/delivery/release suites, no Codex Security calls | REQUIRED |
+| Delivery/transition | Exactsource/image/health/private equality/freshdata/newgeneration/no-oldalerts/TA untouched, reserve/rollback | Current delivery/reset runbooks through contabo-vps; fresh preflight | REQUIRED postmerge |
+| Server probes |1CPU/4GiB/450CPUs/510wall/600outer,35%idle start/15%stop; physical peak before operation | Only bounded isolated project-owned scenario; coreLinux validation viaCI | REQUIRED if applicable |
+| Final capacity/visual | Fresh screenshots, representative largebackup,30min/24h unchanged | Goal2, existingobserver; no cron/automations | PENDING Goal2 |
+
+### Findings и порядок
+
+Goal1 fixes F26,F49–F56 и кодовая частьF22/F38, использованные F24/F31; Goal2 завершаетF22/F34/F38/F42, F24/F31/F32, все visualUX и связанныеCAP25/CWSEC dispositions. Все прежниеfindingIDs/решения ниже сохранены. Не закрывать finding общим зелёнымCI или переносомвDEFER.
+
+Сначала новый минимальный полный путь наоднойSQLite; затем остальныеfunctional сценарии, UI routing/contracts и прогноз; локальныеchecks/self-review, одинinitialpush/PR, requiredCI, merge/CD иразовыйпереход. Переноситьстаруютестовуюhistory не нужно. Если после новоймодели иодногообоснованногоисправления fullpath всёещёнеуспевает — показатьготовыйкод/измерения/варианты без новойбесконечнойцепочкиоптимизаций.
+
+### Текущий implementation checkpoint
+
+Реализовано полностью0/18AC; foundationF49 проверен: persisted active_detectors отдельно от alert_detectors, legacy default all5, validation/roundtrip/reopen/CASrevision, engine вычисляет только activefamilies.64tests config/events/activation PASS1.84s (Windows3.12/mock/tempDB), canonical quality PASS docs/Ruff/format325/mypy132. Tests охватывают оба рынка/4TF, disabled0events/0jobs и enabled сmute. Полный F49 ещё IN_PROGRESS: нужны UI/liveapply и lifecycle уже существующих confirmations. Источники requirements/project/template revisions повторно подтверждены неизменными при planning30Oct; повторного аудита нет.
+
+Следующий шаг: coherent meaningful admission перед context capture/eventwrite; сохранить реальную активность episode без новой immutable revision на каждой свече, firstorigin/outcomeidentity и отсутствие silent suppressed/historical per-bar research. Потом совместимый v2/digest/cohorts/retention; не менять только одну операцию ради microbenchmark. Current production/default35d/N20 пока не менялись; код промежуточный, initialpush/PR/CD отсутствуют. Полный минимальный сценарий поступления/наступивших расчётов/доставки ещё PENDING;64PASS не объявляются доказательством новойepisode модели.
+
+Следующая Goal2 после DoDGoal1: свежий visual ProductDesign audit всех Telegram разделов/состояний, исправленияF32/UX; F24 caller/artefact disposition иF31 hardening/resource proof; многогигабайтныеbackup/restore и physicalpeak; финальные30min/24h неизменныхsource/settings/generation сdue-only очередями. Один основнойPR. Новая валиднаяhistory повторно не сбрасывается. Новыеbackup: latest2verified, retireпослеreplacementverify; releases current+previousgood; rehearsalsremoveпослеproof/reproduciblefixture; failedcapturesнеумножать. Старые уникальныеarchives — отдельный exactlist на позднее согласование. Не создаватьcron/automations/schedules, не вызыватьCodexSecurity, не трогатьсоседей/ресурсыVPS. Каждыйпредыдущийfinding сохраняетID, префиксDEFER сам по себе не закрытие.
 
 ## Последний полный аудит 30Oct2026
 
