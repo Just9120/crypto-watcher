@@ -237,12 +237,18 @@ def admit_value(
     db: sqlite3.Connection, sid: int, start: int, needed_until: int, expiry: int, value: bytes
 ) -> tuple[int, int, int]:
     """Insert one already validated value; source admission owns validation."""
+    from .storage import encode
+    from .storage_meter import record_source
+
+    weight = len(encode(decoded(value)).encode())
     previous = db.execute(
         "SELECT revision,payload,needed_until FROM market_candles WHERE stream=? AND start=? ORDER BY revision DESC",
         (sid, start),
     ).fetchall()
     for row in previous:
         if bytes(row[1]) == value:
+            if needed_until and not row[2]:
+                record_source(db, "candles", 0, weight)
             if needed_until > row[2]:
                 db.execute(
                     "UPDATE market_candles SET needed_until=?,purge_after=max(purge_after,?) WHERE stream=? AND start=? AND revision=?",
@@ -254,6 +260,7 @@ def admit_value(
         "INSERT INTO market_candles VALUES (?,?,?,?,?,?)",
         (sid, start, revision, value, needed_until, expiry),
     )
+    record_source(db, "candles", weight, weight if needed_until else 0)
     return sid, start, revision
 
 
@@ -429,6 +436,7 @@ def save_context(
     db: sqlite3.Connection, kind: str, instrument: str, value: dict[str, Any], anchor: int = 0
 ) -> tuple[int, str, int]:
     from .storage import encode
+    from .storage_meter import record_source
 
     sid = stream_id(db, instrument, create=True)
     assert sid is not None
@@ -444,7 +452,10 @@ def save_context(
     if tiled is not None:
         if encode(context_tile_codec.public(context_tile_codec.get(*tiled))) != encode(value):
             raise ValueError("Conflicting public source snapshot")
+        before = context_tile_codec.get(*tiled)
         context_tiles.renew(db, tiled, anchor=anchor, purge=expires)
+        if anchor and not before.anchor:
+            record_source(db, "context", 0, len(encode(value).encode()))
         return sid, kind, when
     timing = {k: v for k, v in value.items() if k in ("available_at_ms", "market_observation_ms")}
     stable = {k: v for k, v in value.items() if k not in timing}
@@ -459,13 +470,21 @@ def save_context(
     if decoded(bytes(body[1]), 131072) != stable:
         raise ValueError("Conflicting context digest")
     previous = db.execute(
-        "SELECT body,timing FROM market_context WHERE stream=? AND kind=? AND at=?", (sid, kind, when)
+        "SELECT body,timing,needed_anchor FROM market_context WHERE stream=? AND kind=? AND at=?",
+        (sid, kind, when),
     ).fetchone()
     if previous is not None and encode(context_public(db, previous)) != encode(value):
         raise ValueError("Conflicting public source snapshot")
     db.execute(
         "INSERT INTO market_context(stream,kind,at,body,timing,needed_anchor,purge_after) VALUES (?,?,?,?,?,?,?) ON CONFLICT(stream,kind,at) DO UPDATE SET needed_anchor=max(needed_anchor,excluded.needed_anchor),purge_after=max(purge_after,excluded.purge_after)",
         (sid, kind, when, body[0], encoded(timing), anchor, expires),
+    )
+    weight = len(encode(value).encode())
+    record_source(
+        db,
+        "context",
+        weight if previous is None else 0,
+        weight if anchor and (previous is None or not previous[2]) else 0,
     )
     return sid, kind, when
 

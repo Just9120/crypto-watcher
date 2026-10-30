@@ -23,6 +23,7 @@ from cryptowatcher.storage_repack import VERSION, async_work, work
 from scripts import observe_capacity as observer
 from scripts.observe_capacity import advance, atomic
 
+from .test_bounded_storage import legacy_method  # noqa: F401, F811 (legacy contract fixture)
 from .test_outcomes import DAY, NOW, OutcomeWorker, Retention, Sources, future, observe
 
 
@@ -50,8 +51,10 @@ def test_analytics_timestamp_keeps_current_window_and_small_exchange_clock_skew(
     assert "ANALYTICS_NOT_CURRENT" not in stable_reason(store)
 
 
-@pytest.mark.parametrize("working_bytes", (25_000_000_000, 25_340_000_000, 30_000_000_000, 30_000_000_001))
-def test_owner_desired_target_is_advisory_and_complete_thirty_gb_limit_is_inclusive(
+@pytest.mark.parametrize(
+    "working_bytes", (25_000_000_000, 25_340_000_000, 30_000_000_000, 35_000_000_000, 35_000_000_001)
+)
+def test_owner_desired_target_is_advisory_and_complete_thirty_five_gb_limit_is_inclusive(
     store, monkeypatch, working_bytes
 ):
     from cryptowatcher.storage_meter import report
@@ -78,9 +81,9 @@ def test_owner_desired_target_is_advisory_and_complete_thirty_gb_limit_is_inclus
     value = report(store, 1_800_000_000_000)
     assert value["working_bytes"] == working_bytes == sum(value["files"].values())
     assert value["target_bytes"] == 25_000_000_000
-    assert value["budget_bytes"] == 30_000_000_000
+    assert value["budget_bytes"] == 35_000_000_000
     assert value["target_exceeded"] is (working_bytes > 25_000_000_000)
-    assert (value["state"] == "BUDGET_EXCEEDED") is (working_bytes > 30_000_000_000)
+    assert (value["state"] == "BUDGET_EXCEEDED") is (working_bytes > 35_000_000_000)
     assert store.db.total_changes == changes
 
 
@@ -255,7 +258,8 @@ def test_ledger_is_exact_no_sql_temp_sort_and_cohort_ablation_matches_frozen_eve
             assert sum(v[field] for v in ledger["namespaces"].values()) == expected
         cohorts = prospective_cohorts(reader)
         assert cohorts["state"] == "MEASURED_PROSPECTIVE"
-        assert cohorts["facts_if_archived"] == cohorts["event_records"] * 4
+        assert cohorts["facts_if_archived"] == cohorts["episode_records"] * 4
+        assert cohorts["membership_facts_if_archived"] == cohorts["event_records"] * 4
         assert cohorts["dimension_cardinality"]["horizon"] == 4
         assert cohorts["distinct_without_dimension"]["horizon"] * 4 == cohorts["cohort_days_if_archived"]
         partial = runtime_ledger(reader, seconds=0)
@@ -596,7 +600,7 @@ def test_controlled_62week_population_plateaus_and_all_numeric_results_survive(t
 
     value = measure(tmp_path / "rolling-retention.sqlite3", compact=compact)
     assert len(value["families"]) == 5 and value["markets"] == 2 and len(value["timeframes"]) == 4
-    assert value["numeric_and_comparator_multiset_equality"] == value["private_equality"] == "PASS"
+    assert value["episode_numeric_and_membership_equality"] == value["private_equality"] == "PASS"
     assert value["restarts"] == 1 and not any(value["final_remaining"].values())
     if compact:
         assert value["storage_layout"] == f"MIXED_BLOCKS_REPACK{VERSION}"
@@ -604,8 +608,9 @@ def test_controlled_62week_population_plateaus_and_all_numeric_results_survive(t
         assert value["issued_numeric_ids_after_final_gc"] > 0
     stable = value["steady_detail_population"][-8:]
     assert {s["events"] for s in stable} == {50}
-    assert {s["quality_facts"] for s in stable} == {1920}
-    assert {s["source_rows"] for s in stable} == {840}
+    assert {s["quality_facts"] for s in stable} == {768}  # 48 archived weeks ×4episodes ×4horizons
+    assert {s["quality_memberships"] for s in stable} == {480}
+    assert {s["source_rows"] for s in stable} == {824}  # Current168 +4prior weeks ×164 actually used inputs
     # Observed file variation fits within already allocated free-page slack.
     # This is an isolated allocator observation, not a production20GB proof.
     assert max(s["allocated_bytes"] for s in stable) - min(s["allocated_bytes"] for s in stable) <= max(
@@ -613,6 +618,7 @@ def test_controlled_62week_population_plateaus_and_all_numeric_results_survive(t
     )
 
 
+@pytest.mark.usefixtures("legacy_method")
 def test_twenty_comparators_frozen_versions_retention_boundaries_and_source_leases(store):
     from cryptowatcher.analytics import ComparisonWorker, cohorts
     from cryptowatcher.outcomes import DEFINITION, MINUTE
@@ -640,6 +646,9 @@ def test_twenty_comparators_frozen_versions_retention_boundaries_and_source_leas
     Sources(store).put("spot/BTCUSDT/1m", sources, recovery=True)
     h = History(store)
     comparison = ComparisonWorker(store)
+    with store.db:
+        for event in h.events(20):
+            comparison.requeue(event["event_id"], NOW)
     for _ in range(h.count("comparison-pending:")):
         comparison.work(NOW + 16 * MINUTE)
     worker.work(NOW + 16 * MINUTE, batch=200)

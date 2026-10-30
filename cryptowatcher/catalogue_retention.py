@@ -195,6 +195,10 @@ def service(store: Store, coordinate: record_blocks.Coordinate, now: int) -> int
         if keep is not None and keep > now:
             renew(store.db, key, keep)
             return 0
+        from .expiry_index import member_deadline
+
+        if member_deadline(store.db, PREFIX + "episode-event:" + coordinate.identity + ":") is not None:
+            return 0  # Overdue members can still await later bounded batches.
     # Authenticate bytes before deleting, even when there are no private refs.
     record_catalog.read(store.db, coordinate, store.cached_bytes)
     head = (

@@ -164,9 +164,9 @@ runtime source/image и operator SHA256/head/CI; helper в running artifact до
 уже поддерживать используемый API. После операции hotfix проходит обычный merge/CD
 на новой малой working DB. Receiver/permit/protections/budgets не меняются.
 
-После reset автоматические delivery используют full source integrity и SQLite online backup на диске с полной integrity и streaming SHA256. Вся DB в RAM/tmpfs не копируется; cap4GiB/CPU1/no swap остается. Source+backup делят оставшееся время общего900s deadline с резервом переключения/post-checks. При нехватке места/времени stage завершается failure до switch; gates не ослабляются. Желаемые25GB и допустимые30GB не гарантируют полный scan базы соответствующего размера за15min: фактическая скорость и длительность видны в records, превышение требует переработки, не автоматического увеличения deadline.
+После reset автоматические delivery используют full source integrity и SQLite online backup на диске с полной integrity и streaming SHA256. Вся DB в RAM/tmpfs не копируется; cap4GiB/CPU1/no swap остается. Source+backup делят оставшееся время общего900s deadline с резервом переключения/post-checks. При нехватке места/времени stage завершается failure до switch; gates не ослабляются. Желаемые25GB и допустимые35GB не гарантируют полный scan базы соответствующего размера за15min: фактическая скорость и длительность видны в records, превышение требует переработки, не автоматического увеличения deadline.
 
-Retention работает batches через indexes/transactional counters, summaries12 календарных месяцев; routine control не сканирует все DB pages. `storage-indexes` — отдельное ограниченное измерение, размер snapshot помечен временем. Его отсутствие/timeout не считается доказанным размером индексов. Forecast отражает short-window/model limitations и желаемые25,000,000,000bytes и допустимый жёсткий предел30,000,000,000bytes без скрытого сокращения данных. Превышение желаемого объёма в пределах30GB само по себе не блокирует приёмку. Исторические20GB/25GB records остаются snapshots прежних требований. Последующее наблюдение входит в текущую Goal после завершения исправлений и штатной поставки, без нового reset.
+Retention работает batches через indexes/transactional counters, summaries12 календарных месяцев; routine control не сканирует все DB pages. `storage-indexes` — отдельное ограниченное измерение, размер snapshot помечен временем. Его отсутствие/timeout не считается доказанным размером индексов. Forecast отражает short-window/model limitations и желаемые25,000,000,000bytes и допустимый жёсткий предел35,000,000,000bytes без скрытого сокращения данных. Превышение желаемого объёма в пределах35GB само по себе не блокирует приёмку. Исторические20GB/25GB records остаются snapshots прежних требований. Последующее наблюдение входит в текущую Goal после завершения исправлений и штатной поставки, без нового reset.
 
 ## Storage extension3: routine delivery без reset
 
@@ -210,7 +210,7 @@ connection и освобождения live WAL snapshot. Полный SHA256/р
 backup integrity и все post-checks сохраняются. Small backups и TMPFS/compressed
 qualification не меняются. Qualification17Oct на live2.89GB:57.11s, peakRSS2.95GB,
 zero data writes; это snapshot текущего размера, не обещание времени для любой
-будущей базы и не доказательство capacity в текущем допустимом пределе30GB. Failed attempt сохраняется; повтор
+будущей базы и не доказательство capacity в текущем допустимом пределе35GB. Failed attempt сохраняется; повтор
 делается после исправления через новый validated artifact, без bypass/reset.
 
 Для schema2 выше3GiB routine receiver выбирает `NATIVE_DISK_FRAMED` через
@@ -327,15 +327,25 @@ pages; total=DB+WAL+SHM+journal. Табличные/index snapshots показы
 внутри DB, не прибавляются повторно. Snapshot SQL согласован; размеры files снимаются
 отдельно по времени, writer может продвинуть WAL во время deep probe.
 
-`forecast_explanation` восстанавливает арифметику прежней модели. Разделение details
-по namespaces пропорционально текущему payload mix — model allocation, не измеренный
-посуточный insert flow. Cohort study считает frozen event grouping по активной
-outcome methodology1; при других methods не угадывает Cartesian product. Actual
-quality facts и prospective cohorts показываются отдельно. Empty comparator sets
-не доказывают выигрыш от dedup полноценных будущих comparators. Additional methods/
-settings, плотность cohorts, реальные no-signal windows и source leases — явные
-ограничения прогноза. Использованные исходники сравнений могут переживать raw35d
-до истечения30d parent detail; это subset необходимых revisions, не indefinite hold.
+`forecast_explanation` раскладывает текущую episode/member модель, выделяя
+actual working files, free pages, sidecars и page overhead без повторного добавления
+indexes. Частоты берутся только из samples одной settings/history generation;
+старые samples сохраняются отдельно. Описание counters/коэффициентов/ограничений —
+в [архитектуре](../architecture.md#прогноз-фактически-включённой-модели).
+Prospective cohorts новой methodology2 считают уникальные episode origins и
+membership отдельно; group N непригодны для сложения между overlapping groups.
+Это metadata-only bounded explicit probe, не доказательство годовой population mix.
+Legacy methodology1/CQ5/comparator fixtures сохранены как compatibility evidence,
+не задают forecast новой модели. Общие источники72h; только реально использованные
+inputs имеют30d detail leases. При недостаточном usage window forecast консервативно
+предполагает все inputs использованными; никто не сокращает данные ради оценки.
+
+После prolonged downtime сначала архивируются overdue details пакетами. Episode
+membership/origin и shared numeric result не удаляются, пока не обработан последний
+parent, даже если его deadline уже прошёл. Это не продление доступности API заTTL:
+period filters сохраняются. Summary GC сообщает фактический progress, поэтому конечный
+rehearsal drain не останавливается на очередном незавершённом пакете. Repack, callbacks
+и delivery не должны превращать такой остаток в новое исследование или уведомление.
 
 Runtime repack первые600s процесса получает один прежний40ms slice за независимый1s
 tick, с отдельным transaction/checkpoint и scheduler yield. После startup при

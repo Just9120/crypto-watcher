@@ -89,6 +89,7 @@ def _legacy_admit(
 ) -> tuple[int, int, int]:
     """A capacity fallback shares one revision space with the frozen tile."""
     from .market_storage import FIELDS, encoded
+    from .storage_meter import record_source
 
     start, step = value["start"], value["step"]
     expected = encoded([value[k] for k in FIELDS])
@@ -118,6 +119,7 @@ def _legacy_admit(
                 break
     finally:
         cursor.close()
+    cold_anchor = matching_cold[1] if matching_cold is not None else 0
     candle_days, detail_days = blocks.policy(db)
     expiry = max(start + step + candle_days * 86400000, anchor + detail_days * 86400000)
     if matching_cold is not None and (matching_legacy is None or matching_cold[0] > matching_legacy[0]):
@@ -139,6 +141,20 @@ def _legacy_admit(
         db.execute(
             "INSERT INTO market_candles VALUES(?,?,?,?,?,?)", (sid, start, revision, expected, anchor, expiry)
         )
+    previous = (
+        matching_cold if matching_cold is not None and matching_cold[0] == revision else matching_legacy
+    )
+    old_anchor = (
+        cold_anchor
+        if previous is matching_cold and previous is not None
+        else previous[2]
+        if previous is not None
+        else 0
+    )
+    weight = len(encode([value[k] for k in FIELDS]).encode())
+    record_source(
+        db, "candles", weight if previous is None else 0, weight if anchor and not old_anchor else 0
+    )
     return sid, start, revision
 
 

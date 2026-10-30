@@ -362,8 +362,8 @@ class History:
                 raise StateError("Episode outcome reference is immutable")
         direct = False
         if existing is None:
-            if self.store.bounded and kind == "event" and value["revision"] == 1:
-                self.put("event-counter", self.get("event-counter", 0) + 1)
+            if self.store.bounded and kind in ("event", "episode") and value["revision"] == 1:
+                self.put(kind + "-counter", self.get(kind + "-counter", 0) + 1)
             if self.store.bounded and kind in ("event", "outcome", "comparison"):
                 event = (
                     value

@@ -136,3 +136,37 @@ def test_archival_uses_saved_numbers_when_raw_source_windows_are_unavailable(sto
     with store.db:
         archive_facts(store, prepared)
     assert store.db.execute("SELECT count(*) FROM market_episode_results").fetchone()[0] == 4
+
+
+def test_long_downtime_gc_keeps_episode_origin_until_last_overdue_member_is_archived(store):
+    history = populate(store)
+    retention = Retention(store)
+    now = NOW + 400 * DAY
+    # One member per batch guarantees the root is retired before its later
+    # confirmations. Annual GC must not remove the only shared frozen result
+    # while those other overdue details still await cleanup.
+    retention.work(now, batch=1)
+    assert history.count("event-head:") == 3
+    assert store.db.execute("SELECT count(*) FROM market_episode_results").fetchone()[0] == 4
+    for _ in range(40):
+        retention.work(now, batch=1)
+        if (
+            not history.count("event-head:")
+            and not store.db.execute("SELECT 1 FROM market_episode_results").fetchone()
+        ):
+            break
+    assert history.count("event-head:") == history.count("outcome-job:") == 0
+    assert store.db.execute("SELECT count(*) FROM market_episode_results").fetchone()[0] == 0
+    assert store.db.execute("SELECT count(*) FROM market_episode_members").fetchone()[0] == 0
+    assert not store.db.execute("PRAGMA foreign_key_check").fetchall()
+
+
+def test_many_same_timestamp_members_keep_origins_across_bounded_expiry_batches(tmp_path):
+    from scripts.measure_market_storage import measure
+
+    value = measure(tmp_path / "same-stamp.sqlite3", instruments=5)
+    assert value["events"] == 200
+    assert value["episodes"] == 20
+    assert value["outcomes"] == 80 and value["all_outcomes_complete"]
+    assert value["automatic_comparison_jobs"] == 0
+    assert value["analytics_equality"] == "PASS"

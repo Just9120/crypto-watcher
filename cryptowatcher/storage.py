@@ -421,6 +421,9 @@ class Store:
                 from .episode_summary import install as install_episode_summary
 
                 install_episode_summary(self.db)
+                from .storage_meter import install_source_usage
+
+                install_source_usage(self.db)
                 from .expiry_index import install as install_expiry
                 from .quality_layout import install as install_quality
 

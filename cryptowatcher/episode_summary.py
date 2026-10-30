@@ -207,6 +207,10 @@ def retain_provenance(db: sqlite3.Connection, value: Any) -> str:
 
 
 def archive(store: Store, prepared: list[ArchiveFact]) -> None:
+    archive_records(store.db, prepared)
+
+
+def archive_records(db: sqlite3.Connection, prepared: list[ArchiveFact]) -> None:
     from .quality_summary import month_boundary
 
     for day, group, provenance, fact in prepared:
@@ -214,7 +218,7 @@ def archive(store: Store, prepared: list[ArchiveFact]) -> None:
         identity = (episode, group["horizon_min"], "2")
         provenance_id, _ = provenance_key(provenance["origin"])
         serialized = (day, month_boundary(day, 12), encode(fact), provenance_id)
-        existing = store.db.execute(
+        existing = db.execute(
             "SELECT day,expires_day,fact,provenance FROM market_episode_results "
             "WHERE episode_id=? AND horizon=? AND method=?",
             identity,
@@ -222,15 +226,13 @@ def archive(store: Store, prepared: list[ArchiveFact]) -> None:
         if existing is not None and tuple(existing) != serialized:
             raise StateError("Conflicting immutable episode summary; details preserved")
         if existing is None:
-            retain_provenance(store.db, provenance["origin"])
-            store.db.execute(
-                "INSERT INTO market_episode_results VALUES(?,?,?,?,?,?,?)", (*identity, *serialized)
-            )
+            retain_provenance(db, provenance["origin"])
+            db.execute("INSERT INTO market_episode_results VALUES(?,?,?,?,?,?,?)", (*identity, *serialized))
         dimensions = {k: v for k, v in group.items() if k not in ("horizon_min", "methodology_version")}
         packed = encode(dimensions)
-        member_provenance = retain_provenance(store.db, provenance["membership"])
+        member_provenance = retain_provenance(db, provenance["membership"])
         signature = hashlib.sha256(encode([dimensions, provenance["membership"]]).encode()).hexdigest()
-        store.db.execute(
+        db.execute(
             "INSERT OR IGNORE INTO market_episode_members VALUES(?,?,?,?)",
             (episode, signature, packed, member_provenance),
         )
@@ -316,19 +318,30 @@ def union_sql(
     )
 
 
-def collect(db: sqlite3.Connection, now_day: int, batch: int) -> None:
+def collect(db: sqlite3.Connection, now_day: int, batch: int) -> int:
     episodes = db.execute(
         "SELECT episode_id FROM market_episode_results WHERE expires_day<=? ORDER BY expires_day LIMIT ?",
         (now_day, batch),
     ).fetchall()
-    for (episode,) in episodes:
-        db.execute("DELETE FROM market_episode_members WHERE episode_id=?", (episode,))
-        db.execute("DELETE FROM market_episode_results WHERE episode_id=?", (episode,))
-    db.execute(
+    removed = 0
+    for episode in dict.fromkeys(row[0] for row in episodes):
+        from .events import PREFIX
+        from .expiry_index import member_deadline
+
+        # An overdue detail can await a later bounded cleanup batch (for
+        # example after prolonged downtime). Its origin may already be gone,
+        # so retain the shared numeric result until that last member is retired.
+        # Query the existing episode-member index, never scan event JSON.
+        if member_deadline(db, PREFIX + "episode-event:" + episode + ":") is not None:
+            continue
+        removed += db.execute("DELETE FROM market_episode_members WHERE episode_id=?", (episode,)).rowcount
+        removed += db.execute("DELETE FROM market_episode_results WHERE episode_id=?", (episode,)).rowcount
+    removed += db.execute(
         "DELETE FROM market_episode_provenance WHERE id IN "
         "(SELECT id FROM market_episode_provenance WHERE refs=0 LIMIT ?)",
         (batch,),
-    )
+    ).rowcount
+    return removed
 
 
 def records(store: Store, selection: Any) -> Iterator[dict[str, Any]]:

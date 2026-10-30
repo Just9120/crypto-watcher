@@ -35,8 +35,8 @@ Binding/activation/recovery — в [agent procedure](runbooks/agent-delivery.md)
 | Compact market storage | `market_storage.py`, `history_codec.py`, `record_codec.py`, `compact_json.py` | Normalized candle/context revisions, content-addressed shared data и strict public readback |
 | Analytics / recovery | `outcomes.py`, `analytics.py`, `analytics_worker.py`, `analytics_recovery.py` | Frozen horizons/comparator versions, readonly calculations, CAS apply и referenced recovery |
 | Retention / summaries | `storage_lifecycle.py`, `quality_summary.py`, `expiry_index.py`, `quality_layout.py` | Bounded expiry, all-method numeric quality перед удалением details, finite service dependencies |
-| Storage control | `storage_meter.py`, `storage_model.py`, `storage_repack.py` | Cheap counters/samples, separated occupancy/retained-flow forecast, isolated quality scenarios и durable bounded lossless repack |
-| Capacity evidence | `capacity.py`, `scripts/observe_capacity.py`, `scripts/rehearse_retention.py` | Readonly boundary ledger/cardinality/pages, finite host observation после stability и offline full lifecycle; tests/CD отдельно от25GB proof |
+| Storage control | `storage_meter.py`, `storage_model.py`, `storage_repack.py` | Cheap counters/samples, separated occupancy/retained-flow forecast, episode/meaningful-membership model и durable bounded lossless repack |
+| Capacity evidence | `capacity.py`, `scripts/observe_capacity.py`, `scripts/rehearse_retention.py` | Readonly boundary ledger/cardinality/pages, finite host observation после stability и offline full lifecycle; tests/CD отдельно от35GB proof |
 | Agent consumer | `agent_contract.py`, `agent_delivery.py` | Полный public snapshot/hash, independent immutable outbox/retries/ack и owner diagnostics |
 | Digest / optional context | `digest.py`, `enrichment.py`, `enrichment_runtime.py` | Independent period delivery и qualified derivatives mapping/source freshness |
 | Market adapter / computation | `cryptowatcher/market.py` | Общий async HTTP client, bounded REST requests; closed-candle composite, gaps/invalid data diagnostics |
@@ -227,9 +227,47 @@ SQL aggregates и CSV/NDJSON используют одинаковые episode u
 не создаёт. Старые market_quality codecs/readers остаются для legacy event facts,
 method versions и comparator distributions. Их наличие не разрешает новый N20:
 автоматический admission и runtime worker удалены. Старые manual commands/callbacks
-ведут к описательной статистике, не создавая jobs. Compatibility helpers в scripts
-сохраняются до их отдельной сверки; они не описывают новый capacity profile. Unified capacity forecast и весь offered/saved/due/delivery benchmark
-ещё требуют завершения; этот раздел не подтверждает их поставку или приёмку VPS.
+ведут к описательной статистике, не создавая jobs. Canonical storage/retention scripts используют episode origins и unique membership;
+N20 codec qualification запускается только явно как legacy. Finite offered/saved/due/delivery
+replay проверяет новый путь отдельно от production throughput и суточной приёмки.
+
+### Прогноз фактически включённой модели
+
+Storage sample format13 связывает окно с settings и history generation; старые
+samples сохраняются, но другая модель/конфигурация не задаёт частоту новой.
+Episode counter увеличивается только при первой immutable revision episode,
+meaningful event counter — при первой revision значимого observation. Годовая
+модель считает один набор frozen horizons на episode плюс membership для
+значимых events; пересекающиеся группы не умножают численные results.
+
+`storage_model.measure_episodes` использует настоящий SQLite writer и все его
+таблицы/index pages. Synthetic qualification включает полную отдельную provenance
+для каждого origin/member без выгоды от sharing. Коэффициенты округлены вверх
+от измерений512episodes с1/4/20members:2048physical bytes/result и2048/member,
+1024logical bytes/result и1536/member. Это явно заданный сценарий, не bound:
+реальная полнота definitions/settings, SQLite allocation и population mix
+могут отличаться. Runtime не запускает синтетические измерения или dbstat scan.
+Observed annual archive flow, если он больше модели, не отбрасывается.
+
+Двухстрочный `market_source_usage` учитывает canonical byte weight уникальных
+новых inputs и их первого lease в той же transaction. Transfer hot→tile,
+повторное чтение, продление lease и rollback не создают повторных arrivals/usage.
+Доля first-used/arrived применяется к дополнительному30d ownership сверх3d
+общего окна. Для свечей conservatively учитывается ещё native lookback≤3d,
+для context — использованный30d lease; N20 prior28d отсутствует. При отсутствии
+или несогласованности счётчиков предполагаются100% used inputs. Доля canonical
+bytes не является измерением physical compression; запоздалые first leases,
+короткое окно и смена активности остаются явными ограничениями прогноза.
+
+Non-summary categories используют actual flow/net occupancy с measured page
+factor. Summary model уже включает собственные indexes: второй page factor к
+нему не применяется. Free pages добавляются отдельно; journal reserve берёт максимум
+текущих sidecars, наблюдавшегося peak в том же scope и сценария auto-checkpoint.
+Auto-checkpoint — trigger, не cap WAL: долгие readers/backup требуют отдельной
+проверки реального пика. Actual working files задают нижнюю границу.25GB — желательный ориентир,35GB — hard limit.
+Backup/temp/restore copies и резерв остальных проектов в эти35GB не входят:
+полный физический пик квалифицируется отдельно до тяжёлой серверной операции.
+Этот прогноз и finite replay не подтверждают live capacity или30min/24h DoD.
 
 ## G3 legacy analytics и independent digest
 

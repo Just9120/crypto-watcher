@@ -233,8 +233,18 @@ restart, source conflicts и устаревшие pending bindings не изме
 python -m scripts.measure_market_storage --database /absolute/new/fixture.sqlite3 --instruments 5
 ```
 
-Сценарий охватывает оба рынка/4TF/5families, outcomes и служебные записи, controlled expiry и сравнение analytics. Он не измеряет частоту production signals; artifact сохранять отдельно от working DB. Разовый production reset/cutover выполняется по [отдельной процедуре](docs/runbooks/bounded-storage-reset.md); пока ее post-checks не пройдены, новая generation не считается поставленной. Старые backup/conversion tools выше остаются историческими, не текущей задачей.
+Сценарий охватывает оба рынка/4TF/5families, один набор outcomes на episode и служебные записи, controlled expiry и сравнение analytics. N20 не запускается; N пересекающихся групп не складываются. Он не измеряет частоту production signals; artifact сохранять отдельно от working DB. Разовый production reset/cutover выполняется по [отдельной процедуре](docs/runbooks/bounded-storage-reset.md); пока ее post-checks не пройдены, новая generation не считается поставленной. Старые backup/conversion tools выше остаются историческими, не текущей задачей.
 
+
+### Квалификация модели прогноза
+
+Изолированный exact-writer сценарий: `python -m cryptowatcher.storage_model`.
+Он измеряет новую SQLite summary schema с1/4/20members на episode, всеми indexes
+и полной unshared provenance. Небольшая временная DB живёт только в памяти.
+Legacy CQ5/N20 qualification доступна отдельно: `python -m cryptowatcher.storage_model --legacy`;
+она не задаёт прогноз нового runtime. Production частоты/used-input mix и
+backup/temp reserve из synthetic fixture не выводятся. Состав прогноза и его
+ограничения описаны в [архитектуре](docs/architecture.md#прогноз-фактически-включённой-модели).
 
 ### Минимальный replay LIGHT-RADAR
 

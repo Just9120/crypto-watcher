@@ -36,7 +36,9 @@ Goal1 fixes F26,F49–F56 и кодовая частьF22/F38, использо�
 
 ### Текущий implementation checkpoint
 
-**Реализовано по коду8/18AC:04-06,05-02,06-02,06-05,07-06,08-04,11-01,13-02.** Это незамерженная implementation branch; audit percentage не пересчитывался. Existing50READYsnapshot остаётся snapshot, затронутые инварианты проходят regression. VPS, push/PR/merge/CD ещё не менялись.
+Из18AC текущей Goal код завершён для14, включая6новых подтверждений06-01/07-04/08-01/09-02/13-03/13-04 поT-AD02/T-EP01/T-EP02/T-FC01/T-GC01/T-FP02. Для09-06 ещё нужны актуальные handoff/fixtures;12-04 — dependency remediation/compatibility,12-05 — full no-CD profile,13-06 — оставшаяся кодовая/эксплуатационная квалификация. Ни один из этих локальных статусов не означает merge/CD или успешную приёмку общего VPS.
+
+**Реализовано по коду14/18AC:04-06,05-02,06-01/02/05,07-04/06,08-01/04,09-02,11-01,13-02/03/04.** Это незамерженная implementation branch; audit percentage не пересчитывался. Existing50READYsnapshot остаётся snapshot, затронутые инварианты проходят regression. VPS, push/PR/merge/CD ещё не менялись.
 
 | Блок / Evidence IDs | Реализованное и доказательства | Ограничения |
 | --- | --- | --- |
@@ -45,13 +47,17 @@ Goal1 fixes F26,F49–F56 и кодовая частьF22/F38, использо�
 | T-ME02 | Historical/rearm repetitions coalesce; separate market/receipt clocks; fresh historical→live promotion сохраняет origin/jobs; first live alert и restart/rearm.110profile tests PASS | Full VPS timing не подтверждён |
 | T-AD02 | Persisted independent active_detectors, migration defaultall5, CAS UI, invalid/stranger/stale/duplicate callbacks, live apply; legacy notification callbacks сохраняют смысл.122tests+corrected readback1test PASS | Visual review Goal2 |
 | T-FP01 | Identical8stream/5family/104frame replay mainb254→candidate72a7308:188→76observations,36→36episodes,752→144completeoutcomes,156→0N20jobs;16initial numeric facts hash совпадает. Wall14.585→3.849s/CPU11.641→2.891s;due0/late0 уобоих | Исторический finite benchmark; не текущая broad capacity/24h/physicalIO. Reports/hashes внеGit |
-| T-N20 | Runtime scheduler не вызывает N20; legacy recompare read-only→episode analytics.63UI/async cancellation/publication/fullpath tests PASS. Old jobs в legacy fixtures создаются явно, assertions сохранены | Legacy scripts/forecast links ещё требуют сверки F24/F52 |
+| T-N20 | Runtime scheduler не вызывает N20; legacy recompare read-only→episode analytics.63UI/async cancellation/publication/fullpath tests PASS. Old jobs в legacy fixtures создаются явно, assertions сохранены | Canonical scripts переведены на episode units поT-FC01; legacy codecs/scenario qualification сохранены явно |
 | T-WN01 | Default72h/30d, mutable admission rejects incompatible horizons/windows, old snapshots read-only; used-vs-unused source/context expiry и полный4320-candle outcome.67storage/policy tests,16boundary/fullpath cases PASS | Linux/native ещё required CI |
 | T-WN01 transition | Explicit exact-generation light candidate preserves original private recovery/independent restore; только candle_days→3/active migration+revision; verify_private checks deterministic allowlist. Existing receiver/installer поддерживают pinned light mode/consumed-record preservation; valid light history reset refused |50policy/delivery/boundary tests PASS6.72s;4Linux installer cases и1старыйnative case пока SKIP; не Linux/VPS PASS |
+| T-FC01 | Format13 forecast: episode origins и meaningful memberships, measured new SQLite writer/index coefficients, first-used/arrival byte ledger, used-only extra leases, noN20prior,35GB/free pages/journal reserve; same-scope rates.64capacity/archive/model tests PASS138.83s,57targeted forecast cases PASS34.61s;quality PASS335/133 | Windows3.12/SQLite3.49.1. Calibration is scenario, not population bound; actual broad VPS/physical backup peaks remain Goal2 |
+| T-GC01 |62controlled weeks обоих markets/4TF/5families, restart, mixed repack, exact numeric/membership equality, finite final GC. Fixed stale episode aliases/origin/shared result deletion between bounded batches and summary progress reporting.200same-timestamp members→20episodes/80completeoutcomes;analytics unchanged after detail expiry | One fixture default2directions/market; not production arrival rate. Linux dbstat unavailable locally; image CI required |
+| T-FP02 | Current30logical-minute fullpath:104/104closed inputs,76meaningful observations/36episodes,144COMPLETEoutcomes,0N20jobs,all due checkpoints0/late streams0;Telegram2/agent136. Initial16numeric facts hash unchanged. Wall4.137s/CPU3.188s,SQLchanges35742 | Native process IO/RSS unavailable Windows. Counter overhead included; no broad/shared-host capacity claim |
+
 
 Proof archive: локальный light-radar-20261030, включая policy-storage-next/policy-boundary/policy-installer/quality-policy records и light-replay-comparison.json. Обе CLI replayDB и extracted main source/ZIP удалены после сохранения hashes/harness; освобождено12,809,356bytes. Остальные owned pytest temp/cache dirs пока ожидают финальную очистку. Новые schedules/платные операции не создавались.
 
-Следующий шаг: единый forecast фактически включённых механизмов/35GB, проверка finite queues/used-context, F26 dependencies, F55contracts/handoff и F56canonical full no-CD profile; затем self-review полного PR/local gates, initialpush/requiredLinuxCI и controlled CD/light transition. Старые dependency/quality forecast ещё не подтверждают новую ёмкость. Добавлен native-image light transition fixture (syntax PASS; выполнение только required image CI). Root installer Linux tests и representative capacity/runtime обязательны на соответствующих этапах; до них не объявлять поставку/Goal завершёнными.
+Следующий шаг: F26 dependencies (first-party advisory/PyPI metadata перечитаны30Oct; patch releases существуют), F55contracts/handoff и F56canonical full no-CD profile; затем self-review полного PR/local gates, initialpush/requiredLinuxCI и controlled CD/light transition. Новый объяснимый forecast реализован; его observed rates/physical peak и35GB fit ещё не подтверждены наVPS. Добавлен native-image light transition fixture (syntax PASS; выполнение только required image CI). Root installer Linux tests и representative capacity/runtime обязательны на соответствующих этапах; до них не объявлять поставку/Goal завершёнными.
 
 Следующая Goal2 после DoDGoal1: fresh ProductDesign visual review, F24/F31/F32/UX dispositions, representative multigiB backup/recovery и physical peaks,30min/24h на неизменных source/settings/generation. Новую валидную историю не сбрасывать. Backups latest2verified, releases current+previousgood, rehearsals после saved proof/repro scenario, failed captures не размножать; старые уникальныеarchives — отдельный exactlist. Один основной PR наGoal, никаких cron/automations/Security или соседних projects/VPS expansion.
 
@@ -83,7 +89,7 @@ Code SHA: b254e6e1851dc5662cfcd1156ef13aec31d2e2a8. Источники и их �
 | E12 — Технические границы, CI/CD и эксплуатация | 3/5 | 60.0% |
 | E13 — Хранение, сроки и новый период истории | 3/7 | 42.9% |
 
-## Все 68AC: код и evidence
+## Все 68AC: снимок аудита main b254e6e, не статусы implementation branch
 
 Матрица ниже — текущий snapshot, а не обещание будущего PASS. T1/T2/T3 — локальный Windows/fallback, G1 — повторно прочитанные exact-main Linux records25Oct. READY не означает live Telegram/receiver или принятую capacity. Подробная requirement→scenario→code→evidence→result→finding матрица 68AC/130source bullets сохранена вне Git.
 

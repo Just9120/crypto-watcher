@@ -8,7 +8,7 @@ from typing import Any
 from .storage import Store
 
 TARGET = 25_000_000_000
-BUDGET = 30_000_000_000
+BUDGET = 35_000_000_000
 QUALITY_CATEGORIES = frozenset(
     {
         "quality",
@@ -19,12 +19,32 @@ QUALITY_CATEGORIES = frozenset(
         "quality_episodes",
     }
 )
-SAMPLE_FORMAT = 12
+SAMPLE_FORMAT = 13
+
+
+def install_source_usage(db: Any) -> None:
+    # Constant two-row ledger, no source scan or per-source index. Existing
+    # databases start observation here; an explicit fresh transition starts at0.
+    db.execute("""CREATE TABLE IF NOT EXISTS market_source_usage(
+        kind TEXT PRIMARY KEY CHECK(kind IN ('candles','context')),
+        arrived_bytes INTEGER NOT NULL CHECK(arrived_bytes>=0),
+        first_used_bytes INTEGER NOT NULL CHECK(first_used_bytes>=0)) WITHOUT ROWID""")
+
+
+def record_source(db: Any, kind: str, arrived: int, first_used: int) -> None:
+    if arrived or first_used:
+        db.execute(
+            "INSERT INTO market_source_usage VALUES(?,?,?) ON CONFLICT(kind) DO UPDATE SET "
+            "arrived_bytes=arrived_bytes+excluded.arrived_bytes,"
+            "first_used_bytes=first_used_bytes+excluded.first_used_bytes",
+            (kind, arrived, first_used),
+        )
 
 
 def create(db: Any) -> None:
     # The new layout is empty here. Every later counter update is atomic with its
     # corresponding write, including rollbacks, retries and retention deletes.
+    install_source_usage(db)
     db.execute("ALTER TABLE market_counts ADD COLUMN inserted_bytes INTEGER NOT NULL DEFAULT 0")
     db.execute("ALTER TABLE market_counts ADD COLUMN deleted_bytes INTEGER NOT NULL DEFAULT 0")
     for table, column, category in (
@@ -86,7 +106,19 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         r[0]: {"records": r[1], "logical_bytes": r[2], "inserted_bytes": r[3], "deleted_bytes": r[4]}
         for r in store.db.execute("SELECT * FROM market_counts")
     }
+    settings = store.snapshot().settings
+    from dataclasses import asdict
+    from hashlib import sha256
+
+    from .storage import encode
+
+    scope_key = sha256(
+        encode([store.get_runtime("history_generation", {}), asdict(settings)]).encode()
+    ).hexdigest()
     samples = store.get_runtime("storage_samples", [])
+    same_scope = [
+        s for s in samples if s.get("format_version") == SAMPLE_FORMAT and s.get("scope_key") == scope_key
+    ]
     repack = store.get_runtime("storage_repack", {})
     completed_repack = repack.get("version") if repack.get("state") == "COMPLETE" else None
     from .shared_record_work import status as shared_status
@@ -95,40 +127,66 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
     completed_shared = shared_layout.get("version") if shared_layout.get("initial_reclaim_complete") else None
     current = [
         s
-        for s in samples
+        for s in same_scope
         if s.get("format_version") == SAMPLE_FORMAT
         and s.get("completed_repack_version") == completed_repack
         and s.get("completed_shared_layout") == completed_shared
     ]
     base = current[0] if current else None
-    frequency_base = samples[0] if samples else None
+    frequency_base = same_scope[0] if same_scope else None
     elapsed = (now_ms - base["at_ms"]) / 1000 if base else 0
     frequency_elapsed = (now_ms - frequency_base["at_ms"]) / 1000 if frequency_base else 0
     growth = (sum(files.values()) - base["working_bytes"]) / elapsed if elapsed > 0 and base else None
-    settings = store.snapshot().settings
     event_total = store.get_runtime("radar:v1:event-counter", 0)
     event_rate = (
         max(0, event_total - frequency_base.get("event_total", event_total)) / frequency_elapsed
         if frequency_base and frequency_elapsed > 0
         else None
     )
+    episode_total = store.get_runtime("radar:v1:episode-counter", 0)
+    episode_rate = (
+        max(0, episode_total - frequency_base.get("episode_total", episode_total)) / frequency_elapsed
+        if frequency_base and frequency_elapsed > 0
+        else None
+    )
+    usage = (
+        {
+            row[0]: {"arrived_bytes": row[1], "first_used_bytes": row[2]}
+            for row in store.db.execute("SELECT kind,arrived_bytes,first_used_bytes FROM market_source_usage")
+        }
+        if store.db.execute("SELECT 1 FROM sqlite_master WHERE name='market_source_usage'").fetchone()
+        else {}
+    )
+    used_shares = {}
+    for kind in ("candles", "context"):
+        before = (base or {}).get("source_usage", {}).get(kind, {})
+        arrived = usage.get(kind, {}).get("arrived_bytes", 0) - before.get("arrived_bytes", 0)
+        used = usage.get(kind, {}).get("first_used_bytes", 0) - before.get("first_used_bytes", 0)
+        qualified = base is not None and arrived > 0 and 0 <= used <= arrived
+        used_shares[kind] = {
+            "arrived_canonical_bytes": arrived,
+            "first_used_canonical_bytes": used,
+            "share": used / arrived if qualified else 1.0,
+            "basis": "OBSERVED_FIRST_LEASE_BYTES_OVER_UNIQUE_ARRIVALS"
+            if qualified
+            else "CONSERVATIVE_ALL_INPUTS_USED",
+            "not_a_bound": True,
+        }
     saved = repack.get("saved_categories", {})
     forecast = []
-    from .analytics import COMPARATOR_LOOKBACK_DAYS
     from .config import TIMEFRAMES
     from .sources import WINDOW_SIZE
 
-    # A used comparator input can precede its event by28days plus the frozen
-    # native detector window. Its existing lease then lasts detail_retention.
-    # This estimates current admitted bounds; it does not change any expiry.
+    # Only actual used inputs retain detail ownership. Current native lookback
+    # fits72h; N20's former28-day prior population has no admission/lease here.
     native_days = (WINDOW_SIZE * max(int(tf[:-1]) for tf in TIMEFRAMES) + 1439) // 1440
-    candle_dependency_days = max(
-        settings.candle_retention_days,
-        settings.detail_retention_days + COMPARATOR_LOOKBACK_DAYS + native_days,
+    candle_dependency_days = max(settings.candle_retention_days, settings.detail_retention_days + native_days)
+    context_dependency_days = max(settings.candle_retention_days, settings.detail_retention_days)
+    effective_candle_days = settings.candle_retention_days + used_shares["candles"]["share"] * (
+        candle_dependency_days - settings.candle_retention_days
     )
-    context_dependency_days = max(
-        settings.candle_retention_days,
-        settings.detail_retention_days + COMPARATOR_LOOKBACK_DAYS,
+    effective_context_days = settings.candle_retention_days + used_shares["context"]["share"] * (
+        context_dependency_days - settings.candle_retention_days
     )
     occupancy = {
         "services",
@@ -182,9 +240,9 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         rate = inserted / elapsed if elapsed > 0 else None
         net = (inserted - deleted + repack_savings) / elapsed if elapsed > 0 else None
         days = (
-            candle_dependency_days
+            effective_candle_days
             if category in ("candles", "source_blocks", "source_block_indexes")
-            else context_dependency_days
+            else effective_context_days
             if category in ("context", "context_bodies", "context_integrity", "context_tiles")
             else 366
             if category in QUALITY_CATEGORIES
@@ -209,17 +267,30 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
                 else "RETAINED_INSERT_FLOW",
             }
         )
-    # No annual zero from a not-yet-expired history, and no assumption that the
-    # runtime's wide text indexes are the physical layout of numeric quality.
-    from .storage_model import quality_scenarios
+    # One current-production model. Annual results use created episodes;
+    # distinct meaningful events conservatively bound archived memberships.
+    # Prequalified exact-writer coefficients include every summary index and
+    # full unshared provenance; runtime never builds a synthetic population.
+    from .storage_model import (
+        EPISODE_MEMBER_LOGICAL,
+        EPISODE_MEMBER_PHYSICAL,
+        EPISODE_MODEL_VERSION,
+        EPISODE_RESULT_LOGICAL,
+        EPISODE_RESULT_PHYSICAL,
+    )
 
-    scenarios = quality_scenarios()
     quality_flow = sum(
         item["projected_logical_bytes"] or 0 for item in forecast if item["category"] in QUALITY_CATEGORIES
     )
-    quality_model_per_event = scenarios[0]["encoded_bytes_per_fact"] * len(settings.outcome_horizons)
     quality_projection = (
-        event_rate * 86400 * 366 * quality_model_per_event if event_rate is not None else None
+        (
+            episode_rate * len(settings.outcome_horizons) * EPISODE_RESULT_LOGICAL
+            + (event_rate or 0) * EPISODE_MEMBER_LOGICAL
+        )
+        * 86400
+        * 366
+        if episode_rate is not None
+        else None
     )
     quality = next((r for r in forecast if r["category"] == "quality"), None)
     if quality_projection is not None:
@@ -231,49 +302,42 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         quality["projected_logical_bytes"] = max(quality_flow, quality_projection)
         quality["model_applied"] = True
         quality["basis"] = (
-            "WHOLE_ARCHIVE_MODEL_REPLACES_ALL_QUALITY_CATEGORIES; SPARSE_NO_COMPARATOR_SCENARIO"
+            "ONE_EPISODE_RESULT_SET_AND_MEANINGFUL_MEMBERSHIPS; ALL_SUMMARY_TABLES_REPLACED_ONCE"
         )
         for item in forecast:
             if item["category"] in QUALITY_CATEGORIES - {"quality"}:
                 item["allocation_excluded"] = "ALREADY_INCLUDED_IN_WHOLE_ARCHIVE_MODEL"
     logical = sum(v["logical_bytes"] for v in counts.values())
-    # Current measured page utilization calibrates an explicit estimate; it is
-    # neither a guaranteed steady-state size nor a replacement for measured files.
     factor = max(1, (pages - free) * page / max(1, logical))
+    sidecars = files["wal"] + files["shm"] + files["rollback_journal"]
+    observed_sidecars = max(
+        (sum(s.get("files", {}).get(k, 0) for k in ("wal", "shm", "rollback_journal")) for s in same_scope),
+        default=0,
+    )
+    checkpoint_frames = store.db.execute("PRAGMA wal_autocheckpoint").fetchone()[0]
+    checkpoint_scenario = checkpoint_frames * (page + 24) + 32 + 32768 if checkpoint_frames else 0
+    journal_reserve = max(sidecars, observed_sidecars, checkpoint_scenario)
     projected_without_quality = (
         sum(v["projected_logical_bytes"] or 0 for v in forecast if v["category"] not in QUALITY_CATEGORIES)
         * factor
-        + files["wal"]
-        + files["shm"]
     )
     quality_physical = (
-        event_rate * 86400 * 366 * scenarios[0]["physical_bytes_per_fact"] * len(settings.outcome_horizons)
-        if event_rate is not None
+        (
+            episode_rate * len(settings.outcome_horizons) * EPISODE_RESULT_PHYSICAL
+            + (event_rate or 0) * EPISODE_MEMBER_PHYSICAL
+        )
+        * 86400
+        * 366
+        if episode_rate is not None
         else 0
     )
     quality_physical = max(quality_physical, quality_flow * factor)
     projected = (
-        max(sum(files.values()), projected_without_quality + quality_physical) if elapsed > 0 else None
+        max(sum(files.values()), projected_without_quality + quality_physical + free * page + journal_reserve)
+        if elapsed > 0
+        else None
     )
-    alternatives = (
-        [
-            {
-                **scenario,
-                "projected_working_bytes": projected_without_quality
-                + max(
-                    quality_flow * factor,
-                    event_rate
-                    * 86400
-                    * 366
-                    * scenario["physical_bytes_per_fact"]
-                    * len(settings.outcome_horizons),
-                ),
-            }
-            for scenario in scenarios
-        ]
-        if elapsed > 0 and event_rate is not None
-        else []
-    )
+    alternatives: list[dict[str, Any]] = []
     actual = sum(files.values())
     source_layout: dict[str, Any] = {
         "state": "LEGACY_NORMALIZED",
@@ -457,10 +521,12 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "candle_dependency_retention_estimate": {
             "configured_minimum_days": settings.candle_retention_days,
             "detail_days": settings.detail_retention_days,
-            "comparator_prior_days": COMPARATOR_LOOKBACK_DAYS,
+            "comparator_prior_days": 0,
             "native_input_window": WINDOW_SIZE,
             "days_for_estimate": candle_dependency_days,
-            "basis": "CURRENT_ADMITTED_INPUT_BOUND_AND_EXISTING_DETAIL_LEASES; NOT_A_POLICY_CHANGE",
+            "effective_days_for_estimate": effective_candle_days,
+            "used_inputs": used_shares["candles"],
+            "basis": "GENERAL_72H_PLUS_OBSERVED_USED_INPUT_DETAIL_LEASES; NO_N20",
             "limitations": [
                 "Historical configurations outside current input bounds require observed lease qualification"
             ],
@@ -468,9 +534,11 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "context_dependency_retention_estimate": {
             "configured_minimum_days": settings.candle_retention_days,
             "detail_days": settings.detail_retention_days,
-            "comparator_prior_days": COMPARATOR_LOOKBACK_DAYS,
+            "comparator_prior_days": 0,
             "days_for_estimate": context_dependency_days,
-            "basis": "CURRENT_COMPARATOR_CUTOFF_AND_PARENT_DETAIL_LEASES; NOT_A_POLICY_CHANGE",
+            "effective_days_for_estimate": effective_context_days,
+            "used_inputs": used_shares["context"],
+            "basis": "GENERAL_72H_PLUS_OBSERVED_USED_CONTEXT_DETAIL_LEASES; NO_N20",
             "limitations": [
                 "An older selector predecessor per stream/kind and supplied historical dependencies may exceed this span",
                 "Actual frozen leases, population churn and native allocation still require qualification",
@@ -478,6 +546,14 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         },
         "working_bytes": actual,
         "files": files,
+        "journal_reserve": {
+            "bytes": journal_reserve,
+            "observed_peak_bytes": observed_sidecars,
+            "auto_checkpoint_scenario_bytes": checkpoint_scenario,
+            "basis": "MAX_CURRENT_OBSERVED_PEAK_AND_CHECKPOINT_SCENARIO",
+            "not_a_bound": True,
+            "limitation": "Long readers can hold WAL beyond auto-checkpoint trigger; qualify real peaks and backup/temp reserve separately",
+        },
         "allocated_database_bytes": pages * page,
         "freelist_bytes": free * page,
         "categories": counts,
@@ -495,27 +571,34 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "quality_physical_allocation_bytes": quality_physical,
         "quality_replaced_categories": sorted(QUALITY_CATEGORIES),
         "sample_seconds": elapsed,
+        "scope_key": scope_key,
+        "source_usage": usage,
+        "observed_episodes_total": episode_total,
+        "observed_episodes_per_day_extrapolated": episode_rate * 86400 if episode_rate is not None else None,
         "observed_events_total": event_total,
         "observed_events_per_day_extrapolated": event_rate * 86400 if event_rate is not None else None,
         "quality_forecast_model": {
-            "kind": "ISOLATED_CQ5_ALL_QUALITY_POOLS_AND_INDEXES_SCENARIOS",
-            "encoded_bytes_per_event": quality_model_per_event,
-            "scenarios": list(scenarios),
-            "point_scenario": "SPARSE_NO_COMPARATOR_BASELINE",
+            "kind": EPISODE_MODEL_VERSION,
+            "physical_bytes_per_result_with_provenance": EPISODE_RESULT_PHYSICAL,
+            "physical_bytes_per_membership_with_provenance": EPISODE_MEMBER_PHYSICAL,
+            "assumption": "UNSHARED_PROVENANCE; DISTINCT_MEANINGFUL_EVENTS_BOUND_MEMBERSHIPS",
+            "horizons_per_episode": len(settings.outcome_horizons),
             "not_a_bound": True,
             "actual_production_measurement": False,
-            "shared_frame_mature_model_qualified": False,
+            "legacy_n20_model_applied": False,
         },
         "forecast_scenarios": alternatives,
         "repack": repack,
-        "forecast_kind": "RETAINED_FLOW_AND_NET_QUEUE_OCCUPANCY_PLUS_EXPLICIT_QUALITY_SCENARIOS",
+        "forecast_kind": "OBSERVED_INPUT_USE_AND_EPISODE_RESULT_MEMBERSHIP_MODEL",
         "limitations": [
             "Bootstrap/bursts/short samples distort forecast",
-            "Quality density/comparator scenarios are synthetic measurements; neither a proven population mix nor upper bounds",
+            "Episode coefficients use isolated current SQLite writer with full unshared provenance; production allocation remains to qualify",
+            "First-use ratios are byte-weighted canonical values, not physical allocation fractions; delayed leases and population churn can change them",
+            "Source transfers and renewals do not add arrivals or first leases; insufficient or inconsistent usage window assumes all inputs used",
             "Aggregate service occupancy extrapolates positive net growth conservatively; terminal1d and stream-scoped state are not multiplied by gross turnover",
-            "Additional retained methodology/comparator versions can increase cost beyond the single-method fixture",
+            "Historical methodology versions and old leases outside current admission rules need separate transition/qualification",
             "Retained used inputs may exceed raw TTL; forecast is a baseline, not an upper bound",
-            "25GB desired target and30GB acceptable limit include indexes and working journals; no silent scope/retention reduction",
+            "25GB desired target and35GB hard limit include indexes/free pages/working journals; backup/temp/physical reserve are separate",
         ],
         "options": [
             "Review largest category and repeated values",
@@ -551,6 +634,7 @@ def sample(store: Store, now_ms: int) -> None:
         {
             "at_ms": now_ms,
             "working_bytes": value["working_bytes"],
+            "files": value["files"],
             "format_version": SAMPLE_FORMAT,
             "completed_shared_layout": value.get("shared_record_layout", {}).get("version")
             if value.get("shared_record_layout", {}).get("initial_reclaim_complete")
@@ -561,6 +645,9 @@ def sample(store: Store, now_ms: int) -> None:
             "repack_saved": store.get_runtime("storage_repack", {}).get("saved_categories", {}),
             "categories": value["categories"],
             "event_total": value["observed_events_total"],
+            "episode_total": value["observed_episodes_total"],
+            "scope_key": value["scope_key"],
+            "source_usage": value["source_usage"],
         }
     )
     # 24-hour minute samples are bounded. No full database/index scan here.
@@ -569,6 +656,7 @@ def sample(store: Store, now_ms: int) -> None:
         and samples[-1]["at_ms"] // 3600000 == samples[-2]["at_ms"] // 3600000
         and any(
             s.get("format_version") == SAMPLE_FORMAT
+            and s.get("scope_key") == samples[-1]["scope_key"]
             and s.get("completed_repack_version") == samples[-1]["completed_repack_version"]
             and s.get("completed_shared_layout") == samples[-1]["completed_shared_layout"]
             for s in samples[:-2]
