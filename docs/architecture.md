@@ -186,7 +186,13 @@ Restart восстанавливает episodes, per-direction conditions и pen
 Статистика связывает первый outcome с первыми revisions всех meaningful
 подтверждений episode; внутри выбранной группы N уникален. Detector/TF/settings
 группы пересекаются, их N не складывается. Исторический cutoff учитывает availability
-самих подтверждений. Legacy event-reference results сохраняют собственную единицу.
+самих подтверждений. Historical и suppressed наблюдения используют свои
+persisted bindings и тот же meaningful gate. Для recovery учитывается market-clock
+progress, для остановившейся обработки — receipt inactivity; restart не создаёт
+новую исследовательскую цепочку для каждой следующей старой свечи. При fresh
+historical→live promotion сохраняется origin/outcome set, первые live confirmations
+получают отдельный meaningful update и могут создать первый свежий alert.
+Historical closure не блокирует live re-arm и не порождает новый agent intent. Legacy event-reference results сохраняют собственную единицу.
 
 После30d details новая модель сохраняет в той же SQLite числовые results по
 episode/horizon/method, отдельные group memberships и общую provenance dictionary.
@@ -204,8 +210,8 @@ SQL aggregates и CSV/NDJSON используют одинаковые episode u
 не создаёт. Старые market_quality codecs/readers остаются для legacy event facts,
 method versions и comparator distributions. Их наличие не разрешает новый N20:
 автоматический admission удалён, завершение совместимости manual entry points
-остаётся частью текущей Goal. General candle TTL72h, historical/suppressed
-admission, unified capacity forecast и весь offered/saved/due/delivery benchmark
+остаётся частью текущей Goal. General candle TTL72h, active-detector UI/lifecycle,
+unified capacity forecast и весь offered/saved/due/delivery benchmark
 ещё требуют завершения; этот раздел не подтверждает их поставку или приёмку VPS.
 
 ## G3 analytics и independent digest

@@ -475,15 +475,34 @@ class EventEngine:
         compact = self.store.bounded and re.fullmatch(r"[0-9a-f-]{36}", event_id)
         self.history.put(key, {DECISION_HEAD: value["revision"]} if compact else value)
 
-    def _close_due(self, now_ms: int, instrument: str | None = None) -> None:
-        prefix = "active:" if instrument is None else f"active:{instrument}/"
+    def _close_due(
+        self,
+        now_ms: int,
+        instrument: str | None = None,
+        *,
+        namespace: str = "active",
+        observation_ms: int | None = None,
+    ) -> None:
+        passive = namespace != "active"
+        prefix = namespace + ":" + (f"{instrument}/" if instrument is not None else "")
         for key, binding in self.history.items(prefix):
             episode = self.history.get("episode-head:" + binding["episode_id"])
-            max_life = now_ms - episode["started_ms"] >= 3_600_000
-            inactive = (
-                now_ms - binding.get("last_observation_ms", episode["last_observation_ms"])
-                >= 2 * episode["longest_tf_ms"]
-            )
+            if passive:
+                # Historical market time can lag wall time by hours. Replays
+                # advance that clock; wall time bounds stalled/restarted work.
+                max_life = now_ms - binding["opened_at_ms"] >= 3_600_000
+                inactive = now_ms - binding["last_received_ms"] >= 2 * episode["longest_tf_ms"]
+                if observation_ms is not None:
+                    max_life |= observation_ms - episode["started_ms"] >= 3_600_000
+                    inactive |= (
+                        observation_ms - binding["last_observation_ms"] >= 2 * episode["longest_tf_ms"]
+                    )
+            else:
+                max_life = now_ms - episode["started_ms"] >= 3_600_000
+                inactive = (
+                    now_ms - binding.get("last_observation_ms", episode["last_observation_ms"])
+                    >= 2 * episode["longest_tf_ms"]
+                )
             if not (max_life or inactive):
                 continue
             episode.update(
@@ -492,10 +511,12 @@ class EventEngine:
             episode["revision"] += 1
             episode["available_at_ms"] = now_ms
             self.history.version("episode", episode)
-            if self.on_episode is not None:
+            if self.on_episode is not None and not passive:
                 with exposed_conditions(self.history):
                     self.on_episode(episode)
             self.history.delete(key)
+            if passive:
+                continue  # Historical closure never blocks live re-arm.
             for condition in episode["conditions"]:
                 runtime = self.history.get(condition, {})
                 if runtime.get("non_signal_bars", 0) < 2:
@@ -505,6 +526,8 @@ class EventEngine:
     def tick(self, now_ms: int) -> None:
         with self.store.db:
             self._close_due(now_ms)
+            self._close_due(now_ms, namespace="historical-active")
+            self._close_due(now_ms, namespace="suppressed-active")
 
     def observe(
         self,
@@ -544,6 +567,8 @@ class EventEngine:
                 outputs.append((family, exc))  # One family never hides another family's observation.
         with self.store.db if commit else nullcontext(), condition_batch(self.history, stream):
             self._close_due(now_ms, instrument)
+            for namespace in ("historical-active", "suppressed-active"):
+                self._close_due(now_ms, instrument, namespace=namespace, observation_ms=current.end)
             for family, result in outputs:
                 diagnostic = f"diagnostic:{stream}:{family}"
                 if isinstance(result, Exception):
@@ -601,10 +626,41 @@ class EventEngine:
                     if self.history.get("event-head:" + event_id):
                         continue
                     is_live = live and ordered and timely
-                    active_key = f"active:{instrument}/{direction}"
                     suppressed = is_live and runtime["blocked"]
-                    binding = self.history.get(active_key) if is_live and not suppressed else None
+                    namespace = (
+                        "suppressed-active" if suppressed else "active" if is_live else "historical-active"
+                    )
+                    active_key = f"{namespace}:{instrument}/{direction}"
+                    binding = self.history.get(active_key)
                     episode = self.history.get("episode-head:" + binding["episode_id"]) if binding else None
+                    # A repeated/stale observation belonging to a live episode
+                    # is still that episode, never a parallel historical study.
+                    if not is_live:
+                        live_key = f"active:{instrument}/{direction}"
+                        live_binding = self.history.get(live_key)
+                        live_episode = (
+                            self.history.get("episode-head:" + live_binding["episode_id"])
+                            if live_binding
+                            else None
+                        )
+                        if live_episode is not None and current.end >= live_episode["started_ms"]:
+                            namespace, active_key = "active", live_key
+                            binding, episode = live_binding, live_episode
+                    promoted = False
+                    if is_live and not suppressed and episode is None:
+                        historical_key = f"historical-active:{instrument}/{direction}"
+                        historical = self.history.get(historical_key)
+                        if historical is not None:
+                            prior = self.history.get("episode-head:" + historical["episode_id"])
+                            if (
+                                prior["started_ms"] <= current.end
+                                and historical["last_observation_ms"] <= current.end
+                            ):
+                                episode = prior
+                                episode["state"] = "ACTIVE"
+                                binding = {"episode_id": episode["episode_id"]}
+                                self.history.delete(historical_key)
+                                promoted = True
                     if suppressed:
                         reason = "awaiting_rearm"
                     elif not is_live:
@@ -616,10 +672,16 @@ class EventEngine:
                         self.history.put(
                             active_key,
                             {
+                                **binding,
                                 "episode_id": episode["episode_id"],
                                 "last_observation_ms": max(
                                     binding.get("last_observation_ms", episode["last_observation_ms"]),
                                     current.end,
+                                ),
+                                **(
+                                    {"last_received_ms": now_ms}
+                                    if namespace != "active" and current.end > binding["last_observation_ms"]
+                                    else {}
                                 ),
                             },
                         )
@@ -632,7 +694,16 @@ class EventEngine:
                             same_parameters = prior_event["effective_parameters"] == effective_parameters(
                                 snapshot.settings, instrument
                             )
-                        if previous and same_parameters and result.strength < episode["strength"] * 1.5:
+                        became_live = (
+                            is_live and not suppressed and previous and not previous.get("live", True)
+                        )
+                        if (
+                            previous
+                            and same_parameters
+                            and not promoted
+                            and not became_live
+                            and result.strength < episode["strength"] * 1.5
+                        ):
                             continue
                     if context_provider is not None:
                         # Only meaningful updates freeze context and admit downstream work.
@@ -664,8 +735,18 @@ class EventEngine:
                             "pending_notification": None,
                             "notification_sequence": 0,
                         }
-                        if episode["state"] == "ACTIVE":
-                            self.history.put(active_key, {"episode_id": episode_id})
+                        self.history.put(
+                            active_key,
+                            {
+                                "episode_id": episode_id,
+                                "last_observation_ms": current.end,
+                                **(
+                                    {"opened_at_ms": now_ms, "last_received_ms": now_ms}
+                                    if namespace != "active"
+                                    else {}
+                                ),
+                            },
+                        )
                     episode["revision"] += 1
                     episode["available_at_ms"] = now_ms
                     episode["last_observation_ms"] = max(episode["last_observation_ms"], current.end)
@@ -675,6 +756,8 @@ class EventEngine:
                     episode["confirmations"][f"{family}/{tf}"] = {
                         "event_id": event_id,
                         "revision": 1,
+                        "live": (is_live and not suppressed)
+                        or bool(episode["confirmations"].get(f"{family}/{tf}", {}).get("live", False)),
                         "detector": family,
                         "timeframe": tf,
                         "strength": result.strength,

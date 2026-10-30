@@ -163,7 +163,7 @@ def track(store: Store, key: str, value: Any) -> None:
         expiry = min(expiry, value["expires_ms"])
     category = name.split(":", 1)[0]
     # Active per-stream state may renew; immutable/per-event/service state cannot.
-    if category == "active":
+    if category in ("active", "historical-active", "suppressed-active"):
         expiry = now + days * DAY
     elif category in ("condition", "diagnostic", "oi-attempt"):
         expiry = now + store.snapshot().settings.candle_retention_days * DAY

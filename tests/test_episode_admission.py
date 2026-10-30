@@ -83,3 +83,121 @@ def test_repeated_candles_keep_episode_alive_without_research_and_new_tf_keeps_o
         assert episode["state"] == "CLOSED"
         assert episode["origin_event_id"] == original["event_id"]
         assert len(restarted.history.items("outcome-job:")) == 4
+
+
+@pytest.mark.parametrize("bounded", [False, True])
+def test_historical_recovery_repeats_share_episode_and_use_market_and_receipt_clocks(tmp_path, bounded):
+    from .test_events import observe, selected
+
+    path = tmp_path / "recovery.db"
+    with closing(Store(path, 233382575)) as store:
+        store.initialize(OwnerSettings(active_detectors=("price", "composite")))
+        if bounded:
+            enable(store.db)
+            store.bounded = True
+        store.clock_ms = lambda: NOW
+        worker = OutcomeWorker(store)
+        closed = []
+        engine = EventEngine(
+            store, selected("price", "composite"), on_event=worker.admit, on_episode=closed.append
+        )
+        past = NOW - 120 * 60_000
+        for index in range(4):
+            engine.observe(
+                "spot/BTCUSDT/1m", window(past + index * 60_000), 1e6, 0.01, NOW + index * 1000, live=False
+            )
+        engine.observe(
+            "spot/BTCUSDT/3m", window(past + 3 * 60_000, tf="3m"), 1e6, 0.01, NOW + 4000, live=False
+        )
+        events = engine.history.events()
+        assert len(events) == 4 and len({e["episode_id"] for e in events}) == 1
+        assert all(not e["live"] and e["reference_time_ms"] == past for e in events)
+        assert len(engine.history.items("outcome-job:")) == 4
+        assert not engine.history.items("comparison-job:")
+        assert not engine.history.items("active:") and not engine.history.items("pending:telegram:")
+        engine.tick(NOW + 5000)
+        episode_id = events[0]["episode_id"]
+        assert engine.history.get("episode-head:" + episode_id)["state"] == "HISTORICAL"
+        assert closed == []  # No new automatic historical closure delivery.
+    with closing(Store(path, 233382575)) as reopened:
+        reopened.clock_ms = lambda: NOW + 7 * 60_000
+        restarted = EventEngine(
+            reopened, selected("price", "composite"), on_event=OutcomeWorker(reopened).admit
+        )
+        restarted.tick(NOW + 7 * 60_000)
+        episode = restarted.history.get("episode-head:" + episode_id)
+        assert episode["state"] == "CLOSED" and episode["close_reason"] == "inactivity"
+        assert not restarted.history.items("historical-active:")
+        # Historical expiry did not impose a live re-arm block.
+        observe(restarted, NOW + 8 * 60_000)
+        assert any(e["live"] for e in restarted.history.events())
+
+
+@pytest.mark.parametrize("bounded", [False, True])
+def test_fresh_historical_episode_promotes_once_and_notifies_without_new_outcome_set(store, bounded):
+    from .test_events import observe, selected
+
+    if bounded:
+        enable(store.db)
+        store.bounded = True
+    store.clock_ms = lambda: NOW
+    worker = OutcomeWorker(store)
+    engine = EventEngine(store, selected("price", "composite"), on_event=worker.admit)
+    observe(engine, live=False)
+    origin = engine.history.events()[0]
+    observe(engine, NOW + 60_000)
+    events = engine.history.events()
+    assert len(events) == 4 and len({e["episode_id"] for e in events}) == 1
+    assert {e["reference_time_ms"] for e in events} == {NOW}
+    assert len(engine.history.items("outcome-job:")) == 4
+    assert len(engine.history.items("active:")) == 1
+    assert not engine.history.items("historical-active:")
+    assert len(engine.history.items("pending:telegram:")) == 1
+    assert all(e["reference_price"] == origin["reference_price"] for e in events)
+    observe(engine, NOW + 120_000)
+    assert len(engine.history.events()) == 4  # Promotion was a single meaningful transition.
+
+
+@pytest.mark.parametrize("bounded", [False, True])
+def test_awaiting_rearm_repeats_are_not_per_candle_research(store, bounded):
+    from .test_events import observe, selected
+
+    if bounded:
+        enable(store.db)
+        store.bounded = True
+    store.clock_ms = lambda: NOW
+    worker = OutcomeWorker(store)
+    engine = EventEngine(store, selected("composite"), on_event=worker.admit)
+    for minute in range(66):
+        observe(engine, NOW + minute * 60_000)
+    events = engine.history.events()
+    assert len(events) == 2
+    assert {e["observation_reason"] for e in events} == {"live_observation", "awaiting_rearm"}
+    assert len(engine.history.items("outcome-job:")) == 8
+    assert not engine.history.items("active:")
+    assert len(engine.history.items("suppressed-active:")) == 1
+    for minute in (66, 67):
+        observe(engine, NOW + minute * 60_000, close=100)
+    observe(engine, NOW + 68 * 60_000)
+    assert engine.history.events(1)[0]["live"]
+    assert len({e["episode_id"] for e in engine.history.events()}) == 3
+
+
+@pytest.mark.parametrize("bounded", [False, True])
+def test_notification_only_revision_and_duplicate_bar_do_not_create_historical_study(store, bounded):
+    from .test_events import observe, selected
+
+    if bounded:
+        enable(store.db)
+        store.bounded = True
+    store.clock_ms = lambda: NOW
+    engine = EventEngine(store, selected("price", "composite"), on_event=OutcomeWorker(store).admit)
+    observe(engine)
+    before = engine.history.events()
+    settings = store.snapshot()
+    store.update(settings.revision, settings.settings.changed(alert_detectors=()))
+    observe(engine)  # Same already closed bar with a new owner revision.
+    observe(engine, NOW + 60_000)
+    assert engine.history.events() == before
+    assert len(engine.history.items("outcome-job:")) == 4
+    assert not engine.history.items("historical-active:")
