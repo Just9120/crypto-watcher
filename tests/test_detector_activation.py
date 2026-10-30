@@ -63,3 +63,42 @@ def test_disabled_detector_has_no_events_or_jobs_while_notification_mute_keeps_d
         assert len(engine.history.events()) == int(enabled)
         assert len(engine.history.items("outcome-job:")) == (4 if enabled else 0)
         assert not engine.history.items("pending:telegram:")
+
+
+@pytest.mark.parametrize("bounded", [False, True])
+def test_activation_change_applies_to_next_observation_without_erasing_existing_origin(store, bounded):
+    from cryptowatcher.market_storage import enable
+
+    from .test_events import observe
+
+    if bounded:
+        enable(store.db)
+        store.bounded = True
+    store.clock_ms = lambda: NOW
+    evaluated = []
+    detector = selected("price", "composite")
+
+    def track(family, *args):
+        evaluated.append(family)
+        return detector(family, *args)
+
+    engine = EventEngine(store, track, on_event=OutcomeWorker(store).admit)
+    observe(engine)
+    original = engine.history.events()
+    saved = store.snapshot()
+    store.update(saved.revision, saved.settings.changed(active_detectors=("composite",)))
+    evaluated.clear()
+    observe(engine, NOW + 60_000, market="linear")
+    assert evaluated == ["composite"]
+    assert all(
+        e["detector_id"] == "composite" for e in engine.history.events() if e["market_type"] == "linear"
+    )
+    assert all(engine.history.get(f"event:{e['event_id']}:0000000001") == e for e in original)
+    assert len(engine.history.items("outcome-job:")) == 8
+    saved = store.snapshot()
+    store.update(saved.revision, saved.settings.changed(active_detectors=()))
+    before = (engine.history.events(), engine.history.items("outcome-job:"))
+    evaluated.clear()
+    observe(engine, NOW + 120_000, market="linear")
+    assert evaluated == []
+    assert (engine.history.events(), engine.history.items("outcome-job:")) == before

@@ -180,6 +180,14 @@ Restart восстанавливает episodes, per-direction conditions и pen
 
 ## LIGHT-RADAR: episode analytics (текущая implementation-ветка)
 
+Persisted active_detectors управляет domain admission отдельно от Telegram
+alert_detectors. Settings содержит отдельный экран explicit on/off с owner access
+и CAS revision; старые detector:* callbacks остаются notification-only.
+Runtime читает актуальную activation в каждой observation. Отключение не удаляет
+прежнюю history и не отменяет уже принятые episode outcomes. Status/diagnostics
+различают поддерживаемые families, активные расчёты и разрешённые уведомления.
+
+
 Новые события явно фиксируют outcome_unit=EPISODE и outcome_methodology_version=2.
 Первая reference point и первый набор horizons неизменны. Повторное подтверждение
 без значимого изменения не создаёт immutable event revision или новый расчёт.
@@ -210,8 +218,7 @@ SQL aggregates и CSV/NDJSON используют одинаковые episode u
 не создаёт. Старые market_quality codecs/readers остаются для legacy event facts,
 method versions и comparator distributions. Их наличие не разрешает новый N20:
 автоматический admission удалён, завершение совместимости manual entry points
-остаётся частью текущей Goal. General candle TTL72h, active-detector UI/lifecycle,
-unified capacity forecast и весь offered/saved/due/delivery benchmark
+остаётся частью текущей Goal. General candle TTL72h, unified capacity forecast и весь offered/saved/due/delivery benchmark
 ещё требуют завершения; этот раздел не подтверждает их поставку или приёмку VPS.
 
 ## G3 analytics и independent digest

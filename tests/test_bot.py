@@ -280,3 +280,12 @@ async def test_legacy_warmup_does_not_fetch_or_send(controller):
     await controller.warmup_poll(SimpleNamespace(bot=SimpleNamespace(send_message=AsyncMock())))
     controller.market.snapshot.assert_not_awaited()
     assert controller.store.db.total_changes == before
+
+
+@pytest.mark.parametrize("field", ["active_detectors", "alert_detectors"])
+async def test_legacy_poll_respects_domain_activation_and_notification_selection(controller, field):
+    saved = controller.store.snapshot()
+    controller.store.update(saved.revision, saved.settings.changed(**{field: ()}))
+    context = SimpleNamespace(bot=SimpleNamespace(send_message=AsyncMock()))
+    await controller.poll(context)
+    context.bot.send_message.assert_not_awaited()

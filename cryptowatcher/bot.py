@@ -292,6 +292,8 @@ class Controller:
             "source_revision": self.infrastructure.source_revision,
             "configuration_revision": self.store.snapshot().revision,
             "telegram_alerts_enabled": self.store.enabled(),
+            "active_detectors": list(self.store.snapshot().settings.active_detectors),
+            "telegram_detector_families": list(self.store.snapshot().settings.alert_detectors),
             "last_poll": self.store.get_runtime("last_poll_status", {"state": "PENDING"}),
             "telegram_delivery": self.store.get_runtime("telegram_delivery", {"state": "PENDING"}),
             "ingestion": self.store.get_runtime("ingestion", {"state": "PENDING"}),
@@ -715,6 +717,11 @@ class Controller:
             self.first_ready_poll = True
         if self.engine is not None:
             return  # Persisted observation producer and durable episode queue own live delivery.
+        if (
+            "composite" not in snapshot.settings.active_detectors
+            or "composite" not in snapshot.settings.alert_detectors
+        ):
+            return
         for item, quote in result.quotes.items():
             if self.store.snapshot().revision != snapshot.revision:
                 break

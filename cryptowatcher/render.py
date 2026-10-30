@@ -42,7 +42,8 @@ def settings_keyboard(snapshot: Snapshot) -> InlineKeyboardMarkup:
     return keyboard(
         [
             [("Профили", "ui:profiles"), ("Пороги детекторов", "ui:parameters")],
-            [("Уведомления", "ui:alerts"), ("Семейства уведомлений", "ui:detectors")],
+            [("Расчёты детекторов", "ui:detector_activity"), ("Семейства уведомлений", "ui:detectors")],
+            [("Уведомления", "ui:alerts")],
             [("Контекст деривативов", "ui:enrichment"), ("Доставка агенту", "ui:agent")],
             [("Карточка и ввод", "ui:card"), ("Сроки результатов", "ui:field:outcome_horizons")],
         ]
@@ -61,6 +62,22 @@ def detectors_keyboard(snapshot: Snapshot) -> InlineKeyboardMarkup:
             ]
             for family in FAMILIES
         ],
+        back="settings",
+    )
+
+
+def detector_activity_keyboard(snapshot: Snapshot) -> InlineKeyboardMarkup:
+    return keyboard(
+        [
+            [
+                (
+                    ("✓ " if family in snapshot.settings.active_detectors else "○ ") + FAMILY[family],
+                    f"ui:active:{family}:{'off' if family in snapshot.settings.active_detectors else 'on'}:{snapshot.revision}",
+                )
+            ]
+            for family in FAMILIES
+        ]
+        + [[("Уведомления по семействам", "ui:detectors")]],
         back="settings",
     )
 
@@ -391,7 +408,9 @@ def status_text(snapshot: Snapshot, result: RadarResult, enabled: bool) -> str:
     return (
         "📊 Радар Bybit\n"
         f"Мгновенные уведомления: {'включены' if enabled else 'выключены'}\n"
-        "Детекторы для уведомлений: "
+        "Активные расчёты: "
+        + (", ".join(FAMILY[f] for f in s.active_detectors) or "выключены")
+        + "\nДетекторы для уведомлений: "
         + (", ".join(FAMILY[f] for f in s.alert_detectors) or "нет")
         + (
             f"\nОграничений служебной оценки совпадений: {len(result.errors)}. Подробнее — «Разбор совпадений»."

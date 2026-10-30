@@ -15,7 +15,7 @@ from telegram import Update
 from .analytics import cohorts
 from .analytics_worker import read_snapshot
 from .config import TIMEFRAMES, ConfigError, instrument_key
-from .detector_config import PARAMETERS, effective_parameters
+from .detector_config import FAMILIES, PARAMETERS, effective_parameters
 from .diagnostics import snapshot as diagnostic_snapshot
 from .ingestion import BybitRadar
 from .storage import RevisionConflict
@@ -424,7 +424,7 @@ class ControlDeck:
                 update,
                 "Сроки оценки результата: "
                 + ", ".join(map(str, s.outcome_horizons))
-                + " минут. Изменения применяются только к новым событиям.",
+                + " минут. Изменения применяются только к новым эпизодам.",
                 keyboard([[("Изменить", "ui:field:outcome_horizons")]], back="settings"),
             )
         elif command == "profile" and not raw:
@@ -565,8 +565,11 @@ class ControlDeck:
             selected = ", ".join(FAMILY[f] for f in s.alert_detectors) or "выключены"
             await self.c.send(
                 update,
-                "Уведомления по детекторам\nВсе пять семейств рассчитываются для выбранного охвата и сохраняют историю.\n"
-                f"В Telegram разрешены: {selected}.\nКнопки меняют только доставку уведомлений.",
+                "Уведомления по детекторам\n"
+                f"Активные расчёты: {', '.join(FAMILY[f] for f in s.active_detectors) or 'выключены'}.\n"
+                f"В Telegram разрешены: {selected}.\n"
+                "Кнопки меняют только доставку. Выбор не включает отключённые расчёты; "
+                "история, дайджест и агент имеют отдельные правила.",
                 detectors_keyboard(snapshot),
             )
         elif command == "alerts" and not raw:
@@ -767,6 +770,29 @@ class ControlDeck:
                     back="settings",
                 ),
             )
+        elif action == "detector_activity" and len(parts) == 1:
+            from .render import detector_activity_keyboard
+
+            enabled = ", ".join(FAMILY[f] for f in snapshot.settings.active_detectors) or "выключены"
+            await self.c.send(
+                update,
+                "Расчёты детекторов\n"
+                f"Активны: {enabled}.\n"
+                "Отключённое семейство не создаёт новых наблюдений и расчётов. "
+                "Уже сохранённая история и её результаты остаются доступны.\n"
+                "Выбор уведомлений Telegram задаётся отдельно.",
+                detector_activity_keyboard(snapshot),
+            )
+        elif action == "active" and len(parts) == 4:
+            if parts[1] not in FAMILIES or parts[2] not in ("on", "off"):
+                raise ConfigError("Некорректный выбор детектора")
+            if not parts[3].isdecimal() or int(parts[3]) != snapshot.revision:
+                raise RevisionConflict("Панель устарела. Откройте расчёты детекторов заново")
+            selected = set(snapshot.settings.active_detectors)
+            selected.add(parts[1]) if parts[2] == "on" else selected.discard(parts[1])
+            settings = snapshot.settings.changed(active_detectors=tuple(f for f in FAMILIES if f in selected))
+            self.c.store.update(snapshot.revision, settings)
+            await self.callback(update, ["detector_activity"])
         elif action == "composite":
             result = await self.c.market.snapshot(snapshot.settings)
             if self.c.store.snapshot().revision != snapshot.revision:
@@ -1001,6 +1027,8 @@ class ControlDeck:
                 )
             else:
                 raise ConfigError("Неизвестный раздел диагностики")
+        elif action == "active":
+            raise ConfigError("Некорректная кнопка расчётов детектора")
         elif action == "commands":
             from .bot import COMMANDS, MANUAL_FIELDS
 
