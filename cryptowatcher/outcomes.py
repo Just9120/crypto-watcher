@@ -206,7 +206,14 @@ def episode_results(
         results = []
         for horizon in horizons:
             result = history.get(
-                "outcome-head:" + identity(f"outcome/{origin['episode_id']}/{horizon}/{METHOD}")
+                "outcome-head:"
+                + identity(
+                    f"outcome/{origin['episode_id']}/{horizon}/"
+                    + origin.get(
+                        "outcome_methodology_version",
+                        "2" if origin.get("outcome_unit") == "EPISODE" else METHOD,
+                    )
+                )
             )
             if result is None:
                 # Original method1 used event identity. Keep old immutable results readable.
@@ -237,14 +244,17 @@ class OutcomeWorker:
     def admit(self, event: dict[str, Any]) -> None:
         """Called inside the event producer's or initial-admission transaction."""
         episode = self.history.get("episode-head:" + event["episode_id"])
-        if episode and episode.get("origin_event_id", event["event_id"]) != event["event_id"]:
+        per_episode = event.get("outcome_unit") != "EVENT_REFERENCE"
+        if per_episode and episode and episode.get("origin_event_id", event["event_id"]) != event["event_id"]:
             return
         settings = OwnerSettings.from_payload(event["settings_snapshot"])
         native = f"{event['market_type']}/{event['symbol']}/{event['timeframe']}"
         stream = native.rsplit("/", 1)[0] + "/1m"
         protect(self.history, native, event["source_inputs"])
+        method = event.get("outcome_methodology_version", METHOD)
+        unit_id = event["episode_id"] if per_episode else event["event_id"]
         for horizon in settings.outcome_horizons:
-            outcome_id = identity(f"outcome/{event['episode_id']}/{horizon}/{METHOD}")
+            outcome_id = identity(f"outcome/{unit_id}/{horizon}/{method}")
             key = "outcome-job:" + outcome_id
             if self.history.get(key) is not None or (
                 self.store.bounded
@@ -259,7 +269,7 @@ class OutcomeWorker:
                 "event_id": event["event_id"],
                 "event_revision": event["revision"],
                 "horizon_min": horizon,
-                "methodology_version": METHOD,
+                "methodology_version": method,
                 "stream": stream,
                 "state": "PENDING",
                 "next_attempt_ms": due,

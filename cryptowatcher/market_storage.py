@@ -112,6 +112,9 @@ def enable(db: sqlite3.Connection) -> None:
 
     create(db)
     create_meter(db)
+    from .episode_summary import install as install_episodes
+
+    install_episodes(db)
     from .expiry_index import install as install_expiry
 
     install_expiry(db)

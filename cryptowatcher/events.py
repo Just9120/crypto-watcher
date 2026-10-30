@@ -705,6 +705,8 @@ class EventEngine:
                         "event_id": event_id,
                         "revision": 1,
                         "episode_id": episode["episode_id"],
+                        "outcome_unit": "EPISODE",
+                        "outcome_methodology_version": "2",
                         "episode_revision": episode["revision"],
                         "venue": "BYBIT",
                         "symbol": symbol,

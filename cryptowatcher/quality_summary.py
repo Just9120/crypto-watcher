@@ -97,6 +97,10 @@ def prepare_event_facts(store: Store, event: dict[str, Any]) -> list[ArchiveFact
     from .events import PREFIX, History
     from .storage import StateError
 
+    if event.get("outcome_unit") == "EPISODE":
+        from .episode_summary import prepare
+
+        return prepare(store, event)
     history = History(store)
     # Owner/event index is bounded to this event; never walk all method heads.
     from .expiry_index import analytic_heads
@@ -206,6 +210,12 @@ def archive_facts(store: Store, prepared: list[ArchiveFact]) -> None:
     from .quality_layout import put
     from .quality_packets import AppendSizeError, append_many, pack
 
+    episode_facts = [entry for entry in prepared if entry[3].get("episode_id")]
+    if episode_facts:
+        from .episode_summary import archive
+
+        archive(store, episode_facts)
+        prepared = [entry for entry in prepared if not entry[3].get("episode_id")]
     history = History(store)
     groups: dict[tuple[int, str, str], tuple[dict[str, Any], Any, list[Any]]] = {}
     provenance_cache: dict[str, Any] = {}

@@ -97,7 +97,8 @@ def test_preparing_archive_facts_does_not_write_or_mutate_frozen_inputs(store):
     )
     for _, group, provenance, _ in prepared:
         assert group["settings"] == event["settings_revision"]
-        assert encode(provenance["settings_snapshot"]) == encode(event["settings_snapshot"])
+        assert encode(provenance["membership"]["settings_snapshot"]) == encode(event["settings_snapshot"])
+        assert provenance["origin"]["settings_revision"] == event["settings_revision"]
     assert store.db.total_changes == changes
     assert list(store.db.iterdump()) == before and encode(event) == frozen
 

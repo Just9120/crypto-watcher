@@ -157,7 +157,8 @@ def test_workers_restart_protection_cohorts_and_causal_revisions(tmp_path):
     comparison = ComparisonWorker(store)
     while history.items("comparison-pending:"):
         comparison.work(NOW)
-    assert history.items("comparison-head:") and history.items("protected:")
+    assert not history.items("comparison-head:")  # No automatic N20 research.
+    assert history.items("outcome-job:") and history.items("protected:")
     assert decision_context(history, produced["event_id"], NOW - 1)["event"] is None
     initial = decision_context(history, produced["event_id"], NOW)
     assert initial["episode"]["available_at_ms"] <= NOW and "outcome" not in initial

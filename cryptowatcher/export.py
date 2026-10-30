@@ -209,6 +209,12 @@ def ndjson(store: Store, selection: Selection) -> Iterator[str]:
                     )
                     + "\n"
                 )
+            from . import episode_summary
+
+            if episode_summary.installed(store.db):
+                for record in episode_summary.records(store, selection):
+                    counts["quality_summary"] = counts.get("quality_summary", 0) + 1
+                    yield encode({"schema": SCHEMA, "type": "quality_summary", "record": record}) + "\n"
         yield (
             encode({"schema": SCHEMA, "type": "complete", "counts": counts, "selected_events": total}) + "\n"
         )

@@ -406,6 +406,9 @@ class BoundedRetention:
                 store.db.execute(
                     "DELETE FROM market_quality WHERE day=? AND cohort=? AND chunk=?", (day, cohort, chunk)
                 )
+            from .episode_summary import collect as collect_episodes
+
+            collect_episodes(store.db, now_ms // DAY, batch)
             from .expiry_index import collect_garbage as collect_events
             from .quality_layout import collect_garbage as collect_quality
 

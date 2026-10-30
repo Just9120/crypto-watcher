@@ -178,6 +178,36 @@ History всех families независима от Telegram selection/mute. Coa
 
 Restart восстанавливает episodes, per-direction conditions и pending work; exchange clock устанавливается до expiry решения. Незавершённый IN_FLIGHT означает ambiguous ack, поэтому exactly-once не заявляется. Forced closure подавляет старое условие до re-arm; complete recovered non-signal bars могут подтвердить re-arm без historical live flood. Bootstrap/recovery сохраняют последнее проверенное наблюдение как historical; G2B не выполняет ретроспективный detector backtest всех raw candles.
 
+## LIGHT-RADAR: episode analytics (текущая implementation-ветка)
+
+Новые события явно фиксируют outcome_unit=EPISODE и outcome_methodology_version=2.
+Первая reference point и первый набор horizons неизменны. Повторное подтверждение
+без значимого изменения не создаёт immutable event revision или новый расчёт.
+Статистика связывает первый outcome с первыми revisions всех meaningful
+подтверждений episode; внутри выбранной группы N уникален. Detector/TF/settings
+группы пересекаются, их N не складывается. Исторический cutoff учитывает availability
+самих подтверждений. Legacy event-reference results сохраняют собственную единицу.
+
+После30d details новая модель сохраняет в той же SQLite числовые results по
+episode/horizon/method, отдельные group memberships и общую provenance dictionary.
+Полные settings/definitions не копируются для каждого result. FK/refcounts и
+constant-size counters изменяются в одной transaction с удалением details;
+неиспользуемая provenance удаляется bounded GC через partial index.
+Ни свечи, ни source arrays, ни decision contexts в12month summaries не входят.
+Expiry читает saved metadata/numeric metrics, не восстанавливает истёкшие окна.
+При поэтапном expiry live membership продолжает использовать уже сохранённый
+числовой result; это сохраняет N на границе удаления первого observation.
+SQL aggregates и CSV/NDJSON используют одинаковые episode units и UTC-day policy
+архивной части; quantitative facts и методология доступны без старых карточек.
+
+Установка summary schema additive только на writable connection; readonly её
+не создаёт. Старые market_quality codecs/readers остаются для legacy event facts,
+method versions и comparator distributions. Их наличие не разрешает новый N20:
+автоматический admission удалён, завершение совместимости manual entry points
+остаётся частью текущей Goal. General candle TTL72h, historical/suppressed
+admission, unified capacity forecast и весь offered/saved/due/delivery benchmark
+ещё требуют завершения; этот раздел не подтверждает их поставку или приёмку VPS.
+
 ## G3 analytics и independent digest
 
 `outcomes.py` принимает jobs в event transaction, затем bounded worker вычисляет полные future1m окна без смены reference; `analytics.py` вычисляет frozen prior comparator для каждого события в ограниченном batch и отделяет causal readout от late analytics. Cohort distributions сортирует/агрегирует SQLite, exporter не собирает все raw returns в памяти. Telegram/CLI views имеют явные ограничения выдачи; streaming export через отдельный readonly connection не усечён и pinning snapshot проверен concurrent-writer fixture.

@@ -10,7 +10,14 @@ from .storage import Store
 TARGET = 25_000_000_000
 BUDGET = 30_000_000_000
 QUALITY_CATEGORIES = frozenset(
-    {"quality", "quality_numeric", "quality_components", "quality_frames", "quality_numeric_frames"}
+    {
+        "quality",
+        "quality_numeric",
+        "quality_components",
+        "quality_frames",
+        "quality_numeric_frames",
+        "quality_episodes",
+    }
 )
 SAMPLE_FORMAT = 12
 
