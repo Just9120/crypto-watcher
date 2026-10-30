@@ -28,14 +28,14 @@ def _aggregate(store: Store, start: int, end: int, now: int) -> dict[str, Any]:
     groups = [
         dict(row)
         for row in store.db.execute(
-            "SELECT json_extract(cw_record_json(payload_json),'$.market_type') AS market, json_extract(cw_record_json(payload_json),'$.detector_id') AS detector,COUNT(*) AS events,COUNT(DISTINCT json_extract(cw_record_json(payload_json),'$.symbol')) AS instruments"
+            "SELECT json_extract(cw_record_json(payload_json),'$.market_type') AS market, json_extract(cw_record_json(payload_json),'$.detector_id') AS detector,COUNT(DISTINCT json_extract(cw_record_json(payload_json),'$.episode_id')) AS events,COUNT(DISTINCT json_extract(cw_record_json(payload_json),'$.symbol')) AS instruments"
             + base
             + " GROUP BY market,detector ORDER BY market,detector",
             args,
         )
     ]
     count = store.db.execute(
-        "SELECT COUNT(*),COUNT(DISTINCT json_extract(cw_record_json(payload_json),'$.market_type') || '/' || json_extract(cw_record_json(payload_json),'$.symbol'))"
+        "SELECT COUNT(DISTINCT json_extract(cw_record_json(payload_json),'$.episode_id')),COUNT(DISTINCT json_extract(cw_record_json(payload_json),'$.market_type') || '/' || json_extract(cw_record_json(payload_json),'$.symbol'))"
         + base,
         args,
     ).fetchone()
@@ -54,7 +54,7 @@ def _aggregate(store: Store, start: int, end: int, now: int) -> dict[str, Any]:
         dict(row)
         for row in store.db.execute(
             "SELECT json_extract(cw_record_json(payload_json),'$.market_type') || '/' || "
-            "json_extract(cw_record_json(payload_json),'$.symbol') AS instrument,COUNT(*) AS events"
+            "json_extract(cw_record_json(payload_json),'$.symbol') AS instrument,COUNT(DISTINCT json_extract(cw_record_json(payload_json),'$.episode_id')) AS events"
             + base
             + " GROUP BY instrument ORDER BY events DESC,instrument LIMIT 5",
             args,
@@ -75,11 +75,14 @@ def _aggregate(store: Store, start: int, end: int, now: int) -> dict[str, Any]:
         "end_ms": end,
         "snapshot_ms": now,
         "event_count": count[0],
+        "episode_count": count[0],
+        "population": "EPISODES_WITH_MEANINGFUL_UPDATES_IN_PERIOD",
+        "groups_overlap": True,
         "active_instruments": count[1],
         "groups": groups,
         "strongest_episodes": strongest,
         "most_active_instruments": activity,
-        "activity_metric": "SAVED_EVENT_OBSERVATIONS",
+        "activity_metric": "UNIQUE_EPISODES",
         "ongoing_episodes": ongoing,
         "period": "[start,end)",
         "ongoing_at": "snapshot_ms",
@@ -89,22 +92,32 @@ def _aggregate(store: Store, start: int, end: int, now: int) -> dict[str, Any]:
 def text(snapshot: dict[str, Any]) -> str:
     from .telegram_views import DIRECTION, FAMILY, amount, market, when
 
+    episode_mode = snapshot.get("activity_metric") == "UNIQUE_EPISODES"
+    unit = "Эпизодов" if episode_mode else "Событий"
     lines = [
         f"📋 Дайджест · {when(snapshot['start_ms'])} — {when(snapshot['end_ms'])}",
-        f"Событий: {snapshot['event_count']} · инструментов: {snapshot['active_instruments']}",
-        "Оба рынка; сохранённые наблюдения включают исторические и без уведомлений.",
+        f"{unit}: {snapshot['event_count']} · инструментов: {snapshot['active_instruments']}",
+        "Оба рынка; уникальные эпизоды со значимыми обновлениями за период."
+        if episode_mode
+        else "Оба рынка; сохранённые наблюдения включают исторические и без уведомлений.",
     ]
     lines += [
-        f"• {market(r['market'])} · {FAMILY.get(r['detector'], r['detector'])}: {r['events']} событий / {r['instruments']} инструментов"
+        f"• {market(r['market'])} · {FAMILY.get(r['detector'], r['detector'])}: {r['events']} {'эпизодов' if episode_mode else 'событий'} / {r['instruments']} инструментов"
         for r in snapshot["groups"]
     ]
-    lines.append("\n📊 Самые активные инструменты · число сохранённых наблюдений:")
+    if episode_mode:
+        lines.append("Группы пересекаются: эпизод с несколькими детекторами входит в каждую группу один раз.")
+    lines.append(
+        "\n📊 Самые активные инструменты · число уникальных эпизодов:"
+        if episode_mode
+        else "\n📊 Самые активные инструменты · число сохранённых наблюдений:"
+    )
     lines += [
         f"• {v['instrument']} · {v['events']}" for v in snapshot.get("most_active_instruments", [])
     ] or ["Нет наблюдений за период."]
     lines.append("\n📈 Самые сильные эпизоды периода:")
     lines += [
-        f"• {e['instrument']} · {DIRECTION.get(e['direction'], e['direction'])} · интенсивность ×{amount(round(e['strength'], 2))} · наблюдений {e['events']}"
+        f"• {e['instrument']} · {DIRECTION.get(e['direction'], e['direction'])} · интенсивность ×{amount(round(e['strength'], 2))} · значимых наблюдений {e['events']}"
         for e in snapshot["strongest_episodes"]
     ] or ["Нет эпизодов за период."]
     lines.append("\n⏳ Продолжающиеся эпизоды на момент сборки:")

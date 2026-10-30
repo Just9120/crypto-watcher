@@ -159,3 +159,66 @@ async def test_preference_change_during_network_does_not_resurrect_pending(store
         "CANCELED_AFTER_FAILED_ATTEMPT" if failure else "DELIVERED_PRIOR_PREFERENCE"
     )
     assert digest.history.count("digest-pending:") == 0 and digest.preference()["enabled"] is False
+
+
+@pytest.mark.parametrize("bounded", [False, True])
+def test_unique_episode_counts_do_not_inflate_activity_or_overlapping_groups(tmp_path, bounded):
+    from contextlib import closing
+
+    from cryptowatcher.config import OwnerSettings
+    from cryptowatcher.digest import text
+    from cryptowatcher.market_storage import enable
+    from cryptowatcher.storage import Store
+
+    start = 1_800_000_000_000
+    with closing(Store(tmp_path / "digest-episodes.db", 233382575)) as store:
+        store.initialize(OwnerSettings())
+        if bounded:
+            enable(store.db)
+            store.bounded = True
+        store.clock_ms = lambda: start
+        history = History(store)
+        for index, (family, tf, symbol, episode) in enumerate(
+            [
+                ("price", "1m", "BTCUSDT", "first"),
+                ("price", "3m", "BTCUSDT", "first"),
+                ("composite", "1m", "BTCUSDT", "first"),
+                ("price", "1m", "ETHUSDT", "second"),
+            ]
+        ):
+            with store.db:
+                history.version(
+                    "event",
+                    dict(
+                        event_id=identity(f"digest-confirmation/{index}"),
+                        revision=1,
+                        episode_id=identity("digest-episode/" + episode),
+                        market_observation_ms=start + MINUTE,
+                        available_at_ms=start + MINUTE,
+                        market_type="spot",
+                        detector_id=family,
+                        symbol=symbol,
+                        timeframe=tf,
+                        direction="UP",
+                        strength=index + 1,
+                        reference_price=100,
+                        reference_time_ms=start,
+                    ),
+                )
+        before = store.db.total_changes
+        snapshot = aggregate(store, start, start + 2 * MINUTE, start + 2 * MINUTE)
+        assert store.db.total_changes == before
+        assert snapshot["event_count"] == snapshot["episode_count"] == 2
+        assert snapshot["active_instruments"] == 2
+        assert snapshot["groups_overlap"] is True
+        assert {r["detector"]: r["events"] for r in snapshot["groups"]} == {
+            "price": 2,
+            "composite": 1,
+        }
+        assert {r["instrument"]: r["events"] for r in snapshot["most_active_instruments"]} == {
+            "spot/BTCUSDT": 1,
+            "spot/ETHUSDT": 1,
+        }
+        assert snapshot["activity_metric"] == "UNIQUE_EPISODES"
+        rendered = text(snapshot)
+        assert "Эпизодов: 2" in rendered and "Группы пересекаются" in rendered
