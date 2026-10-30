@@ -1,5 +1,57 @@
 # Handoff CryptoWatcher → trading agent
 
+## LIGHT-RADAR: совместимость без изменения v2
+
+Текущий implementation contract сохраняет schema `cryptowatcher.market_event.v2`,
+HMAC/raw bytes, event/source/transport revisions, exact ACK и false execution flags.
+Это не activation receiver и не разрешение на live POST. Исторические runtime/CI
+records ниже относятся к указанным датам; поставка LIGHT-RADAR подтверждается
+отдельными records текущей Goal в [плане](../open_issues.md#текущий-implementation-checkpoint).
+
+Внутренний episode имеет одну неизменную reference price/time первого observation;
+его outcomes/methodology2/horizons/settings/noise не переносятся на последующий update.
+Повторная свеча без значимого изменения не создаёт исследование или agent intent.
+Новое confirmation detector/TF либо существенное усиление — meaningful update.
+Telegram preferences/mute не меняют этот independent consumer.
+
+В публичном v2 meaningful observation сохраняет совместимое значение
+`reference_at=market_observed_at` и reference close из собственных frozen inputs.
+Этот observation reference не объявляется новой точкой episode outcomes.
+Late `HISTORICAL_OUTCOME_UPDATE` передаётся от origin event с его исходными price/time;
+replay позднего confirmation разрешает тот же origin, а не смешивает его outcomes
+с ценой нового observation. Если origin detail отсутствует, replay явно недоступен.
+Нет скрытого нового расчёта. Передача outcomes позднему non-origin reference
+отклоняется producer. Старые event-reference записи сохраняют прежнюю проекцию.
+
+Receiver v2 имеет закрытые public settings. Новый persisted `active_detectors`
+остаётся внутренним domain field: в v2 он не добавляется. `settings_snapshot` и
+`settings_sha256` относятся к одному emitted public projection из прежних20полей;
+их значения/revision и legacy absence не дополняются текущими defaults. Полные
+внутренние settings, включая activation, сохраняются в history/export. Неизвестное
+новое поле нельзя без review незаметно отправить: producer fail-closed. Confirmation
+hashes используют тот же public projection. Замороженные retries прежнего outbox
+не пересериализуются новой версией.
+
+Read-only schema qualification30Oct: неизменные public receiver blobs
+v2 `ea1ec3e3b117159e3e3f1242678d15f1421f91b0`,
+v1 `f73a3533014b4b5ad4321e3e4f9a74af27a37af9`,
+base `eb22bb839016483d8699e05b43c3aac711ed6f93`;
+зависимости из lock blob `5e41d0d42a8d58122a2e983db76b32855a54ace2`.
+На изолированном Python3.12/Pydantic2.14.1 приняты40current producer fixtures обоих
+markets/4TF/5families плюс meaningful later update и historical root replay.
+По42tampered случаев authority/internal-settings/future-time отклонены.
+Receiver source, credentials, ingest и DB не менялись; его текущий runtime не проверен.
+Снимки parser/locked dependencies/qualification script/results сохранены внеGit.
+В репозитории остаётся небольшой pinned public-fields fixture и producer regression.
+Это воспроизводимая boundary qualification, не live acceptance и не замена receiver CI.
+
+Общее окно source candles72h; дольше только использованные inputs доступных30d
+подробностей. Описательные aggregates по unique episodes —12календарных месяцев,
+без полного raw context. Group N пересекаются и не складываются. Automatic N20
+не выполняется; legacy command/callback не запускает новое исследование.
+Working hard limit35GB, желательный25GB; backup/temp reserve и общий VPS qualification
+проверяются отдельно. Успешный transport/schema test не подтверждает этот capacity.
+
 ## Handoff принимающему проекту
 
 **Решение владельца S06/D23,16Oct2026:** CryptoWatcher отвечает за standalone
@@ -33,7 +85,7 @@ alerts под ручную торговлю и готовый producer/contract.
 | [Producer regression suite](../../tests/test_agent_delivery.py) | Controlled receiver проверяет подпись/identity/false authority; restart/retry/outage/Telegram isolation/expired historical replay |
 | [History/export contract](../state_contract.md), [CLI navigation](../../README.md#outcomes-digest-и-export) | Frozen event/reference/availability, NDJSON/CSV, causal context и bounded retention |
 | [Primary records](../open_issues.md#evidence-и-baseline) | CW runtime130225d2/image26b64aee…/CI38897051479/CD38897380425; подробные identities и ограничения в плане |
-| Reference consumer | Внешний repo `claude-bybit-trading-agent`, `app/schemas/cryptowatcher_v2.py`; последняя проверенная revision8c207edf, PR949/CD38899376113. Current consumer main/runtime перед activation перепроверяет принимающая задача |
+| Reference consumer | Внешний repo `claude-bybit-trading-agent`, public v2/v1/base blobs и lock snapshot30Oct приведены выше. Прежняя qualification8c207edf/PR949/CD38899376113 остаётся исторической; current runtime/activation перепроверяет принимающая задача |
 
 Example generated при контролируемом времени **2027-01-15**, producer_ref
 `test-radar`, producer source SHA из fixture (повторяющаяся `a`), synthesized prices
@@ -69,11 +121,11 @@ CF1010 и HTTPx503 ingest_disabled описаны ниже, причину св�
 берутся из event identity; legacy `bybit_category`/`signal_timeframe` в settings
 описывают owner card/compatibility и не ограничивают shared both-market/4TF pipeline.
 Raw source windows выдаются producer-side в пределах хранения, не помещаются в
-bounded envelope. Details30d, small-TF candles35d с конечными used dependencies,
-quality12calendar months; summaries не восстанавливают старый decision context.
-History началась заново16Oct2026: prior no-signal N ограничен новой generation.
-20GB steady-state target пока не доказан; автоматический growth warning и
-измерения/ограничения доступны в плане. Receiver не должен трактовать missing/
+bounded envelope. Current details30d, общие candles72h с used-input dependencies,
+unique-episode aggregates12calendar months; summaries не восстанавливают старый
+decision context. Current generation устанавливается readback после согласованного
+LIGHT-RADAR перехода. Capacity35GB и своевременность ещё требуют приёмки;
+исторические даты/reset/старые20GB оценки не описывают новый baseline. Receiver не должен трактовать missing/
 incomplete/stale context как zero return, fresh signal или торговое разрешение.
 
 ## Contract и qualification
@@ -83,7 +135,7 @@ versions независимы от нее. Действующий backup/recover
 [bounded-storage процедурой](bounded-storage-reset.md#routine-schema2-backupcd).
 Ни наличие binaries, ни приведенные исторические qualifications не включают
 owner credential/binding; последний activation snapshot и primary records —
-в [плане](../open_issues.md#blockers-и-следующий-шаг).
+в [плане](../open_issues.md#текущий-implementation-checkpoint).
 
 Producer передаёт `cryptowatcher.market_event.v2` в `POST /integrations/cryptowatcher/events`.
 Consumer сохраняет приём v1; v2 поставлен в main67716b3282bf9fefe1a84077dfae7c6c99c6b1f0,

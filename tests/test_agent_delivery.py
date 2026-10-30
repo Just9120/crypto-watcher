@@ -1,11 +1,12 @@
 import hashlib
 import hmac
 import json
+from pathlib import Path
 
 import httpx
 import pytest
 
-from cryptowatcher.agent_contract import envelope
+from cryptowatcher.agent_contract import V2_SETTINGS_FIELDS, envelope, public_settings, timestamp
 from cryptowatcher.agent_delivery import AgentConfig, AgentDelivery
 from cryptowatcher.config import OwnerSettings
 from cryptowatcher.events import EventEngine, History
@@ -266,7 +267,7 @@ def test_atomic_callback_failure_rolls_back_all_source_episode_and_outcome_admis
     assert History(store).count("outcome-pending:") == 0
 
 
-def test_peer_projection_preserves_legacy_snapshot_and_all_market_timeframe_units(store, tmp_path):
+def peer_samples(store):
     snapshot = store.snapshot()
     store.update(snapshot.revision, OwnerSettings().with_profile("sensitive"))
     radar = EventEngine(store, source_revision=SOURCE)
@@ -294,10 +295,15 @@ def test_peer_projection_preserves_legacy_snapshot_and_all_market_timeframe_unit
         )
         assert (
             value["settings_sha256"]
-            == hashlib.sha256(encode(event["settings_snapshot"]).encode()).hexdigest()
+            == hashlib.sha256(encode(public_settings(event["settings_snapshot"])).encode()).hexdigest()
         )
         assert value["metric_units"] and len(encode(value).encode()) <= 65536
         samples.append(value)
+    return samples
+
+
+def test_peer_projection_preserves_legacy_snapshot_and_all_market_timeframe_units(store, tmp_path):
+    samples = peer_samples(store)
     assert len(samples) == 40
     assert {v["detector_id"] for v in samples} == {"price", "turnover", "breakout", "volatility", "composite"}
     (tmp_path / "peer-payloads.json").write_text(encode(samples), encoding="utf-8")
@@ -444,3 +450,105 @@ async def test_invalid_outcome_is_delivered_incomplete_without_blocking_next_eve
         observe(radar, now=NOW + 300000, market="linear", close=110)
         await delivery.work(NOW + 302000)
         assert calls[-1]["delivery_kind"] == "LIVE_EVENT"
+
+
+def test_v2_projection_keeps_closed_receiver_settings_and_full_domain_history(store):
+    fixture = json.loads((Path(__file__).parent / "fixtures/agent_v2_public_settings.json").read_text())
+    assert V2_SETTINGS_FIELDS == set(fixture["fields"])
+    samples = peer_samples(store)
+    for value in samples:
+        assert set(value["settings_snapshot"]) == V2_SETTINGS_FIELDS
+        assert "active_detectors" not in value["settings_snapshot"]
+        event = History(store).get(f"event:{value['event_id']}:0000000001")
+        assert len(event["settings_snapshot"]["active_detectors"]) == 5
+        assert public_settings(event["settings_snapshot"]) == value["settings_snapshot"]
+        legacy = {k: v for k, v in event["settings_snapshot"].items() if k != "active_detectors"}
+        before = encode(legacy)
+        assert encode(public_settings(legacy)) == before
+    with pytest.raises(ValueError, match="Unsupported public"):
+        public_settings({**samples[0]["settings_snapshot"], "unknown_secret": "must_not_emit"})
+
+
+def test_synthetic_v2_example_matches_current_producer_fixture(store):
+    path = Path(__file__).resolve().parents[1] / "docs/contracts/cryptowatcher.market_event.v2.example.md"
+    text = path.read_text(encoding="utf-8")
+    raw = text.split("```json\n", 1)[1].split("\n```", 1)[0] + "\n"
+    expected = next(
+        v
+        for v in peer_samples(store)
+        if v["market_type"] == "SPOT" and v["timeframe"] == "3m" and v["detector_id"] == "price"
+    )
+    assert json.loads(raw) == expected
+    assert hashlib.sha256(raw.encode()).hexdigest() in text
+    assert f"{len(raw.encode())} bytes" in text
+
+
+async def test_replay_of_later_confirmation_delivers_original_episode_reference_and_outcomes(store):
+    worker = OutcomeWorker(store)
+    radar = EventEngine(store, selected("price"), source_revision=SOURCE, on_event=worker.admit)
+    observe(radar)
+    for minute in (1, 2):
+        observe(radar, NOW + minute * 60000)
+    observe(radar, NOW + 3 * 60000, tf="3m", close=120)
+    events = radar.history.events(10)
+    origin = min(events, key=lambda x: x["market_observation_ms"])
+    later = max(events, key=lambda x: x["market_observation_ms"])
+    assert later["event_id"] != origin["event_id"] and later["episode_id"] == origin["episode_id"]
+    assert later["reference_time_ms"] == origin["reference_time_ms"]
+    update = envelope(
+        radar.history,
+        later,
+        radar.history.get("episode-head:" + later["episode_id"]),
+        producer_ref="test-radar",
+        revision=1,
+        kind="EPISODE_UPDATE",
+        now_ms=NOW + 3 * 60000 + 2000,
+    )
+    assert update["reference_at"] == timestamp(later["market_observation_ms"])
+    assert update["reference_price"] == 120 and origin["reference_price"] == 102
+    assert not update["historical_outcomes"]
+    assert (
+        radar.history.get("event-head:" + later["event_id"])["reference_time_ms"]
+        == origin["reference_time_ms"]
+    )
+    with pytest.raises(ValueError, match="original reference"):
+        envelope(
+            radar.history,
+            later,
+            radar.history.get("episode-head:" + later["episode_id"]),
+            producer_ref="test-radar",
+            revision=1,
+            kind="HISTORICAL_OUTCOME_UPDATE",
+            now_ms=NOW + 4000000,
+            outcomes=[{"outcome_id": "must_not_project"}],
+        )
+    end = NOW + 60 * 60000
+    Sources(store).put(
+        "spot/BTCUSDT/1m",
+        [
+            Candle.parse([t, 102, 103, 101, 102, 1, 400], "1m", "rest", end, end)
+            for t in range(NOW, end, 60000)
+        ],
+    )
+    worker.work(end)
+    before = store.snapshot()
+    store.update(before.revision, before.settings.changed(price_move_min=99))
+    calls = []
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda r: calls.append(json.loads(r.content)) or ack(r))
+    ) as client:
+        delivery = AgentDelivery(store, client, AgentConfig.from_env(ENV))
+        delivery.enable(True)
+        delivery.replay(later["event_id"], end)
+        await delivery.work(end)
+    assert len(calls) == 1
+    value = calls[0]
+    assert value["event_id"] == origin["event_id"] and value["reference_price"] == origin["reference_price"]
+    assert value["reference_at"] == timestamp(origin["reference_time_ms"])
+    assert value["settings_snapshot"]["price_move_min"] == 2
+    assert len(value["historical_outcomes"]) == 4
+    assert all(
+        o["methodology_version"] == "2"
+        and o["target_at"] == timestamp(origin["reference_time_ms"] + o["horizon_minutes"] * 60000)
+        for o in value["historical_outcomes"]
+    )

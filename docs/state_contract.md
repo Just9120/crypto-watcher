@@ -857,3 +857,15 @@ Owner `enrichment_enabled` — строгий bool, default OFF при отсу�
 Event `enrichment` — frozen optional context, выбранный по availability≤observation cutoff, с method/mapping revision, instrument identities и per-metric values/units/source/observation/availability/cadence. Historical observation не получает future mapping/OI/ticker; malformed/missing/stale metric остаётся маркированным. Current owner view рассчитывает latest freshness отдельно. Использованные snapshots доступны в event/export в пределах подробного срока; после expiry остаются quality summaries/settings/methodology, без бессрочных source arrays.
 
 Explicit `recompare` сохраняет comparison job original event_revision, повторно удерживает prior input ranges до completion и добавляет recalculation_requested_ms. Предыдущие result revisions доступны по as-of cutoff и export; event/settings/reference не изменяются. Автоматической recalibration/threshold mutation нет. При записи owner payload с enrichment field G3 reader несовместим: разрешён forward-fix/verified G5, без DB downgrade или restore поверх живых данных. Enrichment/recompare не меняют текущую physical schema2; logical v1 не разрешает запуск schema1 binary на schema2.
+
+
+### Agent v2 projection LIGHT-RADAR
+
+Internal episode reference остаётся первой price/time; последующие meaningful events
+сохраняют этот analytics origin. В неизменном public v2 observation reference —
+его собственные market_observed_at/close из frozen inputs. Episode outcomes отправляются
+только от origin event; replay confirmation разрешает origin, не переякоривает числа.
+Public settings projection сохраняет прежние20полей и их canonical SHA256, без нового
+internal active_detectors. Полный owner snapshot остаётся в history/export.
+Unknown public fields отклоняются, legacy absence и immutable retry bytes сохраняются.
+Проверка closed schema/provenance и ограничения — в [handoff](runbooks/agent-delivery.md#light-radar-совместимость-без-изменения-v2).

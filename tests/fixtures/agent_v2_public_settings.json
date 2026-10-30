@@ -1,0 +1,29 @@
+{
+  "source_repository": "Just9120/claude-bybit-trading-agent",
+  "source_file": "app/schemas/cryptowatcher_v2.py",
+  "source_blob": "ea1ec3e3b117159e3e3f1242678d15f1421f91b0",
+  "fields": [
+    "alert_detectors",
+    "alert_universe_mode",
+    "bybit_category",
+    "candle_retention_days",
+    "cooldown_min",
+    "custom_pairs",
+    "detail_retention_days",
+    "detector_parameters",
+    "digest_interval_min",
+    "enrichment_enabled",
+    "liquidity_floor_24h",
+    "outcome_horizons",
+    "price_move_min",
+    "profile",
+    "radar_poll_sec",
+    "signal_timeframe",
+    "sma_periods",
+    "turnover_spike_min",
+    "watchlist",
+    "watchlist_multiplier"
+  ],
+  "extra": "forbid",
+  "qualification": "public schema boundary, not live receiver acceptance"
+}
