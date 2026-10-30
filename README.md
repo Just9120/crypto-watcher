@@ -234,3 +234,14 @@ python -m scripts.measure_market_storage --database /absolute/new/fixture.sqlite
 ```
 
 Сценарий охватывает оба рынка/4TF/5families, outcomes и служебные записи, controlled expiry и сравнение analytics. Он не измеряет частоту production signals; artifact сохранять отдельно от working DB. Разовый production reset/cutover выполняется по [отдельной процедуре](docs/runbooks/bounded-storage-reset.md); пока ее post-checks не пройдены, новая generation не считается поставленной. Старые backup/conversion tools выше остаются историческими, не текущей задачей.
+
+
+### Минимальный replay LIGHT-RADAR
+
+Из корня в locked dev environment: `python -m pytest -q tests/test_light_replay.py`.
+Для отдельного нового отчёта: `python -m tests.light_replay --report <новый-путь.json>`.
+Сценарий создаёт только временную локальную БД и удаляет её; Telegram/agent transport
+заглушены, используется production ingestion/admission/outcome/delivery code.
+Logical market time ускорен, wall/CPU измеряются отдельно. Это finite regression
+и сравнение одинакового входа, не доказательство broad-Universe ёмкости VPS.
+Подробные limits и текущие gates — в [плане](docs/open_issues.md).
