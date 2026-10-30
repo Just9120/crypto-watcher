@@ -25,7 +25,7 @@ def legacy_method(monkeypatch):
     from cryptowatcher import outcomes
 
     monkeypatch.setattr(outcomes, "METHOD", "1")
-    monkeypatch.setattr(outcomes, "DEFINITION", {**outcomes.DEFINITION, "version": "1"})
+    monkeypatch.setattr(outcomes, "DEFINITION", outcomes.LEGACY_DEFINITION)
     original = History.version
 
     def legacy_version(history, kind, value):
@@ -760,6 +760,9 @@ def test_pending_method_is_not_silently_replaced_and_recompare_keeps_original_ev
     event = h.events(1)[0]
     job = next(j for _, j in h.items("outcome-job:") if j["event_id"] == event["event_id"])
     monkeypatch.setattr(outcome_module, "METHOD", "2")
+    # V1 is now explicitly supported beside2. Simulate unavailable/corrupt
+    # frozen definition, not merely a different current admission method.
+    monkeypatch.setattr(outcome_module, "LEGACY_DEFINITION", {"version": "UNAVAILABLE"})
     result = worker.calculate(store, job, event)
     assert result["state"] == "INVALID_SOURCE" and result["reason"] == "OUTCOME_METHODOLOGY_UNAVAILABLE"
     with store.db:

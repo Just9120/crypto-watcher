@@ -27,6 +27,13 @@ DEFINITION = {
 }
 
 
+LEGACY_DEFINITION = {
+    **DEFINITION,
+    "version": "1",
+    "reference": "immutable event observation time and reference close",
+}
+
+
 def read_candles(store: Store, stream: str, start: int, end: int) -> list[Candle]:
     frozen = store.bounded and store.readonly and store.db.in_transaction
     key = (stream, start, end, store.db.execute("PRAGMA data_version").fetchone()[0]) if frozen else None
@@ -185,17 +192,21 @@ def pending_key(due: int, outcome_id: str) -> str:
 
 
 def episode_origin(history: History, event: dict[str, Any]) -> dict[str, Any] | None:
-    """Return the frozen first observation, never today's settings or a later update."""
+    """Only an explicit new unit can share an immutable episode origin."""
+    if event.get("outcome_unit") not in (None, "EVENT_REFERENCE", "EPISODE"):
+        raise StateError("Unsupported frozen outcome unit")
+    if event.get("outcome_unit") != "EPISODE":
+        return event  # Untagged frozen v1 data remain event-reference records.
     episode = history.get("episode-head:" + event["episode_id"])
-    if not episode or "origin_event_id" not in episode:
-        return event  # Retained v1 data had a separate reference for each event.
+    if not episode or not episode.get("origin_event_id"):
+        return None
     return history.get(f"event:{episode['origin_event_id']}:0000000001")
 
 
 def episode_results(
     history: History, event: dict[str, Any]
 ) -> tuple[dict[str, Any] | None, tuple[int, ...], list[Any]]:
-    """Small point lookups only; all updates read the original frozen horizon set."""
+    """Point reads of frozen unit/horizons/method; never infer v2 from defaults."""
     from .catalogue_sql import read_snapshot
 
     with read_snapshot(history.store):
@@ -203,22 +214,13 @@ def episode_results(
         if origin is None:
             return None, (), []
         horizons = OwnerSettings.from_payload(origin["settings_snapshot"]).outcome_horizons
-        results = []
-        for horizon in horizons:
-            result = history.get(
-                "outcome-head:"
-                + identity(
-                    f"outcome/{origin['episode_id']}/{horizon}/"
-                    + origin.get(
-                        "outcome_methodology_version",
-                        "2" if origin.get("outcome_unit") == "EPISODE" else METHOD,
-                    )
-                )
-            )
-            if result is None:
-                # Original method1 used event identity. Keep old immutable results readable.
-                result = history.get("outcome-head:" + identity(f"outcome/{origin['event_id']}/{horizon}/1"))
-            results.append(result)
+        per_episode = origin.get("outcome_unit") == "EPISODE"
+        method = origin.get("outcome_methodology_version", "2" if per_episode else "1")
+        unit = origin["episode_id"] if per_episode else origin["event_id"]
+        results = [
+            history.get("outcome-head:" + identity(f"outcome/{unit}/{horizon}/{method}"))
+            for horizon in horizons
+        ]
         return origin, horizons, results
 
 
@@ -244,14 +246,25 @@ class OutcomeWorker:
     def admit(self, event: dict[str, Any]) -> None:
         """Called inside the event producer's or initial-admission transaction."""
         episode = self.history.get("episode-head:" + event["episode_id"])
-        per_episode = event.get("outcome_unit") != "EVENT_REFERENCE"
-        if per_episode and episode and episode.get("origin_event_id", event["event_id"]) != event["event_id"]:
-            return
+        if event.get("outcome_unit") not in (None, "EVENT_REFERENCE", "EPISODE"):
+            raise StateError("Unsupported frozen outcome unit")
+        per_episode = event.get("outcome_unit") == "EPISODE"
+        if per_episode:
+            if not episode or not episode.get("origin_event_id"):
+                raise StateError("Missing frozen episode outcome origin")
+            if episode["origin_event_id"] != event["event_id"]:
+                return
         settings = OwnerSettings.from_payload(event["settings_snapshot"])
         native = f"{event['market_type']}/{event['symbol']}/{event['timeframe']}"
         stream = native.rsplit("/", 1)[0] + "/1m"
         protect(self.history, native, event["source_inputs"])
-        method = event.get("outcome_methodology_version", METHOD)
+        method = event.get("outcome_methodology_version", "2" if per_episode else "1")
+        if method == "1":
+            previous = self.history.get("outcome-method:1")
+            if previous is not None and previous != LEGACY_DEFINITION:
+                raise StateError("Unknown frozen legacy outcome definition")
+            if previous is None:
+                self.history.put("outcome-method:1", LEGACY_DEFINITION)
         unit_id = event["episode_id"] if per_episode else event["event_id"]
         for horizon in settings.outcome_horizons:
             outcome_id = identity(f"outcome/{unit_id}/{horizon}/{method}")
@@ -313,7 +326,21 @@ class OutcomeWorker:
         )
         for row in rows:
             event_id = row[1]["event_id"]
-            self.admit(self.history.get("event:" + event_id + ":0000000001"))
+            event_key = "event:" + event_id + ":0000000001"
+            event = self.history.metadata(event_key)
+            if event is None:
+                raise StateError("Missing frozen outcome admission event")
+            if event.get("outcome_unit") not in (None, "EVENT_REFERENCE", "EPISODE"):
+                raise StateError("Unsupported frozen outcome unit")
+            # Old event-reference history is readable, not a source of newly
+            # scheduled per-candle studies after this model transition. Existing
+            # frozen jobs still finish against their original v1 definition.
+            if event.get("outcome_unit") == "EPISODE":
+                episode = self.history.metadata("episode-head:" + event["episode_id"])
+                if not episode or not episode.get("origin_event_id"):
+                    raise StateError("Missing frozen episode outcome origin")
+                if episode["origin_event_id"] == event_id:
+                    self.admit(self.history.get(event_key))
             admission["cursor"] = row[0]
         admission["complete"] = len(rows) < batch
         self.history.put("outcome-admission", admission)
@@ -333,7 +360,11 @@ class OutcomeWorker:
 
     @staticmethod
     def calculate(store: Store, job: dict[str, Any], event: dict[str, Any]) -> dict[str, Any]:
-        if job.get("methodology_version", "1") != METHOD:
+        method = job.get("methodology_version", "1")
+        available = method == METHOD or (
+            method == "1" and History(store).get("outcome-method:1") == LEGACY_DEFINITION
+        )
+        if not available:
             return {
                 "state": "INVALID_SOURCE",
                 "metrics": {},

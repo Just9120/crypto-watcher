@@ -60,6 +60,8 @@ Goal1 fixes F26,F49–F56 и кодовая частьF22/F38, использо�
 
 | T-FULL01 / F56 | Canonical `checks.py full` с отдельным manual exact-main read-only workflow; Linux3.11/native/quality/whole pytest/JUnit/image/package roundtrip/joint boundary, noCD/no credentials/no schedules. Wrong SHA/main/dirty/Windows/remote Docker/report reuse fail before work; records actual commands, stages/skips/not-run/residuals, owned package cleanup.37profile/delivery guard tests PASS0.18s;quality PASS337/133; `full --plan` reports PLAN_NOT_EXECUTED | Полный профиль не запускался. Обязательный Linux/native обычногоPR и последующийCD остаются pending; local guard tests не substitute native suite |
 
+| T-LEG01 | Self-review: untagged v1 сохраняет собственную reference/method, new EP требуетявныйorigin; metadata-only bootstrap не создаёт старые per-candle jobs. Already-admitted v1 обслуживается прежней declared definition; numeric calculate AST равенb254e6e (SHA8af4425c…). Unknown definition→INVALID_SOURCE без relabel; missing/unknown admission fail-closed.105compatibility/profile tests PASS8.58s+1native skip;62focused final cases PASS7.10s+1skip;quality PASS | Legacy cohort fixtures теперь явноmethod1; current unique-episode path проверяется отдельными new-unit fixtures. Linux/native и full requiredPR пока pending |
+
 
 Proof archive: локальный light-radar-20261030, включая F26-release-metadata/F26-lock-trust-check/F26-tests-01 и policy-storage-next/policy-boundary/policy-installer/quality-policy records и light-replay-comparison.json. Обе CLI replayDB и extracted main source/ZIP удалены после сохранения hashes/harness; освобождено12,809,356bytes. Остальные owned pytest temp/cache dirs пока ожидают финальную очистку. Новые schedules/платные операции не создавались.
 

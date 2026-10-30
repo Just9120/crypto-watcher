@@ -869,3 +869,17 @@ Public settings projection сохраняет прежние20полей и их
 internal active_detectors. Полный owner snapshot остаётся в history/export.
 Unknown public fields отклоняются, legacy absence и immutable retry bytes сохраняются.
 Проверка closed schema/provenance и ограничения — в [handoff](runbooks/agent-delivery.md#light-radar-совместимость-без-изменения-v2).
+
+
+### Frozen v1 outcomes after LIGHT-RADAR
+
+Отсутствие outcome_unit в старой записи означает event-reference v1, не новый
+EPISODE. Reader сохраняет собственную reference/horizon/method такой записи даже
+при наличии общего episode head. Для tagged EPISODE отсутствие origin/head означает
+явную недоступность; текущие defaults или поздний confirmation не заменяют начало.
+Bootstrap читает metadata старых records без восстановления истёкших inputs и не
+создаёт по ним новые per-candle studies. Уже admitted v1 jobs остаются читаемыми и
+могут закончиться по прежней frozen definition; общая numeric calculation function
+побайтно по AST совпадает с main b254e6e. Unit/reference admission version2 — отдельна.
+Неизвестная старая definition даёт INVALID_SOURCE, неизвестные unit/отсутствующий
+admission object fail-closed; исходные записи сохраняются. Это не включает N20 worker.
