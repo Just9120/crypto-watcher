@@ -21,6 +21,41 @@ UNITS = {
 }
 
 
+# V2 receiver has a closed settings object. Domain activation is internal;
+# emitting its new field would break the unchanged public v2 contract.
+V2_SETTINGS_FIELDS = frozenset(
+    (
+        "alert_detectors",
+        "alert_universe_mode",
+        "bybit_category",
+        "candle_retention_days",
+        "cooldown_min",
+        "custom_pairs",
+        "detail_retention_days",
+        "detector_parameters",
+        "digest_interval_min",
+        "enrichment_enabled",
+        "liquidity_floor_24h",
+        "outcome_horizons",
+        "price_move_min",
+        "profile",
+        "radar_poll_sec",
+        "signal_timeframe",
+        "sma_periods",
+        "turnover_spike_min",
+        "watchlist",
+        "watchlist_multiplier",
+    )
+)
+
+
+def public_settings(value: dict[str, Any]) -> dict[str, Any]:
+    if set(value) - V2_SETTINGS_FIELDS - {"active_detectors"}:
+        raise ValueError("Unsupported public v2 settings fields")
+    # Keep original values and legacy absences; never fill current defaults.
+    return {key: item for key, item in value.items() if key in V2_SETTINGS_FIELDS}
+
+
 def timestamp(ms: int) -> str:
     return datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat(timespec="milliseconds")
 
@@ -36,7 +71,7 @@ def confirmation(event: dict[str, Any]) -> dict[str, Any]:
         "detector_id": event["detector_id"],
         "detector_version": f"{event['detector_id']}.v{event['detector_version']}",
         "settings_revision": event["settings_revision"],
-        "settings_sha256": digest(event["settings_snapshot"]),
+        "settings_sha256": digest(public_settings(event["settings_snapshot"])),
         "timeframe": event["timeframe"],
         "strength": float(event["strength"]),
         "market_observed_at": timestamp(event["market_observation_ms"]),
@@ -135,6 +170,19 @@ def envelope(
     outcomes: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """No current settings/defaults or late enrichment enter a recorded source event."""
+    reference_time = event["reference_time_ms"]
+    reference_price = event["reference_price"]
+    if event.get("outcome_unit") == "EPISODE":
+        # Public v2 binds a meaningful observation's reference to its own
+        # close/time. Internal episode analytics retain the separate immutable
+        # origin. Late results/replay use the original event, never a later
+        # confirmation's observation price with the origin's numeric outcomes.
+        current = event["source_inputs"][-1]
+        if current["start"] + current["step"] != event["market_observation_ms"]:
+            raise ValueError("Invalid public observation reference")
+        reference_time, reference_price = event["market_observation_ms"], current["close"]
+        if outcomes and reference_time != event["reference_time_ms"]:
+            raise ValueError("Episode outcomes require original reference")
     result = {
         **confirmation(event),
         "schema_version": "cryptowatcher.market_event.v2",
@@ -149,14 +197,14 @@ def envelope(
         "detected_at": timestamp(event["detection_ms"]),
         "produced_at": timestamp(now_ms),
         "interval_start": timestamp(event["market_observation_ms"] - int(event["timeframe"][:-1]) * 60000),
-        "settings_snapshot": event["settings_snapshot"],
+        "settings_snapshot": public_settings(event["settings_snapshot"]),
         "profile": event["profile"],
         "effective_parameters": event["effective_parameters"],
         "producer_source_revision": event["producer_source_revision"],
         "source_window_sha256": event["source_window_id"],
         "completeness": event["completeness"],
-        "reference_price": float(event["reference_price"]),
-        "reference_at": timestamp(event["reference_time_ms"]),
+        "reference_price": float(reference_price),
+        "reference_at": timestamp(reference_time),
         "source_received_at": timestamp(event["receipt_ms"]) if event.get("receipt_ms") else None,
         "reference_atr14": event["reference_atr14"],
         "tick_size": event["tick_size"],

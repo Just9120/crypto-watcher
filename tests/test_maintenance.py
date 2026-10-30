@@ -373,7 +373,10 @@ async def test_maintenance_and_heartbeat_continue_while_analytics_is_waiting(
         return 0
 
     monkeypatch.setattr(controller.outcomes, "async_work", slow_outcomes)
-    with patch("cryptowatcher.bot.ComparisonWorker.async_work", new=AsyncMock(return_value=0)):
+    with patch(
+        "cryptowatcher.analytics.ComparisonWorker.async_work",
+        new=AsyncMock(side_effect=AssertionError("N20 runtime work")),
+    ):
         task = asyncio.create_task(controller.analytics_job(None))
         await entered.wait()
         try:
@@ -786,7 +789,10 @@ async def test_expiry_priority_yields_to_analytics_and_serializes_the_regular_ca
     with (
         patch.object(controller.retention, "work", side_effect=expire),
         patch.object(controller.outcomes, "async_work", new=AsyncMock(return_value=0)),
-        patch("cryptowatcher.bot.ComparisonWorker.async_work", new=AsyncMock(return_value=0)),
+        patch(
+            "cryptowatcher.analytics.ComparisonWorker.async_work",
+            new=AsyncMock(side_effect=AssertionError("N20 runtime work")),
+        ),
         patch("cryptowatcher.storage_repack.async_work", new=AsyncMock(return_value={"state": "COMPLETE"})),
     ):
         await controller.repack_job(None)
@@ -991,7 +997,7 @@ async def test_completed_initial_repack_continues_pending_live_work_in_the_exist
     await radar.close()
 
 
-async def test_analytics_preserves_serial_readers_and_the_finite_comparison_budget(
+async def test_analytics_preserves_outcome_retention_order_and_never_runs_legacy_comparisons(
     store, infrastructure, monkeypatch
 ):
     controller, radar, _ = steady_repack(store, infrastructure, monkeypatch)
@@ -1003,13 +1009,8 @@ async def test_analytics_preserves_serial_readers_and_the_finite_comparison_budg
         order.append("outcome-done")
         return 3
 
-    async def comparisons(worker, clock, *, seconds):
-        assert order == ["outcome-start", "outcome-done"]
-        assert seconds == 4
-        order.append("comparison-start")
-        await asyncio.sleep(0)
-        order.append("comparison-done")
-        return 2
+    async def comparisons(*args, **kwargs):
+        pytest.fail("N20 worker is retired from the runtime")
 
     def retention(now):
         assert controller.retention_lock.locked()
@@ -1018,19 +1019,18 @@ async def test_analytics_preserves_serial_readers_and_the_finite_comparison_budg
     monkeypatch.setattr(controller, "retention_once", retention)
     with (
         patch.object(controller.outcomes, "async_work", new=outcomes),
-        patch("cryptowatcher.bot.ComparisonWorker.async_work", new=comparisons),
+        patch("cryptowatcher.analytics.ComparisonWorker.async_work", new=comparisons),
         patch("cryptowatcher.storage_meter.sample", side_effect=lambda *args: order.append("meter")),
     ):
         await controller.analytics_job(None)
     assert order == [
         "outcome-start",
         "outcome-done",
-        "comparison-start",
-        "comparison-done",
         "retention",
         "meter",
     ]
     value = store.get_runtime("analytics")
-    assert value["state"] == "OK" and value["processed_outcomes"] == 3 and value["processed_comparisons"] == 2
+    assert value["state"] == "OK" and value["processed_outcomes"] == 3 and value["processed_comparisons"] == 0
+    assert value["comparison_policy"] == "LEGACY_READ_ONLY"
     assert not controller.analytics_lock.locked() and not controller.retention_lock.locked()
     await radar.close()

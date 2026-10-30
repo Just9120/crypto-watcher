@@ -23,7 +23,6 @@ from telegram.ext import (
 )
 
 from .agent_delivery import AgentDelivery
-from .analytics import ComparisonWorker
 from .analytics_recovery import AnalyticsRecovery
 from .config import (
     ConfigError,
@@ -93,7 +92,7 @@ COMMANDS = {
     "horizons": "Сроки оценки результата",
     "analytics": "Статистика детекторов",
     "compare": "Сравнение профилей и версий",
-    "recompare": "Пересчитать сравнение события",
+    "recompare": "Совместимость: статистика эпизодов",
     "enrichment": "Дополнительный контекст деривативов",
     "derivatives": "Контекст деривативов Spot-монеты",
     "digest": "Управление дайджестом",
@@ -156,6 +155,8 @@ MANUAL_FIELDS.update(PARAMETERS)
 
 
 class Controller:
+    comparison_policy = "LEGACY_READ_ONLY"
+
     def __init__(self, infrastructure: Infrastructure, store: Store, market: BybitREST) -> None:
         self.infrastructure = infrastructure
         self.store = store
@@ -292,6 +293,8 @@ class Controller:
             "source_revision": self.infrastructure.source_revision,
             "configuration_revision": self.store.snapshot().revision,
             "telegram_alerts_enabled": self.store.enabled(),
+            "active_detectors": list(self.store.snapshot().settings.active_detectors),
+            "telegram_detector_families": list(self.store.snapshot().settings.alert_detectors),
             "last_poll": self.store.get_runtime("last_poll_status", {"state": "PENDING"}),
             "telegram_delivery": self.store.get_runtime("telegram_delivery", {"state": "PENDING"}),
             "ingestion": self.store.get_runtime("ingestion", {"state": "PENDING"}),
@@ -478,7 +481,7 @@ class Controller:
                 update,
                 "Сроки оценки результата, минут: "
                 + ", ".join(map(str, self.store.snapshot().settings.outcome_horizons))
-                + "\nИзменение применяется только к новым событиям; исходная цена, время и настройки прежних событий сохраняются.",
+                + "\nИзменение применяется только к новым эпизодам; исходная цена, время и настройки прежних эпизодов сохраняются.",
             )
         elif command == "outcomes":
             if raw:
@@ -493,18 +496,15 @@ class Controller:
                 await self.send(update, self.history_notice() + "История пока пуста или событие не найдено.")
             else:
                 for event in events:
-                    from .config import OwnerSettings
-                    from .events import identity
-                    from .outcomes import METHOD
+                    from .outcomes import episode_results
 
-                    horizons = OwnerSettings.from_payload(event["settings_snapshot"]).outcome_horizons
-                    outcomes = [
-                        self.history.get(
-                            "outcome-head:" + identity(f"outcome/{event['event_id']}/{h}/{METHOD}")
-                        )
-                        for h in horizons
-                    ]
-                    await self.send(update, outcome_text(event, outcomes, horizons), event_keyboard(event))
+                    origin, horizons, outcomes = episode_results(self.history, event)
+                    body = (
+                        outcome_text(origin, outcomes, horizons)
+                        if origin is not None
+                        else "Исходные подробности episode уже недоступны в сроке хранения."
+                    )
+                    await self.send(update, body, event_keyboard(event))
         elif command == "enrichment":
             if raw:
                 if raw.lower() not in ("on", "off"):
@@ -521,23 +521,13 @@ class Controller:
                 enrichment_keyboard(self.store.snapshot()),
             )
         elif command == "recompare":
-            try:
-                event_id = str(uuid.UUID(raw))
-                now = (
-                    self.market.server_now()
-                    if isinstance(self.market, BybitRadar)
-                    else int(time.time() * 1000)
-                )
-                if now <= 0:
-                    raise ValueError("Clock pending")
-                state = ComparisonWorker(self.store).requeue(event_id, now)
-            except ValueError as exc:
-                raise ConfigError(
-                    "Формат /recompare event_uuid; событие должно быть сохранено и clock доступен"
-                ) from exc
+            from .telegram_views import keyboard
+
             await self.send(
                 update,
-                f"Comparator {state}. Frozen event/settings/reference и предыдущие revisions сохранены. Только prior windows; thresholds не меняются.",
+                "Исследования N20 больше не запускаются. Доступна описательная статистика "
+                "движения после эпизодов. Исходные результаты и настройки не пересчитываются.",
+                keyboard([[("Статистика эпизодов", "ui:analytics")]], back="analytics_home"),
             )
         elif command == "digest":
             now = (
@@ -718,6 +708,11 @@ class Controller:
             self.first_ready_poll = True
         if self.engine is not None:
             return  # Persisted observation producer and durable episode queue own live delivery.
+        if (
+            "composite" not in snapshot.settings.active_detectors
+            or "composite" not in snapshot.settings.alert_detectors
+        ):
+            return
         for item, quote in result.quotes.items():
             if self.store.snapshot().revision != snapshot.revision:
                 break
@@ -798,12 +793,8 @@ class Controller:
             try:
                 started = time.monotonic()
                 processed_outcomes = await self.outcomes.async_work(self.market.server_now)
-                # Amortize the frozen prior-population preparation before the
-                # reader reopens; the64-result batch and sole writer stay fixed.
-                phase = "COMPARISONS"
-                processed_comparisons = await ComparisonWorker(self.store).async_work(
-                    self.market.server_now, seconds=4
-                )
+                # Legacy comparison records stay readable until their normal
+                # retention/explicit test-history transition. No N20 worker runs.
                 phase = "RETENTION"
                 async with self.retention_lock:
                     self.retention_once(now)
@@ -817,7 +808,8 @@ class Controller:
                         "state": "OK",
                         "at_ms": self.market.server_now(),
                         "processed_outcomes": processed_outcomes,
-                        "processed_comparisons": processed_comparisons,
+                        "processed_comparisons": 0,
+                        "comparison_policy": self.comparison_policy,
                         "elapsed_seconds": round(time.monotonic() - started, 3),
                     },
                 )

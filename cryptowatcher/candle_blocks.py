@@ -24,7 +24,7 @@ def policy(db: sqlite3.Connection) -> tuple[int, int]:
     if row is None:
         raise ValueError("Missing source retention policy")
     value = json.loads(row[0])
-    days = value.get("candle_retention_days", 35), value.get("detail_retention_days", 30)
+    days = value.get("candle_retention_days", 3), value.get("detail_retention_days", 30)
     if any(type(v) is not int or v < 1 for v in days):
         raise ValueError("Invalid source retention policy")
     return days
@@ -290,6 +290,7 @@ def _admit_groups(
     result: dict[int, tuple[int, int, int]] = {}
     with atomic(db):
         candle_days, detail_days = policy(db)
+        arrived = first_used = 0
         for at, items in groups.items():
             if db.execute(
                 "SELECT 1 FROM market_candles WHERE stream=? AND start>=? AND start<? LIMIT 1",
@@ -312,6 +313,8 @@ def _admit_groups(
                 existing = next((v for v in reversed(slots[slot]) if encode(v[3]) == encode(tail)), None)
                 if existing is not None:
                     revision = existing[0]
+                    if anchor and not existing[1]:
+                        first_used += len(encode([at_start, step, *tail]).encode())
                     needed = max(existing[1], anchor)
                     purge = max(existing[2], expiry)
                     if (needed, purge) != (existing[1], existing[2]):
@@ -319,6 +322,9 @@ def _admit_groups(
                         dirty = True
                 else:
                     revision = (slots[slot][-1][0] if slots[slot] else -1) + 1
+                    size = len(encode([at_start, step, *tail]).encode())
+                    arrived += size
+                    first_used += size if anchor else 0
                     slots[slot].append([revision, anchor, expiry, tail])
                     dirty = True
                 result[index] = (sid, at_start, revision)
@@ -329,6 +335,9 @@ def _admit_groups(
                     else codec.pack(sid, at, step, slots)
                 )
                 put(db, packed, old, cache=cache)
+        from .storage_meter import record_source
+
+        record_source(db, "candles", arrived, first_used)
     return result
 
 

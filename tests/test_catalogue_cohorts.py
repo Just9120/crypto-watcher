@@ -10,8 +10,11 @@ from cryptowatcher.expiry_index import expires
 from cryptowatcher.outcomes import OutcomeWorker
 from cryptowatcher.record_blocks import Coordinate
 from cryptowatcher.storage import encode
-from tests.test_bounded_storage import bounded
+from tests.test_bounded_storage import bounded, legacy_method  # noqa: F401
 from tests.test_outcomes import observe
+
+# Frozen v1 storage qualification; current EPISODE summaries have separate coverage.
+pytestmark = pytest.mark.usefixtures("legacy_method")
 
 DAY = 86400000
 

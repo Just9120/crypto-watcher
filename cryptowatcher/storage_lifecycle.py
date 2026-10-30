@@ -163,7 +163,7 @@ def track(store: Store, key: str, value: Any) -> None:
         expiry = min(expiry, value["expires_ms"])
     category = name.split(":", 1)[0]
     # Active per-stream state may renew; immutable/per-event/service state cannot.
-    if category == "active":
+    if category in ("active", "historical-active", "suppressed-active"):
         expiry = now + days * DAY
     elif category in ("condition", "diagnostic", "oi-attempt"):
         expiry = now + store.snapshot().settings.candle_retention_days * DAY
@@ -289,6 +289,12 @@ class BoundedRetention:
             condition_members_expired = 0
             condition_groups_updated = 0
             for row in service:
+                if row[1] == "episode-event":
+                    # This is an owned membership, not an independent service.
+                    # Keep it until remove_event archives/removes its parent;
+                    # a bounded batch can leave the already expired parent for
+                    # its next pass. Query/scan budgets remain unchanged.
+                    continue
                 if row[1] == "condition-state":
                     from .condition_state import expire
 
@@ -302,8 +308,11 @@ class BoundedRetention:
                     episode_id = row[0].split(":")[3]
                     prefix = PREFIX + "episode-event:" + episode_id + ":"
                     keep = member_deadline(store.db, prefix)
-                    if keep is not None and keep > now_ms:
-                        renew_expiry(store.db, row[0], keep)
+                    if keep is not None:
+                        if keep > now_ms:
+                            renew_expiry(store.db, row[0], keep)
+                        # Expired but not yet archived members still need this
+                        # shared origin in their next bounded cleanup batch.
                         continue
                 # Store a bounded terminal-status counter, instead of retaining whole jobs.
                 raw = store.get_runtime(row[0], {})
@@ -406,6 +415,9 @@ class BoundedRetention:
                 store.db.execute(
                     "DELETE FROM market_quality WHERE day=? AND cohort=? AND chunk=?", (day, cohort, chunk)
                 )
+            from .episode_summary import collect as collect_episodes
+
+            removed_episode_summaries = collect_episodes(store.db, now_ms // DAY, batch)
             from .expiry_index import collect_garbage as collect_events
             from .quality_layout import collect_garbage as collect_quality
 
@@ -447,6 +459,7 @@ class BoundedRetention:
                 "removed_candles": len(candles) + removed_source_versions,
                 "removed_context": len(contexts) + removed_context_tiles,
                 "removed_summaries": len(quality),
+                "removed_episode_summary_records": removed_episode_summaries,
                 "removed_bodies": len(garbage),
                 "removed_source_windows": removed_windows,
                 "removed_numeric": removed_numeric,
@@ -467,6 +480,7 @@ class BoundedRetention:
                 "removed_candles": len(candles) + removed_source_versions,
                 "removed_context": len(contexts) + removed_context_tiles,
                 "removed_summary_blocks": len(quality),
+                "removed_episode_summary_records": removed_episode_summaries,
                 "removed_bodies": len(garbage),
                 "removed_source_windows": removed_windows,
                 "removed_numeric": removed_numeric,
@@ -481,15 +495,14 @@ class BoundedRetention:
                 RUNTIME_UPSERT,
                 (("market_retention", encode(telemetry)), ("market_retention_totals", encode(totals))),
             )
-        if removed and store.db.execute("PRAGMA freelist_count").fetchone()[0] > 256:
-            store.db.execute("PRAGMA incremental_vacuum(32)").fetchall()
-        return (
+        progress = (
             removed
             + len(candles)
             + removed_source_versions
             + len(contexts)
             + removed_context_tiles
             + len(quality)
+            + removed_episode_summaries
             + len(garbage)
             + removed_windows
             + removed_numeric
@@ -497,6 +510,9 @@ class BoundedRetention:
             + removed_record_packets
             + removed_cohort_counters
         )
+        if progress and store.db.execute("PRAGMA freelist_count").fetchone()[0] > 256:
+            store.db.execute("PRAGMA incremental_vacuum(32)").fetchall()
+        return progress
 
     def _terminal(self, category: str, state: str) -> None:
         row = self.store.db.execute("SELECT value FROM market_meta WHERE key='expired_work'").fetchone()

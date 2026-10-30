@@ -1,0 +1,56 @@
+name: Full main regression without delivery
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Exact current main SHA, no branch/tag
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: cryptowatcher-full-validation
+  cancel-in-progress: false
+jobs:
+  full:
+    if: github.repository == 'Just9120/crypto-watcher' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      EXPECTED_REVISION: ${{ inputs.revision }}
+      VALIDATION_REPORT: .cache-g1/full-validation-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Verify exact source before dependency setup
+        run: |
+          python - <<'PY'
+          import os,re,subprocess
+          revision=os.environ['EXPECTED_REVISION']
+          assert re.fullmatch(r'[0-9a-f]{40}',revision)
+          for ref in ('HEAD','refs/remotes/origin/main'):
+              assert subprocess.check_output(['git','rev-parse',ref],text=True).strip()==revision
+          PY
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - run: |
+          python -m pip install --upgrade --require-hashes --only-binary=:all: -r requirements-bootstrap.txt
+      - run: python -m pip install --require-hashes -r requirements-dev.txt
+      - run: uv pip check --python "$(command -v python)"
+      - name: Canonical full profile; never deploy
+        run: python scripts/checks.py full --revision "$EXPECTED_REVISION" --report-directory "$VALIDATION_REPORT"
+      - name: Preserve small results including failures and skipped cases
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: full-validation-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.VALIDATION_REPORT }}/*.json
+            ${{ env.VALIDATION_REPORT }}/*.xml
+            ${{ env.VALIDATION_REPORT }}/*.log
+            ${{ env.VALIDATION_REPORT }}/package/manifest.json
+            ${{ env.VALIDATION_REPORT }}/package/bundle.sha256
+          retention-days: 14
+          if-no-files-found: warn

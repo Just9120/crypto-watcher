@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from cryptowatcher.analytics import prior_population
+from cryptowatcher.analytics import ComparisonWorker, prior_population
 from cryptowatcher.config import ConfigError
 from cryptowatcher.detectors import DetectorUnavailable, atr14
 from cryptowatcher.digest import aggregate, text
@@ -15,6 +15,7 @@ from cryptowatcher.sources import Candle
 from cryptowatcher.storage import Store
 from cryptowatcher.storage_repack import VERSION
 from cryptowatcher.telegram_views import source_summary
+from tests.test_bounded_storage import legacy_method  # noqa: F401
 
 
 def test_prior_population_matches_original_float_bits_with_gaps_and_lookbacks(store):
@@ -778,6 +779,7 @@ def test_candle_range_cache_is_fixed_snapshot_only_and_cannot_hide_source_change
     assert store.analytics_range_bytes == 0
 
 
+@pytest.mark.usefixtures("legacy_method")
 def test_comparison_admission_finds_ready_canonical_siblings_without_processing_future_work(store):
     import copy
 
@@ -794,12 +796,17 @@ def test_comparison_admission_finds_ready_canonical_siblings_without_processing_
     history = History(store)
     events = history.events(20)
     assert len(events) == 5
+    # Queue fixtures are explicit: the new producer must not admit N20.
+    comparison = ComparisonWorker(store)
+    for value in events:
+        comparison.requeue(value["event_id"], NOW)
     anchor, future = events[:2]
     unrelated = copy.deepcopy(anchor)
     unrelated.update(event_id=identity("different-instrument"), symbol="OTHERUSDT")
     with store.db:
         history.version("event", unrelated)
         worker.admit(unrelated)
+        comparison.requeue(unrelated["event_id"], NOW)
         for event, deadline in ((anchor, NOW - 2), (unrelated, NOW - 1), (future, NOW + 60000)):
             key = "comparison-job:" + event["event_id"]
             job = history.get(key)
@@ -832,6 +839,7 @@ def test_comparison_admission_finds_ready_canonical_siblings_without_processing_
     assert all(e["symbol"] == anchor["symbol"] and job["next_attempt_ms"] <= NOW for job, e, _, _ in prepared)
 
 
+@pytest.mark.usefixtures("legacy_method")
 def test_grouped_comparison_budget_cannot_starve_the_oldest_due_instrument(store):
     import copy
 
@@ -847,6 +855,7 @@ def test_grouped_comparison_budget_cannot_starve_the_oldest_due_instrument(store
     history = History(store)
     template = history.events(1)[0]
     worker = OutcomeWorker(store)
+    comparison = ComparisonWorker(store)
     oldest = identity("oldest-due-instrument")
     with store.db:
         for _, job in history.items("comparison-job:"):
@@ -857,6 +866,7 @@ def test_grouped_comparison_budget_cannot_starve_the_oldest_due_instrument(store
             event.update(event_id=oldest if index == 0 else identity(symbol), symbol=symbol)
             history.version("event", event)
             worker.admit(event)
+            comparison.requeue(event["event_id"], NOW)
             key = "comparison-job:" + event["event_id"]
             job = history.get(key)
             history.delete(job["pending_key"])

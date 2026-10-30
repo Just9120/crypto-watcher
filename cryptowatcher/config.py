@@ -73,12 +73,13 @@ class OwnerSettings:
     sma_periods: int = 12
     profile: str = "custom"
     detector_parameters: tuple[tuple[str, float], ...] = ()
+    active_detectors: tuple[str, ...] = FAMILIES
     alert_detectors: tuple[str, ...] = ("composite",)
     outcome_horizons: tuple[int, ...] = (5, 15, 30, 60)
     digest_interval_min: int = 60
     enrichment_enabled: bool = False
     detail_retention_days: int = 30
-    candle_retention_days: int = 35
+    candle_retention_days: int = 3
 
     def __post_init__(self) -> None:
         if (
@@ -93,11 +94,9 @@ class OwnerSettings:
                 or not 1 <= getattr(self, key) <= (2**63 - 1 - 253402300799999) // 86400000
             ):
                 raise ConfigError("Invalid " + key)
-        if (
-            self.candle_retention_days < 29
-            or self.candle_retention_days < max(self.outcome_horizons) / 1440 + 1
-        ):
-            raise ConfigError("Candle retention incompatible with comparator/lookback/horizons")
+        # Historical snapshots remain typed/readable. Current admission policy
+        # is validated separately; referenced outcome inputs can outlive the
+        # general candle window, so horizons do not require a global archive.
         if max(self.outcome_horizons) >= self.detail_retention_days * 1440:
             raise ConfigError("Detail retention incompatible with outcome horizons")
         if self.bybit_category not in ("spot", "linear"):
@@ -136,12 +135,14 @@ class OwnerSettings:
             raise ConfigError(str(exc)) from exc
         if self.profile != "custom" and dict(self.detector_parameters) != dict(preset(self.profile)):
             raise ConfigError("Profile parameters do not match preset")
-        if (
-            not isinstance(self.alert_detectors, tuple)
-            or any(not isinstance(x, str) or x not in FAMILIES for x in self.alert_detectors)
-            or len(set(self.alert_detectors)) != len(self.alert_detectors)
-        ):
-            raise ConfigError("Invalid alert_detectors")
+        for key in ("active_detectors", "alert_detectors"):
+            selection = getattr(self, key)
+            if (
+                not isinstance(selection, tuple)
+                or any(not isinstance(x, str) or x not in FAMILIES for x in selection)
+                or len(set(selection)) != len(selection)
+            ):
+                raise ConfigError("Invalid " + key)
         if (
             not isinstance(self.outcome_horizons, tuple)
             or not self.outcome_horizons
@@ -167,7 +168,7 @@ class OwnerSettings:
         if set(values) - set(fields):
             raise ConfigError("Unknown owner settings field")
         parsed = dict(values)
-        for key in ("custom_pairs", "watchlist", "alert_detectors", "outcome_horizons"):
+        for key in ("custom_pairs", "watchlist", "active_detectors", "alert_detectors", "outcome_horizons"):
             if key in parsed:
                 if not isinstance(parsed[key], (list, tuple)):
                     raise ConfigError(f"Invalid {key}")

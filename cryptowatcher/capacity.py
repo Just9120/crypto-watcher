@@ -213,12 +213,122 @@ def comparator_sample(store: Store, limit: int = 128) -> dict[str, Any]:
     }
 
 
+def prospective_episode_cohorts(store: Store, seconds: float) -> dict[str, Any]:
+    """Explicit bounded metadata-only diagnostic; never a periodic bot scan."""
+    import json
+
+    from .catalogue_sql import read_snapshot, source
+    from .config import OwnerSettings
+
+    deadline = time.monotonic() + seconds
+    history = History(store)
+    counts: dict[tuple[Any, ...], set[str]] = defaultdict(set)
+    roots: dict[str, tuple[int, tuple[int, ...]]] = {}
+    facts: set[tuple[str, int]] = set()
+    marginal: dict[str, set[Any]] = defaultdict(set)
+    strengths: set[float] = set()
+    members = 0
+    complete = False
+    reason = "TIME_OR_POPULATION_BUDGET"
+    store.db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+    try:
+        with read_snapshot(store):
+            prefix = PREFIX + "event:"
+            query = (
+                "SELECT cw_record_json(payload_json) FROM "
+                + source(store, "event")
+                + " WHERE key>=? AND key<? AND json_extract(cw_record_json(payload_json),'$.revision')=1"
+            )
+            for (payload,) in store.db.execute(query, (prefix, prefix + "~")):
+                if time.monotonic() >= deadline or members >= 100000:
+                    break
+                event = json.loads(payload)
+                if event.get("outcome_unit") != "EPISODE":
+                    reason = "MIXED_LEGACY_EVENT_UNITS"
+                    break
+                episode = event["episode_id"]
+                if episode not in roots:
+                    head = history.metadata("episode-head:" + episode)
+                    origin = history.metadata(f"event:{head['origin_event_id']}:0000000001") if head else None
+                    if origin is None:
+                        reason = "MISSING_FROZEN_ORIGIN"
+                        break
+                    roots[episode] = (
+                        origin["reference_time_ms"] // DAY_MS,
+                        OwnerSettings.from_payload(origin["settings_snapshot"]).outcome_horizons,
+                    )
+                day, horizons = roots[episode]
+                settings = event["settings_snapshot"]
+                members += 1
+                strengths.add(event["strength"])
+                for horizon in horizons:
+                    facts.add((episode, horizon))
+                    key = (
+                        day,
+                        event["detector_id"],
+                        event["detector_version"],
+                        event["settings_revision"],
+                        settings.get("profile", "custom"),
+                        event["market_type"],
+                        event["timeframe"],
+                        event["symbol"],
+                        settings["alert_universe_mode"],
+                        event["direction"],
+                        horizon,
+                        "2",
+                    )
+                    counts[key].add(episode)
+            else:
+                complete = True
+    except sqlite3.OperationalError as exc:
+        if getattr(exc, "sqlite_errorcode", None) != sqlite3.SQLITE_INTERRUPT:
+            raise
+    finally:
+        store.db.set_progress_handler(None, 0)
+    for group in counts:
+        for field, value in zip(COHORT_FIELDS, group):
+            marginal[field].add(value)
+    density = sorted(len(ids) for ids in counts.values())
+    return {
+        "state": "MEASURED_PROSPECTIVE" if complete else "PARTIAL_BUDGET",
+        "reason": None if complete else reason,
+        "unit": "EPISODE",
+        "event_records": members,
+        "event_revisions": {1: members},
+        "episode_records": len(roots),
+        "facts_if_archived": len(facts),
+        "membership_facts_if_archived": sum(density),
+        "cohort_days_if_archived": len(counts),
+        "density_histogram": dict(Counter(density)),
+        "density_mean": sum(density) / max(1, len(density)),
+        "density_median": density[len(density) // 2] if density else None,
+        "dimension_cardinality": {k: len(v) for k, v in marginal.items()},
+        "distinct_without_dimension": {
+            name: len({key[:i] + key[i + 1 :] for key in counts}) for i, name in enumerate(COHORT_FIELDS)
+        },
+        "distinct_strengths": len(strengths),
+        "groups_overlap": True,
+        "limitations": [
+            "Live first-revision membership only; archived summaries are separate",
+            "One numeric result per episode/horizon; group Ns are not additive",
+            "Explicit metadata diagnostic bounded by time and100000 memberships; not physical capacity proof",
+        ],
+    }
+
+
 def prospective_cohorts(store: Store, seconds: float = 60) -> dict[str, Any]:
     """Measure frozen event grouping, explicitly distinct from actually archived facts."""
     from .cohort_meter import report as cohort_counters
 
+    if (
+        store.get_runtime(PREFIX + "outcome-method:2") is not None
+        and store.get_runtime(PREFIX + "outcome-method:1") is None
+    ):
+        return prospective_episode_cohorts(store, seconds)
     measured = cohort_counters(store.db, seconds)
     if measured is not None:
+        if measured.get("published_methods") == [PREFIX + "outcome-method:2"]:
+            return prospective_episode_cohorts(store, seconds)
         return measured
     deadline = time.monotonic() + seconds
     codec = Codec(store.db)
@@ -236,6 +346,8 @@ def prospective_cohorts(store: Store, seconds: float = 60) -> dict[str, Any]:
     ]
     # Multiple historical methods need outcome-linked counting, not a guessed
     # Cartesian multiplication of every event by every published methodology.
+    if published == [PREFIX + "outcome-method:2"]:
+        return prospective_episode_cohorts(store, seconds)
     if published != [PREFIX + "outcome-method:1"]:
         return {"state": "UNSET_MULTIPLE_OR_UNKNOWN_METHODS", "published_methods": published}
     store.db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
@@ -594,10 +706,12 @@ def explain_forecast(value: dict[str, Any], ledger: dict[str, Any]) -> dict[str,
         "kind": "EXPLANATION_OF_EXISTING_FLOW_MODEL_NOT_A_NEW_MEASUREMENT",
         "runtime_namespace_allocation": allocated,
         "allocation_formula": "details projected_logical_bytes * namespace current payload / current details payload",
-        "physical_formula": "SUM(projected logical excluding quality_replaced_categories)*occupied-page/logical factor + MAX(whole-archive scenario physical, combined quality flow*factor) + WAL + SHM",
+        "physical_formula": "MAX(actual working files, SUM(non-summary projected logical)*occupied-page/logical factor + MAX(episode/member all-index physical model, observed annual archive flow*factor) + free pages + journal reserve)",
         "factor": factor,
         "categories": value.get("forecast"),
+        "quality_model": value.get("quality_forecast_model"),
         "quality_scenarios": value.get("forecast_scenarios"),
+        "journal_reserve": value.get("journal_reserve"),
         "point_bytes": value.get("projected_working_bytes"),
         "limitations": [
             "Allocation is current mix, NOT observed per-namespace daily insert flow",
@@ -674,7 +788,7 @@ def snapshot(store: Store, *, deep: bool = False, cohorts: bool = False) -> dict
             "prospective_cohorts": prospective_cohorts(store) if cohorts else {"state": "NOT_REQUESTED"},
             "physical_snapshot": measure_indexes(store, seconds=10) if deep else {"state": "NOT_REQUESTED"},
             "backups_and_experiments": "EXCLUDED_FROM_WORKING_TOTAL; separate operator inventory",
-            "capacity_verdict": "UNPROVEN; tests/CD success does not establish fit within the30GB acceptable limit;25GB remains desired",
+            "capacity_verdict": "UNPROVEN; tests/CD success does not establish fit within the35GB hard limit;25GB remains desired",
         }
         value["forecast_explanation"] = explain_forecast(storage, value["runtime_ledger"])
         if deep:

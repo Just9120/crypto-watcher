@@ -51,7 +51,9 @@ def test_upgrade_g2b_payload_and_history_preserves_original_and_all_row_backup(t
         ).fetchall()
         == original
     )
-    assert History(store).count("outcome-job:") == len(original) * 4
+    # The old history remains byte-identical, while bootstrap admits one outcome set per episode.
+    episodes = {e["episode_id"] for e in History(store).events()}
+    assert History(store).count("outcome-job:") == len(episodes) * 4
     backup = tmp_path / "backup.sqlite"
     store.backup(backup)
     restored = Store(backup, store.owner_id, readonly=True)
@@ -192,7 +194,7 @@ def test_event_admission_atomic_and_horizon_numeric_order(store, monkeypatch):
     # numeric-order and atomic rollback regression within the supported window.
     with pytest.raises(ConfigError, match="retention incompatible"):
         snapshot.settings.changed(outcome_horizons=(10**100, 5))
-    store.update(snapshot.revision, snapshot.settings.changed(outcome_horizons=(10_000, 5)))
+    store.update(snapshot.revision, snapshot.settings.changed(outcome_horizons=(4320, 5)))
     worker = OutcomeWorker(store)
     engine = observe(store, worker)
     Sources(store).put("spot/BTCUSDT/1m", future())
@@ -208,8 +210,11 @@ def test_event_admission_atomic_and_horizon_numeric_order(store, monkeypatch):
         original(key, value)
 
     monkeypatch.setattr(worker.history, "put", fail)
+    from .test_events import window
+
     with pytest.raises(sqlite3.OperationalError):
-        observe(store, worker, NOW + MINUTE)
+        # A different market creates a new episode and must admit jobs atomically.
+        engine.observe("linear/BTCUSDT/1m", window(now=NOW + MINUTE), 1e6, 0.01, NOW + MINUTE, live=True)
     assert store.db.execute("SELECT count(*) FROM runtime").fetchone()[0] == previous
 
 

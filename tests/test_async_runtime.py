@@ -12,14 +12,14 @@ from cryptowatcher.detector_config import effective_parameters
 from cryptowatcher.diagnostics import snapshot
 from cryptowatcher.events import History
 from cryptowatcher.ingestion import BybitRadar
-from cryptowatcher.outcomes import MINUTE, OutcomeWorker
+from cryptowatcher.outcomes import MINUTE, OutcomeWorker, pending_key
 from cryptowatcher.sources import Candle, Sources
 from cryptowatcher.storage import Store
 
 NOW = 1_800_000_000_000
 
 
-@pytest.mark.parametrize("phase", ["OUTCOMES", "COMPARISONS", "RETENTION", "STORAGE_SAMPLE"])
+@pytest.mark.parametrize("phase", ["OUTCOMES", "RETENTION", "STORAGE_SAMPLE"])
 async def test_worker_failure_identifies_phase_and_bounded_code_frames_without_private_values(
     infrastructure, store, monkeypatch, caplog, phase
 ):
@@ -40,9 +40,7 @@ async def test_worker_failure_identifies_phase_and_bounded_code_frames_without_p
         return 0
 
     async def comparisons(*args, **kwargs):
-        if phase == "COMPARISONS":
-            failing()
-        return 0
+        pytest.fail("Automatic N20 worker must not run")
 
     def retention(*args):
         if phase == "RETENTION":
@@ -72,7 +70,7 @@ async def test_worker_failure_identifies_phase_and_bounded_code_frames_without_p
         await market.close()
 
 
-def seed(tmp_path, count=1):
+def seed(tmp_path, count=1, *, comparisons=False):
     store = Store(tmp_path / "state.sqlite", 233382575)
     store.initialize(OwnerSettings(outcome_horizons=(5,)))
     outcomes = OutcomeWorker(store)
@@ -89,7 +87,7 @@ def seed(tmp_path, count=1):
             event = {
                 "event_id": str(i),
                 "revision": 1,
-                "episode_id": "episode",
+                "episode_id": f"episode-{i}",
                 "available_at_ms": NOW,
                 "reference_time_ms": NOW,
                 "reference_price": 100,
@@ -107,6 +105,24 @@ def seed(tmp_path, count=1):
             }
             history.version("event", event)
             outcomes.admit(event)
+            if comparisons:
+                # Explicit retained-v1 fixture, never an automatic new admission.
+                pending = pending_key(NOW, event["event_id"]).replace(
+                    "outcome-pending:", "comparison-pending:"
+                )
+                history.put(
+                    "comparison-job:" + event["event_id"],
+                    {
+                        "event_id": event["event_id"],
+                        "event_revision": 1,
+                        "methodology_version": "1",
+                        "state": "PENDING",
+                        "next_attempt_ms": NOW,
+                        "due_ms": NOW,
+                        "pending_key": pending,
+                    },
+                )
+                history.put(pending, {"event_id": event["event_id"]})
     return store, outcomes, history
 
 
@@ -204,7 +220,7 @@ async def test_old_snapshot_cannot_overwrite_concurrent_job_change(tmp_path, mon
 
 @pytest.mark.asyncio
 async def test_backlog_batches_drain_and_restart_preserves_completed_sources(tmp_path):
-    store, worker, history = seed(tmp_path, 40)
+    store, worker, history = seed(tmp_path, 40, comparisons=True)
     assert await worker.async_work(lambda: NOW + 5 * MINUTE, batch=32) == 32
     assert await ComparisonWorker(store).async_work(lambda: NOW + 5 * MINUTE, batch=32) == 32
     for name in ("outcome", "comparison"):
@@ -239,7 +255,7 @@ async def test_backlog_batches_drain_and_restart_preserves_completed_sources(tmp
 async def test_publication_failure_stops_remaining_results_and_leaves_jobs_restartable(
     tmp_path, monkeypatch, kind
 ):
-    store, outcome_worker, history = seed(tmp_path, 12)
+    store, outcome_worker, history = seed(tmp_path, 12, comparisons=kind == "comparison")
     worker = outcome_worker if kind == "outcome" else ComparisonWorker(store)
     original = worker.apply
     calls = 0
@@ -276,7 +292,7 @@ async def test_publication_failure_stops_remaining_results_and_leaves_jobs_resta
 async def test_cancellation_during_publication_preserves_commits_and_stops_all_lanes(
     tmp_path, monkeypatch, kind
 ):
-    store, outcome_worker, history = seed(tmp_path, 12)
+    store, outcome_worker, history = seed(tmp_path, 12, comparisons=kind == "comparison")
     worker = outcome_worker if kind == "outcome" else ComparisonWorker(store)
     original = worker.apply
     calls = 0
@@ -445,3 +461,26 @@ async def test_ws_diagnostics_refresh_while_metadata_request_is_waiting(tmp_path
     await asyncio.gather(manager, reporter, return_exceptions=True)
     await radar.close()
     store.close()
+
+
+async def test_controller_analytics_does_not_run_legacy_n20_worker(infrastructure, store, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from cryptowatcher import storage_meter
+
+    market = BybitRadar(store)
+    market.server_now = lambda: NOW
+    controller = Controller(infrastructure, store, market)
+    legacy = AsyncMock(side_effect=AssertionError("N20 worker called"))
+    monkeypatch.setattr(ComparisonWorker, "async_work", legacy)
+    monkeypatch.setattr(controller.outcomes, "async_work", AsyncMock(return_value=0))
+    monkeypatch.setattr(controller, "retention_once", lambda now: None)
+    monkeypatch.setattr(storage_meter, "sample", lambda *args: None)
+    try:
+        await controller.analytics_job(None)
+        legacy.assert_not_awaited()
+        result = store.get_runtime("analytics")
+        assert result["state"] == "OK" and result["processed_comparisons"] == 0
+        assert result["comparison_policy"] == "LEGACY_READ_ONLY"
+    finally:
+        await market.close()

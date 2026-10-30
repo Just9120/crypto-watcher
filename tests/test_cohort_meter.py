@@ -15,7 +15,10 @@ from cryptowatcher.events import History, identity
 from cryptowatcher.market_storage import enable
 from cryptowatcher.outcomes import OutcomeWorker
 from cryptowatcher.storage import Store, encode
+from tests.test_bounded_storage import legacy_method  # noqa: F401
 from tests.test_outcomes import DAY, NOW
+
+pytestmark = pytest.mark.usefixtures("legacy_method")
 
 
 def event(store, index, *, day=0):

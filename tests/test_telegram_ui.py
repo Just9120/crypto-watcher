@@ -1,4 +1,5 @@
 import json
+from contextlib import closing
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -205,7 +206,7 @@ async def test_history_keyset_pages_keep_distinct_events_and_show_observation_ti
 
     engine = EventEngine(deck.store)
     for step in range(3):
-        observe(engine, NOW + step * 60_000)
+        observe(engine, NOW + step * 900_000, tf=("1m", "3m", "5m")[step])
     await history_pages(deck)
 
 
@@ -221,7 +222,7 @@ async def test_cold_history_keeps_the_same_keyset_navigation_open_result_and_ret
     )
     engine = EventEngine(store)
     for step in range(3):
-        observe(engine, NOW + step * 60_000)
+        observe(engine, NOW + step * 900_000, tf=("1m", "3m", "5m")[step])
     expected = engine.history.events(100)
     move_events(store)
     assert engine.history.events(100) == expected
@@ -325,7 +326,7 @@ def test_diagnostics_distinguish_actual_forecast_optional_and_unknown(deck):
     text = diagnostic_summary(data)
     assert "2.9 ГБ / 20 ГБ" in text and "163.28 ГБ" in text and "не подключена" in text
     missing_budget = {**data, "storage": {k: v for k, v in data["storage"].items() if k != "budget_bytes"}}
-    assert "2.9 ГБ / 30 ГБ" in diagnostic_summary(missing_budget)
+    assert "2.9 ГБ / 35 ГБ" in diagnostic_summary(missing_budget)
     current_limits = {
         **data,
         "storage": {**data["storage"], "target_bytes": 25_000_000_000, "budget_bytes": 30_000_000_000},
@@ -371,6 +372,7 @@ async def test_all_visible_readonly_panels_have_working_callbacks_and_bounded_da
     seen = set()
     mutating = (
         "ui:apply:",
+        "ui:active:",
         "ui:restore:",
         "ui:clear",
         "ui:radar_",
@@ -461,7 +463,8 @@ async def test_statistics_frozen_snapshot_and_download_keep_exact_completed_resu
     data = json.loads(frozen)
     assert data["cohorts"] and any(row["sample_size"] for row in data["cohorts"])
     shown = "\n".join(c.args[0] for c in request.effective_message.reply_text.call_args_list)
-    assert "Наблюдений:" in shown and "срок, мин:" in shown and "Это не доходность" in shown
+    assert "Уникальных эпизодов:" in shown and "срок, мин:" in shown and "Это не доходность" in shown
+    assert "Сравнимых периодов без сигнала" not in shown
     token = deck.ui.statistics["token"]
     observe(deck.store, deck.outcomes, now=NOW + MINUTE)
     request = update(callback="ui:statsfile:" + token)
@@ -550,3 +553,62 @@ def test_notification_full_confirmation_grid_fits_without_mutating_event(deck):
     assert len(shown.encode("utf-16-le")) // 2 < 4096
     assert "<b>" not in shown and "**" not in shown
     assert json.dumps([event, delivery], sort_keys=True) == original
+
+
+async def test_domain_detector_buttons_are_revision_safe_and_independent_from_legacy_notifications(deck):
+    original = deck.store.snapshot()
+    delivery = (deck.store.enabled(), deck.digest.preference())
+    opened = update(callback="ui:detector_activity")
+    await deck.handle(opened, None)
+    reply = opened.callback_query.edit_message_text.call_args
+    assert "Расчёты детекторов" in reply.args[0]
+    choices = [
+        b.callback_data
+        for row in reply.kwargs["reply_markup"].inline_keyboard
+        for b in row
+        if (b.callback_data or "").startswith("ui:active:")
+    ]
+    assert len(choices) == 5 and all(len(c.encode()) <= 64 for c in choices)
+    assert deck.store.snapshot() == original
+    off = f"ui:active:price:off:{original.revision}"
+    await deck.handle(update(callback=off), None)
+    saved = deck.store.snapshot()
+    assert "price" not in saved.settings.active_detectors
+    assert saved.settings.alert_detectors == original.settings.alert_detectors
+    assert (deck.store.enabled(), deck.digest.preference()) == delivery
+    # The same old button cannot undo or replay a newer owner decision.
+    again = update(callback=off)
+    await deck.handle(again, None)
+    assert deck.store.snapshot() == saved
+    assert "устарела" in again.effective_message.reply_text.call_args.args[0]
+    await deck.handle(update(callback=f"ui:active:price:on:{saved.revision}", owner=False), None)
+    assert deck.store.snapshot() == saved
+    for bad in (
+        f"ui:active:unknown:on:{saved.revision}",
+        f"ui:active:price:toggle:{saved.revision}",
+        "ui:active:price:on:not-a-revision",
+        "ui:active:price",
+    ):
+        request = update(callback=bad)
+        await deck.handle(request, None)
+        assert deck.store.snapshot() == saved
+        assert "Действие не выполнено" in request.effective_message.reply_text.call_args.args[0]
+    await deck.handle(update(callback="detector:composite:off"), None)
+    notification = deck.store.snapshot()
+    assert notification.settings.alert_detectors == ()
+    assert notification.settings.active_detectors == saved.settings.active_detectors
+    with closing(Store(deck.store.path, deck.store.owner_id, readonly=True)) as reopened:
+        assert reopened.snapshot() == notification
+
+
+@pytest.mark.parametrize("request_data", ["/recompare", "/recompare obsolete-id", "recompare:obsolete-id"])
+async def test_legacy_recompare_is_readonly_navigation_without_hidden_research(deck, request_data):
+    request = update(callback=request_data) if request_data.startswith("recompare:") else update(request_data)
+    before = list(deck.store.db.iterdump())
+    await deck.handle(request, None)
+    reply = request.effective_message.reply_text.call_args
+    assert "N20 больше не запускаются" in reply.args[0]
+    assert any(
+        b.callback_data == "ui:analytics" for row in reply.kwargs["reply_markup"].inline_keyboard for b in row
+    )
+    assert list(deck.store.db.iterdump()) == before

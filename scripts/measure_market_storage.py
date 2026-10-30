@@ -11,8 +11,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from cryptowatcher.analytics import ComparisonWorker, cohort_rows
+from cryptowatcher.analytics import cohort_rows
 from cryptowatcher.config import OwnerSettings
+from cryptowatcher.episode_summary import installed as episode_archive_installed
 from cryptowatcher.events import EventEngine, History
 from cryptowatcher.market_storage import enable
 from cryptowatcher.outcomes import DAY, MINUTE, OutcomeWorker, Retention
@@ -71,11 +72,14 @@ def measure(path: Path, instruments: int = 2) -> dict[str, Any]:
                     for i in range(60)
                 ]
                 Sources(store).put(f"{market}/{symbol}/1m", future)
-        comparison = ComparisonWorker(store)
-        for _ in range(History(store).count("comparison-pending:")):
-            comparison.work(NOW + 61 * MINUTE)
         count = History(store).count("event-head:")
-        worker.work(NOW + 61 * MINUTE, batch=count * 4 + 1)
+        history = History(store)
+        episode_count = history.count("episode-head:")
+        worker.work(NOW + 61 * MINUTE, batch=episode_count * 4 + 1)
+        results = history.items("outcome-head:")
+        complete_count = sum(row["state"] == "COMPLETE" for _, row in results)
+        if history.count("comparison-job:") or history.count("comparison-pending:"):
+            raise ValueError("Automatic legacy comparison admission in episode fixture")
 
         async def send() -> None:
             class Bot:
@@ -104,21 +108,27 @@ def measure(path: Path, instruments: int = 2) -> dict[str, Any]:
         if cohorts_before != cohorts_after or len(families) != 5:
             raise ValueError("Measurement analytics/family equality failed")
         after = report(store, NOW + 30 * DAY + 1)
-        quality_bytes = after["categories"].get("quality", {}).get("logical_bytes", 0)
+        quality_bytes = after["categories"].get("quality_episodes", {}).get("logical_bytes", 0)
+        assert episode_archive_installed(store.db)
         return {
             "schema": "cryptowatcher.storage-measurement.v1",
             "kind": "ISOLATED_SYNTHETIC_MEASUREMENT",
             "events": count,
+            "episodes": episode_count,
+            "outcome_unit": "EPISODE",
+            "automatic_comparison_jobs": 0,
             "markets": 2,
             "timeframes": ["1m", "3m", "5m", "15m"],
             "families": sorted(families),
-            "outcomes": count * 4,
-            "all_outcomes_complete": sum(r["sample_size"] for r in cohorts_before) == count * 4,
+            "outcomes": len(results),
+            "all_outcomes_complete": complete_count == len(results) == episode_count * 4,
+            "group_sample_sizes_are_non_additive": True,
             "analytics_equality": "PASS",
             "details_working_bytes": before["working_bytes"],
             "details_bytes_per_event_including_sources_services_indexes": before["working_bytes"] / count,
             "quality_encoded_bytes": quality_bytes,
             "quality_encoded_bytes_per_event": quality_bytes / count,
+            "quality_encoded_bytes_per_episode": quality_bytes / episode_count,
             "categories_before_expiry": before["categories"],
             "categories_after_expiry": after["categories"],
             "indexes": indexes,
@@ -126,7 +136,7 @@ def measure(path: Path, instruments: int = 2) -> dict[str, Any]:
             "limitations": [
                 "Synthetic values and event mix, not production signal frequency",
                 "Fixed file/page overhead matters on this small fixture",
-                "Comparator sample arrays absent here; contract fixtures verify them separately",
+                "No automatic N20; overlapping detector/TF groups reuse the same episode outcome",
                 "Source sharing and service cost vary with market activity",
                 "12month capacity projection must use actual production arrival rates",
             ],

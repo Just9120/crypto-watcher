@@ -7,10 +7,10 @@
 
 [Граница ответственности, transport и acceptance checklist](../runbooks/agent-delivery.md#handoff-принимающему-проекту).
 
-JSON внутри блока в UTF-8/LF, включая последний перевод строки: 7716 bytes,
-SHA256 `2a65a5d0de157deb6039c0dfb9c4551ded95f89d00135604d36a483c88bc6bbf`.
+JSON внутри блока в UTF-8/LF, включая последний перевод строки: 7715 bytes,
+SHA256 `0a9d44ed3d4c7069b95b642c3def14462281abd556fe8dbdf047381bb5654690`.
 Для сверки нормализовать переводы строк в LF; BOM отсутствует.
-Это hash примера, не HMAC запроса. При отправке подпись вычисляется по точным
+Это hash примера, не HMAC запроса. Public settings v2 исключают внутренний active_detectors; полные domain settings остаются в history/export. При отправке подпись вычисляется по точным
 request bytes; credentials и подпись в пример не включены.
 
 ```json
@@ -69,7 +69,7 @@ request bytes; credentials и подпись в пример не включен
           "range_low": 99.0
         },
         "settings_revision": 2,
-        "settings_sha256": "05bcf00615dbdf43e619ada7ae2cdeb8a0d8b1a98adda1547a7bb8d990f8fdb2",
+        "settings_sha256": "24f8089befbcdd7ac397b988770c3b73a1296d3b8a63aeac5b16cc2349fda295",
         "source_event_revision": 1,
         "strength": 126.66666666666664,
         "timeframe": "1m"
@@ -102,7 +102,7 @@ request bytes; credentials и подпись в пример не включен
           "turnover_threshold": 2.25
         },
         "settings_revision": 2,
-        "settings_sha256": "05bcf00615dbdf43e619ada7ae2cdeb8a0d8b1a98adda1547a7bb8d990f8fdb2",
+        "settings_sha256": "24f8089befbcdd7ac397b988770c3b73a1296d3b8a63aeac5b16cc2349fda295",
         "source_event_revision": 1,
         "strength": 11.11111111111111,
         "timeframe": "1m"
@@ -123,7 +123,7 @@ request bytes; credentials и подпись в пример не включен
           "price_threshold": 0.75
         },
         "settings_revision": 2,
-        "settings_sha256": "05bcf00615dbdf43e619ada7ae2cdeb8a0d8b1a98adda1547a7bb8d990f8fdb2",
+        "settings_sha256": "24f8089befbcdd7ac397b988770c3b73a1296d3b8a63aeac5b16cc2349fda295",
         "source_event_revision": 1,
         "strength": 26.66666666666666,
         "timeframe": "1m"
@@ -144,7 +144,7 @@ request bytes; credentials и подпись в пример не включен
           "price_threshold": 1.5
         },
         "settings_revision": 2,
-        "settings_sha256": "05bcf00615dbdf43e619ada7ae2cdeb8a0d8b1a98adda1547a7bb8d990f8fdb2",
+        "settings_sha256": "24f8089befbcdd7ac397b988770c3b73a1296d3b8a63aeac5b16cc2349fda295",
         "source_event_revision": 1,
         "strength": 13.33333333333333,
         "timeframe": "3m"
@@ -189,14 +189,14 @@ request bytes; credentials и подпись в пример не включен
   "revision": 1,
   "schema_version": "cryptowatcher.market_event.v2",
   "settings_revision": 2,
-  "settings_sha256": "05bcf00615dbdf43e619ada7ae2cdeb8a0d8b1a98adda1547a7bb8d990f8fdb2",
+  "settings_sha256": "24f8089befbcdd7ac397b988770c3b73a1296d3b8a63aeac5b16cc2349fda295",
   "settings_snapshot": {
     "alert_detectors": [
       "composite"
     ],
     "alert_universe_mode": "top",
     "bybit_category": "spot",
-    "candle_retention_days": 35,
+    "candle_retention_days": 3,
     "cooldown_min": 10,
     "custom_pairs": [],
     "detail_retention_days": 30,

@@ -24,7 +24,7 @@ def values(index):
     }
 
 
-def setup(store, count=8, *, freeze=True):
+def setup(store, count=8, *, freeze=True, per_point_anchor=False):
     enable(store.db)
     store.bounded = True
     store.clock_ms = lambda: BASE
@@ -32,7 +32,8 @@ def setup(store, count=8, *, freeze=True):
     with store.db:
         for index in range(count):
             value = values(index)
-            key = save_context(store.db, "ticker", "spot/BTCUSDT", value, BASE)
+            anchor = value["available_at_ms"] if per_point_anchor else BASE
+            key = save_context(store.db, "ticker", "spot/BTCUSDT", value, anchor)
             keys.append(key)
             legacy = {
                 "mode": "contexts",
@@ -56,7 +57,7 @@ def counts(store):
 
 
 def test_warmed_timestamp_index_cannot_keep_a_rolled_back_sql_lease(store):
-    keys, refs, _ = setup(store)
+    keys, refs, _ = setup(store, per_point_anchor=True)
     tiles.publish(store.db, keys)
     store.db.commit()
     original = tile(store)
@@ -216,20 +217,22 @@ def test_sql_guards_reject_early_release_lease_regression_rewrite_and_duplicate_
 
 
 def test_partial_expiry_retention_increase_and_final_release_preserve_remaining_frozen_points(store):
-    keys, refs, _ = setup(store)
+    keys, refs, _ = setup(store, per_point_anchor=True)
     tiles.publish(store.db, keys)
     with store.db:
         save_context(store.db, "ticker", "spot/BTCUSDT", values(7), BASE + 37 * DAY)
-    store.clock_ms = lambda: BASE + 35 * DAY
+    store.clock_ms = lambda: BASE + 30 * DAY
     assert tiles.expire(store.db, store.clock_ms()) == 1
     with pytest.raises(ValueError, match="Missing retained"):
         restore(store.db, refs[0])
     assert restore(store.db, refs[7]) == encode({"ticker": values(7)}).encode()
+    # Retain explicit legacy-policy growth coverage; current owner admission
+    # rejects 40-day general windows. This direct fixture models old data only.
     with store.db:
         store.db.execute(
             "UPDATE owner_settings SET settings_json=json_set(settings_json,'$.candle_retention_days',40)"
         )
-    store.clock_ms = lambda: BASE + 36 * DAY
+    store.clock_ms = lambda: BASE + 31 * DAY
     assert tiles.expire(store.db, store.clock_ms()) == 0
     assert codec.get(tile(store), 0).purge == keys[1][2] + 40 * DAY
     store.clock_ms = lambda: BASE + 41 * DAY

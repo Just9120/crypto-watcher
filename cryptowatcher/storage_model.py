@@ -234,5 +234,125 @@ def main() -> None:
     print(json.dumps(scenarios, indent=2))
 
 
+EPISODE_MODEL_VERSION = "EPISODE_SQLITE_V1"
+# Rounded above isolated 512-episode, 1/4/20-membership all-table/page results.
+# Full unshared provenance per origin/member; actual production reuse is not
+# assumed. These are explicit model coefficients, not a mathematical bound.
+EPISODE_RESULT_PHYSICAL = 2048
+EPISODE_MEMBER_PHYSICAL = 2048
+EPISODE_RESULT_LOGICAL = 1024
+EPISODE_MEMBER_LOGICAL = 1536
+
+
+def measure_episodes(*, episodes: int = 512, members: int = 4) -> dict[str, Any]:
+    """Isolated exact writer/index qualification, never called by runtime.
+
+    Every origin/member has distinct provenance: deliberately no saving from
+    settings/definition reuse. Values vary at full float precision. Source
+    arrays are absent because 12-month results do not own them.
+    """
+    from dataclasses import asdict
+    from uuid import NAMESPACE_URL, uuid5
+
+    from .config import OwnerSettings
+    from .episode_summary import archive_records, install
+    from .outcomes import DEFINITION
+
+    if not 1 <= episodes <= 4096 or not 1 <= members <= 20:
+        raise ValueError("Bounded qualification requires 1..4096 episodes and 1..20 members")
+    db = sqlite3.connect(":memory:")
+    try:
+        db.executescript("""
+            CREATE TABLE market_meta(key TEXT PRIMARY KEY,value TEXT);
+            CREATE TABLE market_counts(category TEXT PRIMARY KEY,records INTEGER,
+                logical_bytes INTEGER,inserted_bytes INTEGER,deleted_bytes INTEGER);
+        """)
+        install(db)
+        empty_pages = db.execute("PRAGMA page_count").fetchone()[0]
+        settings = asdict(OwnerSettings())
+        digest = hashlib.sha256()
+        with db:
+            for i in range(episodes):
+                episode = str(uuid5(NAMESPACE_URL, f"episode-storage/{i}"))
+                origin = {
+                    "settings_snapshot": settings,
+                    "settings_revision": i + 1,
+                    "outcome_definition": DEFINITION,
+                    "effective_parameters": {"price_pct": 2.0, "turnover_ratio": 3.0},
+                    "producer_source_revision": hashlib.sha256(f"revision/{i}".encode()).hexdigest(),
+                    "settings_sha256": hashlib.sha256(encode(settings).encode()).hexdigest(),
+                }
+                prepared = []
+                for j in range(members):
+                    dimensions = {
+                        "detector": ("price", "turnover", "breakout", "volatility", "composite")[j % 5],
+                        "version": "1",
+                        "settings": i + 1,
+                        "profile": "custom",
+                        "market": ("spot", "linear")[i % 2],
+                        "timeframe": ("1m", "3m", "5m", "15m")[j % 4],
+                        "instrument": f"ASSET{i % 512}USDT",
+                        "universe": "top",
+                        "direction": "up",
+                        "strength": math.sqrt(i + j + 1) / 7,
+                    }
+                    membership = {
+                        "settings_snapshot": settings,
+                        "detector_definition": {
+                            "id": dimensions["detector"],
+                            "version": "1",
+                            "semantics": "closed candle; frozen inputs; prior-only baseline",
+                        },
+                        "effective_parameters": {"price_pct": 2.0, "turnover_ratio": 3.0},
+                        "producer_source_revision": hashlib.sha256(f"member/{i}/{j}".encode()).hexdigest(),
+                    }
+                    for h in (5, 15, 30, 60):
+                        fact = {
+                            "episode_id": episode,
+                            "state": "COMPLETE",
+                            "previous_state": "COMPLETE",
+                            "metrics": metric(i * 60 + h),
+                            "classification": "CONTINUATION",
+                            "noise": math.sqrt(i + h + 1) / 100,
+                            "completeness": {"expected_candles": h, "observed_candles": h},
+                        }
+                        row = (
+                            20756 + i % 30,
+                            {**dimensions, "horizon_min": h, "methodology_version": "2"},
+                            {"origin": origin, "membership": membership},
+                            fact,
+                        )
+                        prepared.append(row)
+                        digest.update(encode(row).encode())
+                archive_records(db, prepared)
+        physical = (db.execute("PRAGMA page_count").fetchone()[0] - empty_pages) * db.execute(
+            "PRAGMA page_size"
+        ).fetchone()[0]
+        return {
+            "model_version": EPISODE_MODEL_VERSION,
+            "sqlite_version": sqlite3.sqlite_version,
+            "episodes": episodes,
+            "members_per_episode": members,
+            "horizons": 4,
+            "encoded_bytes_per_episode": db.execute(
+                "SELECT logical_bytes FROM market_counts WHERE category='quality_episodes'"
+            ).fetchone()[0]
+            / episodes,
+            "physical_bytes_per_episode": physical / episodes,
+            "public_sha256": digest.hexdigest(),
+            "empty_layout_bytes": empty_pages * db.execute("PRAGMA page_size").fetchone()[0],
+            "assumption": "ONE_UNSHARED_FULL_PROVENANCE_PER_ORIGIN_AND_MEMBERSHIP",
+        }
+    finally:
+        db.close()
+
+
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--legacy", action="store_true", help="Explicit CQ5/N20 compatibility qualification")
+    if parser.parse_args().legacy:
+        main()
+    else:
+        print(json.dumps([measure_episodes(members=n) for n in (1, 4, 20)], indent=2))

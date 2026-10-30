@@ -5,6 +5,33 @@
 Сначала приведен действующий market layout; последующий compact schema1 раздел
 сохраняет historical compatibility и не задает routine schema2 backup/retention.
 
+## LIGHT-RADAR policy (30Oct2026)
+
+Current writes требуют72h general candles,30d details и outcome horizons≤4320min;
+неизменные historical settings прежней policy читаются без скрытой миграции.
+Существующий256-bar source limit сохраняется и на15m строже72h. Invalid current
+startup/update не создаёт private rows и не меняет revision. Actual used candles/
+context имеют отдельную detail lease; неиспользованные inputs не получают30d TTL.
+Граница72h и полный4320-candle outcome с исключением следующей свечи проверяются
+controlled-clock fixtures; это не elapsed production observation.
+
+Новые event records фиксируют outcome_unit=EPISODE/outcome_methodology_version=2.
+Один numeric result наepisode/horizon/method и immutable origin; meaningful
+memberships могут попадать в несколько групп, но внутри группы N уникален.
+После detail expiry schema2 additive marker episode_summary=1 обозначает:
+market_episode_results, market_episode_members, market_episode_provenance.
+Results/members immutable; provenance deduplicated по content hash, FK/refcounts
+и bounded GC освобождают неиспользуемые definitions/settings. Ни исходных свечей,
+ни decision contexts в12month summaries нет. Legacy market_quality layouts/readers
+сохраняются для прежних records; runtime не запускает N20 workers.
+
+Light transition — отдельный exact-generation режим из
+[runbook](runbooks/bounded-storage-reset.md), а не Store.open/initialize или
+обычный restart. Private bytes сначала независимо восстанавливаются; только
+explicit policy fields нормализуются в candidate и отражаются в receipt.
+Новая model generation не допускает повторного reset даже через legacy discard.
+Source market history не архивируется/конвертируется; чужие данные не затрагиваются.
+
 ## Новая policy хранения и разовый reset (D22)
 
 Updated S01/owner request2026-10-16 отменяют raw90d и бессрочное хранение event/outcome/comparator inputs. Актуальные сроки/AC: [E13](product_scope.md#e13--компактное-хранение-сроки-и-новый-период-истории). Implementation state и gates: [Current Goal](open_issues.md). Полная конвертация прежней тестовой market history больше не задача. Описания прежних converter/qualification tools относятся к историческому tooling и не являются precondition нового reset.
@@ -599,7 +626,7 @@ Format2 включается только для нового reset candidate; s
 
 Completed outcome/comparison jobs не дублируют результаты. Bootstrap проверяет immutable heads, explicit recompare восстанавливает job из исходной event revision. Job сохраняет frozen method; недоступная старая формула дает явный INVALID_SOURCE, а не расчет новой формулой под прежним номером. Retention читает metadata без материализации уже истекших raw windows; обычные public readers по-прежнему проверяют полные references. Retry/IN_FLIGHT payload остается immutable; terminal delivery receipt сокращается, успешные attempts/receipts диагностируются1day, event/episode/transport sequence сохраняют dedup в подробном сроке. Pending recovery проверяет существование активного owner hold; отсутствие владельца дает EXPIRED_RETENTION_INCOMPLETE, а не бесконечный backfill.
 
-Category counters обновляются triggers и rollback вместе с данными. Initial small DB index walk bounded; дальше runtime использует cheap counters/files/pages/samples и явно помеченную модель до появления годовых summaries. Exact later index snapshot — отдельная bounded read-only команда. Physical target25GB включает free pages и sidecars; его соблюдение не следует из успешного codec/CI test, backups/experiments отдельно. После expiry incremental vacuum освобождает pages небольшими порциями; полный VACUUM живой истории не запускается.
+Category counters обновляются triggers и rollback вместе с данными. Initial small DB index walk bounded; дальше runtime использует cheap counters/files/pages/samples и явно помеченную episode/member модель до появления годовых summaries. Format13 samples привязаны к settings/history generation. Constant two-row source-usage ledger сохраняет unique arrivals/first leases по canonical byte weight; он изменяется с исходной transaction, не при transfer/renewal, и не является physical allocation measurement. Exact later index snapshot — отдельная bounded read-only команда. Physical working hard limit35GB (25GB желательный ориентир) включает free pages и sidecars; его соблюдение не следует из успешного codec/CI test, backups/experiments отдельно. После expiry incremental vacuum освобождает pages небольшими порциями; полный VACUUM живой истории не запускается.
 
 
 ## Compact history representation
@@ -830,3 +857,29 @@ Owner `enrichment_enabled` — строгий bool, default OFF при отсу�
 Event `enrichment` — frozen optional context, выбранный по availability≤observation cutoff, с method/mapping revision, instrument identities и per-metric values/units/source/observation/availability/cadence. Historical observation не получает future mapping/OI/ticker; malformed/missing/stale metric остаётся маркированным. Current owner view рассчитывает latest freshness отдельно. Использованные snapshots доступны в event/export в пределах подробного срока; после expiry остаются quality summaries/settings/methodology, без бессрочных source arrays.
 
 Explicit `recompare` сохраняет comparison job original event_revision, повторно удерживает prior input ranges до completion и добавляет recalculation_requested_ms. Предыдущие result revisions доступны по as-of cutoff и export; event/settings/reference не изменяются. Автоматической recalibration/threshold mutation нет. При записи owner payload с enrichment field G3 reader несовместим: разрешён forward-fix/verified G5, без DB downgrade или restore поверх живых данных. Enrichment/recompare не меняют текущую physical schema2; logical v1 не разрешает запуск schema1 binary на schema2.
+
+
+### Agent v2 projection LIGHT-RADAR
+
+Internal episode reference остаётся первой price/time; последующие meaningful events
+сохраняют этот analytics origin. В неизменном public v2 observation reference —
+его собственные market_observed_at/close из frozen inputs. Episode outcomes отправляются
+только от origin event; replay confirmation разрешает origin, не переякоривает числа.
+Public settings projection сохраняет прежние20полей и их canonical SHA256, без нового
+internal active_detectors. Полный owner snapshot остаётся в history/export.
+Unknown public fields отклоняются, legacy absence и immutable retry bytes сохраняются.
+Проверка closed schema/provenance и ограничения — в [handoff](runbooks/agent-delivery.md#light-radar-совместимость-без-изменения-v2).
+
+
+### Frozen v1 outcomes after LIGHT-RADAR
+
+Отсутствие outcome_unit в старой записи означает event-reference v1, не новый
+EPISODE. Reader сохраняет собственную reference/horizon/method такой записи даже
+при наличии общего episode head. Для tagged EPISODE отсутствие origin/head означает
+явную недоступность; текущие defaults или поздний confirmation не заменяют начало.
+Bootstrap читает metadata старых records без восстановления истёкших inputs и не
+создаёт по ним новые per-candle studies. Уже admitted v1 jobs остаются читаемыми и
+могут закончиться по прежней frozen definition; общая numeric calculation function
+побайтно по AST совпадает с main b254e6e. Unit/reference admission version2 — отдельна.
+Неизвестная старая definition даёт INVALID_SOURCE, неизвестные unit/отсутствующий
+admission object fail-closed; исходные записи сохраняются. Это не включает N20 worker.

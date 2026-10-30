@@ -86,7 +86,7 @@ def _policy(db: sqlite3.Connection) -> tuple[int, int]:
 
     row = db.execute("SELECT settings_json FROM owner_settings LIMIT 1").fetchone()
     settings = json.loads(row[0])
-    return settings.get("candle_retention_days", 35), settings.get("detail_retention_days", 30)
+    return settings.get("candle_retention_days", 3), settings.get("detail_retention_days", 30)
 
 
 def _now(db: sqlite3.Connection) -> int:

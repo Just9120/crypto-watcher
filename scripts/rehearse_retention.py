@@ -1,4 +1,4 @@
-"""Controlled-clock rolling retention, numeric equality and bounded-population evidence.
+"""Controlled-clock rolling retention, episode numeric equality and bounded-population evidence.
 
 Synthetic weekly closed windows cover both markets/five detectors/four TF. This
 is not a continuous market/load model and never predicts production bytes/day.
@@ -13,12 +13,11 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from cryptowatcher.analytics import ComparisonWorker
+from cryptowatcher import episode_summary
 from cryptowatcher.config import TIMEFRAMES, OwnerSettings
-from cryptowatcher.events import EventEngine, History, identity
+from cryptowatcher.events import EventEngine, History
 from cryptowatcher.market_storage import enable
 from cryptowatcher.outcomes import DAY, MINUTE, OutcomeWorker, Retention
-from cryptowatcher.quality_packets import unpack as unpack_quality
 from cryptowatcher.quality_summary import month_boundary
 from cryptowatcher.reset_history import private_state, signature
 from cryptowatcher.source_context import save
@@ -29,64 +28,39 @@ from cryptowatcher.storage_repack import VERSION
 NOW = 1_800_000_000_000
 
 
-def fingerprint(
-    group: dict[str, Any], strength: float, metrics: dict[str, Any], comparators: list[Any], state: str
-) -> str:
+def fingerprint(episode: str, group: dict[str, Any], fact: dict[str, Any]) -> str:
     return encode(
         {
+            "episode_id": episode,
             "group": group,
-            "strength": strength,
-            "metrics": metrics,
-            "comparator_metrics": comparators,
-            "complete": state == "COMPLETE",
+            "metrics": fact["metrics"],
+            "complete": fact["state"] == "COMPLETE",
         }
     )
 
 
 def detail_facts(h: History, event: dict[str, Any]) -> list[str]:
-    settings = event["settings_snapshot"]
-    result = []
-    comparison = h.metadata("comparison-head:" + identity(f"comparison/{event['event_id']}/1")) or {}
-    for horizon in settings["outcome_horizons"]:
-        outcome = h.metadata("outcome-head:" + identity(f"outcome/{event['event_id']}/{horizon}/1"))
-        if outcome is None:
-            raise ValueError("Missing admitted outcome")
-        group = {
-            "detector": event["detector_id"],
-            "version": event["detector_version"],
-            "settings": event["settings_revision"],
-            "profile": settings["profile"],
-            "market": event["market_type"],
-            "timeframe": event["timeframe"],
-            "instrument": event["symbol"],
-            "universe": settings["alert_universe_mode"],
-            "direction": event["direction"],
-            "horizon_min": horizon,
-            "methodology_version": outcome["methodology_version"],
-        }
-        metrics = [
-            s["outcomes"][str(horizon)]["metrics"]
-            for s in comparison.get("samples", [])
-            if str(horizon) in s["outcomes"]
-        ]
-        result.append(fingerprint(group, event["strength"], outcome["metrics"], metrics, outcome["state"]))
-    return result
+    return [
+        fingerprint(event["episode_id"], group, fact)
+        for _, group, _, fact in episode_summary.prepare(h.store, event)
+    ]
 
 
 def retained_facts(store: Store) -> Counter[str]:
     h = History(store)
-    result: Counter[str] = Counter()
-    for _, event in h.items("event-head:"):
-        result.update(detail_facts(h, event))
-    for row in store.db.execute("SELECT dimensions,facts FROM market_quality"):
-        group = json.loads(row[0])
-        for fact in unpack_quality(store.db, bytes(row[1])):
-            result[
-                fingerprint(
-                    group, fact["strength"], fact["metrics"], fact["comparator_metrics"], fact["state"]
-                )
-            ] += 1
-    return result
+    # A membership/group counts the episode once even while its root is already
+    # archived and later confirmations remain live at the30-day boundary.
+    facts = set()
+    for key, _ in store.scan_runtime("radar:v1:event-head:"):
+        event = h.metadata(key.removeprefix("radar:v1:"))
+        facts.update(detail_facts(h, event))
+    for episode, horizon, method, raw, dimensions in store.db.execute(
+        "SELECT r.episode_id,r.horizon,r.method,r.fact,m.dimensions "
+        "FROM market_episode_results r JOIN market_episode_members m ON m.episode_id=r.episode_id"
+    ):
+        group = {**json.loads(dimensions), "horizon_min": horizon, "methodology_version": method}
+        facts.add(fingerprint(episode, group, json.loads(raw)))
+    return Counter(facts)
 
 
 def measure(path: Path, weeks: int = 62, *, compact: bool = False) -> dict[str, Any]:
@@ -105,7 +79,6 @@ def measure(path: Path, weeks: int = 62, *, compact: bool = False) -> dict[str, 
     compaction: dict[str, Any] = {}
     try:
         worker = OutcomeWorker(store)
-        comparison = ComparisonWorker(store)
         engine = EventEngine(store, on_event=worker.admit)
         for week in range(weeks):
             now = NOW + week * 7 * DAY
@@ -163,15 +136,13 @@ def measure(path: Path, weeks: int = 62, *, compact: bool = False) -> dict[str, 
                 if event["market_observation_ms"] == now:
                     born.append(event["event_id"])
                     families.add(event["detector_id"])
-            for _ in range(history.count("comparison-pending:")):
-                comparison.work(now + 61 * MINUTE)
             worker.work(now + 61 * MINUTE, batch=1000)
             epoch_facts = []
             for eid in born:
                 event = history.metadata("event-head:" + eid)
                 epoch_facts += detail_facts(history, event)
-                comp = history.metadata("comparison-head:" + identity(f"comparison/{eid}/1")) or {}
-                comparator_nonempty += int(comp.get("sample_size", 0) > 0)
+                if history.count("comparison-job:"):
+                    raise ValueError("Automatic N20 in current episode rehearsal")
             manifests.append((now // DAY, epoch_facts))
             private = signature(private_state(store))
             if compact and week >= 8:
@@ -198,9 +169,9 @@ def measure(path: Path, weeks: int = 62, *, compact: bool = False) -> dict[str, 
             expected: Counter[str] = Counter()
             for day, facts in manifests:
                 if month_boundary(day, 12) > (now + 61 * MINUTE) // DAY:
-                    expected.update(facts)
+                    expected.update(set(facts))
             if retained_facts(store) != expected:
-                raise ValueError(f"Numeric/comparator/group equality failed at epoch{week}")
+                raise ValueError(f"Episode numeric/membership equality failed at epoch{week}")
             live_events = history.count("event-head:")
             expected_events = sum(
                 len(facts) // 4 for day, facts in manifests if day * DAY + 30 * DAY > now + 61 * MINUTE
@@ -218,7 +189,10 @@ def measure(path: Path, weeks: int = 62, *, compact: bool = False) -> dict[str, 
                     "week": week,
                     "events": live_events,
                     "quality_facts": store.db.execute(
-                        "SELECT COALESCE(SUM(n),0) FROM market_quality"
+                        "SELECT COUNT(*) FROM market_episode_results"
+                    ).fetchone()[0],
+                    "quality_memberships": store.db.execute(
+                        "SELECT COUNT(*) FROM market_episode_members"
                     ).fetchone()[0],
                     "source_rows": source_rows,
                     "allocated_bytes": store.db.execute("PRAGMA page_count").fetchone()[0] * 4096,
@@ -229,7 +203,6 @@ def measure(path: Path, weeks: int = 62, *, compact: bool = False) -> dict[str, 
                 store.close()
                 store = Store(path, 233382575)
                 worker = OutcomeWorker(store)
-                comparison = ComparisonWorker(store)
                 engine = EventEngine(store, on_event=worker.admit)
                 restarts += 1
         # All generations of dependent windows, jobs, summaries and shared bodies
@@ -243,6 +216,9 @@ def measure(path: Path, weeks: int = 62, *, compact: bool = False) -> dict[str, 
             "market_context",
             "market_context_bodies",
             "market_holds",
+            "market_episode_results",
+            "market_episode_members",
+            "market_episode_provenance",
             "market_quality",
             "market_quality_cohorts",
             "market_quality_provenance",
@@ -310,7 +286,8 @@ def measure(path: Path, weeks: int = 62, *, compact: bool = False) -> dict[str, 
             "families": sorted(families),
             "markets": 2,
             "timeframes": list(TIMEFRAMES),
-            "numeric_and_comparator_multiset_equality": "PASS",
+            "episode_numeric_and_membership_equality": "PASS",
+            "outcome_unit": "EPISODE",
             "private_equality": "PASS",
             "restarts": restarts,
             "nonempty_comparator_events": comparator_nonempty,
@@ -319,7 +296,7 @@ def measure(path: Path, weeks: int = 62, *, compact: bool = False) -> dict[str, 
             "elapsed_seconds": round(time.monotonic() - started, 3),
             "limitations": [
                 "Weekly complete local windows, not continuous market/load model",
-                "File pages include indexes; no multiplication into production25GB claim",
+                "File pages include indexes; no multiplication into production35GB claim",
                 "Calendar12month expiry and partial outcomes are checked; real annual mix remains unobserved",
             ],
         }

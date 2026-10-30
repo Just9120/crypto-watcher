@@ -19,6 +19,24 @@ def bounded(store):
     return store
 
 
+@pytest.fixture
+def legacy_method(monkeypatch):
+    """Retain frozen v1 archive/codec coverage after the producer moves to v2."""
+    from cryptowatcher import outcomes
+
+    monkeypatch.setattr(outcomes, "METHOD", "1")
+    monkeypatch.setattr(outcomes, "DEFINITION", outcomes.LEGACY_DEFINITION)
+    original = History.version
+
+    def legacy_version(history, kind, value):
+        if kind == "event":
+            value["outcome_unit"] = "EVENT_REFERENCE"
+            value.pop("outcome_methodology_version", None)
+        original(history, kind, value)
+
+    monkeypatch.setattr(History, "version", legacy_version)
+
+
 def test_normalized_overlapping_windows_replay_and_restart_keep_exact_analytics(store):
     bounded(store)
     worker = OutcomeWorker(store)
@@ -104,16 +122,16 @@ def test_retention_keeps_exact_cohorts_and_method_settings_after_detail_expiry(s
     after = cohorts(store)
     assert after["cohorts"] == before["cohorts"]
     assert after["incomplete_outcomes"] == before["incomplete_outcomes"]
-    assert store.db.execute("SELECT sum(n) FROM market_quality").fetchone()[0] > 0
+    assert store.db.execute("SELECT count(*) FROM market_episode_results").fetchone()[0] > 0
     assert History(store).count("protected:") == 0
     # Retry of cleanup is idempotent, no duplicate summary admissions.
-    total = store.db.execute("SELECT sum(n) FROM market_quality").fetchone()[0]
+    total = store.db.execute("SELECT count(*) FROM market_episode_results").fetchone()[0]
     retention.work(NOW + 31 * DAY)
-    assert store.db.execute("SELECT sum(n) FROM market_quality").fetchone()[0] == total
+    assert store.db.execute("SELECT count(*) FROM market_episode_results").fetchone()[0] == total
     retention.work(NOW + 36 * DAY)
     assert store.db.execute("SELECT count(*) FROM market_candles").fetchone()[0] == 0
     retention.work(NOW + 400 * DAY)
-    assert store.db.execute("SELECT count(*) FROM market_quality").fetchone()[0] == 0
+    assert store.db.execute("SELECT count(*) FROM market_episode_results").fetchone()[0] == 0
 
 
 def test_reset_preparation_preserves_private_configuration_and_refuses_repeat(store, tmp_path):
@@ -378,7 +396,7 @@ def test_pending_delivery_expires_explicitly_without_retaining_event_or_sources(
     assert json_payload(row[0])["test-pending:RETRY->EXPIRED_RETENTION_INCOMPLETE"] == 1
     Retention(store).work(NOW + 36 * DAY)
     assert store.db.execute("SELECT count(*) FROM market_candles").fetchone()[0] == 0
-    assert store.db.execute("SELECT sum(n) FROM market_quality").fetchone()[0] > 0
+    assert store.db.execute("SELECT count(*) FROM market_episode_results").fetchone()[0] > 0
 
 
 def test_bounded_summary_preserves_nonzero_comparator_distributions_and_export(store):
@@ -514,7 +532,9 @@ def test_current_episode_pointer_renews_and_permanent_target_failure_is_not_auto
     assert h.get("target:telegram")["state"] == "BLOCKED"
 
 
-def test_retention_preserves_all_method_versions_and_frozen_strength_grouping(store, monkeypatch):
+def test_retention_preserves_all_method_versions_and_frozen_strength_grouping(
+    store, monkeypatch, legacy_method
+):
     from cryptowatcher import outcomes as outcome_module
     from cryptowatcher.analytics import cohort_rows
     from cryptowatcher.events import identity
@@ -569,7 +589,7 @@ def test_retention_preserves_all_method_versions_and_frozen_strength_grouping(st
     )
 
 
-def test_retention_keeps_all_comparator_versions_and_original_pending_method(store):
+def test_retention_keeps_all_comparator_versions_and_original_pending_method(store, legacy_method):
     from cryptowatcher.analytics import cohort_rows
     from cryptowatcher.events import identity
     from cryptowatcher.outcomes import DAY, Retention
@@ -649,7 +669,9 @@ def test_retention_keeps_all_comparator_versions_and_original_pending_method(sto
     } == {"1": -2, "2": 3}
 
 
-def test_split_retention_batches_keep_pending_versions_and_do_not_expand_expired_windows(store):
+def test_split_retention_batches_keep_pending_versions_and_do_not_expand_expired_windows(
+    store, legacy_method
+):
     from dataclasses import asdict
 
     from cryptowatcher.analytics import cohort_rows
@@ -717,14 +739,16 @@ def test_split_retention_batches_keep_pending_versions_and_do_not_expand_expired
     assert "source_inputs" not in h.metadata("comparison-head:" + cid)["samples"][0]
     for _ in range(20):
         Retention(store).work(NOW + 31 * DAY, batch=1)
-        if not h.events(1):
+        if not h.count("event-head:"):
             break
-    assert not h.events(1) and list(cohort_rows(store)) == before
+    assert h.count("event-head:") == 0 and list(cohort_rows(store)) == before
     rows = store.db.execute("SELECT dimensions FROM market_quality").fetchall()
     assert any(json_payload(r[0])["methodology_version"] == "original-pending" for r in rows)
 
 
-def test_pending_method_is_not_silently_replaced_and_recompare_keeps_original_event(store, monkeypatch):
+def test_pending_method_is_not_silently_replaced_and_recompare_keeps_original_event(
+    store, monkeypatch, legacy_method
+):
     from cryptowatcher import analytics as analytics_module
     from cryptowatcher import outcomes as outcome_module
     from cryptowatcher.analytics import ComparisonWorker
@@ -736,6 +760,9 @@ def test_pending_method_is_not_silently_replaced_and_recompare_keeps_original_ev
     event = h.events(1)[0]
     job = next(j for _, j in h.items("outcome-job:") if j["event_id"] == event["event_id"])
     monkeypatch.setattr(outcome_module, "METHOD", "2")
+    # V1 is now explicitly supported beside2. Simulate unavailable/corrupt
+    # frozen definition, not merely a different current admission method.
+    monkeypatch.setattr(outcome_module, "LEGACY_DEFINITION", {"version": "UNAVAILABLE"})
     result = worker.calculate(store, job, event)
     assert result["state"] == "INVALID_SOURCE" and result["reason"] == "OUTCOME_METHODOLOGY_UNAVAILABLE"
     with store.db:

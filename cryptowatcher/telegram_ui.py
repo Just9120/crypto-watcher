@@ -15,7 +15,7 @@ from telegram import Update
 from .analytics import cohorts
 from .analytics_worker import read_snapshot
 from .config import TIMEFRAMES, ConfigError, instrument_key
-from .detector_config import PARAMETERS, effective_parameters
+from .detector_config import FAMILIES, PARAMETERS, effective_parameters
 from .diagnostics import snapshot as diagnostic_snapshot
 from .ingestion import BybitRadar
 from .storage import RevisionConflict
@@ -72,9 +72,7 @@ class ControlDeck:
     async def show_event(
         self, update: Update, event_id: str, token: str = "", *, result: bool = False
     ) -> None:
-        from .config import OwnerSettings
-        from .events import identity
-        from .outcomes import METHOD
+        from .outcomes import episode_results
         from .render import event_keyboard, event_text, outcome_text
 
         try:
@@ -93,12 +91,12 @@ class ControlDeck:
             )
             return
         if result:
-            horizons = OwnerSettings.from_payload(event["settings_snapshot"]).outcome_horizons
-            outcomes = [
-                self.c.history.get("outcome-head:" + identity(f"outcome/{event_id}/{h}/{METHOD}"))
-                for h in horizons
-            ]
-            body = outcome_text(event, outcomes, horizons)
+            origin, horizons, outcomes = episode_results(self.c.history, event)
+            body = (
+                outcome_text(origin, outcomes, horizons)
+                if origin is not None
+                else "Исходные подробности episode уже недоступны в сроке хранения."
+            )
         else:
             body = (
                 event_text(event, int(time.time() * 1000))
@@ -346,6 +344,10 @@ class ControlDeck:
             "Сравнение" if value["command"] == "compare" else "Статистика детекторов",
             "Снимок: " + when(value["at"] * 1000),
         ]
+        if data.get("groups_overlap"):
+            lines.append(
+                "Один эпизод учитывается один раз внутри группы. Группы могут пересекаться; их N не складывается."
+            )
         if data.get("selection_period"):
             lines.append(
                 "Архивная часть выбирается целыми UTC-днями; доступные подробности — по точному времени."
@@ -359,10 +361,17 @@ class ControlDeck:
                 )
             else:
                 description = str(group)
-            lines.append(
-                f"{description}\nНаблюдений: {row['sample_size']}; среднее {amount(row['mean'])}%; медиана {amount(row['median'])}%\n"
+            episode_mode = isinstance(group, dict) and group.get("methodology_version") == "2"
+            unit = "Уникальных эпизодов" if episode_mode else "Наблюдений (прежняя методика)"
+            legacy_comparison = (
                 f"Сравнимых периодов без сигнала: {row['comparator_sample_size']}; среднее {amount(row['comparator_mean'])}%\n"
-                f"Шум: {amount(row['noise_min_pct'])}…{amount(row['noise_max_pct'])}%; наблюдений шума {row['noise_sample_size']}."
+                if not episode_mode
+                else ""
+            )
+            lines.append(
+                f"{description}\n{unit}: {row['sample_size']}; среднее {amount(row['mean'])}%; медиана {amount(row['median'])}%\n"
+                + legacy_comparison
+                + f"Шум: {amount(row['noise_min_pct'])}…{amount(row['noise_max_pct'])}%; результатов с порогом шума {row['noise_sample_size']}."
             )
         if not rows:
             lines.append("Для этого разреза завершённых результатов пока нет.")
@@ -426,7 +435,7 @@ class ControlDeck:
                 update,
                 "Сроки оценки результата: "
                 + ", ".join(map(str, s.outcome_horizons))
-                + " минут. Изменения применяются только к новым событиям.",
+                + " минут. Изменения применяются только к новым эпизодам.",
                 keyboard([[("Изменить", "ui:field:outcome_horizons")]], back="settings"),
             )
         elif command == "profile" and not raw:
@@ -567,8 +576,11 @@ class ControlDeck:
             selected = ", ".join(FAMILY[f] for f in s.alert_detectors) or "выключены"
             await self.c.send(
                 update,
-                "Уведомления по детекторам\nВсе пять семейств рассчитываются для выбранного охвата и сохраняют историю.\n"
-                f"В Telegram разрешены: {selected}.\nКнопки меняют только доставку уведомлений.",
+                "Уведомления по детекторам\n"
+                f"Активные расчёты: {', '.join(FAMILY[f] for f in s.active_detectors) or 'выключены'}.\n"
+                f"В Telegram разрешены: {selected}.\n"
+                "Кнопки меняют только доставку. Выбор не включает отключённые расчёты; "
+                "история, дайджест и агент имеют отдельные правила.",
                 detectors_keyboard(snapshot),
             )
         elif command == "alerts" and not raw:
@@ -769,6 +781,29 @@ class ControlDeck:
                     back="settings",
                 ),
             )
+        elif action == "detector_activity" and len(parts) == 1:
+            from .render import detector_activity_keyboard
+
+            enabled = ", ".join(FAMILY[f] for f in snapshot.settings.active_detectors) or "выключены"
+            await self.c.send(
+                update,
+                "Расчёты детекторов\n"
+                f"Активны: {enabled}.\n"
+                "Отключённое семейство не создаёт новых наблюдений и расчётов. "
+                "Уже сохранённая история и её результаты остаются доступны.\n"
+                "Выбор уведомлений Telegram задаётся отдельно.",
+                detector_activity_keyboard(snapshot),
+            )
+        elif action == "active" and len(parts) == 4:
+            if parts[1] not in FAMILIES or parts[2] not in ("on", "off"):
+                raise ConfigError("Некорректный выбор детектора")
+            if not parts[3].isdecimal() or int(parts[3]) != snapshot.revision:
+                raise RevisionConflict("Панель устарела. Откройте расчёты детекторов заново")
+            selected = set(snapshot.settings.active_detectors)
+            selected.add(parts[1]) if parts[2] == "on" else selected.discard(parts[1])
+            settings = snapshot.settings.changed(active_detectors=tuple(f for f in FAMILIES if f in selected))
+            self.c.store.update(snapshot.revision, settings)
+            await self.callback(update, ["detector_activity"])
         elif action == "composite":
             result = await self.c.market.snapshot(snapshot.settings)
             if self.c.store.snapshot().revision != snapshot.revision:
@@ -929,7 +964,7 @@ class ControlDeck:
                     else [
                         [("Монета", copied[2][0][1])],
                         [("Полные исходные данные", "ui:eventfile:" + parts[1])],
-                        [("Пересчитать сравнение", "recompare:" + parts[1])],
+                        [("Статистика эпизодов", "ui:analytics")],
                     ]
                 )
                 if not back:
@@ -1003,6 +1038,8 @@ class ControlDeck:
                 )
             else:
                 raise ConfigError("Неизвестный раздел диагностики")
+        elif action == "active":
+            raise ConfigError("Некорректная кнопка расчётов детектора")
         elif action == "commands":
             from .bot import COMMANDS, MANUAL_FIELDS
 
@@ -1017,7 +1054,7 @@ class ControlDeck:
                 "horizons": "5,15,30,60",
                 "analytics": "[detector,market,timeframe]",
                 "compare": "[profile,version]",
-                "recompare": "EVENT_ID",
+                "recompare": "(совместимость: описательная статистика)",
                 "digest": "on [минуты] | off",
                 "enrichment": "on|off",
                 "derivatives": "spot/BTC",

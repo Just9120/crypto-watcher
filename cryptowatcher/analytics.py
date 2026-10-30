@@ -534,6 +534,17 @@ def _cohort_rows(
                 f"{name} AS (SELECT payload_json FROM {name}v WHERE pos=1)",
             ]
             args += [prefix, prefix + "~", cutoff_ms]
+    # Materialize first observations once, then let SQLite index episode membership.
+    # Notification/delivery revisions must not introduce extra samples or future labels.
+    event_prefix = PREFIX + "event:"
+    definitions.append(
+        "episode_members AS MATERIALIZED (SELECT "
+        "json_extract(cw_record_json(payload_json),'$.episode_id') AS episode_id, payload_json "
+        f"FROM {source(store, 'event')} WHERE key>=? AND key<? "
+        "AND json_extract(cw_record_json(payload_json),'$.revision')=1 "
+        "AND json_extract(cw_record_json(payload_json),'$.outcome_unit')='EPISODE')"
+    )
+    args += [event_prefix, event_prefix + "~"]
     paths = {
         "detector": "detector_id",
         "version": "detector_version",
@@ -566,6 +577,7 @@ def _cohort_rows(
         f"json_extract(cw_record_json({event_payload}),'$.market_observation_ms')>=?",
         f"json_extract(cw_record_json({event_payload}),'$.market_observation_ms')<?",
     ]
+    filter_start = len(args)
     args += [start_ms, end_ms]
     if cutoff_ms is not None:
         terms.append(f"json_extract(cw_record_json({event_payload}),'$.available_at_ms')<=?")
@@ -584,14 +596,49 @@ def _cohort_rows(
         if mixed
         else "FROM o JOIN runtime e ON e.key=" + event_key + " WHERE "
     )
-    definitions += [
-        "base AS (SELECT json_object(" + ",".join(fields) + ") AS group_key, "
-        "COALESCE(json_extract(cw_numeric_json(o.payload_json),'$.metrics.directed_return_pct'),json_extract(cw_numeric_json(o.payload_json),'$.metrics.price_return_pct')) AS value, "
-        "json_extract(cw_record_json(o.payload_json),'$.classification') AS class, json_extract(cw_record_json(o.payload_json),'$.noise_threshold_pct') AS noise, "
-        "json_extract(cw_record_json(o.payload_json),'$.event_id') AS event_id, json_extract(cw_record_json(o.payload_json),'$.horizon_min') AS horizon "
+    metrics = (
+        "COALESCE(json_extract(cw_numeric_json(o.payload_json),'$.metrics.directed_return_pct'),"
+        "json_extract(cw_numeric_json(o.payload_json),'$.metrics.price_return_pct')) AS value, "
+        "json_extract(cw_record_json(o.payload_json),'$.classification') AS class, "
+        "json_extract(cw_record_json(o.payload_json),'$.noise_threshold_pct') AS noise, "
+    )
+    legacy = (
+        "SELECT json_object("
+        + ",".join(fields)
+        + ") AS group_key, "
+        + metrics
+        + "json_extract(cw_record_json(o.payload_json),'$.event_id') AS event_id, "
+        "json_extract(cw_record_json(o.payload_json),'$.horizon_min') AS horizon "
         + event_join
         + " AND ".join(terms)
-        + ")",
+        + " AND (json_extract(cw_record_json(o.payload_json),'$.methodology_version')!='2' OR "
+        + f"COALESCE(json_extract(cw_record_json({event_payload}),'$.outcome_unit'),'EVENT_REFERENCE')!='EPISODE')"
+    )
+    episode_fields = [field.replace(event_payload, "e.payload_json") for field in fields]
+    episode_terms = [
+        term.replace(event_payload, "e.payload_json").replace(
+            "'$.market_observation_ms'", "'$.reference_time_ms'"
+        )
+        for term in terms
+    ]
+    episodes = (
+        "SELECT json_object("
+        + ",".join(episode_fields)
+        + ") AS group_key, "
+        + metrics
+        + "'episode:'||e.episode_id AS event_id, "
+        "json_extract(cw_record_json(o.payload_json),'$.horizon_min') AS horizon "
+        "FROM o JOIN episode_members e "
+        "ON e.episode_id=json_extract(cw_record_json(o.payload_json),'$.episode_id') WHERE "
+        + " AND ".join(episode_terms)
+        + " AND json_extract(cw_record_json(o.payload_json),'$.methodology_version')='2'"
+    )
+    args += args[filter_start:]
+    definitions += [
+        "observations AS (" + legacy + " UNION ALL " + episodes + ")",
+        # One outcome per episode in each selected group, including overlapping
+        # detector/TF/settings groups; repeated strengthening is not another N.
+        "base AS (SELECT DISTINCT group_key,value,class,noise,event_id,horizon FROM observations)",
         "ordered AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY group_key ORDER BY value) AS rn, COUNT(*) OVER (PARTITION BY group_key) AS n FROM base)",
         "stats AS (SELECT group_key,COUNT(*) AS n,MIN(noise) AS noise_min,MAX(noise) AS noise_max,COUNT(noise) AS noise_n,AVG(value) AS mean,MIN(value) AS minimum,MAX(value) AS maximum,AVG(CASE WHEN rn IN ((n+1)/2,(n+2)/2) THEN value END) AS median,MAX(CASE WHEN rn=(n+9)/10 THEN value END) AS p10,MAX(CASE WHEN rn=(n*9+9)/10 THEN value END) AS p90 FROM ordered GROUP BY group_key)",
         "classes AS (SELECT group_key,class,COUNT(*) AS n FROM base GROUP BY group_key,class)",
@@ -602,8 +649,16 @@ def _cohort_rows(
         from .quality_summary import union_sql
 
         summary_sql, summary_args = union_sql(groups, start_ms, end_ms, detector, version, market)
+        from . import episode_summary
+
+        if episode_summary.installed(store.db):
+            episode_sql, episode_args = episode_summary.union_sql(
+                groups, start_ms, end_ms, detector, version, market
+            )
+            summary_sql += " UNION ALL " + episode_sql
+            summary_args += episode_args
         for index, definition in enumerate(definitions):
-            if definition.startswith("base AS ("):
+            if definition.startswith("observations AS ("):
                 definitions[index] = definition[:-1] + " UNION ALL " + summary_sql + ")"
             elif definition.startswith("c AS ("):
                 definitions[index] = (
@@ -704,17 +759,33 @@ def _cohorts(store: Store, groups: tuple[str, ...], *, cutoff_ms: int | None, li
         incomplete += store.db.execute(
             "SELECT COUNT(*) FROM market_quality q JOIN json_each(cw_quality_json(q.facts)) s WHERE json_extract(s.value,'$.state')!='COMPLETE'"
         ).fetchone()[0]
+    if store.bounded and cutoff_ms is None:
+        from .episode_summary import installed
+
+        if installed(store.db):
+            incomplete += store.db.execute(
+                "SELECT COUNT(*) FROM market_episode_results r WHERE json_extract(r.fact,'$.state')!='COMPLETE' "
+                "AND NOT EXISTS (SELECT 1 FROM " + source(store, "outcome", head=True) + " o "
+                "WHERE o.key>=? AND o.key<? "
+                "AND json_extract(cw_record_json(o.payload_json),'$.episode_id')=r.episode_id "
+                "AND json_extract(cw_record_json(o.payload_json),'$.horizon_min')=r.horizon "
+                "AND json_extract(cw_record_json(o.payload_json),'$.methodology_version')=r.method)",
+                (PREFIX + "outcome-head:", PREFIX + "outcome-head:~"),
+            ).fetchone()[0]
     return {
         "schema": "cryptowatcher.analytics.v1",
         "selection_period": period_metadata(0, 9_999_999_999_999_999) if store.bounded else {},
         "groups": list(groups),
+        "sample_units_by_method": {"1": "EVENT_REFERENCE", "2": "UNIQUE_EPISODES"},
+        "groups_overlap": True,
         "cohorts": records,
         "incomplete_outcomes": incomplete,
         "cohort_limit": limit,
         "truncated": truncated,
         "limitations": [
             "Descriptive detector informativeness; not Strategy profitability",
-            "Repeated events and cross-event comparator overlap may correlate samples",
+            "Detector/TF/settings groups may overlap; their N are not additive",
+            "Legacy event samples and cross-event comparator overlap may correlate samples",
             "Small N and incomplete prior source history constrain interpretation",
         ],
         "cutoff_ms": cutoff_ms,

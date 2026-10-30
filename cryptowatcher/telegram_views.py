@@ -176,7 +176,8 @@ def settings_summary(snapshot: Snapshot) -> str:
     prices = " · ".join(f"{tf}: {amount(p['price_' + tf])}%" for tf in TIMEFRAMES)
     return (
         "⚙️ Настройки радара\n"
-        f"Профиль: {PROFILE[s.profile]}\n\n"
+        f"Профиль: {PROFILE[s.profile]}\n"
+        f"Активные расчёты: {', '.join(FAMILY[f] for f in s.active_detectors) or 'выключены'}\n\n"
         "🎚 Пороги срабатывания\n"
         f"Цена: {prices}\n"
         f"Оборот: ×{amount(p['turnover_ratio'])}; среднее за {int(p['turnover_lookback'])} свечей\n"

@@ -280,6 +280,10 @@ def test_cold_episode_lease_renews_to_members_atomically_with_a_hot_duplicate_an
         assert History(reader).get(coordinate.key) == value
         assert not reader.db.execute("PRAGMA foreign_key_check").fetchall()
     with store.db:
+        assert service(store, coordinate, 130 * DAY + 600000) == 0
+        assert history.get(coordinate.key) == value
+        # Model the parent archive acknowledgement consuming this fixture alias.
+        history.delete(aliases.Alias(last.identity, 100 * DAY + 600000, episode).key[len(PREFIX) :])
         assert service(store, coordinate, 130 * DAY + 600000) == 2
         assert service(store, coordinate, 130 * DAY + 600000) == 0
     assert history.get("episode-head:" + episode) is None

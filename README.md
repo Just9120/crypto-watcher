@@ -129,6 +129,52 @@ python scripts/checks.py all
 python -m ruff format .
 ```
 
+### Полная регрессия exact main без поставки
+
+Canonical entrypoint: `python scripts/checks.py full`; inventory без выполнения:
+`python scripts/checks.py full --plan`. Полный запуск — отдельное поручение владельца,
+не побочный эффект аудита/обычного CI. Новый manual workflow `full-validation.yml`
+доступен только отmain, не вызываетrelease/CD и не получает production credentials.
+Его настройка не означает запуск или успешную полную регрессию.
+
+На отдельном Linux/Python3.11 checkout после fresh fetch и безопасногоfast-forward
+на точныйmainSHA, с установленными hash-locked bootstrap/dev dependencies, gcc/bash
+и локальным Unix Docker daemon:
+
+```bash
+python scripts/checks.py full --revision EXACT_MAIN_SHA --report-directory .cache-g1/full-validation-UNIQUE_ID
+```
+
+HEAD иorigin/main должны совпасть с переданным40-characterSHA; tracked source чист.
+Существующий report directory, Windows/fallback и remote Docker (включая override
+черезcontext) отклоняются до тяжёлой работы. Не указывать daemon общегоVPS.
+Перед manual Actions запуском сверить included minutes/разрешение на расход;
+неизвестный остаток не выдавать за доступный. Workflow имеет предел40min; runner
+wall durations в отчёте не являются billable usage.
+
+| Профильный этап | Canonical реализация / результат |
+| --- | --- |
+| Native | `scripts/build_native.py`, pinned sources; отсутствие native не заменяется fallback |
+| Static | Тот же `checks.py quality`, включая docs/Ruff/mypy |
+| Tests | Тот же `checks.py test`: все discovered tests/recovery/security/async/export fixtures; отдельныйtemp/JUnit |
+| Image | Pinned Dockerfile exact SHA + `image_checks.py`:non-root, native, transition/private recovery, backup/hash/restart и storage |
+| Package | `package_release.py`: local archive/hash/image load identity round trip; qualification-only, не trusted release |
+| Joint boundary | `qualify_numeric_boundary.py`: прежние pinned inputs, full geometry и неизменённые ограничения |
+
+`result.json` содержит environment/revision/tree, inventory, реально выполненные
+commands/states/durations, not-run stages, всеpytest skips с причинами и residuals.
+Пустой/отсутствующий JUnit не считаетсяPASS. Первый failure останавливает следующие
+этапы; partial/skip не выдается за live либо native acceptance. Небольшие reports,
+logs/JUnit/manifests/hashes сохраняются; новые тяжёлые package copies удаляются,
+собственный unique image удаляется только после identity check. Native binaries,
+pytesttemp и обычныйDocker cache остаются явно указанными; global prune нет.
+
+В профиль не входят VPS/load/large-backup приёмка, visual Telegram, реальные
+Telegram/agent и30min/24h observation: для них нужны свои условия и Evidence.
+ОбычныеPR required jobs и post-merge release/CD сохраняют действующие gates;
+полный manual профиль их не запускает и не выдаёт себя за поставку.
+
+
 `quality` проверяет canonical doc links/fences, Ruff lint/format и mypy. `test` запускает meaningful regression suite; `all` объединяет оба этапа. PR CI исполняет оба с конечной numeric qualification между ними; trusted release проверяет `all`. Во время разработки допустим точечный pytest по затронутому риску. Coverage target не задан. Основной merge gate — GitHub `ci-required` на актуальной PR test merge revision; local PASS его не заменяет.
 
 После native build и quality Linux PR CI выполняет `python scripts/qualify_numeric_boundary.py`:
@@ -233,4 +279,25 @@ restart, source conflicts и устаревшие pending bindings не изме
 python -m scripts.measure_market_storage --database /absolute/new/fixture.sqlite3 --instruments 5
 ```
 
-Сценарий охватывает оба рынка/4TF/5families, outcomes и служебные записи, controlled expiry и сравнение analytics. Он не измеряет частоту production signals; artifact сохранять отдельно от working DB. Разовый production reset/cutover выполняется по [отдельной процедуре](docs/runbooks/bounded-storage-reset.md); пока ее post-checks не пройдены, новая generation не считается поставленной. Старые backup/conversion tools выше остаются историческими, не текущей задачей.
+Сценарий охватывает оба рынка/4TF/5families, один набор outcomes на episode и служебные записи, controlled expiry и сравнение analytics. N20 не запускается; N пересекающихся групп не складываются. Он не измеряет частоту production signals; artifact сохранять отдельно от working DB. Разовый production reset/cutover выполняется по [отдельной процедуре](docs/runbooks/bounded-storage-reset.md); пока ее post-checks не пройдены, новая generation не считается поставленной. Старые backup/conversion tools выше остаются историческими, не текущей задачей.
+
+
+### Квалификация модели прогноза
+
+Изолированный exact-writer сценарий: `python -m cryptowatcher.storage_model`.
+Он измеряет новую SQLite summary schema с1/4/20members на episode, всеми indexes
+и полной unshared provenance. Небольшая временная DB живёт только в памяти.
+Legacy CQ5/N20 qualification доступна отдельно: `python -m cryptowatcher.storage_model --legacy`;
+она не задаёт прогноз нового runtime. Production частоты/used-input mix и
+backup/temp reserve из synthetic fixture не выводятся. Состав прогноза и его
+ограничения описаны в [архитектуре](docs/architecture.md#прогноз-фактически-включённой-модели).
+
+### Минимальный replay LIGHT-RADAR
+
+Из корня в locked dev environment: `python -m pytest -q tests/test_light_replay.py`.
+Для отдельного нового отчёта: `python -m tests.light_replay --report <новый-путь.json>`.
+Сценарий создаёт только временную локальную БД и удаляет её; Telegram/agent transport
+заглушены, используется production ingestion/admission/outcome/delivery code.
+Logical market time ускорен, wall/CPU измеряются отдельно. Это finite regression
+и сравнение одинакового входа, не доказательство broad-Universe ёмкости VPS.
+Подробные limits и текущие gates — в [плане](docs/open_issues.md).

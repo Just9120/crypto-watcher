@@ -9,7 +9,7 @@ from cryptowatcher.events import History
 from cryptowatcher.sources import Sources
 from cryptowatcher.storage import StateError, Store, encode
 from cryptowatcher.storage_repack import VERSION, async_work, work
-from tests.test_bounded_storage import bounded
+from tests.test_bounded_storage import bounded, legacy_method  # noqa: F401
 from tests.test_outcomes import MINUTE, NOW, OutcomeWorker, future, observe
 
 
@@ -324,6 +324,7 @@ async def test_async_repack_continues_live_work_after_finite_initial_complete(st
     assert tick.call_count == 3 and result == idle
 
 
+@pytest.mark.usefixtures("legacy_method")
 def test_deep_capacity_counts_all_cold_records_aliases_pending_and_comparator_samples(store):
     from collections import Counter
 
@@ -334,7 +335,10 @@ def test_deep_capacity_counts_all_cold_records_aliases_pending_and_comparator_sa
     observe(store, OutcomeWorker(store))
     Sources(store).put("spot/BTCUSDT/1m", future())
     OutcomeWorker(store).work(NOW + 61 * MINUTE)
-    ComparisonWorker(store).work(NOW + 61 * MINUTE)
+    comparison = ComparisonWorker(store)
+    # Explicitly seed historical research; runtime no longer admits N20.
+    comparison.requeue(History(store).events(1)[0]["event_id"], NOW)
+    comparison.work(NOW + 61 * MINUTE)
     before = comparator_sample(store)
     assert before["n"] > 0
     complete(store)

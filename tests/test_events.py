@@ -200,7 +200,7 @@ async def test_coalesce_escalation_success_baseline_and_restart(state):
         == first["delivery_id"]
     )
     observe(engine, NOW + 60_000)
-    assert not history.items("pending:telegram:")  # Unchanged signal is history, not another alert.
+    assert not history.items("pending:telegram:")  # Unchanged signal adds neither research nor another alert.
     observe(engine, NOW + 120_000)
     observe(engine, NOW + 180_000, tf="3m")
     escalation = candidate(history)
@@ -341,10 +341,11 @@ async def test_expiry_config_race_and_unknown_ack_on_restart(state):
     bot.send_message.assert_not_called()
 
     observe(engine, NOW + 120_000)
+    observe(engine, NOW + 180_000, tf="3m")  # Closed TF boundary, meaningful update.
     current = candidate(engine.history)
     snapshot = state.snapshot()
     state.update(snapshot.revision, snapshot.settings.changed(price_move_min=3))
-    await delivery(state).send_due(bot, NOW + 122_000)
+    await delivery(state).send_due(bot, NOW + 182_000)
     assert (
         engine.history.get("outbox:telegram:" + current["delivery_id"])["state"] == "OBSOLETE_CONFIGURATION"
     )

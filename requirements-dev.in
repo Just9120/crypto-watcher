@@ -4,4 +4,4 @@ pytest-asyncio>=0.24
 ruff
 mypy
 PyYAML
-uv
+uv>=0.13.4

@@ -16,7 +16,7 @@ from cryptowatcher.storage import encode
 from cryptowatcher.storage_lifecycle import BoundedRetention, forget
 from tests.test_analytics import event as legacy_event
 from tests.test_analytics import series
-from tests.test_bounded_storage import bounded
+from tests.test_bounded_storage import bounded, legacy_method  # noqa: F401
 from tests.test_outcomes import MINUTE, NOW, future, observe
 
 
@@ -69,6 +69,7 @@ def test_noncanonical_legacy_event_keeps_its_hot_numeric_results_through_mixed_e
 
 
 @pytest.mark.parametrize("full_expiry", [False, True])
+@pytest.mark.usefixtures("legacy_method")
 def test_mixed_analytic_heads_archive_all_numeric_and_comparator_facts_exactly_and_rollback(
     store, full_expiry
 ):

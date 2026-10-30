@@ -72,6 +72,12 @@ def preset(name: str) -> tuple[tuple[str, float], ...]:
 
 def validate_effective_configuration(settings: Any) -> None:
     """Admission guard only: historical settings remain readable unchanged."""
+    if settings.candle_retention_days != 3:
+        raise ValueError("Общее окно свечей — 72 часа (3 суток); прежние настройки требуют явного перехода")
+    if settings.detail_retention_days != 30:
+        raise ValueError("Срок подробностей — 30 дней")
+    if max(settings.outcome_horizons) > 72 * 60:
+        raise ValueError("Срок оценки результата не может превышать 72 часа (4320 минут)")
     for instrument in ("", *settings.instruments()):
         values = effective_parameters(settings, instrument)
         for key in ("turnover_ratio", "volatility_ratio"):
@@ -85,5 +91,7 @@ def validate_effective_configuration(settings: Any) -> None:
             values["breakout_lookback"] + 1,
             values["volatility_lookback"] + 2,
         )
+        if required * 15 > 72 * 60:
+            raise ValueError("Lookback с текущей свечой не может превышать 72 часа на 15m")
         if required > 256:
             raise ValueError(f"Для расчёта требуется {int(required)} свечей; доступное окно — 256")

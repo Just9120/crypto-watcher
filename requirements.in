@@ -4,3 +4,4 @@ python-dotenv>=1.0.0
 websockets==17.1
 apsw==3.53.4.0
 zstandard==0.25.0
+certifi>=2026.10.19

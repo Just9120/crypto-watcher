@@ -7,6 +7,7 @@ state, image/unit and paths. Old market history is intentionally not copied.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -23,6 +24,7 @@ from .storage import StateError, Store, check_integrity, encode
 PRIVATE_TABLES = ("owner_settings", "delivery_preferences", "mutes", "legacy_import")
 PREFERENCES = ("radar:v1:digest-preferences", "radar:v1:agent:preference")
 MAX_PRIVATE = 8 * 1024 * 1024
+LIGHT_POLICY = "EPISODE_ORIGIN_V2_72H"
 
 
 def private_state(store: Store) -> dict[str, Any]:
@@ -43,6 +45,33 @@ def private_state(store: Store) -> dict[str, Any]:
     if len(encode(result).encode()) > MAX_PRIVATE:
         raise StateError("Private state byte bound")
     return result
+
+
+def light_private(value: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Only the agreed policy fields change; original recovery stays untouched."""
+    from .config import ConfigError, OwnerSettings
+    from .detector_config import validate_effective_configuration
+
+    normalized = copy.deepcopy(value)
+    owners = [r for r in normalized["tables"]["owner_settings"] if r[0] == value["owner_id"]]
+    if len(owners) != 1:
+        raise StateError("Private transition owner row mismatch")
+    row = owners[0]
+    payload = json.loads(row[2])
+    original = OwnerSettings.from_payload(payload)
+    changed = {}
+    for key, target in (("candle_retention_days", 3), ("active_detectors", list(original.active_detectors))):
+        if key not in payload or payload[key] != target:
+            changed[key] = {"before": payload.get(key, "ABSENT"), "after": target}
+            payload[key] = target
+    try:
+        validate_effective_configuration(OwnerSettings.from_payload(payload))
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+    if changed:
+        row[1] += 1
+        row[2] = encode(payload)
+    return normalized, changed
 
 
 def signature(value: Any) -> str:
@@ -88,6 +117,7 @@ def prepare(
     expected_generation: str | None = None,
     preserved_archive_sha256: str | None = None,
     discard_test_history: bool = False,
+    light_radar_transition: bool = False,
 ) -> dict[str, Any]:
     if any(
         not p.is_absolute() or p.resolve() != p or any(q.is_symlink() for q in (p, *p.parents))
@@ -96,6 +126,8 @@ def prepare(
         raise StateError("Unsafe reset path")
     if destination.exists() or recovery.exists() or source == destination:
         raise StateError("Reset destination already exists")
+    if light_radar_transition and not discard_test_history:
+        raise StateError("Light radar transition requires explicit exact-generation test-history discard")
     started = time.monotonic()
     deadline = started + 120
     if discard_test_history and (
@@ -130,7 +162,12 @@ def prepare(
                 raise StateError("Fresh measurement predecessor generation mismatch")
         elif previous_generation is not None:
             raise StateError("History reset already performed; no automatic repeat")
+        if isinstance(previous_generation, dict) and previous_generation.get("model") == LIGHT_POLICY:
+            raise StateError("Light radar history already exists; reset refused")
         preserved = private_state(old)
+    expected_private, configuration_changes = (
+        light_private(preserved) if light_radar_transition else (preserved, {})
+    )
     raw = encode(preserved).encode()
     write_new(recovery, raw)
     # Independently parse and restore exact preserved bytes before any source cutover.
@@ -147,6 +184,15 @@ def prepare(
         enable(fresh.db)
         fresh.bounded = True
         restore_private(fresh, parsed)
+        if configuration_changes:
+            expected_row = next(r for r in expected_private["tables"]["owner_settings"] if r[0] == owner)
+            with fresh.db:
+                cursor = fresh.db.execute(
+                    "UPDATE owner_settings SET revision=?,settings_json=? WHERE owner_id=? AND revision=?",
+                    (expected_row[1], expected_row[2], owner, expected_row[1] - 1),
+                )
+                if cursor.rowcount != 1:
+                    raise StateError("Private transition CAS mismatch")
         start = now_ms if now_ms is not None else int(time.time() * 1000)
         generation = {
             "schema": "cryptowatcher.history-generation.v1",
@@ -166,6 +212,13 @@ def prepare(
             "prior_detail_available": False,
             "comparator_limitations": "NEW_HISTORY_INSUFFICIENT_PRIOR_DATA",
         }
+        if light_radar_transition:
+            generation.update(
+                model=LIGHT_POLICY,
+                reason="OWNER_AUTHORIZED_LIGHT_RADAR_TRANSITION_20261030",
+                candle_window_hours=72,
+                comparator_limitations="COMPARISONS_DISABLED_LEGACY_READ_ONLY",
+            )
         fresh.put_runtime("history_generation", generation)
         # Preserve toggles; replace only the old digest schedule cursor. No old
         # queue, event delivery identity or source gap cursor is copied.
@@ -177,7 +230,7 @@ def prepare(
         fresh.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         check_integrity(fresh.db, deadline=deadline)
         actual = private_state(fresh)
-        expected = json.loads(raw)
+        expected = copy.deepcopy(expected_private)
         if expected["preferences"][PREFERENCES[0]] is not None:
             expected["preferences"][PREFERENCES[0]] = pref
         if actual != expected:
@@ -207,6 +260,8 @@ def prepare(
             "candidate_bytes": destination.stat().st_size,
             "elapsed_seconds": round(time.monotonic() - started, 3),
         }
+        if light_radar_transition:
+            receipt.update(light_radar_transition=True, configuration_changes=configuration_changes)
         if measurement:
             receipt.update(
                 previous_generation_id=expected_generation,
@@ -229,6 +284,9 @@ def verify_private(database: Path, recovery: Path, owner: int) -> dict[str, Any]
     expected = json.loads(recovery.read_bytes())
     with closing(Store(database, owner, readonly=True)) as store:
         actual = private_state(store)
+        generation = store.get_runtime("history_generation", {})
+        if generation.get("model") == LIGHT_POLICY:
+            expected, _ = light_private(expected)
     for value in (expected, actual):
         pref = value["preferences"][PREFERENCES[0]]
         if isinstance(pref, dict):
@@ -248,6 +306,7 @@ def main() -> int:
     parser.add_argument("--expected-generation")
     parser.add_argument("--preserved-archive-sha256")
     parser.add_argument("--discard-test-history", action="store_true")
+    parser.add_argument("--light-radar-transition", action="store_true")
     args = parser.parse_args()
     receipt = prepare(
         args.source,
@@ -257,6 +316,7 @@ def main() -> int:
         expected_generation=args.expected_generation,
         preserved_archive_sha256=args.preserved_archive_sha256,
         discard_test_history=args.discard_test_history,
+        light_radar_transition=args.light_radar_transition,
     )
     write_new(args.receipt, encode(receipt).encode())
     print(encode(receipt))

@@ -66,7 +66,10 @@ def test_migration_preserves_logical_reads_order_limits_counts_and_individual_ex
     assert store.count_runtime(PREFIX + "condition:") == 0
     assert store.count_runtime(PREFIX + conditions.GROUP) == 1
     assert group(history)["states"]["price:UP"]["expires_ms"] == original_expiry
-    assert group(history)["states"]["price:DOWN"]["expires_ms"] == clock[0] + 35 * DAY
+    assert (
+        group(history)["states"]["price:DOWN"]["expires_ms"]
+        == clock[0] + store.snapshot().settings.candle_retention_days * DAY
+    )
     assert hot_binding(store.db, PREFIX + GROUP) == (original_expiry, "condition-state", None)
     fetched = history.get(UP)
     fetched["last_ms"] = 999
@@ -80,11 +83,11 @@ def test_partial_and_final_retention_neither_shorten_nor_renew_another_member(st
     store, history, clock = state
     with store.db:
         history.put(UP, value(1))
-    first = clock[0] + 35 * DAY
+    first = clock[0] + store.snapshot().settings.candle_retention_days * DAY
     clock[0] += 100
     with store.db, conditions.batch(history, STREAM):
         history.put(DOWN, value(2))
-    last = clock[0] + 35 * DAY
+    last = clock[0] + store.snapshot().settings.candle_retention_days * DAY
     clock[0] = first
     BoundedRetention(store).work(first)
     assert history.get(UP) is None
@@ -172,15 +175,18 @@ def test_exposed_callbacks_see_prior_writes_and_their_changes_are_not_overwritte
     engine.observe(STREAM, window(), 1e6, 0.01, NOW, live=True)
     assert checked and history.get(UP)["non_signal_bars"] == 7
     assert len(engine.history.events()) == 4
-    before = list(history.scan(""))
 
     def broken(_):
-        assert History(store).get(UP)["last_ms"] == NOW + 60_000
+        assert History(store).get(UP)["last_ms"] == NOW + 120_000
         raise RuntimeError("callback after publication")
 
     engine.on_event = broken
+    # A repeated unchanged candle updates liveness without invoking on_event.
+    engine.observe(STREAM, window(NOW + 60_000), 1e6, 0.01, NOW + 60_000, live=True)
+    assert len(engine.history.events()) == 4
+    before = list(history.scan(""))
     with pytest.raises(RuntimeError, match="callback after publication"):
-        engine.observe(STREAM, window(NOW + 60_000), 1e6, 0.01, NOW + 60_000, live=True)
+        engine.observe(STREAM, window(NOW + 120_000, close=110), 1e6, 0.01, NOW + 120_000, live=True)
     assert list(history.scan("")) == before
 
 

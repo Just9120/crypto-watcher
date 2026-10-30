@@ -343,6 +343,9 @@ class Store:
             from .quality_summary import install
 
             install(self.db, binary_cache=self.cached_bytes)
+            from .episode_summary import installed as validate_episode_summary
+
+            validate_episode_summary(self.db)
             numeric_blocks = self.db.execute(
                 "SELECT value FROM market_meta WHERE key='numeric_blocks'"
             ).fetchone()
@@ -415,6 +418,12 @@ class Store:
             self.db.execute("PRAGMA journal_mode=WAL")
             self.db.execute("PRAGMA synchronous=FULL")
             if self.bounded:
+                from .episode_summary import install as install_episode_summary
+
+                install_episode_summary(self.db)
+                from .storage_meter import install_source_usage
+
+                install_source_usage(self.db)
                 from .expiry_index import install as install_expiry
                 from .quality_layout import install as install_quality
 
@@ -545,6 +554,12 @@ class Store:
             return
         if legacy is not None and legacy.exists():
             raise StateError("Legacy state needs reviewed explicit migration")
+        from .detector_config import validate_effective_configuration
+
+        try:
+            validate_effective_configuration(defaults)
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
         with self.db:
             self.db.execute(
                 "INSERT INTO owner_settings VALUES (?,1,?)", (self.owner_id, encode(defaults.payload()))
