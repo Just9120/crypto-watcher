@@ -344,6 +344,10 @@ class ControlDeck:
             "Сравнение" if value["command"] == "compare" else "Статистика детекторов",
             "Снимок: " + when(value["at"] * 1000),
         ]
+        if data.get("groups_overlap"):
+            lines.append(
+                "Один эпизод учитывается один раз внутри группы. Группы могут пересекаться; их N не складывается."
+            )
         if data.get("selection_period"):
             lines.append(
                 "Архивная часть выбирается целыми UTC-днями; доступные подробности — по точному времени."
@@ -357,10 +361,17 @@ class ControlDeck:
                 )
             else:
                 description = str(group)
-            lines.append(
-                f"{description}\nНаблюдений: {row['sample_size']}; среднее {amount(row['mean'])}%; медиана {amount(row['median'])}%\n"
+            episode_mode = isinstance(group, dict) and group.get("methodology_version") == "2"
+            unit = "Уникальных эпизодов" if episode_mode else "Наблюдений (прежняя методика)"
+            legacy_comparison = (
                 f"Сравнимых периодов без сигнала: {row['comparator_sample_size']}; среднее {amount(row['comparator_mean'])}%\n"
-                f"Шум: {amount(row['noise_min_pct'])}…{amount(row['noise_max_pct'])}%; наблюдений шума {row['noise_sample_size']}."
+                if not episode_mode
+                else ""
+            )
+            lines.append(
+                f"{description}\n{unit}: {row['sample_size']}; среднее {amount(row['mean'])}%; медиана {amount(row['median'])}%\n"
+                + legacy_comparison
+                + f"Шум: {amount(row['noise_min_pct'])}…{amount(row['noise_max_pct'])}%; результатов с порогом шума {row['noise_sample_size']}."
             )
         if not rows:
             lines.append("Для этого разреза завершённых результатов пока нет.")
@@ -953,7 +964,7 @@ class ControlDeck:
                     else [
                         [("Монета", copied[2][0][1])],
                         [("Полные исходные данные", "ui:eventfile:" + parts[1])],
-                        [("Пересчитать сравнение", "recompare:" + parts[1])],
+                        [("Статистика эпизодов", "ui:analytics")],
                     ]
                 )
                 if not back:
@@ -1043,7 +1054,7 @@ class ControlDeck:
                 "horizons": "5,15,30,60",
                 "analytics": "[detector,market,timeframe]",
                 "compare": "[profile,version]",
-                "recompare": "EVENT_ID",
+                "recompare": "(совместимость: описательная статистика)",
                 "digest": "on [минуты] | off",
                 "enrichment": "on|off",
                 "derivatives": "spot/BTC",

@@ -463,7 +463,8 @@ async def test_statistics_frozen_snapshot_and_download_keep_exact_completed_resu
     data = json.loads(frozen)
     assert data["cohorts"] and any(row["sample_size"] for row in data["cohorts"])
     shown = "\n".join(c.args[0] for c in request.effective_message.reply_text.call_args_list)
-    assert "Наблюдений:" in shown and "срок, мин:" in shown and "Это не доходность" in shown
+    assert "Уникальных эпизодов:" in shown and "срок, мин:" in shown and "Это не доходность" in shown
+    assert "Сравнимых периодов без сигнала" not in shown
     token = deck.ui.statistics["token"]
     observe(deck.store, deck.outcomes, now=NOW + MINUTE)
     request = update(callback="ui:statsfile:" + token)
@@ -598,3 +599,16 @@ async def test_domain_detector_buttons_are_revision_safe_and_independent_from_le
     assert notification.settings.active_detectors == saved.settings.active_detectors
     with closing(Store(deck.store.path, deck.store.owner_id, readonly=True)) as reopened:
         assert reopened.snapshot() == notification
+
+
+@pytest.mark.parametrize("request_data", ["/recompare", "/recompare obsolete-id", "recompare:obsolete-id"])
+async def test_legacy_recompare_is_readonly_navigation_without_hidden_research(deck, request_data):
+    request = update(callback=request_data) if request_data.startswith("recompare:") else update(request_data)
+    before = list(deck.store.db.iterdump())
+    await deck.handle(request, None)
+    reply = request.effective_message.reply_text.call_args
+    assert "N20 больше не запускаются" in reply.args[0]
+    assert any(
+        b.callback_data == "ui:analytics" for row in reply.kwargs["reply_markup"].inline_keyboard for b in row
+    )
+    assert list(deck.store.db.iterdump()) == before

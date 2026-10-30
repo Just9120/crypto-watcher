@@ -164,7 +164,8 @@ async def replay(path: Path, *, minutes: int = 30) -> dict[str, Any]:
                 )
             # Old main still admits N20; exercise its current worker too.
             with measured("comparisons"):
-                comparisons.work(clock[0])
+                if getattr(controller, "comparison_policy", None) != "LEGACY_READ_ONLY":
+                    comparisons.work(clock[0])
             with measured("telegram"):
                 await controller.delivery.send_due(bot, clock[0])
             with measured("agent"):

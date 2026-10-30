@@ -217,11 +217,18 @@ SQL aggregates и CSV/NDJSON используют одинаковые episode u
 Установка summary schema additive только на writable connection; readonly её
 не создаёт. Старые market_quality codecs/readers остаются для legacy event facts,
 method versions и comparator distributions. Их наличие не разрешает новый N20:
-автоматический admission удалён, завершение совместимости manual entry points
-остаётся частью текущей Goal. General candle TTL72h, unified capacity forecast и весь offered/saved/due/delivery benchmark
+автоматический admission и runtime worker удалены. Старые manual commands/callbacks
+ведут к описательной статистике, не создавая jobs. Compatibility helpers в scripts
+сохраняются до их отдельной сверки; они не описывают новый capacity profile. General candle TTL72h, unified capacity forecast и весь offered/saved/due/delivery benchmark
 ещё требуют завершения; этот раздел не подтверждает их поставку или приёмку VPS.
 
-## G3 analytics и independent digest
+## G3 legacy analytics и independent digest
+
+N20/comparison readers и прежние вычислительные helpers ниже сохраняются для legacy
+данных/fixtures; scheduler новой модели не запускает эти исследования. Current
+episode outcome/summary path описан в разделе LIGHT-RADAR. Digest остаётся отдельным
+consumer, количество и ranking в нём считаются по уникальным episodes.
+
 
 `outcomes.py` принимает jobs в event transaction, затем bounded worker вычисляет полные future1m окна без смены reference; `analytics.py` вычисляет frozen prior comparator для каждого события в ограниченном batch и отделяет causal readout от late analytics. Cohort distributions сортирует/агрегирует SQLite, exporter не собирает все raw returns в памяти. Telegram/CLI views имеют явные ограничения выдачи; streaming export через отдельный readonly connection не усечён и pinning snapshot проверен concurrent-writer fixture.
 
