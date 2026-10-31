@@ -200,7 +200,12 @@ class PhaseProfile:
 
 
 def case(
-    report: Path, *, profile: bool = False, direct_sqlite: bool = False, bounded_pool: bool = False
+    report: Path,
+    *,
+    profile: bool = False,
+    direct_sqlite: bool = False,
+    bounded_pool: bool = False,
+    diagnostic: bool = False,
 ) -> int:
     sys.path.insert(0, str(ROOT))
     from scripts.qualify_framed_backup import require_native_limits
@@ -231,16 +236,23 @@ def case(
                     progress=progress,
                     direct_sqlite=direct_sqlite,
                     bounded_pool=bounded_pool,
+                    diagnostic=diagnostic,
                 )
             )
     finally:
         capture.save(report.parent / "profile.json")
     failures = verdict(result, direct_sqlite=direct_sqlite, bounded_pool=bounded_pool)
+    if diagnostic and result.get("diagnostic", {}).get("complete") is not True:
+        failures.append("DIAGNOSTIC_TRACE_INCOMPLETE")
     payload = {
         "schema": "cryptowatcher.processing-qualification.v1",
         "source": os.environ.get("SOURCE_REVISION"),
-        "state": "FAIL" if failures else ("PROFILE_ONLY" if profile else "PASS"),
-        "mode": "DIAGNOSTIC_PROFILE_NOT_ACCEPTANCE" if profile else "QUALIFICATION",
+        "state": "FAIL" if failures else ("DIAGNOSTIC_ONLY" if diagnostic or profile else "PASS"),
+        "mode": "DIAGNOSTIC_TRACE_NOT_ACCEPTANCE"
+        if diagnostic
+        else "DIAGNOSTIC_PROFILE_NOT_ACCEPTANCE"
+        if profile
+        else "QUALIFICATION",
         "repository": "DIRECT_SQLITE_PROTOTYPE" if direct_sqlite else "CURRENT_APPLICATION",
         "analytics_scope": "BOUNDED_POOL" if bounded_pool else "ALL_EPISODES",
         "failures": failures,
@@ -250,7 +262,7 @@ def case(
     }
     report.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     signal.alarm(0)
-    return int(bool(failures) or profile)
+    return int(bool(failures) or profile or diagnostic)
 
 
 def run(
@@ -261,6 +273,7 @@ def run(
     profile: bool = False,
     direct_sqlite: bool = False,
     bounded_pool: bool = False,
+    diagnostic: bool = False,
 ) -> int:
     if sys.platform != "linux" or os.geteuid() != 0 or not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("Linux CI root controller and exact revision required")
@@ -276,7 +289,11 @@ def run(
     proof = {
         "source": revision,
         "image": inspected["Id"],
-        "mode": "DIAGNOSTIC_PROFILE_NOT_ACCEPTANCE" if profile else "QUALIFICATION",
+        "mode": "DIAGNOSTIC_TRACE_NOT_ACCEPTANCE"
+        if diagnostic
+        else "DIAGNOSTIC_PROFILE_NOT_ACCEPTANCE"
+        if profile
+        else "QUALIFICATION",
         "repository": "DIRECT_SQLITE_PROTOTYPE" if direct_sqlite else "CURRENT_APPLICATION",
         "analytics_scope": "BOUNDED_POOL" if bounded_pool else "ALL_EPISODES",
         "state": "PREPARED",
@@ -340,6 +357,7 @@ def run(
             *(["--profile"] if profile else []),
             *(["--direct-sqlite"] if direct_sqlite else []),
             *(["--bounded-pool"] if bounded_pool else []),
+            *(["--diagnostic"] if diagnostic else []),
         ).strip()
         created = True
         proof["container_id"] = cid
@@ -489,6 +507,7 @@ def main() -> int:
     inner.add_argument("--profile", action="store_true")
     inner.add_argument("--direct-sqlite", action="store_true")
     inner.add_argument("--bounded-pool", action="store_true")
+    inner.add_argument("--diagnostic", action="store_true")
     outer = commands.add_parser("run")
     outer.add_argument("image")
     outer.add_argument("revision")
@@ -496,6 +515,7 @@ def main() -> int:
     outer.add_argument("--profile", action="store_true")
     outer.add_argument("--direct-sqlite", action="store_true")
     outer.add_argument("--bounded-pool", action="store_true")
+    outer.add_argument("--diagnostic", action="store_true")
     args = parser.parse_args()
     if args.command == "case":
         return case(
@@ -503,6 +523,7 @@ def main() -> int:
             profile=args.profile,
             direct_sqlite=args.direct_sqlite or args.bounded_pool,
             bounded_pool=args.bounded_pool,
+            diagnostic=args.diagnostic,
         )
     return run(
         args.image,
@@ -511,6 +532,7 @@ def main() -> int:
         profile=args.profile,
         direct_sqlite=args.direct_sqlite or args.bounded_pool,
         bounded_pool=args.bounded_pool,
+        diagnostic=args.diagnostic,
     )
 
 

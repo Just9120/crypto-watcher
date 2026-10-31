@@ -106,7 +106,13 @@ async def replay(
     progress=None,
     direct_sqlite: bool = False,
     bounded_pool: bool = False,
+    diagnostic: bool = False,
 ) -> dict:
+    if diagnostic and not bounded_pool:
+        raise ValueError("Diagnostic trace requires the unchanged bounded-pool scenario")
+    from .processing_trace import Trace
+
+    trace = Trace(diagnostic)
     if bounded_pool and not direct_sqlite:
         raise ValueError("The isolated pool uses the explicit direct SQLite repository")
     if path.exists() or type(instruments) is not int or not 1 <= instruments <= 256:
@@ -126,6 +132,7 @@ async def replay(
     wall_started, cpu_started = time.monotonic(), time.process_time()
 
     def stage(name):
+        trace.stage({"stage": name})
         if progress is not None:
             progress(
                 {
@@ -150,6 +157,7 @@ async def replay(
         patch("time.time", lambda: now() / 1000),
         patch.dict(os.environ, ENV),
         repository_context(direct_sqlite) as finish_readers,
+        trace,
         closing(Store(path, infrastructure.owner_id)) as store,
     ):
         store.initialize(OwnerSettings())
@@ -221,7 +229,9 @@ async def replay(
                 original_publish = controller.engine.on_event_snapshot
 
                 def published(event, episode):
-                    global_trace.append(signal_point(event))
+                    point = signal_point(event)
+                    global_trace.append(point)
+                    trace.published(event, point)
                     original_publish(event, episode)
 
                 controller.engine.on_event_snapshot = published
@@ -624,6 +634,10 @@ async def replay(
             if pool is not None:
                 expected = global_reference(path.with_name("oracle.sqlite3"), instruments, seconds)
                 actual = sorted(encode(point) for point in global_trace)
+                if diagnostic:
+                    result["diagnostic"] = trace.report(
+                        path.with_name("aligned-oracle.sqlite3"), expected, global_trace, signal_point
+                    )
                 from cryptowatcher.events import identity
 
                 selected_ids = set()
