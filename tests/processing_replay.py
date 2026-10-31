@@ -30,7 +30,7 @@ import httpx
 from cryptowatcher import frozen_codec_native
 from cryptowatcher.bot import Controller
 from cryptowatcher.config import TIMEFRAMES, Infrastructure, OwnerSettings
-from cryptowatcher.ingestion import BybitRadar, shards
+from cryptowatcher.ingestion import BybitRadar, _subscription_groups
 from cryptowatcher.market_storage import enable
 from cryptowatcher.outcomes import MINUTE
 from cryptowatcher.sources import Candle
@@ -38,6 +38,39 @@ from cryptowatcher.storage import Store, encode
 from cryptowatcher.universe import classify
 
 from .light_replay import ENV, NOW, SOURCE, ack, metadata, minute_row
+
+
+def wire_groups(streams):
+    groups = {}
+    for category in ("spot", "linear"):
+        groups.update(
+            _subscription_groups(category, {s for s in streams if s.startswith(category + "/")}, {})
+        )
+    return groups
+
+
+def frozen_group_label(name):
+    # Preserve the existing offered digest's wire labels, not socket identities.
+    category, index = name.split(":")
+    if category not in ("spot", "linear") or not index.isdigit():
+        raise ValueError("Unexpected canonical fixture subscription identity")
+    return f"{category}/{index}"
+
+
+async def refresh_preserving_wire(market, settings):
+    groups, receivers = dict(market._groups), dict(market._sessions)
+    await market.refresh(settings)
+    preserved = (
+        groups == market._groups
+        and set(receivers) == set(market._sessions)
+        and all(
+            market._sessions[name] is task and not task.done() and not task.cancelling()
+            for name, task in receivers.items()
+        )
+    )
+    if not preserved:
+        raise AssertionError("REFRESH_REPLACED_SIMULATED_RECEIVERS")
+    return {"receivers": len(receivers), "preserved": True}
 
 
 def candle(end: int, tf: str) -> Candle:
@@ -235,19 +268,18 @@ async def replay(
             queues = {}
             arrivals = {}
             loop = asyncio.get_running_loop()
-            groups = {}
-            for category in ("spot", "linear"):
-                for i, group in enumerate(shards([s for s in streams if s.startswith(category + "/")])):
-                    name = f"{category}/{i}"
-                    groups[name] = tuple(group)
-                    queues[name] = queue.Queue(maxsize=4096)
-                    arrivals[name] = asyncio.Event()
-                    market.connections[name] = {
-                        "state": "CONNECTED",
-                        "requested": len(group),
-                        "acknowledged": len(group),
-                    }
+            groups = wire_groups(streams)
+            for name, group in groups.items():
+                queues[name] = queue.Queue(maxsize=4096)
+                arrivals[name] = asyncio.Event()
+                market.connections[name] = {
+                    "state": "CONNECTED",
+                    "requested": len(group),
+                    "acknowledged": len(group),
+                }
             market._groups = groups
+            refresh_checks = []
+            post_refresh_closed = [0]
             source_lags = []
             accepted = Counter()
             original_accept = market.accept_message
@@ -262,6 +294,8 @@ async def replay(
                     assert source.close == message["data"][0]["close"]
                     accepted[stream] += 1
                     source_lags.append(max(0, now() - message["data"][0]["end"] - 1))
+                    if refresh_checks:
+                        post_refresh_closed[0] += 1
 
             market.accept_message = accept
             completed = []
@@ -321,7 +355,7 @@ async def replay(
                                 confirmed = offset % (int(stream.rsplit("/", 1)[1][:-1]) * 60) == 0
                                 value = message(stream, offset, confirmed)
                                 raw = encode(value)
-                                offered_hash.update(encode([name, raw]).encode())
+                                offered_hash.update(encode([frozen_group_label(name), raw]).encode())
                                 if confirmed:
                                     offered[stream] += 1
                                 queues[name].put_nowait(raw)
@@ -363,7 +397,10 @@ async def replay(
                 market.persist_diagnostics()
 
             async def global_refresh(_context):
-                await market.refresh(store.snapshot().settings)
+                checked = await refresh_preserving_wire(market, store.snapshot().settings)
+                refresh_checks.append(
+                    {**checked, "at_ms": now(), "accepted_at_refresh": sum(accepted.values())}
+                )
 
             samples = []
 
@@ -410,7 +447,7 @@ async def replay(
             try:
                 for name, group in groups.items():
                     task = asyncio.create_task(
-                        market._receive_messages(Wire(name), name, name.split("/")[0], set(group))
+                        market._receive_messages(Wire(name), name, name.split(":")[0], set(group))
                     )
                     market._sessions[name] = task
                 for name, callback, interval, first in (
@@ -607,6 +644,9 @@ async def replay(
                     "selected_outcome_ids": sorted(selected_ids),
                     "actual_outcome_ids": sorted(scheduled_ids),
                     "global_refresh_requests": refresh_requests,
+                    "refresh_receiver_checks": refresh_checks,
+                    "accepted_closed_after_refresh": post_refresh_closed[0],
+                    "wire_digest_labels": "Legacy market/index labels; actual subscription IDs use canonical market:index",
                     "agent_receipts_by_kind": dict(Counter(a["delivery_kind"] for a in agents)),
                     "coverage_limitations": [
                         "130s may not fill64 long-lived reservations; transition fixtures are separate",

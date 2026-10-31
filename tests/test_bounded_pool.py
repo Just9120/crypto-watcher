@@ -25,6 +25,7 @@ async def test_pool_keeps_global_signals_and_runs_real_selected_outcomes(tmp_pat
     assert pool["capacity"]["state"] == "UNPROVEN"
     assert pool["actual_outcome_ids"] == pool["selected_outcome_ids"]
     assert len(pool["global_refresh_requests"]) == 4
+    assert pool["refresh_receiver_checks"] and pool["refresh_receiver_checks"][0]["preserved"]
 
 
 def test_legacy_result_and_empty_pool_cannot_pass_new_gate():
@@ -34,6 +35,105 @@ def test_legacy_result_and_empty_pool_cannot_pass_new_gate():
     assert "NONTRIVIAL_SELECTION_REQUIRED" in failed
     assert "FULL_POOL_PRESSURE_UNPROVEN" in failed
     assert "MATURE_CAPACITY_UNPROVEN" in failed
+    assert "POST_REFRESH_CLOSED_INPUT_REQUIRED" in failed
+
+
+@pytest.mark.parametrize("legacy_socket_names", [False, True])
+async def test_closed_arrival_after_real_refresh_preserves_wire_receivers(store, legacy_socket_names):
+    import asyncio
+    from unittest.mock import Mock
+
+    import httpx
+
+    from cryptowatcher.config import TIMEFRAMES
+    from cryptowatcher.ingestion import BybitRadar
+    from cryptowatcher.sources import Sources
+    from cryptowatcher.universe import classify
+    from tests.processing_replay import MINUTE, NOW, frozen_group_label, refresh_preserving_wire, wire_groups
+    from tests.test_ingestion import message
+    from tests.test_universe import metadata
+
+    symbols = ["BTCUSDT"] + [f"SIM{i:03}USDT" for i in range(1, 65)]
+    clock = [NOW]
+
+    def transport(request):
+        category = request.url.params["category"]
+        assert request.url.path in ("/v5/market/instruments-info", "/v5/market/tickers")
+        rows = (
+            [metadata(symbol, category) for symbol in symbols]
+            if request.url.path.endswith("instruments-info")
+            else [{"symbol": symbol, "turnover24h": "2000000", "lastPrice": "104"} for symbol in symbols]
+        )
+        return httpx.Response(
+            200, json={"retCode": 0, "time": clock[0], "result": {"list": rows, "nextPageCursor": ""}}
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        market = BybitRadar(store, client)
+        market.server_now = lambda: clock[0]
+        market.connector = Mock(side_effect=AssertionError("Real socket must never replace the Wire"))
+        try:
+            for category in ("spot", "linear"):
+                for symbol in symbols:
+                    item, reason = classify(category, metadata(symbol, category))
+                    assert item is not None, reason
+                    market.instruments[item.key] = item
+                    market.tickers[item.key] = {"turnover24h": "2000000", "lastPrice": "104"}
+                    market.streams.update(item.key + "/" + tf for tf in TIMEFRAMES)
+            groups = wire_groups(market.streams)
+            assert len(groups) == 6  # Multiple real subscription shards per market.
+            if legacy_socket_names:
+                groups = {frozen_group_label(k): v for k, v in groups.items()}
+            market._groups = groups
+            market._scope_revision = store.snapshot().revision
+            queues = {name: asyncio.Queue() for name in groups}
+
+            class Wire:
+                def __init__(self, name):
+                    self.name = name
+
+                async def recv(self):
+                    return await queues[self.name].get()
+
+            for name, group in groups.items():
+                category = group[0].split("/")[0]
+                market._sessions[name] = asyncio.create_task(
+                    market._receive_messages(Wire(name), name, category, set(group))
+                )
+                market.connections[name] = {
+                    "state": "CONNECTED",
+                    "requested": len(group),
+                    "acknowledged": len(group),
+                }
+            receivers = dict(market._sessions)
+            streams = {name: next(s for s in group if s.endswith("/1m")) for name, group in groups.items()}
+
+            async def wave(start):
+                for name, stream in streams.items():
+                    await queues[name].put(encode(message(symbol=stream.split("/")[1], start=start)))
+                for _ in range(100):
+                    if all(start in market.sources.windows.get(stream, {}) for stream in streams.values()):
+                        return
+                    await asyncio.sleep(0)
+                pytest.fail("The confirmed closed wave was not persisted")
+
+            await wave(NOW - MINUTE)
+            if legacy_socket_names:
+                with pytest.raises(AssertionError, match="REFRESH_REPLACED"):
+                    await refresh_preserving_wire(market, store.snapshot().settings)
+                return
+            checked = await refresh_preserving_wire(market, store.snapshot().settings)
+            assert checked == {"receivers": 6, "preserved": True}
+            assert all(market._sessions[name] is task for name, task in receivers.items())
+            clock[0] += MINUTE  # Correctness clock only; the capped replay stays real1:1.
+            await wave(NOW)
+            fresh_reader = Sources(store)
+            for stream in streams.values():
+                fresh_reader.load(stream)
+                assert fresh_reader.windows[stream][NOW].end == NOW + MINUTE
+            assert not market.connector.called
+        finally:
+            await market.close()
 
 
 def test_policy_reference_and_rollback_are_durable(tmp_path):

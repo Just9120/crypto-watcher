@@ -107,6 +107,12 @@ def verdict(result: dict, *, direct_sqlite: bool = False, bounded_pool: bool = F
         pool = result.get("bounded_pool", {})
         if pool.get("mode") != "ISOLATED_BOUNDED_ANALYTICS_POOL":
             failures.append("BOUNDED_POOL_EVIDENCE_REQUIRED")
+        if (
+            not pool.get("refresh_receiver_checks")
+            or not all(check.get("preserved") is True for check in pool["refresh_receiver_checks"])
+            or pool.get("accepted_closed_after_refresh", 0) <= 0
+        ):
+            failures.append("POST_REFRESH_CLOSED_INPUT_REQUIRED")
         if not pool.get("global_expected") or pool.get("global_expected_sha256") != pool.get(
             "global_actual_sha256"
         ):
