@@ -116,11 +116,11 @@ jobs:
         run: |
           docker build --build-arg SOURCE_REVISION="$REVISION" --build-arg BUILD_RUN="$RUN_ID" -t "cryptowatcher:$REVISION" .
           docker build -f tests/processing.Dockerfile --build-arg BASE_IMAGE="cryptowatcher:$REVISION" -t "cw-processing:$REVISION" .
-      - name: One isolated direct SQLite prototype; identical workload and limits
+      - name: One bounded analytics pool prototype; global detection and delivery unchanged
         env:
           REVISION: ${{ github.sha }}
         run: |
-          sudo timeout --signal=INT --kill-after=10s 600s "$(command -v python)" -B scripts/qualify_processing.py run "cw-processing:$REVISION" "$REVISION" ".cache-g1/processing-direct-${{ github.run_id }}-${{ github.run_attempt }}" --direct-sqlite
+          sudo timeout --signal=INT --kill-after=10s 600s "$(command -v python)" -B scripts/qualify_processing.py run "cw-processing:$REVISION" "$REVISION" ".cache-g1/processing-direct-${{ github.run_id }}-${{ github.run_attempt }}" --bounded-pool
       - name: Preserve processing result including resource stops
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

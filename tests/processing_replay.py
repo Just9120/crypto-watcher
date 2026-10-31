@@ -66,8 +66,16 @@ def candle(end: int, tf: str) -> Candle:
 
 
 async def replay(
-    path: Path, *, instruments: int = 32, seconds: int = 130, progress=None, direct_sqlite: bool = False
+    path: Path,
+    *,
+    instruments: int = 32,
+    seconds: int = 130,
+    progress=None,
+    direct_sqlite: bool = False,
+    bounded_pool: bool = False,
 ) -> dict:
+    if bounded_pool and not direct_sqlite:
+        raise ValueError("The isolated pool uses the explicit direct SQLite repository")
     if path.exists() or type(instruments) is not int or not 1 <= instruments <= 256:
         raise ValueError("Qualification needs a new owned database and1..256 instruments per market")
     if type(seconds) is not int or not 4 <= seconds <= 190:
@@ -122,12 +130,30 @@ async def replay(
         agents = []
 
         rest_requests = []
+        refresh_requests = []
 
         def transport(request):
             if str(request.url) == ENV["AGENT_EVENT_URL"]:
                 assert not store.db.in_transaction
                 agents.append(json.loads(request.content))
                 return ack(request)
+            if (
+                bounded_pool
+                and request.url.host == "api.bybit.com"
+                and request.url.path in ("/v5/market/tickers", "/v5/market/instruments-info")
+            ):
+                category = request.url.params["category"]
+                refresh_requests.append({"path": request.url.path, "category": category})
+                rows = (
+                    [metadata(symbol=symbol, market=category) for symbol in symbols]
+                    if request.url.path.endswith("instruments-info")
+                    else [
+                        {"symbol": symbol, "turnover24h": "2000000", "lastPrice": "104"} for symbol in symbols
+                    ]
+                )
+                return httpx.Response(
+                    200, json={"retCode": 0, "time": now(), "result": {"list": rows, "nextPageCursor": ""}}
+                )
             if request.url.host != "api.bybit.com" or request.url.path != "/v5/market/kline":
                 raise AssertionError("Unexpected external request")
             query = dict(request.url.params)
@@ -153,6 +179,19 @@ async def replay(
             market.server_now = now
             controller = Controller(infrastructure, store, market)
             controller.agent.enable(True)
+            pool = None
+            global_trace = []
+            if bounded_pool:
+                from .bounded_pool import Pool
+
+                pool = Pool(controller.outcomes, manual=("spot/BTCUSDT", "linear/BTCUSDT"))
+                original_publish = controller.engine.on_event_snapshot
+
+                def published(event, episode):
+                    global_trace.append(signal_point(event))
+                    original_publish(event, episode)
+
+                controller.engine.on_event_snapshot = published
             bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=1)))
             context = SimpleNamespace(bot=bot)
             symbols = ["BTCUSDT"] + [f"SIM{i:03}USDT" for i in range(1, instruments)]
@@ -181,6 +220,13 @@ async def replay(
                         instrument.key + "/1m", rows, 2000000, instrument.tick_size, reference, live=True
                     )
                 market.metadata_at[category] = market.tickers_at[category] = time.monotonic()
+            if pool is not None:
+                pool.tick(now())
+                # Force exactly the next ordinary refresh to exercise its real
+                # global persistence. The added cadence is explicit in report.
+                for category in ("spot", "linear"):
+                    market.metadata_at[category] -= 601
+                    market.tickers_at[category] -= 301
             seed_seconds = time.monotonic() - wall_started
             seed_cpu = time.process_time() - cpu_started
             stage("SEED_COMPLETE")
@@ -316,6 +362,48 @@ async def replay(
             async def diagnostics(_context):
                 market.persist_diagnostics()
 
+            async def global_refresh(_context):
+                await market.refresh(store.snapshot().settings)
+
+            samples = []
+
+            async def pool_work(_context):
+                pool.tick(now())
+                # This bounded diagnostic is part of the measured workload.
+                jobs = [j for _, j in controller.history.items("outcome-job:")]
+                pending_bytes = sum(
+                    store.db.execute(
+                        "SELECT COALESCE(SUM(length(CAST(payload_json AS BLOB))),0) FROM runtime WHERE key>=? AND key<?",
+                        ("radar:v1:" + prefix, "radar:v1:" + prefix + "~"),
+                    ).fetchone()[0]
+                    for prefix in ("pending:telegram:", "agent:intent-due:", "agent:send-due:")
+                )
+                pending_count = sum(
+                    controller.history.count(prefix)
+                    for prefix in ("pending:telegram:", "agent:intent-due:", "agent:send-due:")
+                )
+                if (
+                    pending_count > pool.limits["delivery_pending"]
+                    or pending_bytes > pool.limits["delivery_pending_bytes"]
+                ):
+                    raise RuntimeError("Global delivery work exceeded its explicit budget")
+                samples.append(
+                    {
+                        "at_ms": now(),
+                        "source_accepted": sum(accepted.values()),
+                        "source_max_ms": max(source_lags, default=0),
+                        "due": sum(j["due_ms"] <= now() for j in jobs),
+                        "future": sum(j["due_ms"] > now() for j in jobs),
+                        "oldest_due_ms": max(
+                            (now() - j["due_ms"] for j in jobs if j["due_ms"] <= now()), default=0
+                        ),
+                        "telegram": controller.history.count("pending:telegram:"),
+                        "agent_intents": controller.history.count("agent:intent-due:"),
+                        "agent_send": controller.history.count("agent:send-due:"),
+                        "delivery_pending_bytes": pending_bytes,
+                    }
+                )
+
             steady_started[0] = time.monotonic()
             phase_cpu = time.process_time()
             producer = threading.Thread(target=wire, name="finite-mock-wire", daemon=True)
@@ -338,6 +426,13 @@ async def replay(
                 ):
                     tasks.append(
                         asyncio.create_task(periodic(name, callback, interval, first), name="fixture:" + name)
+                    )
+                if pool is not None:
+                    tasks.append(asyncio.create_task(periodic("pool", pool_work, 2, 0), name="fixture:pool"))
+                    tasks.append(
+                        asyncio.create_task(
+                            periodic("global_refresh", global_refresh, 300, 1), name="fixture:global-refresh"
+                        )
                     )
                 producer.start()
                 await asyncio.sleep(seconds)
@@ -378,6 +473,7 @@ async def replay(
                     }
                 measured_freshness = market.confirmed_source_diagnostic(finished)
                 measured_analytics = store.get_runtime("analytics", {})
+                measured_pool = pool.report() if pool is not None else None
                 stage("STOPPING_FIXTURE_WORKERS")
                 producer.join(timeout=1)
                 assert not producer.is_alive(), "Independent offered input did not terminate"
@@ -488,7 +584,125 @@ async def replay(
                 from .sqlite_repository import stats
 
                 result["direct_sqlite"] = stats(store)
+            if pool is not None:
+                expected = global_reference(path.with_name("oracle.sqlite3"), instruments, seconds)
+                actual = sorted(encode(point) for point in global_trace)
+                from cryptowatcher.events import identity
+
+                selected_ids = set()
+                for row in measured_pool["selected"]:
+                    event = controller.history.get("event-head:" + row[1])
+                    selected_ids.update(
+                        identity(f"outcome/{row[0]}/{h}/2")
+                        for h in event["settings_snapshot"]["outcome_horizons"]
+                    )
+                scheduled_ids = {r["outcome_id"] for r in results} | {j["outcome_id"] for j in jobs}
+                result["bounded_pool"] = {
+                    **measured_pool,
+                    "global_expected": len(expected),
+                    "global_actual": len(actual),
+                    "global_expected_sha256": hashlib.sha256(encode(expected).encode()).hexdigest(),
+                    "global_actual_sha256": hashlib.sha256(encode(actual).encode()).hexdigest(),
+                    "samples": samples,
+                    "selected_outcome_ids": sorted(selected_ids),
+                    "actual_outcome_ids": sorted(scheduled_ids),
+                    "global_refresh_requests": refresh_requests,
+                    "agent_receipts_by_kind": dict(Counter(a["delivery_kind"] for a in agents)),
+                    "coverage_limitations": [
+                        "130s may not fill64 long-lived reservations; transition fixtures are separate",
+                        "Global rich event publication remains unchanged",
+                        "One added global metadata/ticker refresh; previous replay had no refresh calls",
+                        "Oracle compares exact market values/types/formulas/origins; reception timestamps differ by scheduling. Each actual source-window SHA is verified separately",
+                    ],
+                    "capacity": {
+                        "state": "UNPROVEN",
+                        "general_hours": 72,
+                        "detail_days": 30,
+                        "aggregate_months": 12,
+                        "working_limit_bytes": 35_000_000_000,
+                        "model": "global candles72h + global signals/used-inputs30d + selected outcomes30d + unique annual aggregates + indexes/free-pages/journals/legacy debt; shared inputs counted once",
+                        "missing": [
+                            "steady global meaningful-signal incidence",
+                            "mature per-population physical bytes",
+                            "shared-VPS backup/temp reserve",
+                        ],
+                    },
+                }
             return result
+
+
+def signal_point(event):
+    if hashlib.sha256(encode(event["source_inputs"]).encode()).hexdigest() != event["source_window_id"]:
+        raise AssertionError("Source window hash does not match the saved exact inputs")
+    point = {
+        k: event[k]
+        for k in (
+            "market_type",
+            "symbol",
+            "timeframe",
+            "detector_id",
+            "direction",
+            "strength",
+            "market_observation_ms",
+            "reference_price",
+            "reference_time_ms",
+            "metrics",
+        )
+    }
+    point["source_data_sha256"] = hashlib.sha256(
+        encode(
+            [
+                {k: v for k, v in row.items() if k not in ("received_ms", "server_ms")}
+                for row in event["source_inputs"]
+            ]
+        ).encode()
+    ).hexdigest()
+    return point
+
+
+def global_reference(path, instruments, seconds):
+    """Independent ungated engine, two template instruments and frozen market time.
+
+    Only symbol changes between identical fixture instruments. No transports or
+    outcomes run here. This post-phase oracle still counts in the total limits.
+    """
+    from cryptowatcher.events import EventEngine
+
+    points = []
+    with closing(Store(path, 233382575)) as store:
+        store.initialize(OwnerSettings())
+        engine = EventEngine(store, source_revision=SOURCE, on_event=lambda e: points.append(signal_point(e)))
+        for category in ("spot", "linear"):
+            reference = NOW - 5 * MINUTE
+            engine.observe(
+                category + "/BTCUSDT/1m",
+                [candle(reference - i * MINUTE, "1m") for i in range(24, -1, -1)],
+                2000000,
+                0.01,
+                reference,
+                live=True,
+            )
+            windows = {
+                tf: [candle(NOW - i * int(tf[:-1]) * MINUTE, tf) for i in range(24, 0, -1)]
+                for tf in TIMEFRAMES
+            }
+            for offset in range(0, seconds, 5):
+                for tf in TIMEFRAMES:
+                    if offset % (int(tf[:-1]) * 60):
+                        continue
+                    windows[tf].append(candle(NOW + (offset // 60) * MINUTE, tf))
+                    engine.observe(
+                        category + "/BTCUSDT/" + tf,
+                        windows[tf],
+                        2000000.0,
+                        0.01,
+                        NOW + offset * 1000,
+                        live=True,
+                    )
+    for suffix in ("", "-wal", "-shm"):
+        path.with_name(path.name + suffix).unlink(missing_ok=True)
+    symbols = ["BTCUSDT"] + [f"SIM{i:03}USDT" for i in range(1, instruments)]
+    return sorted(encode({**point, "symbol": symbol}) for point in points for symbol in symbols)
 
 
 def main():

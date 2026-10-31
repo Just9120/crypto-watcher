@@ -78,7 +78,7 @@ def admit(samples: list[dict], free: int) -> bool:
     )
 
 
-def verdict(result: dict, *, direct_sqlite: bool = False) -> list[str]:
+def verdict(result: dict, *, direct_sqlite: bool = False, bounded_pool: bool = False) -> list[str]:
     # Reuse the exact existing joint assertions, including freshness, maintenance,
     # unique families, independent delivery and the exclusion of future horizons.
     from tests.test_processing_replay import assert_joint_result
@@ -103,6 +103,31 @@ def verdict(result: dict, *, direct_sqlite: bool = False) -> list[str]:
             or result.get("repack", {}).get("state") != "DIRECT_SQLITE_CORE"
         ):
             failures.append("DIRECT_SQLITE_EVIDENCE_REQUIRED")
+    if bounded_pool:
+        pool = result.get("bounded_pool", {})
+        if pool.get("mode") != "ISOLATED_BOUNDED_ANALYTICS_POOL":
+            failures.append("BOUNDED_POOL_EVIDENCE_REQUIRED")
+        if not pool.get("global_expected") or pool.get("global_expected_sha256") != pool.get(
+            "global_actual_sha256"
+        ):
+            failures.append("GLOBAL_SIGNALS_CHANGED_OR_MISSING")
+        if not pool.get("selected") or not pool.get("states", {}).get("NOT_SELECTED"):
+            failures.append("NONTRIVIAL_SELECTION_REQUIRED")
+        if not pool.get("selected_outcome_ids") or pool.get("selected_outcome_ids") != pool.get(
+            "actual_outcome_ids"
+        ):
+            failures.append("OUTCOMES_OUTSIDE_SELECTION_OR_MISSING")
+        for key, threshold in (("max_source_lag_ms", 30000), ("max_completed_due_lag_ms", 60000)):
+            if isinstance(result.get(key), (int, float)) and result[key] > threshold:
+                failures.append(
+                    "SOURCE_DEADLINE_EXCEEDED" if key == "max_source_lag_ms" else "DUE_DEADLINE_EXCEEDED"
+                )
+        if pool.get("peaks", {}).get("obligations", 0) < 64:
+            failures.append("FULL_POOL_PRESSURE_UNPROVEN")
+        if pool.get("capacity", {}).get("state") != "PASS":
+            failures.append("MATURE_CAPACITY_UNPROVEN")
+        if any(q.get("pending_total", 0) for q in result.get("delivery_queues_at_endpoint", {}).values()):
+            failures.append("DELIVERY_DRAIN_UNPROVEN")
     return failures
 
 
@@ -168,7 +193,9 @@ class PhaseProfile:
         )
 
 
-def case(report: Path, *, profile: bool = False, direct_sqlite: bool = False) -> int:
+def case(
+    report: Path, *, profile: bool = False, direct_sqlite: bool = False, bounded_pool: bool = False
+) -> int:
     sys.path.insert(0, str(ROOT))
     from scripts.qualify_framed_backup import require_native_limits
     from tests.processing_replay import replay
@@ -197,17 +224,19 @@ def case(report: Path, *, profile: bool = False, direct_sqlite: bool = False) ->
                     seconds=130,
                     progress=progress,
                     direct_sqlite=direct_sqlite,
+                    bounded_pool=bounded_pool,
                 )
             )
     finally:
         capture.save(report.parent / "profile.json")
-    failures = verdict(result, direct_sqlite=direct_sqlite)
+    failures = verdict(result, direct_sqlite=direct_sqlite, bounded_pool=bounded_pool)
     payload = {
         "schema": "cryptowatcher.processing-qualification.v1",
         "source": os.environ.get("SOURCE_REVISION"),
         "state": "FAIL" if failures else ("PROFILE_ONLY" if profile else "PASS"),
         "mode": "DIAGNOSTIC_PROFILE_NOT_ACCEPTANCE" if profile else "QUALIFICATION",
         "repository": "DIRECT_SQLITE_PROTOTYPE" if direct_sqlite else "CURRENT_APPLICATION",
+        "analytics_scope": "BOUNDED_POOL" if bounded_pool else "ALL_EPISODES",
         "failures": failures,
         "temporary_database_removed": True,
         "result": result,
@@ -219,7 +248,13 @@ def case(report: Path, *, profile: bool = False, direct_sqlite: bool = False) ->
 
 
 def run(
-    image: str, revision: str, directory: Path, *, profile: bool = False, direct_sqlite: bool = False
+    image: str,
+    revision: str,
+    directory: Path,
+    *,
+    profile: bool = False,
+    direct_sqlite: bool = False,
+    bounded_pool: bool = False,
 ) -> int:
     if sys.platform != "linux" or os.geteuid() != 0 or not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("Linux CI root controller and exact revision required")
@@ -237,6 +272,7 @@ def run(
         "image": inspected["Id"],
         "mode": "DIAGNOSTIC_PROFILE_NOT_ACCEPTANCE" if profile else "QUALIFICATION",
         "repository": "DIRECT_SQLITE_PROTOTYPE" if direct_sqlite else "CURRENT_APPLICATION",
+        "analytics_scope": "BOUNDED_POOL" if bounded_pool else "ALL_EPISODES",
         "state": "PREPARED",
         "admission": [],
         "limits": {
@@ -297,6 +333,7 @@ def run(
             "/work/result.json",
             *(["--profile"] if profile else []),
             *(["--direct-sqlite"] if direct_sqlite else []),
+            *(["--bounded-pool"] if bounded_pool else []),
         ).strip()
         created = True
         proof["container_id"] = cid
@@ -445,21 +482,29 @@ def main() -> int:
     inner.add_argument("--report", type=Path, required=True)
     inner.add_argument("--profile", action="store_true")
     inner.add_argument("--direct-sqlite", action="store_true")
+    inner.add_argument("--bounded-pool", action="store_true")
     outer = commands.add_parser("run")
     outer.add_argument("image")
     outer.add_argument("revision")
     outer.add_argument("directory", type=Path)
     outer.add_argument("--profile", action="store_true")
     outer.add_argument("--direct-sqlite", action="store_true")
+    outer.add_argument("--bounded-pool", action="store_true")
     args = parser.parse_args()
     if args.command == "case":
-        return case(args.report, profile=args.profile, direct_sqlite=args.direct_sqlite)
+        return case(
+            args.report,
+            profile=args.profile,
+            direct_sqlite=args.direct_sqlite or args.bounded_pool,
+            bounded_pool=args.bounded_pool,
+        )
     return run(
         args.image,
         args.revision,
         args.directory.resolve(),
         profile=args.profile,
-        direct_sqlite=args.direct_sqlite,
+        direct_sqlite=args.direct_sqlite or args.bounded_pool,
+        bounded_pool=args.bounded_pool,
     )
 
 
