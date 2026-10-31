@@ -63,6 +63,30 @@ report. Existing production qualification и required CI не ослабляют
 result остановиться; merge/CD/baseline автоматически не начинать. Temporary DBs
 только новые локальные/CI; учёт и cleanup, маленькие proofs внеGit.
 
+Native direct-SQLite attempt31Oct закончилась REPORT_ERROR, не performance PASS/FAIL:
+PR94 head2c99c45a97568bea20e019012d6ba2f10838a75d, tested merge5872e13c15fb25095fc2f918e015ce03c5e1ba9a,
+run41219276241/job124590274170. App завершила130s arrival window; JSON report не
+сохранился из-за sqlite3.Row в prototype stats. Latency/accepted/queues/numeric hash
+утрачены, не восстанавливаются по CPU или отсутствию traceback application.
+Artifact13048639740/SHA cfe2b311bf643d5c40d7cbe24ac3ca604a26c9692f44a1a680605bd4a60c0e05:
+1CPU/4GiB/networknone/OOMfalse, cgroup lastsample136.14971CPU-s (lower bound), peakRAM308314112B,
+owned files peak201178288B, sampled block write4537409536B на одном8:0 device,
+hostidlemin73.85%, cleanupCOMPLETE. Resource admission/limits не причина завершения.
+До конца окна processCPU133.76149s; exact phaseCPU не сохранён. Сохранённый reference
+run41196967614: source92.373s/due118.044s; сравнение source/due нового case невозможно.
+Иные runners не causal VPS A/B. Старый runtime в том же run, job124590274319:
+accepted1496/2472/source135.060s/due135.186s/pending766 — отдельный FAIL, не результат prototype.
+
+Локальный narrow fix только JSON output: stats rows преобразованы в plain lists;
+малый реальный pipeline теперь проверяет json roundtrip всего результата.
+PASS1test12.72s Windows, native rerun НЕ выполнен. Первое разрешение на один полный
+CI prototype использовано. Владелец31Oct отдельно разрешил один повтор той же
+проверки после исправления ТОЛЬКО отчёта; source/queues/algorithms/лимиты прежние.
+Перед grouped push дождаться текущего run41219276241; после повторного результата
+остановиться независимо от PASS/FAIL, не начинать full integration. Большая
+интеграция, migration, merge/CD и VPS изменения не начинаются. Reports/hashes/logs
+сохранены внеGit, synthetic DB очищена. Обычные CI gates не ослабляются.
+
 Local validation31Oct:13focused tests PASS14.64s (test_sqlite_repository и
  test_processing_qualification), quality PASS: docs/Ruff/format/mypy133source files.
 Windows3.12 fallback; native и capped result PENDING. Readonly calculation threads

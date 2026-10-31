@@ -448,10 +448,12 @@ def stats(store: Store) -> dict[str, Any]:
             kind: store.db.execute(f"SELECT COUNT(*) FROM prototype_{kind}_revisions").fetchone()[0]
             for kind in KINDS
         },
-        "snapshots": store.db.execute(
-            "SELECT COUNT(*),COALESCE(SUM(length(CAST(payload AS BLOB))),0),COALESCE(SUM(refs),0) FROM prototype_snapshots"
-        ).fetchone(),
-        "foreign_key_violations": store.db.execute("PRAGMA foreign_key_check").fetchall(),
+        "snapshots": list(
+            store.db.execute(
+                "SELECT COUNT(*),COALESCE(SUM(length(CAST(payload AS BLOB))),0),COALESCE(SUM(refs),0) FROM prototype_snapshots"
+            ).fetchone()
+        ),
+        "foreign_key_violations": [list(row) for row in store.db.execute("PRAGMA foreign_key_check")],
         "limitations": [
             "Fresh isolated DB only; no migration or production activation",
             "Legacy mutable jobs/deliveries/source and retention are actual existing components",

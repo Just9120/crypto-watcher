@@ -131,6 +131,8 @@ async def test_direct_real_pipeline_to_both_transports_and_storage_maintenance(t
     assert result["direct_sqlite"]["revisions"]["event"] > 0
     assert result["direct_sqlite"]["revisions"]["outcome"] > 0
     assert result["repack"]["state"] == "DIRECT_SQLITE_CORE"
+    # The native controller persists this complete report after the measured window.
+    assert json.loads(json.dumps(result))["direct_sqlite"] == result["direct_sqlite"]
 
 
 def test_full_source_retention_annual_facts_and_real_gc_keep_numeric_results(core):
