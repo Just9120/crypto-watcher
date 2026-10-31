@@ -2,7 +2,7 @@
 
 ## Current Goal и утверждённая последовательность
 
-**INTERFACE-ACCEPTANCE — незавершена, Goal 2; продолжена по поручению владельца31Oct, native qualification NOT_STARTED_RESOURCE_ADMISSION**, явно поручена владельцем в последовательности30Oct2026; встроенная Goal2 активирована после выполненной Goal1. CAPACITY25 отменена и не возобновляется. Новая параллельная optimization chain, cron/automations и Codex Security запрещены.
+**INTERFACE-ACCEPTANCE — незавершена, Goal 2; продолжена по поручению владельца31Oct, native qualification FAIL_SOURCE_DEADLINE (CI), capped details PENDING**, явно поручена владельцем в последовательности30Oct2026; встроенная Goal2 активирована после выполненной Goal1. CAPACITY25 отменена и не возобновляется. Новая параллельная optimization chain, cron/automations и Codex Security запрещены.
 
 Baseline origin/main12cf5d48e8d4b13aa77dbbe84ee9d161f81a4619. Branch codex/interface-acceptance-20261030; существующий checkout .cache-g1/git-recovery-20261024. Fresh Git/remotes/worktrees/protections/openPR проверены: strict ci-required15368/admins, approvals0; чужой draftPR57 сохранён. Goal1 task branch безопасно удалена после merge/CD и exact-tree proof; preexisting checkout/audit/two-writer материалы сохранены.
 
@@ -121,7 +121,47 @@ one-pause-proposal.json с source hash. Manager связан с исходным
 Старые one-off approvals отменённой Goal не переиспользуются. До явного ответа stop/start не выполнять, новые CPU gates не ослаблять.
 Визуальная проверка отдельно POSTPONED_OWNER; baseline/30min/24h не приняты.
 
-### Последний checkpoint: ранний Draft PR разрешён31Oct2026
+### Последний checkpoint: PR94 и первый native CI31Oct2026
+
+Открыт единственный основной Draft PR94 всей Goal2, head3d9b4354fd3b8ea209a1a31ba21ab463f31cbed5,
+base12cf5d4, exact treeb208d760632822d4764bed1caa809a0a77ffd873 совпал с локальным
+проверенным tree. Публикация через connected Git Data, raw commit импортирован с
+проверкой Git SHA. Prepublication local history ebe69ed сохранена в отдельном
+refs/codex-checkpoints/interface-acceptance-prepublication-20261031-ebe69ed; branch
+и его upstream синхронизированы без изменения tracked bytes/main/user branches.
+Primary branch main read подтверждает protected/everyone/ci-required/app15368;
+полный admin endpoint403 не обходился, reviews0 не выданы за approval.
+
+Run41189799928/attempt1, actual tested merge2d1aacd9f52f7516c746e307a4f466f318389496:
+select/docs/storage-boundary PASS. Validation job124504070323:2608PASS/1FAIL535.58s;
+единственный failure — native broad joint source deadline:89514ms>30000ms.
+Предыдущие asserts offered==accepted/errors empty пройдены; другие последующие
+asserts этим traceback не проверены. Это full-process native negative на GitHub
+runner, не shared-VPS measurement и не отдельный capped result.
+
+Dedicated capped job124504070298 закончил replay и получил stateFAIL/resultFAIL за
+199.148s; resource refusal/stop не зарегистрирован в log summary. Причины/точные
+метрики не сохранились в GitHub artifact: upload-artifact default include-hidden=false
+исключил .cache-g1, action предупредил no files, artifacts0. Это ошибка нашего CI
+proof plumbing; нельзя выдумывать capped delay/CPU/формулу причины по общему FAIL.
+Primary job log и краткий failure record сохранены внеGit. Порог/fixture/app candidate
+после отрицательного результата не меняются, новой performance цепочки нет.
+
+Один сгруппированный CI correction готовится в том же PR: include-hidden-files=true
+только для allowlisted processing JSON/log, absence becomes error; bounded named
+metrics/failures/actual limits также выводятся в job log. Regression проверяет
+hidden upload/always/error/исключение DB capture; local5targeted tests PASS,
+обязательный quality и self-review перед push. Результат второго run заранее PENDING.
+Это исправление обязательного evidence, не новый performance candidate/ослабление.
+Обычная suite и все gates сохраняются; standalone full-main/CD/rerun ради статуса нет.
+
+Согласованное stop rule действует: после получения подробного capped результата
+представить ветку/измерения/варианты; не продолжать локальные application micro-fixes.
+Merge/CD/35GB/backup/resource/visual/30min/24h остаются незавершёнными. Source на VPS,
+settings/generation/history/TA/Paper и соседние проекты этим PR/CI не менялись.
+Primary receipts/run/job IDs внеGit позволяют продолжить без повторной публикации.
+
+### Предшествующий checkpoint: ранний Draft PR разрешён31Oct2026
 
 Владелец разрешил продолжить текущую Goal через ранний единственный Draft PR Goal2;
 узкая часть — отдельный capped processing CI job, scope самой Goal/PR не сокращён.

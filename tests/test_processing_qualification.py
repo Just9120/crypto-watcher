@@ -37,3 +37,20 @@ def test_status_timeout_reobserves_same_container_without_restarting(monkeypatch
     monkeypatch.setattr(q.time, "sleep", lambda _: None)
     assert q.observe("same-container")["State"]["Running"] is False
     assert calls == [("inspect", "same-container"), ("inspect", "same-container")]
+
+
+def test_hidden_report_artifacts_are_required_and_exclude_fixture_databases():
+    from pathlib import Path
+
+    import yaml
+
+    root = Path(__file__).resolve().parents[1]
+    workflow = yaml.load((root / ".github/workflows/ci.yml").read_text(), Loader=yaml.BaseLoader)
+    job = workflow["jobs"]["processing-qualification"]
+    upload = next(step for step in job["steps"] if "actions/upload-artifact@" in step.get("uses", ""))
+    settings = upload["with"]
+    assert upload["if"] == "always()"
+    assert settings["include-hidden-files"] == "true"
+    assert settings["if-no-files-found"] == "error"
+    patterns = settings["path"].splitlines()
+    assert patterns == [".cache-g1/processing-*/*.json", ".cache-g1/processing-*/*.log"]

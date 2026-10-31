@@ -97,7 +97,8 @@ jobs:
             .cache-g1/processing-*/*.json
             .cache-g1/processing-*/*.log
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
+          include-hidden-files: true
   ci-required:
     needs: [select, documentation, validation, storage-boundary, processing-qualification]
     if: always()

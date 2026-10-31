@@ -175,6 +175,7 @@ def run(image: str, revision: str, directory: Path) -> int:
         proof["state"] = "NOT_STARTED_RESOURCE_ADMISSION"
         (directory / "controller.json").write_text(json.dumps(proof, indent=2))
         signal.alarm(0)
+        print(json.dumps({"state": proof["state"], "admission": proof["admission"]}))
         return 2
     name = "cw-ci-processing-" + uuid.uuid4().hex
     created = False
@@ -301,7 +302,44 @@ def run(image: str, revision: str, directory: Path) -> int:
         proof["fixture_cleanup"] = "COMPLETE"
         (directory / "controller.json").write_text(json.dumps(proof, indent=2))
         signal.alarm(0)
-    print(json.dumps({key: proof.get(key) for key in ("state", "result_state", "elapsed_seconds")}))
+    summary = {
+        key: proof.get(key) for key in ("state", "result_state", "elapsed_seconds", "container_limits")
+    }
+    if (directory / "result.json").exists():
+        report = json.loads((directory / "result.json").read_bytes())
+        summary["failures"] = report["failures"]
+        summary["case"] = {
+            key: report["result"].get(key)
+            for key in (
+                "streams",
+                "offered_closed",
+                "accepted_closed",
+                "native_backend",
+                "seed_seconds",
+                "seed_cpu_seconds",
+                "phase_seconds",
+                "phase_cpu_seconds",
+                "seed_sha256",
+                "offered_sha256",
+                "max_source_lag_ms",
+                "source_p95_ms",
+                "due_pending",
+                "oldest_due_pending_ms",
+                "max_completed_due_lag_ms",
+                "future_jobs",
+                "families",
+                "telegram_attempts",
+                "signed_agent_receipts",
+                "producer_errors",
+                "worker_errors",
+                "receiver_errors",
+                "source_freshness_at_endpoint",
+                "analytics",
+                "recovery_worker",
+                "input_timing",
+            )
+        }
+    print(json.dumps(summary))
     return 0 if proof["state"] == "PASS" else 1
 
 
