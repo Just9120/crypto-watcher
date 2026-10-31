@@ -2,76 +2,478 @@
 
 ## Current Goal и утверждённая последовательность
 
-**LIGHT-RADAR — ACTIVE, Goal 1**, явно поручена владельцем30Oct2026 после выхода из Plan Mode. Отменённую CAPACITY25 не возобновлять. После DoD Goal1 последовательно выполнить Goal2 — Telegram visual/остаточные findings/backup и30min/24h приёмка. Встроенная Goal1 активирована; одновременно Goal2 не активировать.
+**INTERFACE-ACCEPTANCE — Goal 2 ACTIVE: разрешены ограниченный prototype global detection + bounded analytics pool, публикация в Draft PR94 и один Linux-прогон31Oct2026; после результата остановиться**, явно поручена владельцем в последовательности30Oct2026; встроенная Goal2 активирована после выполненной Goal1. CAPACITY25 отменена и не возобновляется. Новая параллельная optimization chain, cron/automations и Codex Security запрещены.
 
-Baseline origin/main b254e6e1851dc5662cfcd1156ef13aec31d2e2a8; ветка codex/light-radar-20261030, checkout .cache-g1/git-recovery-20261024. Main/remote/protections/PR/worktrees проверены30Oct: strict ci-required/admins, required approvals0, ранее открытый draftPR57 сохранён. Audit commits dab39e3/6227a5d перенесены как d759311/fd48355 без отдельного docs PR. Прежняя двух-writer ветка ae270373 и материалы аудита внеGit сохранены.
+Baseline origin/main12cf5d48e8d4b13aa77dbbe84ee9d161f81a4619. Branch codex/interface-acceptance-20261030; существующий checkout .cache-g1/git-recovery-20261024. Fresh Git/remotes/worktrees/protections/openPR проверены: strict ci-required15368/admins, approvals0; чужой draftPR57 сохранён. Goal1 task branch безопасно удалена после merge/CD и exact-tree proof; preexisting checkout/audit/two-writer материалы сохранены.
 
-### Scope/AC и DoD Goal1
+### Результат, scope и DoD Goal2
 
-18 исходно неготовыхAC:04-06,05-02,06-01/02/05,07-04/06,08-01/04,09-02/06,11-01,12-04/05,13-02/03/04/06. Кодовая часть13-06 входит вGoal1; полная эксплуатационная приёмка остаётсяGoal2. Сохраняются50READYинвариантов прошлого snapshot; проценты во время реализации не пересчитывать.
+Довести согласованный остаточный scope: финальная AC-13-06; регрессия17AC, завершённых Goal1, и прежних инвариантов; F22/F34/F38/F42, F24/F31/F32, UX-001–UX-041 и применимость всех связанных engineering/security IDs ниже. F26/F49–F56 реализованы и прошли required CI/CD Goal1; применимые пользовательские сценарии повторно проверяются визуально. Каждый оставшийся finding получает подтверждённый итог FIX/REMOVE/CONSOLIDATE/сохранён как используемый/обоснованно неприменим; новый DEFER не закрывает scope. Проценты проекта/эпиков не пересчитывать; audit snapshot ниже исторический.
 
-Результат: independent persisted active_detectors (migration all5; Telegram families отдельно), meaningful episode updates, immutable first origin и один outcome set, uniqueN/digest/aggregates, отсутствиеautomaticN20,72h/30d/12m/finite dependencies, compatible v2/commands/callbacks/export, безопасные dependencies и full no-CD profile. Один основной PR, required checks/review, merge/CD, exact-target discard прежней тестовой market history без архива/конвертации; private/settings/watchlist/credentials/infra иTA/Paper сохранены. Failed post-check — штатный rollback, не продвижение дальше.
+Результат: свежий визуальный аудит доступного Telegram клиента и bot-controlled исправления, объяснимый unified forecast для фактически работающей модели, измеренный ресурсный бюджет CW с запасом соседям, representative multiGB backup/restore и полный physical peak, ограниченное хранение серверных артефактов,30min/24h приёмка после последней поставки на неизменных source/settings/history generation. Один основной PR, required CI/review, merge/CD; необходимые hotfix в том же scope. DONE только по фактическому результату всех этих gates.
 
-Non-goals Goal1: visual polish (Goal2), receiver activation/стратегии/LLM/execution, полный перенос двух writer, новые external schedules, изменения соседних проектов/VPS expansion. Старые archives и уникальные experiments удалять только согласованным точным списком. Working≤35GB и отдельный physical peak обязательны, CPU throttling не заменяет обработку.
+Non-goals: новые функции/прибыльные thresholds, receiver/TA/Paper изменения, двух-writer реализация, увеличение VPS, изменения соседних проектов, самостоятельный полный no-CD regression run. Валидную light history5bb5712dd7144032941f5d7f72766522 повторно не сбрасывать. Working set со служебными файлами≤35GB; physical backup/temp/VPS reserve считаются отдельно. Никакого общего Docker prune. Старые backups/unique experiments/archives — только после нового точного согласованного списка и проверенной замены.
 
-### Validation Plan LIGHT-RADAR
+### Текущий checkpoint — разрешённый bounded-pool prototype31Oct2026
 
-| Риск/этап | Проверка/ожидание | Команда/среда | Gate |
+Владелец отдельно разрешил ограниченный этап плана b692fb2: минимальную реализацию,
+публикацию в существующий Draft PR94 и один Linux-прогон с прежними лимитами, затем
+остановку с результатом. Full integration/merge/CD/VPS/рабочая БД не разрешены.
+Выбор направления/прежняя плановая блокировка сняты этим поручением; новая Goal
+не создаётся. Встроенный tool пока возвращает прежний BLOCKED и не имеет resume
+API; явное поручение разрешает текущий этап, завершение полной Goal не заявляется.
+
+Реализовано только в isolated tests: durable pool64/shared manual16/warming4,
+rate8/min (4/min/market), waitlist128/128KiB; admission перед OutcomeWorker.admit,
+глобальные5detectors/4TF/events/episode updates и обе доставки не отключаются.
+SQLite transaction связывает selection/reservation и настоящие outcome jobs.
+Reference immutable; auto-selection не пишет owner settings/watchlist. Existing
+jobs сохраняются и блокируют новый admission до drain; closure не снимает слот
+с незавершёнными outcomes. TTL selection30d, finite source/queues/maintenance прежние.
+Минимальное изолированное publication storage из предыдущего prototype переиспользуется,
+production activation отсутствует; полноценный typed core не переносится.
+
+Независимый ungated engine/oracle сравнивает count/точные market values/types,
+metrics/strength/episode reference и source-data hashes, без разных scheduling
+receipt/server timestamps; SHA каждого реально записанного input window проверяется
+отдельно. Original full seed/offered market hashes сохраняются; outcome population
+намеренно ограничена новым scope. Один настоящий global metadata/ticker refresh
+добавлен в measured phase и явно отличается от прежних0calls. Подробный mature
+forecast и давление заполненного пула не объявляются PASS без нужных данных.
+
+Local18focused PASS25.33s: bounded_pool5 + existing processing_qualification6 +
+sqlite_repository7; Windows3.12 fallback, не Linux/native proof. Включены real
+SQLite/outcome/delivery small8s, saturation64 без eviction, close→draining→реальный
+COMPLETE→release, immutable reference/reopen/rollback/private unchanged и legacy
+jobs unchanged/block admission. Canonical quality PASS: docs/Ruff/format349files/
+mypy133source. Native/capped result PENDING; existing required CI не ослаблены.
+
+Следующий шаг: один grouped publication этого полного isolated scope в PR94,
+один candidate job в существующем PR workflow (заменяет старый prototype job,
+не добавляет ещё один). Existing mandatory CI остаётся; результаты/расходы
+раздельны. Сохранить evidence внеGit, проверить cleanup и остановиться независимо
+от результата. Rerun/расширение/new optimization chain автоматически не разрешены.
+
+### Действующее уточнение scope и ближайший gate31Oct2026
+
+Основание: владелец принял ограничение подробной аналитики при сохранении всех пяти
+детекторов на четырёх TF по всему допустимому рынку, затем поручил обновить план
+Goal2, показать одну ограниченную сквозную проверку и критерии приёмки. Первоначально
+разрешались только план и локальный commit; последующее отдельное разрешение
+на bounded prototype/publication/one Linux run записано в checkpoint выше.
+Полная интеграция, поставка и операции VPS по-прежнему не разрешены. Встроенная Goal2 возобновлена владельцем.
+Блокер выбора полноты outcomes снят; отдельное явное поручение на единственную
+проверку уже получено, его границы записаны в текущем checkpoint. Остаточный scope/F/UX/AC и окончательный DoD выше сохраняются,
+кроме прямо согласованного отбора подробной аналитики, описанного здесь.
+
+Новая граница для плана имеет приоритет над прежним предположением этого файла,
+что каждый новый глобальный episode обязательно получает outcomes. Product spec,
+AC IDs/denominator и historical READY сейчас не переписываются. При разрешённой
+интеграции синхронизировать затронутые формулировки spec/AC с этим решением,
+сохранив IDs и old→new связи; до проверки нового поведения старый PASS не переносить.
+
+| Уровень | Обязательная работа и данные |
+| --- | --- |
+| Глобальный | Весь eligible Spot USDT и USDT Perpetual, native1m/3m/5m/15m, пять поддерживаемых detectors по active settings, прежние формулы/пороги/precision, source freshness/gaps/recovery; condition/re-arm, immutable episode origin и все meaningful updates независимо от пула |
+| Сохранение вне пула | Компактный signal/episode record, metrics/thresholds/settings/provenance и необходимые использованные inputs для объяснения сигнала; причины/время отбора либо отсутствия сопровождения, независимые delivery statuses. Общие свечи72h, подробности/used inputs30d, агрегаты12calendar months; не полные исследования каждого свечного repeat |
+| Доставка вне пула | Telegram по enabled families/mute; Agent по его независимым settings, существующий полный v2/HMAC/idempotency/ACK/retry/freshness. Отсутствие места не подавляет сигнал. Недоставленное/просроченное явно видно в истории; expiry не превращает старый сигнал в свежий |
+| Подробный пул | Один набор настроенных outcomes/MFE/MAE от исходного episode reference, дополнительный context и подробные результаты. Повтор, обновление, admission или restart не сбрасывают reference/horizons. Поздний admission явно виден, catch-up тоже расходует бюджет |
+| Аналитика | Все обнаруженные уникальные episodes и отобранная outcome population учитываются раздельно; coverage/selection reasons/bias явны. NOT_SELECTED не равно нулевому результату, pending, MISSING_INPUT или COMPLETE; digest/history/export не скрывают сигнал вне пула |
+
+Публичные commands/callbacks и форма Agent v2 сохраняются. Пустой список результатов
+не выдавать за рассчитанные нули. Selection fields нельзя незаметно добавлять в
+закрытый settings object v2; точную совместимую проекцию проверить до интеграции.
+Автоотбор хранит собственное состояние/revision, не изменяет owner settings,
+manual watchlist и связанные sensitivity multipliers при каждой ротации.
+
+#### Пул и конечность работы
+
+- Единица бюджета — обязательство сопровождения episode, а не только symbol.
+  Market входит в identity. Несколько episodes одной монеты расходуют отдельные
+  обязательства; общие данные можно разделять без двойного счёта результатов.
+- Для единственной проверки предлагается фиксированный K=64 обязательства,
+  включая ACTIVE, WARMING, manual pins и DRAINING с незавершёнными outcomes.
+  Это параметр изолированного эксперимента, не обещанная production capacity.
+  WARMING≤4, manual≤16, минимум48 мест не занимают manual pins;
+  admission≤8 новых обязательств/min без накопления токенов сверх8.
+  Значения и алгоритм фиксируются до запуска, не подбираются по результату.
+- При admission резервировать все четыре выбранных горизонта и необходимые
+  inputs; в fixture5/15/30/60min максимум256 horizon jobs для64 новых obligations.
+  Активный episode не вытеснять; после closure слот освобождается только после
+  выполнения/конечного terminal результата обязательств. Future не overdue,
+  но входит в резерв. Зависимости освобождаются по действующим срокам.
+- Ranking детерминированный: strength относительно frozen thresholds, новые
+  подтверждения detector/TF, freshness и liquidity; представительство обоих
+  рынков, фиксированный tie-break. Минимальное удержание/порог замены исключают
+  churn; свободный либо завершённый slot заменяется, активный pin — нет.
+- Если бюджет заполнен, сигнал сохраняется и доставляется без outcomes.
+  Кандидатный waitlist конечен по count/bytes и freshness, не создаёт jobs заранее;
+  истечение ожидания явно NOT_SELECTED, не бесконечное pending. Ручные pins
+  не расширяют K и не вытесняют уже принятые обязательства.
+- Pending/unknown deliveries имеют собственные конечные count/byte/expiry bounds
+  и не скрываются за пустой send queue. Backpressure не даёт тихо потерять
+  подтверждённый signal; перегрузка и невозможность доставки — видимый FAIL/gap.
+- Existing valid episodes/jobs/deliveries не удалять ради K или PASS. Переходный
+  долг учитывается отдельно и в суммарных ресурсах; пока он превышает budget,
+  новые admissions закрыты. Такой режим нельзя объявить устойчивым без drain.
+- K не ограничивает накопление за30d: отдельно считать число admissions/day,
+  их retained inputs/updates/outcomes и глобальный signal rate при ротации.
+
+#### Одна ограниченная сквозная проверка — только после разрешения реализации
+
+1. Подготовить минимальный изолированный путь на реальной SQLite, используя
+   существующие ingestion, формулы и delivery boundaries. Не переносить все
+   подсистемы и не менять process/storage core целиком. Проверяемый путь:
+   closed candles → глобальные5detectors/4TF → meaningful episodes → durable
+   signal и selection → outcomes принятых episodes → Telegram и подписанный
+   Agent → retention/checkpoint/recovery. Вне пула обязательно проходит та же
+   signal delivery; её стоимость не выносится за пределы измерения.
+2. До capped run зафиксировать manifest: revision, seed/offered SHA, K/все
+   queue/rate/byte limits, rank/tie-break, исходные обязательства и expected
+   global signal sequence. Использовать прежние1648streams/2472closed arrivals
+   за130s, оба рынка/всеTF; не растягивать поступление ради PASS. Market inputs
+   и необходимые seed candles прежние. Изменённая outcome population — явное
+   следствие scope, не требование повторить824старых outcomes/hash всех рынков.
+   Для новой одноразовой fixture начальное распределение selected outcomes
+   строится по новой policy на тех же market inputs и полностью раскрывается:
+   это изменение workload по scope, не ускорение идентичной работы. Global
+   signal/delivery population не сокращать. Существующие production jobs не
+   переносить/удалять; сохранность legacy obligations отдельно проверить маленькой
+   compatibility fixture, включая закрытие admissions при превышении budget.
+   Уже созданные обязательства нельзя удалять ради PASS; reference не causal A/B.
+3. В тот же ограниченный сценарий включить filled pool, manual/auto competition,
+   warming limit, meaningful confirmation, slot release, необходимые future/due
+   horizons, retry/unknown ACK и restart идемпотентности, а также maintenance.
+   Недостающие переходы проверяются маленькими correctness fixtures до него,
+   без второго полного performance run. Ticker/discovery refresh и удержание
+   данных не исключать; если добавлены к старому расписанию, отдельно указать
+   стоимость и отличие. В прежнем130s case эти refresh имели0calls.
+4. Единственный Linux/native capped run:1CPU СУММАРНО,4GiB/no swap,
+   450CPU-s/510wall/600outer; idle admission≥35% в течение30s, stop<15%,
+   RAM reserve1.5GiB, исходные disk guards. Все scanner/selector/writer/workers/
+   delivery/maintenance и drain входят в суммарные ресурсы/время. Окно arrivals130s,
+   последующий ограниченный drain внутри того же общего предела; послезапусковый
+   drain не стирает опоздания внутри окна. Никаких VPS операций или рабочей БД:
+   CI/isolated Linux, одноразовые test credentials, внешние transports mocked,
+   настоящие v2 serialization/HMAC/ACK и SQLite. Запуск CI отдельно согласуется;
+   подготовка плана не разрешает publication или расходы Actions.
+5. Сохранить report/manifests/hashes и сопоставление с run41220369584 внеGit:
+   accepted, global signal recall/sequence, source lag max/p95/time series,
+   completed/oldest due age, future counts, selection coverage/reasons/churn,
+   обе стадии delivery queues и ACK latency, total CPU/RAM/block I/O,
+   DB/index/free pages/WAL/SHM/temp peak, maintenance timings/counts.
+   Учитывать seed/active/drain отдельно и итог вместе. Прежние source75.792s,
+   due98.042s, phase108.240CPU-s, DB+sidecars197220720B — reference, не новый PASS.
+6. После единственного результата остановиться. При FAIL/INVALID — measured
+   причины/ограничения и варианты владельцу, без нового prototype или автоматического
+   rerun. При PASS — показать результат и минимальный состав интеграции для
+   согласования; не начинать большую переработку/merge/CD автоматически.
+
+#### Критерии приёмки ближайшего gate
+
+| Gate / связь | Обязательное подтверждение |
+| --- | --- |
+| V1 Global correctness / F22,AC-04/05 | Accepted2472/2472; все ожидаемые global signals/meaningful revisions и immutable origins совпадают с frozen full-market reference, включая сигналы вне пула; нет пропусков, double episodes или повторных исследований свечей |
+| V2 Bounded selection / F22,F42 | K и все warm/manual/admission/job/queue bounds соблюдены во времени, не только на endpoint. Есть реальный admission, заполнение, отказ новым candidates, release/replacement и рассчитанные due outcomes выбранных episodes: пустой пул или отказ всем не PASS. Нет скрытого retiring хвоста; полное заполнение не гасит global detection/delivery. Existing obligations сохранены/учтены; переходный долг не маскируется |
+| V3 Outcomes / F49–F56 regression | У каждого принятого episode ровно один набор; значение/reference/float precision/provenance совпадают с reference для этого же episode и inputs. Не выбранные не запускают outcome jobs. Future отдельно, неполные inputs/expiry/terminal явно; restart/retry не меняет origin |
+| V4 Timeliness / F22,F42,AC-13-06 | Source max≤30s; каждый наступивший расчёт при доступных inputs≤60s, включая завершённые с опозданием. Нет растущего overdue хвоста. Нулевой endpoint backlog и средние значения не заменяют эти условия |
+| V5 Delivery / F31,AC-07/09 | В нормальном fixture все разрешённые свежие global signals, включая вне пула, доходят до mockTelegram/signedAgent в действующем freshness, без нормального истечения из-за очереди. Failure cases имеют корректные retry/unknown/terminal states. Все intents/outboxes учтены, каналы независимы; это не live Telegram/receiver proof |
+| V6 Resources / F31,F34 | Полный поток соблюдает1CPU/4GiB/450CPU-s/510wall/600outer и guards; есть aggregate CPU/RAM/I/O/physical peak, а не только цена метода. Reporting не скрывает setup/drain/maintenance. Отказ начального допуска — NO_RUN; guard stop после старта — INTERRUPTED/FAIL, не PASS |
+| V7 Storage / F34,F38,F42 | Единый расчёт: general72h + global details/used inputs30d + selected details30d + global/selected aggregates12mo + indexes/free pages/journals/legacy debt; ротация/admissions/day и signal bursts явны. Shared inputs/страницы учитывать один раз, без двойного суммирования global и selected. Рабочая сумма≤35GB при заявленных assumptions и отдельный backup/temp/shared-VPS physical reserve; неизвестные rates или short DB size не дают mature capacity PASS |
+| V8 Cleanup/evidence | Actual FK/integrity, rollback/restart/retention и immutable public/numeric checks подходят к затронутому риску; report сериализован/полон, own temporary DB/container удалены с readback, стоимость CI и ограничения отчёта раскрыты |
+
+Успешный первый gate означает только жизнеспособность ограниченного сценария.
+Если workload/обязательные показатели не покрыты либо forecast требует неизвестных
+rates, результат PARTIAL/UNPROVEN, а не разрешение полной интеграции. MultiGB restore,
+полный physical peak зрелой базы, shared-VPS влияние и неизменные30min/24h остаются
+обязательными поздними gates Goal2, не нагружают первую проверку и не считаются PASS.
+
+#### Экономия и последующие шаги
+
+Глобальные4TF feeds/candles, пять detectors, condition/re-arm, значимые signal
+records/used inputs и обе доставки остаются. Вне пула исчезают только новые
+outcome/MFE/MAE jobs, дополнительный context и соответствующие результаты/maintenance;
+новый selection accounting добавляет работу. Прежние76% относились к другому
+1m scout варианту и здесь неприменимы; observation69.067CPU-s из108.240CPU-s нельзя
+целиком объявить устраняемыми. Проценты CPU/I/O/GB до результата не обещаются.
+
+После PASS и отдельного решения: только минимальная интеграция глобального пути,
+selector/budgets, outcome admission и совместимых history/analytics/digest/export/
+Agent projections, preserving valid history/private state. Затем остальные прежние
+F/UX, required CI/review, один основной PR94/merge/CD, representative backup/restore,
+physical capacity и30min/24h. При FAIL дальнейшая достройка прекращается. Старый план
+полного typed core A–D и оценка8–15дней ниже — архивная отвергнутая к автоматическому
+исполнению альтернатива, не текущий roadmap и не разрешение миграции.
+
+Плановая проверка31Oct: main12cf5d4 совпадает с origin/main; PR94 OPEN/DRAFT,
+remote head12ac4b8, local pre-plan7ba6d89, divergence0behind/8ahead; unrelated changes
+нет. Свежий protection read403 (integration), protected main подтверждён branch API;
+прежние strict ci-required15368/admins/approvals0 — historical snapshot, не новый PASS.
+Документ остаётся локально; перед будущей публикацией повторно проверить gates.
+Последующее поручение на реализацию только bounded gate получено; исполнение и ограничения — в checkpoint выше.
+Локальная проверка только документа: `python scripts/checks.py docs` и
+`git diff --check` PASS. Application tests/performance/CI/VPS не запускались;
+self-review ограничен изменением плана, локальный commit без публикации.
+
+### Последовательность и Validation Plan Goal2
+
+| Блок / finding / риск | Проверка и ожидаемый результат | Команда/среда/этап | Gate |
 | --- | --- | --- | --- |
-| Settings/activation | Roundtrip/defaultmigration/CAS/invalid/disabled0history/jobs; delivery mute независимо | Existing config/storage/events/bot tests + существенные regressions; isolated Windows tempDB | REQUIRED local |
-| Full processing | Оба рынка/4TF/5families, одинаковый offered→saved→episode→due→delivery ledger, immutable origin/math/retry/expiry/causality | Minimal complete controlled replay locally; real wall/CPU отдельно от accelerated retention clock | REQUIRED before initial push |
-| Retention/stats | 72h/30d/12month boundaries, used-input ownership/terminal cleanup, uniqueN по overlapping groups, exact export | Profiled existing outcomes/analytics/export/lifecycle fixtures | REQUIRED local/CI |
-| Code quality | Docs/Ruff/format/mypy, targeted tests | Python scripts/checks.py quality изroot; temporary local caches | REQUIRED local |
-| Linux/native/image | Current required CI, source-pinned native/security/recovery/image/qualification | Existing PR CI и trusted release наточнойrevision; Windows неLinux | REQUIRED premerge/CD |
-| Contracts/security | Owner negativeaccess/CAS/corruptstate/HMAC/strictACK/frozen retry/legacycallback/secret hygiene | Existing contract/delivery/release suites, no Codex Security calls | REQUIRED |
-| Delivery/transition | Exactsource/image/health/private equality/freshdata/newgeneration/no-oldalerts/TA untouched, reserve/rollback | Current delivery/reset runbooks through contabo-vps; fresh preflight | REQUIRED postmerge |
-| Server probes |1CPU/4GiB/450CPUs/510wall/600outer,35%idle start/15%stop; physical peak before operation | Only bounded isolated project-owned scenario; coreLinux validation viaCI | REQUIRED if applicable |
-| Final capacity/visual | Fresh screenshots, representative largebackup,30min/24h unchanged | Goal2, existingobserver; no cron/automations | PENDING Goal2 |
+| Прогрев и full path / F22,F42 | Разделить source bootstrap, уже наступившие расчёты, referenced recovery и future horizons; проверить динамику/inputs/terminal expiry. Source grace30s, due calculations60s при доступных inputs | Bounded readonly diagnostics/queue snapshots через contabo-vps, существующий observer; до baseline и тяжёлых операций | REQUIRED |
+| Forecast / F38,F42 | Actual episode/origin/membership/source usage rates и physical pages/journals, без startup churn или N20; единая арифметика с явными limits/reserves | Existing storage_meter/storage_model/capacity; targeted tests, representative isolated writer/retention scenario; steady VPS interval | REQUIRED |
+| Telegram / F32,UX | product-design:audit: fresh captured/screenshotted actual flow, navigation/empty/error/confirmation/cancel; desktop и доступная узкая компоновка. Mobile app не заявлять | Native Telegram available; capture evidence внеGit. Bot-only formatting/copy fixes; existing UI/UTF16/control tests | REQUIRED |
+| Cleanup / F24 и связанные IDs | Caller/script/contract/recovery inventory; доказанный REMOVE, полезное сохранить с основанием, пересечения CONSOLIDATE. Source security regressions без provider scan | rg/current source/tests/primary records; scoped local checks, current CI | REQUIRED |
+| Hardening/resources / F31 | UID/caps/readonly roots и фактический суммарный CPU/RAM/I/O, ordinary против recovery/repack/backup; бюджет с запасом другим проектам | Bounded Contabo/Grafana snapshots;30min/24h, attributable cgroups и whole-host metrics | REQUIRED |
+| Backup/capacity / F34 | Representative multiGB full integrity/independent restore/exact byte/numeric/private equality, actual time/resources и полный disk peak до старта | Canonical backup/qualification procedures; owned isolated data only.1CPU/4GiB/450CPUs/510wall/600outer;35%idle admit/15%stop, existing RAM reserve | REQUIRED |
+| Artifact retention | Latest2verified backups, current+previousgood release; rehearsal after saved proofs/repro, failed capture until investigated/replaced; exact lists for old unique data | Fresh metadata inventory/replacement/recovery requirements; owner decision only where needed, late with concrete list | REQUIRED |
+| Code/release | quality и нужные профильные checks; Linux/native/image required CI на готовом PR; actual merge artifact/source/private/health/smoke | Canonical checks.py quality, existing PR CI/CD. Standalone full workflow не запускать автоматически | REQUIRED |
+| Финальная приёмка | Закончить тестовые действия, принять baseline;30min затем24h unchanged version/settings/generation, сохранение interruptions, source/due/delivery/resource/reserve | Existing observer вручную по процедуре, без scheduled tasks/Actions monitoring | REQUIRED |
 
-### Findings и порядок
+Сначала выявить системный риск и проверить полный эффект, затем достроить подтверждённые интерфейсные/остаточные исправления и единственный основной PR. После новой модели и одного обоснованного исправления измеренного ограничения сохраняющееся общее отставание требует готовой ветки/сопоставимых measurements/вариантов владельцу; бесконечные локальные micro-optimizations не продолжать. Ordinary failures исправлять автономно в текущем scope. Независимую работу продолжать при недоступном UI/внешнем gate; конкретное согласование выносить поздно, с готовыми доказательствами и действием.
 
-Goal1 fixes F26,F49–F56 и кодовая частьF22/F38, использованные F24/F31; Goal2 завершаетF22/F34/F38/F42, F24/F31/F32, все visualUX и связанныеCAP25/CWSEC dispositions. Все прежниеfindingIDs/решения ниже сохранены. Не закрывать finding общим зелёнымCI или переносомвDEFER.
+### Предыдущий checkpoint — ограниченный SQLite prototype31Oct2026, FAIL
 
-Сначала новый минимальный полный путь наоднойSQLite; затем остальныеfunctional сценарии, UI routing/contracts и прогноз; локальныеchecks/self-review, одинinitialpush/PR, requiredCI, merge/CD иразовыйпереход. Переноситьстаруютестовуюhistory не нужно. Если после новоймодели иодногообоснованногоисправления fullpath всёещёнеуспевает — показатьготовыйкод/измерения/варианты без новойбесконечнойцепочкиоптимизаций.
+Последний результат: **FAIL, развитие prototype остановлено по условию владельца**.
+После reporter-only fix и отдельно разрешённого одного повтора: head12ac4b8006a632d4ef8d673c857ce7da298cd189,
+test merge264bab07da6e8a069aa303e045fbe4f402370003, run41220369584/job124593507395,
+artifact13049339407/SHA cf763de71825e17962e6eda6562e74f243fa8c4a3e6002fba1593d690f67e9c7.
+1648streams/2472accepted/130s, same seed+offered SHA,824complete outcomes с одинаковым
+numeric SHA. Native bothmarkets/4TF/5families; errors0/FK violations0. Source max75.792s
+(p9570.803) >30s; completed due max98.042s >60s. Due endpoint0 не отменяет late completion;
+future10352 не backlog. Telegram468mock attempts, agent196signed mock ACKs. Pending TG285
+(age40.608s), agent intent2958(age428.015s, включая seeded T−5min), send0. Live delivery
+не проверялась; фактические очереди доставки не объявлять устойчивыми.
 
-### Текущий implementation checkpoint
+Сохранённое сравнение run41196967614: source92.373s/due118.044s, phase119.576CPU-s;
+теперь108.240CPU-s. Working after join97.276MB→197.221MB; sampled cgroup memory.peak
+197.595MB→293.716MB; sampled block writes4.079GB→4.535GB по одному device каждого host.
+Разные CI hosts, не causal VPS A/B. Observation69.067CPU-s, source5.164,repack0.611,
+retention2.418; внутренний SQL/validation/encoding split нового adapter не измерялся.
+Рабочий набор35GB и зрелый прогноз не подтверждены коротким DB размером.
+Actual1CPU/4GiB/no swap/networknone; OOMfalse/resource stop отсутствует,
+controller187.102s/cgroup lastsample131.821CPU-s (lower bound), hostidlemin74.12%.
+Owned synthetic DB/container cleanupCOMPLETE, локальные TEMP fixtures удалены.
+Reports/manifest/ZIP/hash внеGit. VPS/private state/valid history/другие проекты не менялись.
 
-Из18AC текущей Goal код завершён для17, включая6подтверждений06-01/07-04/08-01/09-02/13-03/13-04 поT-AD02/T-EP01/T-EP02/T-FC01/T-GC01/T-FP02. По12-04 обновлены только3affected packages и пройдены88security/transport/config fixtures; image/native CI и deployment остаются обязательными. По09-06 согласованы public v2 projection/handoff и pinned reference consumer qualification42accepted/126negative. По12-05 canonical full no-CD profile добавлен и проверены его guards/результаты; отдельный полный запуск не выполнялся и не требуется для настройки.13-06 — оставшаяся кодовая/эксплуатационная квалификация. Ни один из этих локальных статусов не означает merge/CD или успешную приёмку общего VPS.
+PR94 остаётся единственным Draft/unmerged. Полную интеграцию/migration/merge/CD,
+baseline и30min/24h не начинать; третьего prototype run нет. F22/F42/AC-13-06 и весь
+scope Goal2 не закрыты. Новое направление — только по отдельному решению владельца.
+Итоговый plan commit сохраняется локально: новый push вызвал бы ещё один неразрешённый
+prototype job. Required CI run41220369584 completedFAIL: docs/select/storage-boundaryPASS;
+validation2624PASS/1existing broadFAIL905.83s (accepted1222/2472), ci-requiredFAIL.
+Новые targeted guards проходят native CI; SLO остаются нарушены. Billing не получен,
+runner duration обоих разрешённых runs сохранён внеGit. Последующий push не выполняется.
 
-**Реализовано по коду17/18AC:04-06,05-02,06-01/02/05,07-04/06,08-01/04,09-02/06,11-01,12-04/05,13-02/03/04.** Это незамерженная implementation branch; audit percentage не пересчитывался. Existing50READYsnapshot остаётся snapshot, затронутые инварианты проходят regression. PR93 открыт на7b11b8c; merge/CD ещё не выполнялись. Scoped read-only VPS snapshot подтвердил runtimeb254, generation8a0e8841, working9.00GB/free20.47GB; staging/DB/runtime не менялись.
 
-| Блок / Evidence IDs | Реализованное и доказательства | Ограничения |
+Goal2 возобновлена явным поручением владельца31Oct: сначала один ограниченный
+сквозной prototype нового способа SQLite, не полная переделка. При PASS показать
+результат и минимальную интеграцию для решения; при FAIL остановить работу над
+подходом с измеренным выводом. Не переносить все подсистемы, не мигрировать историю,
+не менять VPS/рабочую БД. Большой план ниже остаётся PROPOSED; его сроки не обещаны.
+Отдельное разрешение на публикацию именно этого plan в public repository сохраняется.
+
+Baseline main12cf5d48e8d4b13aa77dbbe84ee9d161f81a4619; PR94 Draft/unmerged,
+remote head8fb8db9902aeebd7cc7ef611d6eff81c7aed4c6c, предыдущий applicationf38cff0.
+Local494f617 — дополнительный nested-head corruption guard, включается в текущую
+проверку. Checkout/branch прежние; новые ветки/PR и production hooks не создаются.
+
+Изолированный адаптер только tests/sqlite_repository.py: прямые неизменяемые SQLite
+revisions и shared exact inputs, small compatibility heads, foreign keys/checksums,
+те же source/detectors/episode/outcome/retry/retention и обе доставки. Process layout
+не меняется. Заменяется только хранение immutable публикаций; generic mutable queues,
+source и annual storage остаются реальными текущими компонентами. Это не полное
+выполнение предложенного ниже ядра и не доказательство зрелой ёмкости35GB.
+
+Validation REQUIRED: focused golden canonical equality обеих реализаций, rollback,
+immutable origin, повтор/повреждение fresh head/inputs, actual signed retry/restart,
+TTL/annual facts; local quality. Один дополнительный Linux/native capped CI job
+в PR94: unchanged1648streams/2472closed arrivals/130real seconds/seed+offered SHA,
+1CPU aggregate/4GiB/no swap/450CPUs/510wall/600outer,35%idle admission/15%stop,
+source≤30s/due≤60s, future отдельно; real maintenance/FK checks и полный resource
+report. Existing production qualification и required CI не ослабляются и не
+заменяются prototype. Windows small PASS не substitute. External transports mocked,
+реальные Telegram/TA/VPS и30min/24h здесь не проверяются. После единственного full
+result остановиться; merge/CD/baseline автоматически не начинать. Temporary DBs
+только новые локальные/CI; учёт и cleanup, маленькие proofs внеGit.
+
+Native direct-SQLite attempt31Oct закончилась REPORT_ERROR, не performance PASS/FAIL:
+PR94 head2c99c45a97568bea20e019012d6ba2f10838a75d, tested merge5872e13c15fb25095fc2f918e015ce03c5e1ba9a,
+run41219276241/job124590274170. App завершила130s arrival window; JSON report не
+сохранился из-за sqlite3.Row в prototype stats. Latency/accepted/queues/numeric hash
+утрачены, не восстанавливаются по CPU или отсутствию traceback application.
+Artifact13048639740/SHA cfe2b311bf643d5c40d7cbe24ac3ca604a26c9692f44a1a680605bd4a60c0e05:
+1CPU/4GiB/networknone/OOMfalse, cgroup lastsample136.14971CPU-s (lower bound), peakRAM308314112B,
+owned files peak201178288B, sampled block write4537409536B на одном8:0 device,
+hostidlemin73.85%, cleanupCOMPLETE. Resource admission/limits не причина завершения.
+До конца окна processCPU133.76149s; exact phaseCPU не сохранён. Сохранённый reference
+run41196967614: source92.373s/due118.044s; сравнение source/due нового case невозможно.
+Иные runners не causal VPS A/B. Старый runtime в том же run, job124590274319:
+accepted1496/2472/source135.060s/due135.186s/pending766 — отдельный FAIL, не результат prototype.
+
+Локальный narrow fix только JSON output: stats rows преобразованы в plain lists;
+малый реальный pipeline теперь проверяет json roundtrip всего результата.
+PASS1test12.72s Windows, native rerun НЕ выполнен. Первое разрешение на один полный
+CI prototype использовано. Владелец31Oct отдельно разрешил один повтор той же
+проверки после исправления ТОЛЬКО отчёта; source/queues/algorithms/лимиты прежние.
+Перед grouped push дождаться текущего run41219276241; после повторного результата
+остановиться независимо от PASS/FAIL, не начинать full integration. Большая
+интеграция, migration, merge/CD и VPS изменения не начинаются. Reports/hashes/logs
+сохранены внеGit, synthetic DB очищена. Обычные CI gates не ослабляются.
+
+Local validation31Oct:13focused tests PASS14.64s (test_sqlite_repository и
+ test_processing_qualification), quality PASS: docs/Ruff/format/mypy133source files.
+Windows3.12 fallback; native и capped result PENDING. Readonly calculation threads
+явно завершаются перед снятием adapters; snapshot cancellation не считается join.
+Canonical extra case: `scripts/qualify_processing.py run IMAGE REVISION NEW_REPORT_DIR --direct-sqlite`.
+Он создаёт только owned isolated Docker/SQLite с networknone, сохраняет JSON/log,
+проверяет native/fixture SHA/actual direct tables/FK/maintenance и удаляет fixture.
+
+Предыдущий sole prototype остаётся FAIL и служит основным сохранённым сравнением;
+последующий docs-only run41206428542 не новый candidate: requiredFAIL, capped accepted1287,
+source133425ms/due805 на другом runner. Новая попытка меняет изолированный storage
+adapter; numerical/transaction correctness отдельно от performance.
+
+| Проверка | Факт, evidence и ограничения |
+| --- | --- |
+| Sole structural prototype | Run41196967614/job124525014452 FAIL:2472/2472accepted, maxsource92373ms/p9584582ms, due pending0, maxcompleted due118044ms. Limits30/60s не пройдены; zero backlog на endpoint не доказывает своевременность |
+| Сопоставимый предыдущий case | Run41190740672:1784/2472accepted, maxsource119706ms/p95112028ms, due312/maxcompleted126368ms. Phase131.077CPU-s против119.576CPU-s prototype; одинаковые offered/seed SHA, разные CI runner instances, не causal VPS A/B |
+| Полнота/ресурсы prototype | Native, both markets/4TF/5families/1648streams; producer/worker/receiver errors0. Future10200 не overdue. Actual1CPU/4GiB/no swap/networknone; OOMfalse; peakRAM197595136B, temporary work97144760B; host idlemin72.93%. Cgroup133.779CPU-s — last sampled lower bound, не exact total |
+| CPU decomposition | Observation80.483CPU-s/2472calls, source6.378,repack2.234,retention0.073,diagnostics0.260. Предшествующий instrumented profile: observe96.218, version53.771, tick closure38.599, detector0.526; nested cumulative не суммировать. SQL995246calls в profile не количество SQL каждого обычного run |
+| Ordinary required CI |2615PASS/1broadFAIL679.19s:accepted1672/2472 на другом runner без capped report; поздние assertions traceback не выполнял. docs/select/storage-boundary PASS, ci-required FAIL; subsequent image/package не запускались |
+| Proof | Artifact13040847857/11807B/SHA93eafcc2c9ac9d6d2cf85e2e2408e6662de0abc83bc3aecee7b879dba46404d9 проверен, reports внеGit, synthetic cleanupCOMPLETE. MockTelegram348/signedagent101 — не live delivery acceptance |
+
+Prototype убрал повторную materialization из lifecycle/head checks, сгруппировал
+closure re-arm и общие candle inputs. Immutable records, reference, CAS и generic
+callbacks сохранены; этого оказалось недостаточно. Не начинать следующую цепочку
+операционных micro-optimizations, не увеличивать ресурсы и не уменьшать universe.
+
+### Архивная альтернатива — предметное ядро одной SQLite, не текущий план
+
+Статус PROPOSED, НЕ IMPLEMENTED. Заменяется generic live publication path; согласованные
+business rules, private settings, внешние interfaces и numerical methods не меняются.
+Одно приложение остаётся одним deployment; PostgreSQL/Redis и второй writer не нужны.
+
+1. Network/Telegram loop обслуживает I/O и bounded input commands; единственный
+   writer process владеет SQLite writes и доменным порядком. Read-only calculations
+   и UI reads имеют отдельные snapshots. Process split сам по себе не ускорение:
+   все процессы вместе укладываются в прежние1CPU/4GiB, а очередь входит в lag.
+   Accepted/confirmed только после durable commit; backpressure/crash ведут к явному
+   gap/recovery, не к потере свечи или переносу timestamps для маскировки задержки.
+2. Одна closed observation — один prepared input frame и одна предметная transaction:
+   source revision, все meaningful events/episode revisions, origin jobs и независимые
+   consumer intents. Прямые bound SQL против typed tables вместо recursive generic
+   runtime envelopes, head re-reading и service-reference expansion при записи.
+   Сохраняется КАЖДАЯ meaningful immutable revision; delta storage восстанавливает
+   exact public snapshot, не объединяет события и не заменяет origin текущей ценой.
+3. Явные tables/constraints для streams/source revisions/windows, episodes/updates/
+   confirmations/conditions, finite jobs, outboxes/attempts, settings/provenance.
+   Ready/deadline indexes ограничивают lifecycle и due selection; один owner/CAS,
+   immutable uniqueness и транзакционные dependencies остаются DB invariants.
+   Во время network send writer transaction не удерживается; frozen body/signature,
+   HMAC/idempotency/retry/unknown ACK/expiry и независимость каналов сохраняются.
+4. Annual facts хранят один компактный набор выбранных horizons на episode, а не
+   повторяющиеся JSON schemas/UUID keys в каждом horizon row. Dimensions/provenance
+   dictionary и exact memberships отдельны. Binary UUID/digest и существующие pure
+   lossless codecs допустимы; float bits/types, MFE/MAE, completeness, arbitrary
+   поддерживаемые owner horizons и provenance не округляются и не сокращаются.
+   Indexed/streaming analytics и export не разворачивают полные source windows.
+5. Public History/commands/callbacks/export/agent v2 получают compatibility adapters.
+   Legacy readers/converters остаются для реально retained объектов; новый live
+   writer не использует старую catalogue/repack цепочку как обязательный путь.
+   F24 REMOVE только после proof callers/recovery/retention, не по названию модуля.
+6. Переход без reset валидной light history: additive typed layout и resumable
+   ownership handoff в той же SQLite. Private state, generation, IDs/revisions,
+   reference/settings, leases/jobs и pending/unknown deliveries сохраняются.
+   Каждая adopted identity имеет единственного authoritative owner; union reads
+   исключают double N. До switch квалифицируются migration и reverse projection
+   новых writes либо другая доказанная recovery strategy. Старый image сам по себе
+   не считается rollback нового layout. Legacy debt входит в physical forecast.
+
+### Архивные этапы и оценка typed core — не разрешены и заменены bounded gate
+
+| Этап | Результат и gate | Оценка effort, не обещанный срок |
 | --- | --- | --- |
-| T-EP01/T-EP02 | Meaningful live updates, immutable origin/method/horizons, one outcome set; shared result UI/agent/export.66admission и36consumer tests PASS; readonly0writes, origin expiry explicit unavailable | Windows/mock; native export converter SKIP |
-| T-DG01/T-AN01 | Unique episode digest/ranking/cohorts, overlapping groups explicit; same-SQLite numeric result/membership/shared-provenance tables, atomic12month calendar expiry, exact numeric export.51archive/storage tests и38consumer cases PASS | Не physical capacity model |
-| T-ME02 | Historical/rearm repetitions coalesce; separate market/receipt clocks; fresh historical→live promotion сохраняет origin/jobs; first live alert и restart/rearm.110profile tests PASS | Full VPS timing не подтверждён |
-| T-AD02 | Persisted independent active_detectors, migration defaultall5, CAS UI, invalid/stranger/stale/duplicate callbacks, live apply; legacy notification callbacks сохраняют смысл.122tests+corrected readback1test PASS | Visual review Goal2 |
-| T-FP01 | Identical8stream/5family/104frame replay mainb254→candidate72a7308:188→76observations,36→36episodes,752→144completeoutcomes,156→0N20jobs;16initial numeric facts hash совпадает. Wall14.585→3.849s/CPU11.641→2.891s;due0/late0 уобоих | Исторический finite benchmark; не текущая broad capacity/24h/physicalIO. Reports/hashes внеGit |
-| T-N20 | Runtime scheduler не вызывает N20; legacy recompare read-only→episode analytics.63UI/async cancellation/publication/fullpath tests PASS. Old jobs в legacy fixtures создаются явно, assertions сохранены | Canonical scripts переведены на episode units поT-FC01; legacy codecs/scenario qualification сохранены явно |
-| T-WN01 | Default72h/30d, mutable admission rejects incompatible horizons/windows, old snapshots read-only; used-vs-unused source/context expiry и полный4320-candle outcome.67storage/policy tests,16boundary/fullpath cases PASS | Linux/native ещё required CI |
-| T-WN01 transition | Explicit exact-generation light candidate preserves original private recovery/independent restore; только candle_days→3/active migration+revision; verify_private checks deterministic allowlist. Existing receiver/installer поддерживают pinned light mode/consumed-record preservation; valid light history reset refused |50policy/delivery/boundary tests PASS6.72s;4Linux installer cases и1старыйnative case пока SKIP; не Linux/VPS PASS |
-| T-FC01 | Format13 forecast: episode origins и meaningful memberships, measured new SQLite writer/index coefficients, first-used/arrival byte ledger, used-only extra leases, noN20prior,35GB/free pages/journal reserve; same-scope rates.64capacity/archive/model tests PASS138.83s,57targeted forecast cases PASS34.61s;quality PASS335/133 | Windows3.12/SQLite3.49.1. Calibration is scenario, not population bound; actual broad VPS/physical backup peaks remain Goal2 |
-| T-GC01 |62controlled weeks обоих markets/4TF/5families, restart, mixed repack, exact numeric/membership equality, finite final GC. Fixed stale episode aliases/origin/shared result deletion between bounded batches and summary progress reporting.200same-timestamp members→20episodes/80completeoutcomes;analytics unchanged after detail expiry | One fixture default2directions/market; not production arrival rate. Linux dbstat unavailable locally; image CI required |
-| T-FP02 | Current30logical-minute fullpath:104/104closed inputs,76meaningful observations/36episodes,144COMPLETEoutcomes,0N20jobs,all due checkpoints0/late streams0;Telegram2/agent136. Initial16numeric facts hash unchanged. Wall4.137s/CPU3.188s,SQLchanges35742 | Native process IO/RSS unavailable Windows. Counter overhead included; no broad/shared-host capacity claim |
+| A — минимальное новое ядро | Schema/transaction API + один настоящий end-to-end adapter: immutable inputs,5detectors,episodes,one outcome set, обе доставки, expiry/restart/CAS. Same frozen130s replay и ранний physical archive sample. Не макет, не mock persistence. При FAIL остановиться и вернуть вариант/измерения |2–3 рабочих дня |
+| B — функциональная интеграция | Полные adapters для history/outcome/analytics/digest/export/settings/legacy callbacks; active detectors отдельно от alerts; finite queues/source recovery и exact annual storage; текущие golden/negative tests |3–5 рабочих дней |
+| C — переход и эксплуатационные риски | Непрерывная valid history migration/recovery, representative multiGB restore, measured capacity/physical peak и retained artifact policy; shared-VPS CPU/RAM/I/O admission |2–4 рабочих дня |
+| D — закрытие Goal2 | Оставшиеся F/UX/F24/F31/F32, visual после owner resume, required CI/review/merge/CD, accepted30min затем24h unchanged observation |1–3 рабочих дня + минимум24h |
 
-| T-DEP01 / F26 | Official GHSA/PyPI readback; certifi2026.7.22→2026.10.19,uv0.13.0→0.13.4,setuptools84.0.0→84.1.0. Selective hashed lock regeneration, no unrelated version drift; all artifact hashes match release metadata. Compromised emSign ECC G3 absent in new trust bundle; other roots not removed. uv pip check PASS;88release-security/receiver/vendor/agent/config tests PASS2.08s;quality PASS | Updated isolated Windows environment, not actual Linux image/production. No fresh exhaustive scan or Codex Security calls; required native/image/deployed-version gates pending |
+Итого8–15 рабочих дней плюс минимум сутки наблюдения, confidence LOW. Отсчёт от
+одобрения реализации, не от накопленного времени отменённой CAPACITY25. Оценки effort
+не задают непрерывное время автономной сессии; главный неизвестный — schema/adapters/
+migration и legacy debt, не только строки кода. После этапа A оценку пересмотреть
+по actual full-path evidence. Эти2–3дня — первый решающий результат, не вся поставка.
 
-| T-AG02 / F55 | Compatible closed v2 settings projection (internal activation остаётся в domain history/export), own observation reference для meaningful update, late outcomes/replay толькоorigin. Regenerated synthetic example7715bytes/SHA0a9d44ed и frozen public-field fixture.58agent/recovery/export/episode/UI tests PASS3.00s,1native skip;quality PASS | Reference parser v2/v1/base blobs и hash-locked Pydantic2.14.1 изreceiver lock:42accepted,по42authority/unknown-activation/future-time rejected. Только schema boundary, receiver/VPS/config/ingest не менялись; actual live acceptance внеCW |
+Validation этапа A REQUIRED: неизменные offered/seed input SHA, оба рынка/4TF/
+5families, accepted2472/2472, source≤30s, due≤60s при доступных inputs, future отдельно,
+никакого нового N20. Real current formulas и persistence/outbox/receiver boundaries;
+совпадение всех canonical fields/float bits/state transitions с fixtures, meaningful
+revision sequence, rollback после failure и restart в каждом handoff boundary.
+Очередь IPC учитывается в end-to-end, accepted после commit. Замер ресурсов суммарный
+по всем процессам;1CPU/4GiB/450CPU-s/510wall/600outer,35%idle admission/15%stop и
+RAM reserve неизменны. CI Linux/native — основной proof, Windows не substitute.
 
-| T-FULL01 / F56 | Canonical `checks.py full` с отдельным manual exact-main read-only workflow; Linux3.11/native/quality/whole pytest/JUnit/image/package roundtrip/joint boundary, noCD/no credentials/no schedules. Wrong SHA/main/dirty/Windows/remote Docker/report reuse fail before work; records actual commands, stages/skips/not-run/residuals, owned package cleanup.37profile/delivery guard tests PASS0.18s;quality PASS337/133; `full --plan` reports PLAN_NOT_EXECUTED | Полный профиль не запускался. Обязательный Linux/native обычногоPR и последующийCD остаются pending; local guard tests не substitute native suite |
+Capacity gate REQUIRED уже в A: actual writer/index pages, source-used dedup и
+membership/provenance sensitivity, detail30d/general72h/annual12calendar months,
+fragmentation/free pages/WAL/SHM/checkpoint/repack/legacy debt. Forecast имеет
+явные episode/day, updates/members/horizons, no-sharing и sharing scenarios; число
+35GB не выводится из короткого DB размера. Representative2–4GB sample и calendar
+boundaries проверяются в существующем qualification budget; при недоступном gate
+не ослаблять limits. Измерение costs не является proof live incidence rates.
+Численные16/20/25GB targets заранее не обещаются. Финальная сумма≤35GB И физически
+вмещает backup/temp/shared-VPS reserve. Annual query latency/resources проверяются
+наряду с записью, без скрытого переноса издержек на чтение.
 
-| T-LEG01 | Self-review: untagged v1 сохраняет собственную reference/method, new EP требуетявныйorigin; metadata-only bootstrap не создаёт старые per-candle jobs. Already-admitted v1 обслуживается прежней declared definition; numeric calculate AST равенb254e6e (SHA8af4425c…). Unknown definition→INVALID_SOURCE без relabel; missing/unknown admission fail-closed.105compatibility/profile tests PASS8.58s+1native skip;62focused final cases PASS7.10s+1skip;quality PASS | Legacy cohort fixtures теперь явноmethod1; current unique-episode path проверяется отдельными new-unit fixtures. Linux/native и full requiredPR пока pending |
+Первый code milestone не переносит весь menu/UX и старые experimental branches.
+Он проверяет новую единицу обработки на прежнем полном сценарии; после одного
+отрицательного полноценного результата не достраивать его бессрочно. Успех A даёт
+основание продолжить B–D, но не закрывает AC-13-06 и не заменяет VPS30min/24h.
+Новое implementation поручение должно утвердить этот подход и bounded early gate;
+сейчас выполняется только plan publication, без нового prototype/поставки/перезапуска.
 
-| T-REV01 | Final local review/profile:100analytics-recovery/async/activation/Telegram/episode scenarios PASS; единственный failure — прежнее expectation30GB для отсутствующего budget, исправлено на согласованный35GB и повторено отдельно. Freshorigin/main b254 unchanged; open draftPR57 сохранён, protections ci-required strict/admins, approvals0/conversation resolution | Это не primaryLinuxCI. Передinitialpush fresh GitHub main/protections перепроверены; primary recordPR восстанавливается по head codex/light-radar-20261030; бюджет/observation/VPS не изменялись |
+### Сохраняемые findings и физический reserve
 
-| T-CI01 | PR93/run41094801697: Linux/native joint proof129572frames/8292608owners/313564240metrics/shared50000groups/1050000packets,13.45GB tempDB removed; docs/native build/quality PASS.29legacy/default-fixture suite failures разобраны и исправлены однимbatch,182affected local cases PASS; no runtime/gate changes | Initial requiredCI FAIL; fresh Linux/native/image/package results pending. Native proof is structural geometry, not capacity/live SLO |
+- По коду17/18 shared AC из Goal1; AC-13-06/F22/F34/F38/F42 не закрыты. Все stable
+  F/UX/CAP25/CWSEC IDs и прежние dispositions остаются в реестре ниже; новый design
+  не закрывает их автоматически и не меняет readiness denominator/проценты.
+- F26/F49–F56 поставлены Goal1; regressions READY сохраняют подходящие evidence,
+  но future adapters потребуют affected checks. F31 deployed hardening сохранён,
+  sustainable ordinary/maintenance budget не подтверждён. F32/UX POSTPONED_OWNER;
+  интерфейс приложения Telegram не открывать до отдельного resume visual.
+- F38: прежний cached442–446GB не принят, startup/repack flow не steady. Sensitivity
+  current writer512EP:3328B/EP при1membership и4712при4; условные91452EP/day дают
+ 111.4/157.7GB/year только archive. Это не forecast нового typed layout и не lower
+  bound. Новая модель обязана объяснить stored bytes без удобного выбора26–27GB.
+- Fresh readonly31Oct11:45UTC: workingDB+sidecars0.864GB, free27.961GB, backups3.280GB
+  (7files с sidecars), rehearsals15.233GB/109dirs, releases0.585GB/20dirs (3heavy).
+  Рост working до35GB превышает current free на6.175GB ещё до backup/temp reserve.
+  Снимок1092streams/285late/unknown0, bootstrap/blocked/recovery0; heartbeat healthy
+  не делает source своевременным. Generation5bb5712 сохранилась, source12cf5d4.
+- F34 source pre-97592ec15d0716ba7e7072a7c951e0008fb77788-1792737395.sqlite3,
+ 2962976768B нужен multiGB qualification, не удалять. Readonly stat не full integrity.
+  Его conservative3x source+7GiB дополнительный envelope16.405GB арифметически
+  помещается с current11.556GB остатком; это не CPU admission или restore PASS.
+  На полном35GB такой backup envelope физически не помещается в этот filesystem.
+- F24/artifact review:64old heavy directories/15.039GB directory upper bound,
+  no open FD в полном bounded scan, но58mounts stopped containers. Verified replacement
+  уникальных inputs отсутствует; deletion не разрешена. Small reports/scenarios/
+  manifests/hashes сохранить. Latest2ACTUALLY verified backups и current+previous good
+  release — политика, не доказательство существования двух проверенных новых копий.
+- Новый valid-history reset, old artifact deletion, other project changes, увеличение
+  ресурсов, schedules/automations и Codex Security не разрешены. Canonical tooling
+  и подробные evidence/checkpoint сохраняются внеGit; public plan разрешён владельцем.
 
+### Goal1 — DONE по primary records,30Oct2026
 
-Proof archive: локальный light-radar-20261030, включая F26-release-metadata/F26-lock-trust-check/F26-tests-01 и policy-storage-next/policy-boundary/policy-installer/quality-policy records и light-replay-comparison.json. Обе CLI replayDB и extracted main source/ZIP удалены после сохранения hashes/harness; освобождено12,809,356bytes. 23owned temporary directories этого финального блока удалены после сохранения proofs/repro; освобождено337,097,297bytes (temporary-cleanup-b1365db.json внеGit). Fixed Ruff/mypy/uv caches и прежние Goal directories сохранены до отдельной финальной сверки; это не удаление unknown/user data. Новые schedules/платные операции не создавались.
+PR93: reviewed head5ccfefabb874a5b6591e6ccb71b01a0c1ee96e25, merge12cf5d48e8d4b13aa77dbbe84ee9d161f81a4619. Required CI41097848708:2587Linux/native tests, quality/docs,13.45GB joint structural boundary, image/security/package PASS. Trusted release41100389366:2587tests PASS583.07s, source-pinned image/package, production PASS18:00:55UTC. API metadata запаздывала; full logs, independent artifact/primary VPS receipt и затем final run success сохранены. No standalone full workflow run.
 
-Следующий шаг: requiredLinux/native/imageCI единственногоPR93 на актуальнойrevision. InitialCI41094801697: docs/quality/native build/joint13.45GB storage boundary PASS; suite2558PASS/29FAIL, image/package не запускались из-за dependency failure. Batch исправляет explicit frozen-v1 archive/cohort fixtures, legacy comparison queue seeds,72h/used30d expectations, meaningful callback rollback и запретN20 в maintenance;182affected Windows cases PASS после2исправлений clock setup, quality PASS. Assertions integrity/rollback/exact facts сохранены, приложение/gates не ослаблялись. Freshorigin/main b254 иprotections подтверждены. Затем controlled CD/light transition. Полный standalone no-CD main профиль не запускать автоматически. Новый объяснимый forecast реализован; его observed rates/physical peak и35GB fit ещё не подтверждены наVPS. Добавлен native-image light transition fixture (syntax PASS; выполнение только required image CI). Root installer Linux tests и representative capacity/runtime обязательны на соответствующих этапах; до них не объявлять поставку/Goal завершёнными.
+Artifact12997713871/64769770bytes/SHA493539be508d6cb2e8727338a96e2ba7c2295164fe41efe545a5a2b05a65f838; host image4288c29670e684fde336ba8672f1078ba971bc9230a8ace15c277c5ec88b9286. Primary release12cf5d4-493539be508d6cb2/deployment.json SHA72cb850946d0c89c271c98ad6dc94a587c8c650abe6476c4850b6e9b1d63ea8e. Exact-generation transition/private independent restore/verify PASS, config5→6 only candle_days35→3 и absent activation→all5; .env/watchlist/private/notification selection/TA unchanged. Old working DB/wal/shm removed3 only after post-checks; no backups/experiments/other projects touched. PermitCONSUMED; new valid light generation защищена от повторного reset.
 
-Следующая Goal2 после DoDGoal1: fresh ProductDesign visual review, F24/F31/F32/UX dispositions, representative multigiB backup/recovery и physical peaks,30min/24h на неизменных source/settings/generation. Новую валидную историю не сбрасывать. Backups latest2verified, releases current+previousgood, rehearsals после saved proof/repro scenario, failed captures не размножать; старые уникальныеarchives — отдельный exactlist. Один основной PR наGoal, никаких cron/automations/Security или соседних projects/VPS expansion.
+По коду READY17/18 shared AC:04-06,05-02,06-01/02/05,07-04/06,08-01/04,09-02/06,11-01,12-04/05,13-02/03/04. Evidence T-EP01/02,T-DG01,T-AN01,T-ME02,T-AD02,T-N20,T-WN01,T-GC01,T-AG02,T-FULL01,T-LEG01,T-CI01 и primary CI/CD; прежний audit% не пересчитывался. AC-13-06 code control реализован, final operating acceptance намеренно Goal2. Functional regression и visual подтверждения продолжаются.
+
+Finite identical104inputs fullpath:188→76observations,752→144outcomes,156→0N20,36episodes,16initial numeric facts hash unchanged; due0/late0/Telegram2/signedagent136. Windows finite timings не выдаются за sharedVPS capacity; Linux structural boundary не live SLO.62week lifecycle/used30d/general72h/calendar12month/exact numeric export/finiteGC и v1 frozen formula compatibility проходят tests. Public receiver schema qualification42accepted/126negative; actual agent OFF/unconfigured отдельно, receiver не менялся. F26 actual image certifi2026.10.19/setuptools84.1.0, compromised emSign ECC G3 absent; build uv0.13.4 locked, no exhaustive scan claim.
+
+Scope closure не означает устойчивую широкую нагрузку, окончательный forecast, multiGB backup, visual или24h PASS. Эти явно согласованные остатки остаются Goal2, не скрыто перенесены вDEFER. Goal1 учёт5h55m; обе её task branches удалены по merge/tree/CAS proof; preexisting checkout и экспериментальные ветки сохранены.
 
 ## Последний полный аудит 30Oct2026
 
@@ -457,7 +859,7 @@ Non-goals: visual Telegram, execution/LLM/news/multi-exchange, новый transp
 
 ## Blockers и следующий шаг
 
-Для аудита блокеров выполнения нет; ограничения перечислены. Для следующей реализации blockers:18 неготовых AC,13 открытых findings и отсутствие принятой стабильности/физического capacity. Следующий шаг выбирает владелец; отменённую Goal не активировать.
+Прежний аудит — historical snapshot. Текущая Goal2: scope global detection + bounded detailed pool принят, разрешены минимальный prototype/publication/один Linux gate. Прежний direct-SQLite gate FAIL. Full integration/merge/CD/VPS не разрешены; после единственного результата остановиться. F22/F34/F38/F42/AC-13-06 и остальные findings не закрыты; отменённую CAPACITY25 не возобновлять.
 
 ## Checkpoint аудита
 

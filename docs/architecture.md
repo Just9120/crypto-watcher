@@ -178,7 +178,7 @@ History всех families независима от Telegram selection/mute. Coa
 
 Restart восстанавливает episodes, per-direction conditions и pending work; exchange clock устанавливается до expiry решения. Незавершённый IN_FLIGHT означает ambiguous ack, поэтому exactly-once не заявляется. Forced closure подавляет старое условие до re-arm; complete recovered non-signal bars могут подтвердить re-arm без historical live flood. Bootstrap/recovery сохраняют последнее проверенное наблюдение как historical; G2B не выполняет ретроспективный detector backtest всех raw candles.
 
-## LIGHT-RADAR: episode analytics (текущая implementation-ветка)
+## LIGHT-RADAR: episode analytics
 
 Новые owner writes используют general candle window3days/72h и detail retention30d;
 outcome horizons>4320min отклоняются до изменения state. Исторические snapshots
@@ -435,7 +435,9 @@ Existing maintenance cadence выполняет конечный initial scan/re
 source marker. Operator backup/token/900s/forward recovery охватывает shared
 и source adoption; current full capacity qualification требуется до её выполнения.
 Store/startup не активируют3; current native/image, runtime activation/recovery,
-Linux/native совместный50s boundary и mature25GB еще требуют qualification перед production.
+Linux/native совместный50s boundary проверяется отдельно от полного operating path.
+Эксплуатационная ёмкость35GB и зрелая occupancy требуют собственной квалификации;
+актуальные delivery/acceptance records находятся в [плане](open_issues.md).
 Тот же maintenance worker обслуживает конечную initial scan, live eligibility
 queue и partial-slot GC. Открытый expiry-frontier tail остаётся CQ5 до закрытия
 UTC дня; его факты уже доступны. Body initial reclaim сохраняется при upgrade,
@@ -454,3 +456,43 @@ INTERRUPTED. Уже captured snapshots не теряются при ошибке
 минимум две чистые проверки и не менее30min устойчивости, а также
 исходную deep boundary/12h wait policy. Другие blockers не retry; после baseline
 каждый interruption остается видимым. Resource caps и24h boundary не меняются.
+
+
+## Publication path и границы диагностических выводов
+
+Controller использует paired internal callbacks: EventEngine передаёт уже сохранённые
+event/episode независимым consumers, OutcomeWorker — result и immutable event metadata.
+Замена public callback возвращает прежнюю singleton/flush boundary. В bounded intents
+сохраняются checked revision references; expansion заново читает actual revision и
+проверяет canonical digest. Объекты, SQL existence/ownership и полномочия не кэшируются.
+Pure transform свежих bytes использует прежний общий1MiB budget и возвращает новый object.
+
+Только Controller opt-in объединяет до4 COMPLETE outcome publications в одну writer
+transaction с CAS и rollback всей группы. INCOMPLETE/recovery и произвольные callbacks
+сохраняют singleton contract; completion latency заканчивается после commit.
+Agent drain ограничен8 units/250ms, перепроверяет clock/policy и прекращается при
+unknown/negative ACK; frozen bytes/HMAC/idempotency и network вне transactions прежние.
+Один SQL writer, thread для readonly calculations и конечные scheduler yields сохраняются.
+Кандидат проверяется совместным paced scenario; локальный эффект не доказывает LIVE SLO.
+
+Queue diagnostics разделяет first pending sample и последнюю неудачную попытку.
+SOURCE_LIMITED_OR_UNKNOWN остаётся fail-closed состоянием, а не утверждением о
+текущем отсутствии inputs. Вложенный pending_queue показывает due/retry age отдельно;
+NOT_RECHECKED явно обозначает отсутствие повторного расчёта readiness. Полного
+обхода заданий или пересчёта outcomes в routine diagnostics нет.
+
+## Сохраняемые compatibility и qualification surfaces
+
+| Объект / F24 | Подтверждённое назначение и решение |
+| --- | --- |
+| [Compatibility entrypoint](../telegram_crypto_watcher.py) | Прежний launcher делегирует canonical main; старых private implementations в wrapper нет. Сохранить используемый запуск. |
+| [Controller](../cryptowatcher/bot.py) diagnostics helper | Используется compatibility regression в test_bot; production CLI/UI выбирают bounded snapshot. Сохранить как внутренний compatibility surface, не считать dead code или свежим runtime measurement. |
+| [Conversion qualification](../cryptowatcher/conversion_qualification.py), native history/VFS readers | Historical archive/recovery и negative/parity tests. Нужны для чтения сохранённых layouts; удаление по отсутствию runtime admission необоснованно. |
+| [Historical exact-target probe](../scripts/qualify_compressed_validation.py) | Привязан к старым image/input/hash и конкретному эксперименту; не canonical текущий capacity/backup gate. Сохранить воспроизводимый tooling с этим ограничением; отсутствие старого input не разрешает подставлять live DB. |
+| [Retention rehearsal](../scripts/rehearse_retention.py), numeric/shared qualifications | Используемые finite regression и Linux boundaries. Они подтверждают свои сценарии, а не live throughput или размер зрелой population. |
+| Experimental two-writer material | Не переносится в runtime: прежние ветки и уникальные inputs сохраняются до точного approved cleanup. Новое получение данных и outcomes остаются на одной SQLite. |
+
+Данные старых experiments не нужны как current LIGHT-RADAR recovery history, однако
+их удаление требует проверки воспроизводимости/уникальности и отдельного точного
+списка. Reports/manifests/hashes сохраняются отдельно от тяжёлых copies. Общий
+Docker prune и очистка соседних проектов не входят в процедуру.
