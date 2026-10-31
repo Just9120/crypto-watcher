@@ -7,8 +7,7 @@ import json
 import math
 import re
 import uuid
-from contextlib import nullcontext
-from dataclasses import asdict
+from contextlib import AbstractContextManager, nullcontext
 from itertools import islice
 from typing import Any, Callable, Iterator
 
@@ -107,7 +106,12 @@ class History:
         return self._resolve_with_head(key, value, omit_fields=omit_fields)[0]
 
     def _resolve_with_head(
-        self, key: str, value: Any, *, omit_fields: frozenset[str] = frozenset()
+        self,
+        key: str,
+        value: Any,
+        *,
+        omit_fields: frozenset[str] = frozenset(),
+        projection: frozenset[str] | None = None,
     ) -> tuple[Any, bool]:
         """Return whether this call fully checked a compact head and its record."""
         if isinstance(value, dict) and DECISION_HEAD in value:
@@ -127,7 +131,12 @@ class History:
                 or DECISION_HEAD in value
             ):
                 raise StateError("Missing or conflicting decision revision")
-        value = self.codec.unpack(value, omit_fields=omit_fields)
+        compact = isinstance(value, dict) and value.get("schema") == HEAD_SCHEMA
+        value = (
+            self.codec.project(value, projection)
+            if projection is not None and not compact
+            else self.codec.unpack(value, omit_fields=omit_fields)
+        )
         if self.store.bounded:
             value = self._expand_services(value)
         if not isinstance(value, dict) or value.get("schema") != HEAD_SCHEMA:
@@ -143,8 +152,11 @@ class History:
             or value.get("revision_key") != f"{kind}:{record_id}:{revision:010d}"
         ):
             raise StateError("Invalid history head reference")
-        record = self.codec.unpack(
-            self.store.get_runtime(PREFIX + value["revision_key"]), omit_fields=omit_fields
+        raw_record = self.store.get_runtime(PREFIX + value["revision_key"])
+        record = (
+            self.codec.project(raw_record, projection)
+            if projection is not None
+            else self.codec.unpack(raw_record, omit_fields=omit_fields)
         )
         if (
             not isinstance(record, dict)
@@ -156,6 +168,15 @@ class History:
         ):
             raise StateError("Missing or conflicting history head revision")
         return record, True
+
+    def episode_clock(self, key: str) -> Any:
+        """Fresh, identity-checked episode lifecycle projection, never a public body."""
+        fields = frozenset(HEAD_FIELDS["episode"]) | {
+            "origin_event_id",
+            "reference_price",
+            "reference_time_ms",
+        }
+        return self._resolve_with_head(key, self.store.get_runtime(PREFIX + key), projection=fields)[0]
 
     @staticmethod
     def _head(
@@ -372,7 +393,11 @@ class History:
         existing = self.get(version_key)
         if existing is not None and encode(existing) != encode(value):
             raise StateError("Conflicting immutable history revision")
-        head = self.metadata(f"{kind}-head:{key}")
+        head = (
+            self.episode_clock(f"episode-head:{key}")
+            if kind == "episode"
+            else self.metadata(f"{kind}-head:{key}")
+        )
         if (
             kind == "event"
             and head
@@ -380,9 +405,8 @@ class History:
         ):
             raise StateError("Event outcome reference is immutable")
         if kind == "episode" and head:
-            previous_episode = self.get(f"episode-head:{key}")
             if any(
-                field in previous_episode and value.get(field) != previous_episode[field]
+                field in head and value.get(field) != head[field]
                 for field in ("origin_event_id", "reference_price", "reference_time_ms")
             ):
                 raise StateError("Episode outcome reference is immutable")
@@ -518,7 +542,8 @@ class EventEngine:
         passive = namespace != "active"
         prefix = namespace + ":" + (f"{instrument}/" if instrument is not None else "")
         for key, binding in self.history.items(prefix):
-            episode = self.history.get("episode-head:" + binding["episode_id"])
+            episode_key = "episode-head:" + binding["episode_id"]
+            episode = self.history.episode_clock(episode_key)
             if passive:
                 # Historical market time can lag wall time by hours. Replays
                 # advance that clock; wall time bounds stalled/restarted work.
@@ -537,6 +562,10 @@ class EventEngine:
                 )
             if not (max_life or inactive):
                 continue
+            # Materialize confirmations only when this episode is actually due.
+            # Both reads share the writer snapshot; callbacks still receive the
+            # complete immutable closure and observe prior condition writes.
+            episode = self.history.get(episode_key)
             episode.update(
                 state="CLOSED", closed_ms=now_ms, close_reason="max_lifetime" if max_life else "inactivity"
             )
@@ -549,11 +578,30 @@ class EventEngine:
             self.history.delete(key)
             if passive:
                 continue  # Historical closure never blocks live re-arm.
+            # A closure updates a stream as one state unit, not one complete
+            # migration/CAS/flush cycle per detector condition.
+            by_stream: dict[str, list[str]] = {}
             for condition in episode["conditions"]:
-                runtime = self.history.get(condition, {})
-                if runtime.get("non_signal_bars", 0) < 2:
-                    runtime["blocked"] = True
-                    self.history.put(condition, runtime)
+                by_stream.setdefault(condition.split(":")[1], []).append(condition)
+            for stream, conditions in by_stream.items():
+                current = self.history._condition_batch
+                boundary: AbstractContextManager[None]
+                if current is not None and current.stream == stream:
+                    boundary = nullcontext()
+                else:
+                    boundary = exposed_conditions(self.history)
+                with boundary:
+                    group = (
+                        nullcontext()
+                        if current is not None and current.stream == stream
+                        else condition_batch(self.history, stream)
+                    )
+                    with group:
+                        for condition in conditions:
+                            runtime = self.history.get(condition, {})
+                            if runtime.get("non_signal_bars", 0) < 2:
+                                runtime["blocked"] = True
+                                self.history.put(condition, runtime)
 
     def tick(self, now_ms: int) -> None:
         with self.store.db:
@@ -589,6 +637,7 @@ class EventEngine:
             return
         market, symbol, tf = stream.split("/")
         instrument = f"{market}/{symbol}"
+        frame_inputs: dict[int, tuple[list[dict[str, Any]], str]] = {}
         outputs: list[tuple[str, Detection | Exception]] = []
         for family in snapshot.settings.active_detectors:
             try:
@@ -815,6 +864,15 @@ class EventEngine:
                             ) :
                         ]
                     )
+                    if len(inputs) not in frame_inputs:
+                        prepared = [
+                            {name: getattr(c, name) for name in Candle.__dataclass_fields__} for c in inputs
+                        ]
+                        frame_inputs[len(inputs)] = (
+                            prepared,
+                            hashlib.sha256(encode(prepared).encode()).hexdigest(),
+                        )
+                    prepared, source_window_id = frame_inputs[len(inputs)]
                     event = {
                         "schema": "cryptowatcher.event.v1",
                         "event_id": event_id,
@@ -850,10 +908,10 @@ class EventEngine:
                         "tick_size": tick_size,
                         "reference_atr14": atr,
                         "continuation_threshold_pct": noise,
-                        "source_window_id": hashlib.sha256(
-                            encode([asdict(c) for c in inputs]).encode()
-                        ).hexdigest(),
-                        "source_inputs": [asdict(c) for c in inputs],
+                        "source_window_id": source_window_id,
+                        # Each event owns mutable public dictionaries; a replaced
+                        # callback cannot corrupt another family's frozen input.
+                        "source_inputs": [dict(c) for c in prepared],
                         "source_context": source_context or {"ticker": None, "instrument": None},
                         "enrichment": enrichment or {"state": "UNAVAILABLE", "detector_input": False},
                         "producer_source_revision": self.source_revision,
