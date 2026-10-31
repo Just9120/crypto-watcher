@@ -54,3 +54,33 @@ def test_hidden_report_artifacts_are_required_and_exclude_fixture_databases():
     assert settings["if-no-files-found"] == "error"
     patterns = settings["path"].splitlines()
     assert patterns == [".cache-g1/processing-*/*.json", ".cache-g1/processing-*/*.log"]
+
+
+def test_cpu_profile_covers_measured_phase_and_excludes_seed_and_cleanup(tmp_path):
+    import json
+
+    from scripts.qualify_processing import PhaseProfile
+
+    def unprofiled_seed():
+        return sum(range(100))
+
+    def measured_work():
+        return sum(i * i for i in range(1000))
+
+    def unprofiled_cleanup():
+        return sum(range(100))
+
+    capture = PhaseProfile(True)
+    unprofiled_seed()
+    capture.stage({"stage": "SEED_COMPLETE"})
+    measured_work()
+    capture.stage({"stage": "STOPPING_FIXTURE_WORKERS"})
+    unprofiled_cleanup()
+    target = tmp_path / "profile.json"
+    capture.save(target)
+    report = json.loads(target.read_text())
+    names = {v["function"] for v in report["functions"]}
+    assert "measured_work" in names
+    assert not names.intersection({"unprofiled_seed", "unprofiled_cleanup"})
+    assert report["phase_started"] is report["phase_ended"] is True
+    assert report["mode"] == "DIAGNOSTIC_PROFILE_NOT_ACCEPTANCE"

@@ -30,301 +30,138 @@ Non-goals: новые функции/прибыльные thresholds, receiver/T
 
 Сначала выявить системный риск и проверить полный эффект, затем достроить подтверждённые интерфейсные/остаточные исправления и единственный основной PR. После новой модели и одного обоснованного исправления измеренного ограничения сохраняющееся общее отставание требует готовой ветки/сопоставимых measurements/вариантов владельцу; бесконечные локальные micro-optimizations не продолжать. Ordinary failures исправлять автономно в текущем scope. Независимую работу продолжать при недоступном UI/внешнем gate; конкретное согласование выносить поздно, с готовыми доказательствами и действием.
 
-### Текущий checkpoint Goal2
+### Текущий checkpoint Goal2 — подтверждённый systemic FAIL31Oct2026
 
-30Oct2026, runtime main12cf5d4/config6/generation5bb5712 неизменны; новых reset/restarts/production changes не было.18:18UTC sources1648/bootstrap0/late0;18:29late506/1644;19:03late1414/1652;20:01late1542/1648, sample source lag~990–1110s.20:01working173.967MB/events13441/episodes7430, forecast439.7GB. Это FAIL эксплуатационной своевременности, не принятый baseline/30min/24h и не доказательство35GB fit. Future horizons отдельно.
+Goal active; согласованная ранняя публикация выполнена единственным основным
+Draft PR94, head3ea15ebe77a46d8f690689ada05c39798a1f31ff/base12cf5d4.
+Branch codex/interface-acceptance-20261030, checkout .cache-g1/git-recovery-20261024.
+Run41190740672/attempt1 проверяет merge294bae5b559fdcfaab2e51cc16d30f13ba4e6502,
+exact treee348f7fc совпадает с опубликованным/локальным code tree. Main не менялся,
+merge/CD не выполнялись. Current primary main branch summary: protected/everyone,
+required ci-required/app15368; полный admin endpoint403 не обходился. Draft PR57 чужой.
 
-19:03analytics256results/45.907s: readonly calculate1.947s/threadCPU0.750s, apply11.352s/threadCPU8.924s,32.538s другие event-loop tasks. Lifetime observation979.034CPU-s/37204calls; closed_ws_source242.986/35432; repack42.491/521.19:21bounded readonly probe:8 старейших INCOMPLETE outcomes уже COMPLETE при повторном расчёте из имеющихся inputs;8старейших PENDING gaps полностью покрыты. Возраст~22min;probe0.503CPU-s/readonly changes0. SOURCE_LIMITED_OR_UNKNOWN — состояние прошлой попытки, не доказательство отсутствия ready backlog. F22/F38/F42 OPEN; observer должен отражать это без тяжёлого постоянного recalculation.
+| Проверка | Подтверждённый результат и ограничения |
+| --- | --- |
+| Capped full path, job124506876154 | FAIL:1784/2472accepted,688не обработаны к endpoint; source max119706ms/p95112028ms; due pending312/oldest131545ms/maxcompleted126368ms. Both markets/fourTF/fivefamilies/1648streams, frozen seed/offered SHA совпали; errors0. Future8024 не backlog |
+| CPU/ресурсы | Phase131.546wall/131.077CPU-s; observation exclusive98.805CPU-s, closed-source4.930,repack1.574,retention0.037. Native/cgroup1CPU/4GiB/no swap подтверждены; OOMfalse; peak192122880B, owned work max89642952B, host idle min74.37%/availableRAMmin15.34GB. Last cgroup sample149.582CPU-s — sampled lower bound, не точный total |
+| I/O | Два stacked-device counters показывают~3.481GB writes каждый; не суммировать уровни и не выдавать за mature disk forecast. Seed+phase combined, не отдельная phase measurement |
+| Доставки | MockTelegram148/signedagent67; pendingTelegram412/oldest due90.901s. Agent intents2377, их oldest429.545s включает искусственно5min-old seed и не является новой7min задержкой. Источник/доставки не приняты |
+| Ordinary Linux/native CI |2609PASS/1FAIL571.34s, job124506876219: source92785ms>30000ms; input accepted equality/errors empty до этой проверки пройдены. Поздние asserts этим traceback не проверены |
+| Остальные checks | docs/select/storage-boundary PASS; ci-required FAIL. Image/package следующие stages ordinary validation не запускались после pytestFAIL |
+| Proof/cleanup | Artifact13039015334/11811B/SHA bc4bfd6e10c290abe5d82915413bba46312e55beee9570847b6da0df73bfc9b5 скачан, digest/ZIP/индивидуальные files проверены. Synthetic CI work cleanupCOMPLETE, reports сохранены внеGit; пользовательская БД не подключалась |
 
-20:01ordinary3s snapshot CW0.678core/534MB cgroup, host20.3%idle/4.9%iowait/6.73GiB available. CW cgroup writes22.36GB since process start18:00 при working174MB; recent+12.48MB/3s и1132writes/3s. Это наблюдение write amplification, не steady budget/причина всех задержек. Earlier3s snapshots0.825–0.861core/31.1–35.4%idle сохранены. Isolated native finite profile NOT_STARTED:30s admission samples idle10.4–39.2%,35% rule сохранено, production unchanged; нового контейнера/тестовойБД наVPS не создано.
+Это подтверждённый failure текущей реализации под1CPU, не доказанная невозможность
+всего scope. Phase почти полностью занимаетCPU; главный измеренный boundary —
+синхронный detection/episode/persistence/publication callback. Его внутренние доли
+numeric/SQL/encoding этим тестом не разделены. Не приписывать весь расход сжатию,
+не считать свободные остальные ядра доказательством способности этого пути успевать.
 
-Low-impact passive native profile: same runtime/pid,62.99wall,389samples/no lost, controller0.103CPU-s/children1.472CPU-s; Python/SQLite заметны, compression не установлено как главная причина. Дополнительный allowlisted code-frame sample PARTIAL: ABI sleeping control4/4, strict1.5CPU-s collection cap остановил сбор после14.4s; min sample gate не ослаблялся. Не выдавать смещённые частичные frame proportions за CPU%. Малые profile outputs сохранены внеGit; тяжёлые runtime dumps/DB copies не делались.
+Предшествующий run41189799928/head3d9b435:2608PASS/1sourceFAIL89514ms; capped replay
+получилFAIL199.148s, но upload default include-hidden=false исключил .cache-g1 и
+artifact отсутствовал. Ошибка evidence исправлена одним grouped update в том жеPR:
+allowlisted hidden JSON/log, отсутствие artifact — error, metrics также в job log.
+Новый run завершился полным отрицательным результатом выше. App/inputs/thresholds/
+resource limits не менялись; это не второй performance candidate. Local quality
+344formatted/mypy133/docs и5targeted guards/timeout/workflow/artifact regressions PASS.
+Windows local checks не выданы за native throughput.
 
-Подготовлен реальный paced local fullpath: independent finite wire, actual WS receiver shards, partial frames5s/closed TF bursts, both markets/4TF/5detectors, source→meaningful episodes→due outcomes, exact closed mocked referenced REST, signed agent ACK/mockTelegram, competing analytics/retention/repack/backfill/poll/heartbeat. Clock offset1:1, no acceleration; подготовка и measured interval раздельны, future jobs не backlog. Windows baseline1648streams/130s:2472offered/1624accepted,phase~138s/128CPU-s,max source~138s,771due pending; observation97.53CPU-s/1624calls vs source10.78/repack1.23. Этот full-process negative подтверждает bottleneck admission/publication; не native/VPS capacity. First fixture attempt had missing REST stub and teardown lifecycle failure: FAILED, owned local fixture preserved, not accepted comparative evidence. Corrected fixture terminates and includes REST/recovery. Fair final A/B uses frozen identical fixture/source manifests; comparison PENDING.
+Публикация выполнена через connected Git Data после exact blob/tree/SHA readback;
+CLI HTTPS/TLS fetch отказ не скрыт. Оригинальные local commits ebe69ed/d9efa16
+сохранены в refs/codex-checkpoints/interface-acceptance-prepublication-20261031-*
+до безопасной CAS синхронизации task branch/upstream. Unknown/user branches сохранены.
+Только итоговый checkpoint может быть локально впереди remote; metadata-only push
+ради статуса не делать. Primary receipts/PR/run/job/artifact IDs в acceptance-20261030
+позволяют восстановить state независимо от pre-merge текста.
 
-Один согласованный кандидат системного исправления IN_PROGRESS, ещё не поставлен: producer передаёт уже проверенный episode независимым consumers; outcome callback получает проверенную immutable event metadata; service intents используют прежние checked revision references вместо повторного вложения/проверки schema-less episode/full outcome; raw runtime reads повторно используют только pure validated-byte transform в существующем1MiB budget, без DB existence/authority cache. Actual rows/body references заново проверяются, generic/replaced callbacks сохраняют прежние flush/reload и singleton semantics. Controller opt-in: COMPLETE outcomes atomic groups≤4 с CAS/commit-before-latency/yield между units; incomplete recovery отдельно. Agent finite drain≤8/250ms, существующий singleton transport/lock/bytes/retry и clock recheck; unknown/negative ACK прекращает серию. Это один publication-path candidate, не разрешение на следующую цепочку оптимизаций.
+### Следующий этап — один системный prototype, разрешён владельцем31Oct2026
 
-Local final quality340formatted/mypy133/docs и diff check PASS. Targeted84tests PASS для snapshot/group/cache/async/catalogue/recovery; дополнительная outcome/admission/recovery группа41PASS, одна ошибка новой test fixture исправлена и отдельно PASS. Small paced joint scenario1PASS/1Linux-only SKIP; Linux/native PASS не заявлен. Проверены group rollback/retry с bounded revision references, cancellation/commit timing, corruption/missing/replaced callbacks, fresh reads/cache bound, signed agent/unknown ACK/owner stop. Final fixture v2 фиксирует endpoint до cleanup и видимость committed outcomes; ранние development runs не объединять в сопоставимый A/B. Далее один frozen Git candidate и одинаковые fixture/seed/offered manifests для baseline/candidate. Native/current CI, representative A/B и operating acceptance ещё REQUIRED. Никакого нового standalone full workflow, PR/push или расходов Actions Goal2 пока нет.
+Владелец выбрал ARCHITECTURAL_PROTOTYPE: продолжить ту же Goal2 с сохранением scope
+и всех лимитов, без нового parallel Goal. Решение PENDING ниже историческое и заменено
+этим явным разрешением. Результат этапа: cost decomposition observation98.805CPU-s,
+один целостный prototype измеренного горячего пути, прежний full-path positive proof;
+при повторном systemicFAIL остановить оптимизации и представить требования/ресурсные
+варианты владельцу. Никакого автоматического увеличенияCPU/RAM/35GB, сокращения
+universe/TF/families, precision/retention, смены agent contract или нового VPS reset.
 
-Визуальная часть POSTPONED_OWNER: владелец ответил «Пока продолжай без визуальной проверки». Telegram getApp раньше завершился app approval timeout; fresh screenshots/interactions/test messages не было. Visual/UX не закрыты и не объявлены N/A. Невизуальная работа продолжается; перед финальным baseline нужны завершённые test actions/разрешённый итог этого блока. Agent наVPS сохранён OFF/INTEGRATION_NOT_CONFIGURED, receiver/TA/Paper не менялись.
+Validation Plan этапа: (1) DIAGNOSTIC_PROFILE одного fixed broad CI replay с теми же
+1CPU/4GiB/450CPU-s/510wall/600outer и35/15; profile overhead не admission/acceptance
+PASS, cProfile только SEED_COMPLETE→endpoint, function/self/cumulative/caller records
+сохраняются JSON вне work до cleanup. Это измерение, не новый performance candidate.
+(2) До следующего изменения приложения зафиксировать выбранное структурное ограничение,
+code path и ожидаемый общий эффект. (3) Existing semantic/negative tests+quality local,
+далее один prototype CI с отключённым профилем, прежними input SHA и SLO30/60, due/future
+разделением, полным independent delivery/maintenance, resource/disk/capacity checks.
+Ordinary required CI сохраняется. Новых остановок VPS/платных ресурсов/schedules нет.
+One primary PR94; не достраивать UI вместо проверки жизнеспособности обработки.
 
-Branch codex/interface-acceptance-20261030/base12cf; основной PR не создан. Detailed proofs/manifests/raw profiles внеGit в acceptance-20261030. Temporary ownership: failed synthetic fixture cw-processing-replay-ok6oe2au заменён завершённым v2 A/B;31Oct удалён только этот owned local root92.94MB и завершённый queue test root10.35MB после проверки paths/reparse points. Reports/source manifests сохранены; прочие pytest roots и bounded uv profiler cache под acceptance archive учтены отдельно. Production data/old experiments не очищались. Старые archives/experiments не удалялись. Next: закончить один source-frozen A/B, подтвердить native full path в допустимом Linux контуре; затем forecast calibration/resource/disk inventory/backup qualification/остаточные findings и единственный PR. При сохраняющемся native/systemic FAIL после этого кандидата — готовая ветка/измерения/варианты владельцу, без следующей серии micro-fixes.
+### Предшествующее решение по согласованному stop rule
 
-### Проверенный результат этапа31Oct2026
+Новый application performance candidate не начат. Готовая ветка и измерения
+представляются владельцу. Вариант1 — один ограниченный архитектурный prototype
+горячего пути: сначала разделить98.805CPU-s на detector/SQL/persistence/publication,
+затем один целостный structural path с прежними scope/точностью/retention/35GB и
+тем же capped full-path proof. Это гипотеза, не обещанное ускорение; при новом FAIL
+цепочку остановить. Вариант2 — согласованно уменьшить рабочую нагрузку/universe либо
+аналитический scope с явным пересмотром AC до реализации. CPU/RAM/серверные ресурсы,
+SLO и требования самостоятельно не ослаблять. Решение PENDING. Goal не DONE.
 
-Local commit2e7a358 сохраняет один publication candidate и paced fixture v2; нового PR/push/CD нет. Fair A/B одинаковых committed fixture/seed/offered SHA: обеим версиям предложено2472closed/1648streams за130s. Windows/fallback baseline12cf:accepted1640,CPU122.83s,max source133.42s,due pending756,max completed due132.66s,TG68/signedagent23. Candidate2e7:accepted1749,CPU119.22s,max source120.94s,due pending336,max completed due131.23s,TG148/signedagent56. Worker/receiver errors0; temporary sources/DB после каждого успешного прогона удалены. Pending delivery/ages сохранены отдельно; agent fixture содержит старые seed intents. Whole-path SLO FAIL в обеих версиях; улучшение отдельных результатов не закрывает F22/F42. Windows shared-machine comparison не native acceptance; короткие независимые checks не являются измерением изолированного CPU budget. Следующего performance candidate не начинать без разбора этого системного результата.
+### Сохраняемые результаты и открытые gates
 
-Подготовлен paired Linux/native exact-image/source-overlay test с тем же paced helper: isolated networknone, physical owned work≤1GiB,1CPU/4GiB/450totalCPU-s/510wall/600outer и прежние35%/15%/1.5GiB reserve. До старта требуется7GiB disk headroom. Admission22:10UTC:6пятисекундных samples idle6.9–31.7%, RAM6.99–7.27GB; NOT_STARTED_RESOURCE_ADMISSION. Container/testDB/rehearsal не создавались, runtime ID/start/restarts/config6/settings hash/generation совпали до/после. Бот не приостанавливался. Local Linux отсутствует: WSL distributions не установлены, Docker/Podman CLI не найдены; ничего не устанавливалось. Native source-controlled comparison остаётся REQUIRED, его отсутствие не N/A и не PASS.
-
-22:06UTC runtime12cf/config6/generation5bb5712:working328.66MB,events27383/episodes15606,late805/1480; earlier22:02late279/1480, поэтому краткий спад просрочки не устойчивость. Analytics184results/59.626s,referenced recovery33/oldest202s. Native readonly snapshot changes0. Same container/restarts0; virtual host6CPU.3s CW0.78–0.80core/~590–601MB cgroup; snapshot limited, не steady operating budget. Grafana node15min/step60s показывает idle13.95–23.98%; latest node sample age8.4s. Sparse container series требуют5min rate вместо неполной2min выдачи; CW0.58–0.82core в отдельных5min windows, writes~2.10MB/s. Prometheus/cgroup RAM definitions и sample intervals различаются; их не усреднять в один точный budget. Другие проекты и monitoring не менялись; отсутствие ошибок соседей/их SLO этим не доказано.
-
-F38: штатный текущий прогноз445.70GB явно не accepted forecast. Sensitivity точного текущего episode archive writer/всех indexes на512episodes: unshared vs shared same-source/config provenance —9360→3328B/episode при1membership,14888→4712 при4,43352→12808 при20. Numeric facts/dimensions сохранены; Windows SQLite in-memory measurement не native mature occupancy. Нездоровый4h startup rate~91452episodes/day при3328B даёт~111.4GB только годового архива, при4members~157.7GB. Это условный sensitivity, не прогноз/доказанный нижний bound. Одной поправкой sharing и выбором удобного старого26–27GB расчёта соответствие35GB подтвердить нельзя. Изменений annual schema/rates/thresholds/retention не сделано.
-
-F34: fresh metadata inventory22:02UTC free28.794GB,backups3.280GB,rehearsals15.216GB,releases0.585GB; обход без partial.3releases включают current12cf/previousb254 и olderd66. Metadata usage scan22:12UTC3.8s/62457FD: открытых rehearsal files нет,103directories,83с небольшими reports; retained stopped CW test containers ссылаются на часть inputs/work. Ancestor read-only mounts monitoring exporters не являются recovery dependency; их не менять. Уникальность inputs и наличие проверенной воспроизводимой замены ещё не установлены; удаления не разрешены. Exact inventory/report identities сохранены внеGit, no general prune. Physical budget вычисляется отдельно от35GB ceiling:source+raw+newarchive+две retained copies+7GiB reserve и уже занятое другими данными. Worst-case compression не предполагается; текущая файловая система не обещает размещение35GB working с таким полным peak. MultiGB backup/restore не выполнялся, gate остаётся REQUIRED.
-
-F24 current disposition: original private wrapper implementations отсутствуют; launcher используется. Controller.diagnostics имеет test_bot caller, сохранён как compatibility. Legacy converters/native readers нужны для archives/negative/parity tests; hardcoded exact-target qualification остаётся историческим tooling, не текущим runtime gate. Two-writer реализация не перенесена; уникальные серверные inputs и stopped test containers — отдельный точный cleanup scope после замены/согласования. Эти объекты не объявлены dead по import map. F31 hardening current UID10001/read-only/capdropALL/nnp подтверждён; resource budget и стабильность OPEN, caps не используются как исправление backlog. F32/UX visual POSTPONED_OWNER сохраняется.
-
-Queue diagnostics candidate теперь показывает pending_queue с retry/original due age отдельно от last failed attempt. NOT_RECHECKED/LAST_FAILED_ATTEMPT_NOT_CURRENT_INPUTS явно исключают вывод о current readiness; прежнее fail-closed SOURCE_LIMITED_OR_UNKNOWN сохраняется. Два bounded samples вместо полного queue scan/recalculation. Existing observer/queue suites45PASS, quality340formatted/mypy133/docs PASS. README/architecture очищены от противоречивых текущих35d/30GB/N20 формулировок; исторические format/recovery процедуры сохранены. Ни AC-13-06, ни общая Goal2 не закрыты. Реализовано по коду17/18 общих AC последовательности, operating evidence REQUIRED.
-
-Следующий зависимый шаг — native whole-path qualification при допустимом resource window; повтор без изменения условий не запускать вслепую. После неё применить согласованное stop rule: при systemic FAIL представить готовую ветку/сопоставимые measurements и варианты изменения подхода, без очередной цепочки micro-fixes. Независимо завершить проверку replacements/retention policy и единый physical ledger; visual возобновлять только по поручению владельца. Не принимать baseline при текущих source/due/forecast failures.
-
-### Qualification tooling и ожидаемое решение31Oct2026
-
-Следующий локальный блок F34 подготовлен без новой performance-оптимизации приложения:
-canonical scripts/qualify_framed_backup.py и процедура closed-snapshot qualification.
-Source≥2GiB с exact size, Linux/native/cgroup≤1CPU/4GiB/no swap и inherited CPU≤450s;
-новый exclusive physical work, additional peak3×source+framing+7GiB. Исходный snapshot
-открывается только как файл: private copy/hash, full current native CHECK/FK/independent
-archive readback, затем независимый physical restore/full SHA256/private+numeric sample
-equality и повторный hash/identity оригинала. Numeric sample≤8 отдельно от полного
-validated snapshot byte equality. Copies/empty-WAL sidecars удаляются только после
-persisted result; отдельный cleanup.json показывает завершение, при ошибке новые
-материалы сохраняются. Оригинал и рабочая light history не меняются.
-
-Local18tests PASS для driver+existing framed-backup; после завершения cleanup guards
-affected4driver tests PASS. Canonical quality342formatted/mypy133/docs PASS. Это
-Windows functional evidence, не multiGB/Linux/VPS qualification. Три собственных
-pytest roots backup-qualification01/02/03 очищены после сохранения small reports и
-cleanup receipts внеGit; рабочие/старые серверные данные не затронуты. На сервере тяжёлая
-проверка backup/restore ещё НЕ запускалась и F34 не закрыт.
-
-22:41UTC immutable readonly source preflight подтвердил потенциальный representative
-input: pre-97592ec15d0716ba7e7072a7c951e0008fb77788-1792737395.sqlite3,2962976768B,
-schema2/config5/old generation710614f1,69tables,>1.37million detail records и другие
-заполненные layouts. Snapshot закрыт, sidecars отсутствуют; changes0 и stat identity
-до/после совпали. Ни полный source hash, ни integrity этим preflight не проверялись.
-Это старое реальное test-history population; текущие episode tables проверяются
-отдельно. Снимок нужен незавершённой F34 qualification и не кандидат удаления сейчас.
-
-22:26cached forecast компонентов:442.28GB total,392.02GB annual,~50.25GB остальных
-категорий. Startup extrapolation/overhead2.17 и staging/repack mix не являются steady
-production footprint. Candle/context effective windows20.56/12.19days учитывают
-использованные inputs доступных30d details; сами по себе не нарушение general72h.
-Current writer sharing sensitivity и эти категории не складывать как два независимых
-готовых прогноза. F38 остаётся OPEN до здорового периода и зрелой модели occupancy.
-
-После изменения фактических условий ресурса выполнены ограниченные resource-only
-admissions22:24/22:25/22:28UTC. Все NOT_STARTED: отдельные intervals достигали63%idle,
-но30s последовательного допуска35% не получено. Последний controller ожидает не более
-60s, сохраняя саму непрерывную30s проверку,35/15 thresholds и все maxima. Shared total
-CPU450 дополнительно ограничен между двумя child cases; внешний deadline резервирует
-cleanup. Containers/fixtureDB/VPS rehearsal files не создавались, before/after runtime
-identity совпадает. Нет активного Linux-test handle для дальнейшего ожидания.
-
-Владельцу отправлен один конкретный запрос на одноразовую паузу только CryptoWatcher
-≤10min для frozen native pair и восстановления того же контейнера с проверкой
-истории/private state. На этапе подготовки ответ был PENDING (разрешение и фактический итог — в последнем checkpoint); подготовлен one-pause-native-pair-manager.py внеGit и
-one-pause-proposal.json с source hash. Manager связан с исходным container StartedAt
-и отказывается от повторной паузы после восстановления; finally пытается восстановить
-тот же бот даже при ошибке probe cleanup. Source/syntax review выполнен, live stop/start
-не выполнялся; Docker outage оставит restoration UNCONFIRMED, не выдуманный PASS.
-Старые one-off approvals отменённой Goal не переиспользуются. До явного ответа stop/start не выполнять, новые CPU gates не ослаблять.
-Визуальная проверка отдельно POSTPONED_OWNER; baseline/30min/24h не приняты.
-
-### Последний checkpoint: PR94 и первый native CI31Oct2026
-
-Открыт единственный основной Draft PR94 всей Goal2, head3d9b4354fd3b8ea209a1a31ba21ab463f31cbed5,
-base12cf5d4, exact treeb208d760632822d4764bed1caa809a0a77ffd873 совпал с локальным
-проверенным tree. Публикация через connected Git Data, raw commit импортирован с
-проверкой Git SHA. Prepublication local history ebe69ed сохранена в отдельном
-refs/codex-checkpoints/interface-acceptance-prepublication-20261031-ebe69ed; branch
-и его upstream синхронизированы без изменения tracked bytes/main/user branches.
-Primary branch main read подтверждает protected/everyone/ci-required/app15368;
-полный admin endpoint403 не обходился, reviews0 не выданы за approval.
-
-Run41189799928/attempt1, actual tested merge2d1aacd9f52f7516c746e307a4f466f318389496:
-select/docs/storage-boundary PASS. Validation job124504070323:2608PASS/1FAIL535.58s;
-единственный failure — native broad joint source deadline:89514ms>30000ms.
-Предыдущие asserts offered==accepted/errors empty пройдены; другие последующие
-asserts этим traceback не проверены. Это full-process native negative на GitHub
-runner, не shared-VPS measurement и не отдельный capped result.
-
-Dedicated capped job124504070298 закончил replay и получил stateFAIL/resultFAIL за
-199.148s; resource refusal/stop не зарегистрирован в log summary. Причины/точные
-метрики не сохранились в GitHub artifact: upload-artifact default include-hidden=false
-исключил .cache-g1, action предупредил no files, artifacts0. Это ошибка нашего CI
-proof plumbing; нельзя выдумывать capped delay/CPU/формулу причины по общему FAIL.
-Primary job log и краткий failure record сохранены внеGit. Порог/fixture/app candidate
-после отрицательного результата не меняются, новой performance цепочки нет.
-
-Один сгруппированный CI correction готовится в том же PR: include-hidden-files=true
-только для allowlisted processing JSON/log, absence becomes error; bounded named
-metrics/failures/actual limits также выводятся в job log. Regression проверяет
-hidden upload/always/error/исключение DB capture; local5targeted tests PASS,
-обязательный quality и self-review перед push. Результат второго run заранее PENDING.
-Это исправление обязательного evidence, не новый performance candidate/ослабление.
-Обычная suite и все gates сохраняются; standalone full-main/CD/rerun ради статуса нет.
-
-Согласованное stop rule действует: после получения подробного capped результата
-представить ветку/измерения/варианты; не продолжать локальные application micro-fixes.
-Merge/CD/35GB/backup/resource/visual/30min/24h остаются незавершёнными. Source на VPS,
-settings/generation/history/TA/Paper и соседние проекты этим PR/CI не менялись.
-Primary receipts/run/job IDs внеGit позволяют продолжить без повторной публикации.
-
-### Предшествующий checkpoint: ранний Draft PR разрешён31Oct2026
-
-Владелец разрешил продолжить текущую Goal через ранний единственный Draft PR Goal2;
-узкая часть — отдельный capped processing CI job, scope самой Goal/PR не сокращён.
-Встроенный get_goal теперь active; новая Goal не создавалась. Main12cf5d4 независимо
-перечитан через GitHub primary commit. Public fetch и CLI API имеют transport/TLS
-failures; GitHub connector repository/commit/PR reads работают. Current protection
-read через integration403, прежний strict ci-required сохраняется как известное
-основание; перед merge потребуется актуальное primary read без обхода protections.
-DraftPR57 чужой, head5be499d сохранён; remote interface-acceptance branch отсутствует.
-
-Подготовлен scripts/qualify_processing.py, отдельный tests/processing.Dockerfile с
-hash-locked dev dependencies и ограниченным build context. Обычный production image
-не изменён. Native case использует existing tests.processing_replay/assert_joint_result,
-оба рынка/fourTF/fivefamilies/1648streams/2472offered, frozen seed/offered SHA;
-input не облегчён. Actual cgroup/rlimit проверяются внутри, hostcontroller наблюдает
-CPU/RAM/I/O/диск и bound elapsed с прежними1CPU/4GiB/450CPU-s/510wall/600outer/35%/15%.
-Fixture mock-only/networknone; source metadata привязана к image/tested CI SHA.
-
-CI processing-qualification независим от ordinary suite и входит в существующий
-ci-required без ослабления прежних checks. Выполняется в отдельном standard ubuntu
-runner без VPS/SSH/deploy/secrets; dedicated report artifact14days включает actual
-limits, states/errors/resources; resource stop не PASS/FAIL throughput. Собственный
-synthetic work удаляется после reports, production/старые archives не подключаются.
-Сборка ephemeral qualification image не поставляет её на VPS. Canonical manual
-full-main workflow/release/CD не запускается и не меняется. Дополнительные платные
-runners/resources не разрешены и не заказываются; included balance не выдумывается.
-
-Local quality344formatted/mypy133/docs PASS; guard/timeout/workflow-trust4tests PASS. Это
-Windows functional checks, native throughput PENDING required CI. Предыдущие local
-regressions publication/cancellation/CAS/reference/queue/backup остаются применимыми:
-application candidate не менялся в этом блоке. Self-review проверяет cumulative
-patch/CI resource enforcement и сохранение scope/данных. Push/PR/check/run IDs пока
-PENDING; после публикации брать primary records latest revision, не rerun ради статуса.
-
-Publication sourcebranch codex/interface-acceptance-20261030/base12cf5d4;
-предыдущие локальные commits сохранять, unknown/user branches не менять. При публикации
-через connected Git Data проверять exact tree и сохранять локальную prepublication
-историю до безопасной синхронизации. До готового CI результата не делать следующего
-application performance candidate. При systemic failure — ветка/измерения/варианты,
-не очередная серия microfixes. F34/F38/F42/resource/artifact policy, visual
-POSTPONED_OWNER, merge/CD/30min/24h и operating AC-13-06 остаются REQUIRED.
-
-### Предшествующий checkpoint: допуск кандидата не получен31Oct2026
-
-Владелец уточнил статус: CryptoWatcher — тестовый экземпляр, не прошедший все AC,
-он сейчас не используется для торговли. Название production у deployment environment
-не означает продуктовую приёмку.31Oct разрешено остановить этот экземпляр на весь
-необходимый период одной полной проверки; прежний отдельный10min pause cap снят.
-CPU/RAM/test deadlines/35%admission/15%stop, защита данных и соседей не менялись.
-
-Исполнена candidate-only процедура без повторного baseline: operation
-cw-paused-candidate-oa44xl1x, frozen source2e7a358 и прежние fixture/seed/offered SHA.
-Менеджер3e13b347cf76fead37f413f397fafb1d6fc06959b76ceda51a542d8fadbaa0fb,
-inner a67f51f6bab104cd05af46318275f0a9cfdb5ed34f49a7755a3039e1f619f0af.
-08:16:46–08:17:46UTC admission не получил continuous30s idle≥35% за60s: idle
-3.12–69.35%,iowait0.21–41.93%,RAM7.49–7.78GB/freeFS28.25GB. Контейнер/fixtureDB
-не создавались, test CPU/measurement ещё не начинались. Inner state
-NOT_STARTED_RESOURCE_ADMISSION, candidate_slo_pass=null. Внешнее CANDIDATE_FINISHED
-означает завершение controller, не PASS обработки и не доказанный FAIL кандидата.
-
-Тот же e1ff9808 восстановлен08:17:47UTC после82.514s паузы, health healthy; image4288,
-source12cf/config6/generation5bb/private SQL SHA b2f663c5 до/после совпали. Primary
-single-candidate-result01.json сохранён внеGit.08:20:20 bounded readonly snapshot:
-heartbeat/components healthy,1084streams/734unknown/bootstrap734/recovery926; это
-прогрев, не source readiness PASS. Аналитика194outcomes/10.631s. Повторный snapshot08:25:41UTC:1080streams,unknown/bootstrap/recovery0,late186;
-analytics5outcomes/13.732s. Прогрев завершился, но source timeliness FAIL на прежней
-версии; не continuous acceptance и не результат кандидата. Старую history,
-backups/unique experiments/TA/Paper/credentials и другие проекты не меняли.
-
-Grafana node1min подтвердил iowait в том интервале; disk busy~8.9–38.9% на минутных
-окнах не означает saturation100%. Cgroup1min sparse/incomplete;5min rates захватывают
-время до остановки и после восстановления (в том числе CW~1.49–2.44MB/s writes).
-Короткий peak нельзя приписать только соседним проектам или считать исчезнувшей
-нагрузку хранения CW сразу после stop. Источник peak не установлен; no causal claim.
-Сохранён single-candidate-grafana-context01.json, no host process-history coverage.
-
-Повторять ту же VPS попытку/новую паузу без отдельного решения не планируется.
-Предлагаемый выход — тот же frozen candidate-only сценарий в изолированном Linux CI
-с hard1CPU/4GiB/450CPU-s/510wall/600outer; после PASS всё равно нужны shared-VPS
-post-delivery30min/24h. Existing full-validation.yml только exact current main и не
-принимает unmerged candidate. Ordinary PR validation содержит native broad scenario,
-но сама по себе не доказывает1CPU/4GiB caps. Ранний единственный Draft PR Goal2 с
-целенаправленной capped qualification до завершения всего scope — изменение прежнего
-порядка публикации; владелец31Oct явно APPROVED. Это тот же основной PR всей Goal2,
-не отдельный экспериментальный PR. Merge/CD по-прежнему только после оставшихся gates.
-На момент этого checkpoint push/PR/Actions ещё PENDING, результат не предсказывается.
-Остаток included minutes/расходы отдельного запуска пока неизвестны; платные runners
-или дополнительные расходы без согласования не разрешены. Последний fetch
-31Oct08:22UTC завис без ответа и прерван по exact PID/parent/command только своего
-HTTPS transport; tracked worktree не изменён. Последний подтверждённый origin/main
-12cf5d4, актуальность remote на момент публикации нужно установить заново.
-
-Frozen payload13files/65542B собран и byte-roundtrip проверен внеGit:
-single-candidate-linux-payload01.zip SHA5260e1e360e92d8666266a84e64c01dd642f301991c9faa9b99eccd805804177.
-Это только reproducible mock inputs/source overlay/entry/manifests; нет пользовательской
-БД или credentials. Нужны pinned native image и enclosing resource controller;
-архив не выдан за выполняемый готовый CI workflow. Runtime unchanged, operating
-AC-13-06/F22/F34/F38/F42 и прочие gates Goal2 остаются OPEN. Ни baseline, ни суточный
-замер не приняты; новой application optimization chain и schedules нет.
-
-### Предшествующая проверка baseline и восстановление31Oct2026
-
-Владелец разрешил одну паузу только CryptoWatcher≤10min и продолжение существующей
-Goal2. Разрешение ИСПОЛЬЗОВАНО: pause362.510s, тот же container e1ff9808 восстановлен
-31Oct07:15:22UTC; image4288c296/source12cf/config6/generation5bb5712, private SQL hash
-до/после совпали, health PASS. Настройки, история, credentials, TA/Paper и другие
-проекты не изменены. Новая пауза этим разрешением не покрывается. Primary records
-approved-pause-result01.json/postcheck01.json сохранены внеGit. Встроенный get_goal
-после явного resume всё ещё возвращает blocked; доступные tools не имеют операции
-resume. Это ограничение bookkeeping, не новое решение остановить разрешённую работу;
-повторная Goal не создавалась и фиктивная активация не заявляется.
-
-Полный baseline12cf native result получен на frozen paced fixture1648streams:
-2472offered,414accepted; phase140.795s/134.064CPU-s, seed113.519s/94.201CPU-s;
-max source140769ms/p95135623ms, due pending821/oldest140794ms, completed due max125512ms,
-mockTelegram0/signedagent7, worker/receiver errors0. Observation exclusive97.588CPU-s
-при414calls. Baseline SLO FAIL. Это изолированный синтетический синхронный burst
-системного пути, не обычная production нагрузка или суточная приёмка.
-
-До candidate SEED_COMPLETE host idle упал до9.76%<15%; controller корректно остановил
-только тест, exit137/noOOM. Весь probe283.535s/248.373CPU-s,peakRAM167.584MB,
-physical writes1.449GB. Полного native candidate результата нет, verdict PENDING,
-а не FAIL/PASS. Native baseline файл22631B скачан с проверенным SHA; manifest и
-controller report43232B независимо сохранены с SHA6829e99930c16737ee0673f9a11d4da1edf0e4050ca40a663fa0005ededca698.
-
-Две ограниченные попытки candidate-only без дополнительной паузы:07:29UTC не
-получен continuous30s gate35%, контейнер/БД не создавались;07:33UTC gate пройден,
-но через9.462s preparation host idle13.21%<15%, exit137/noOOM,7.956CPU-s,
-peakRAM74.482MB,writes28.742MB. Container удалён; production before/after ID/start,
-image/config/settings hash/generation совпали. Controller report6452B SHA
-c20475b0ed37e0162520c8c127d40da7e2492f692cec136212d8d48828523943 сохранён независимо.
-Эти попытки не дают native performance verdict. Baseline выполнялся с paused live
-bot, candidate-only с работающим: даже завершённые результаты нельзя выдавать за
-причинное native ускорение при разной внешней конкуренции. Следующего application
-performance candidate не начинали, лимиты1CPU/4GiB/450CPU-s/510wall/600outer и35/15
-не менялись. Дальнейшие blind reruns/новые остановки не выполнять.
-
-07:32:44UTC bounded readonly recovery snapshot: source12cf/config6/generation5bb,
-1080measured streams,late0/unknown0/bootstrap0/blocked0/recovery0; analytics16outcomes
-за2.179s,Telegram DELIVERED07:31:05UTC. Readonly changes0. Это подтверждает выход из
-прогрева после паузы, но не отсутствие всех due jobs, не постоянный universe1648 и
-не30min/24h PASS. Повторный bounded snapshot07:53:39UTC:1088streams,
-late0/unknown0/bootstrap0/blocked0/recovery0,Telegram DELIVERED07:50:41UTC,
-source/config/generation прежние,readonly changes0. Это два отдельных снимка,
-не непрерывное наблюдение. Baseline не принимается при остальных открытых gates.
-
-После независимого сохранения proofs/repro убраны ровно6файлов собственных synthetic
-DB/WAL/SHM двух завершённых probes:14541568logicalB. Exact paths/sizes/report SHA,
-receipt и отсутствие файлов подтверждены в native-owned-cleanup03.json; reports,
-source/fixture manifests и небольшой scaffold оставлены для воспроизведения. Старые
-backups/unique experiments, production DB и соседние проекты не тронуты. Новых
-GitHub Actions runs, поставок, schedules и расходов внешних API не было.
-
-Branch codex/interface-acceptance-20261030; fresh origin/main12cf5d4 unchanged,
-publication candidate2e7a358/queue-doc3deabab/backup qualifier04237e3 сохранены локально;
-push/PR нет. GitHub CLI read вернул401 (не вывод о потере connected access: repository
-read через GitHub connector успешен); перед публикацией current protections/review
-проверить через доступный источник. По коду17/18 общих AC последовательности;
-operating AC-13-06 и Goal2 не завершены. Forecast/storage35GB, multiGB backup,
-artifact policy/resource budget, visual POSTPONED_OWNER и CI/CD/30min/24h остаются
-REQUIRED. Следующий зависимый шаг — полный candidate native case в допустимом
-внешнем resource window без новой паузы; при systemic FAIL применить согласованное
-правило остановки цепочки и представить branch/measurements/варианты владельцу.
+- По коду17/18 общих AC утверждённой последовательности; operatingAC-13-06 и
+  F22/F34/F38/F42 не завершены. F26/F49–F56 поставлены Goal1; current affected
+  regressions проходят кроме named full-pathSLO. Другие F/UX/CAP25/CWSEC dispositions
+  сохранены в реестре ниже; отсутствие finding в CI не закрывает его.
+- Один publication-path candidate2e7a358: paired published snapshots, checked revision
+  refs, pure-byte decode cache в прежнем1MiB budget, atomic COMPLETE groups≤4 и agent
+  drain≤8/250ms. CAS/unknownACK/owner/contract/cancel/replaced callbacks tests сохранены;
+  schemas/семантика аналитики и активность detectors не урезались.3deabab исправляет
+  truthful queue ages/NOT_RECHECKED и docs;04237e3 — backup qualifier.
+- Fair Windows v2 A/B same inputs: baseline1640accepted/122.83CPU-s/maxsource133.42s/
+  due756; candidate1749/119.22CPU-s/120.94s/due336; оба FAIL. Native VPS baseline
+ 12cf paused:414accepted/134.064phaseCPU/maxsource140.769s/due821; candidate preparation
+  прервана hostidle9.76%<15. С CI это разные hosts/условия, причинное ускорение не заявлять.
+- Тестовый VPS экземпляр ещё не прошёл приёмку; environment name production не
+  означает готовый продукт. Владелец снял отдельный10min pause cap для полного теста;
+  ресурсы/gates сохраняются. Последняя candidate-only процедура cw-paused-candidate-
+  oa44xl1x не получила35%continuous30s за60s даже без бота, iowaitpeak41.93%; test
+  container/DB не создавались. Восстановлен тот же e1ff9808/source12cf/image4288/config6/
+  generation5bb5712 после82.514s, privateSQL SHA совпал. Старое одноразовое разрешение
+  первой паузы362.510s использовано, новая пауза/тот же VPS rerun не планируются.
+- Последний проверенный VPS snapshot08:25:41UTC:1080streams/late186/unknown0/
+  bootstrap0/recovery0; это не accepted baseline. Earlier07:32/07:53late0 были
+  отдельными snapshots, не непрерывностью. Telegram/agent реальные outcomes/TA
+  receiverACK этим mock CI не проверяются; agentOFF/INTEGRATION_NOT_CONFIGURED сохранён.
+- F38: cached forecast442–446GB не принят, startup/repack/нездоровый rate не steady.
+ 22:26UTC annual392.02GB/other50.25GB/factor2.17. Sharing sensitivity точного writer
+ 512EP:3328B/EP при1membership и4712при4; при условных91452EP/day это111.4/157.7GB/year
+  только archive. Это sensitivity, не validated forecast или lower bound. Модель
+  хранения35GB и зрелая population не подтверждены; старые26–27GB не выбирать как удобные.
+- F34: canonical qualify_framed_backup.py/code/tests готовы; multiGB/Linux runtime
+  qualification не выполнялась. Closed candidate pre-97592ec15d0716ba7e7072a7c951e0008fb77788-
+ 1792737395.sqlite3/2962976768B/oldgeneration710614f1/69tables нужен этой проверке,
+  не удалять. Stat/readonly preflightPASS, full source hash/integrityPENDING. Budget
+  дополнительного peak3×source+framing+7GiB reserve~16.41GB; future35GB working и
+  backup/temp физически считать отдельно, достаточность VPS не обещана.
+- Artifact inventory30Oct22:02UTC:free28.794GB/backups3.280GB/rehearsals15.216GB/
+  releases0.585GB. Это historical metadata, не current free. Open descriptors не
+  обнаружены, но retained stopped containers/уникальные inputs ещё требуют replacement
+  proof. Preliminary64heavy dirs/15.038GB не разрешены к удалению. Политика latest2
+  verifiedbackups/current+previousgoodrelease/repro-backed rehearsal cleanup согласована,
+  enforcement и точный старый cleanup list ещё не завершены. No general prune.
+- F24: original private wrappers отсутствуют; launcher/Controller.diagnostics/converters/
+  native readers имеют callers/tests/archive recovery назначения и сохранены с основанием.
+  Legacy/two-writer эксперимент не переносился. F31 nonroot/RO/capdrop/nnp подтверждены,
+  sustainable budget OPEN. F32/UX001–041 POSTPONED_OWNER; Telegram app/screenshots/messages
+  не открывались после отсрочки; research доходности внеscope.
+- Source history/private settings/retention/TA/Paper/остальные проекты не менялись.
+  Старые backups/unique experiments не очищались. После proof убраны ровно6собственных
+  synthetic DB/WAL/SHM14541568B прежних probes; manifests/reports сохранены. Новые
+  local guard tests не оставили временных DB; ledger PR94-owned-local-cleanup01.json.
+- Required остаются capacity/physical reserve/многогигабайтный restore, resource budget
+  ordinary против recovery/repack/backup, artifact policy, visual решение, все findings,
+  required CI/review/merge/CD и accepted30min/24h unchanged source/config/generation.
+  Ни текущую историю не сбрасывать, ни baseline не принимать до этих gates. Нет schedules,
+  Codex Security requests, standalone full-main runs или заказанных платных ресурсов.
 
 ### Goal1 — DONE по primary records,30Oct2026
 

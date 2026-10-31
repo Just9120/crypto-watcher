@@ -97,7 +97,69 @@ def verdict(result: dict) -> list[str]:
     return failures
 
 
-def case(report: Path) -> int:
+class PhaseProfile:
+    """Optional diagnostic of the real measured phase, never of seed or teardown."""
+
+    def __init__(self, enabled: bool):
+        import cProfile
+
+        self.profile = cProfile.Profile(timer=time.thread_time) if enabled else None
+        self.started = False
+        self.finished = False
+
+    def stage(self, value: dict) -> None:
+        if self.profile is None:
+            return
+        if value["stage"] == "SEED_COMPLETE" and not self.started:
+            self.started = True
+            self.profile.enable()
+        elif value["stage"] == "STOPPING_FIXTURE_WORKERS" and self.started:
+            self.profile.disable()
+            self.finished = True
+
+    def save(self, destination: Path) -> None:
+        if self.profile is None:
+            return
+        import pstats
+
+        self.profile.disable()
+        stats = pstats.Stats(self.profile)
+        functions = []
+        for (filename, line, name), (primitive, calls, own, cumulative, callers) in stats.stats.items():
+            functions.append(
+                {
+                    "file": filename,
+                    "line": line,
+                    "function": name,
+                    "primitive_calls": primitive,
+                    "calls": calls,
+                    "self_cpu_seconds": own,
+                    "cumulative_cpu_seconds": cumulative,
+                    "callers": [
+                        {"file": f, "line": n, "function": fn, "counts": counts}
+                        for (f, n, fn), counts in callers.items()
+                    ],
+                }
+            )
+        functions.sort(key=lambda value: value["self_cpu_seconds"], reverse=True)
+        destination.write_text(
+            json.dumps(
+                {
+                    "mode": "DIAGNOSTIC_PROFILE_NOT_ACCEPTANCE",
+                    "source": os.environ.get("SOURCE_REVISION"),
+                    "phase_started": self.started,
+                    "phase_ended": self.finished,
+                    "timer": "main-thread CPU; profiling overhead changes throughput",
+                    "total_self_cpu_seconds": stats.total_tt,
+                    "functions": functions,
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+
+def case(report: Path, *, profile: bool = False) -> int:
     sys.path.insert(0, str(ROOT))
     from scripts.qualify_framed_backup import require_native_limits
     from tests.processing_replay import replay
@@ -111,20 +173,27 @@ def case(report: Path) -> int:
 
     signal.signal(signal.SIGALRM, expire)
     signal.alarm(WALL_SECONDS)
-    with tempfile.TemporaryDirectory(prefix="paced-", dir="/work") as temporary:
-        result = asyncio.run(
-            replay(
-                Path(temporary) / "processing.sqlite3",
-                instruments=206,
-                seconds=130,
-                progress=lambda value: print(json.dumps(value), file=sys.stderr, flush=True),
+    capture = PhaseProfile(profile)
+
+    def progress(value):
+        capture.stage(value)
+        print(json.dumps(value), file=sys.stderr, flush=True)
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="paced-", dir="/work") as temporary:
+            result = asyncio.run(
+                replay(
+                    Path(temporary) / "processing.sqlite3", instruments=206, seconds=130, progress=progress
+                )
             )
-        )
+    finally:
+        capture.save(report.parent / "profile.json")
     failures = verdict(result)
     payload = {
         "schema": "cryptowatcher.processing-qualification.v1",
         "source": os.environ.get("SOURCE_REVISION"),
-        "state": "PASS" if not failures else "FAIL",
+        "state": "FAIL" if failures else ("PROFILE_ONLY" if profile else "PASS"),
+        "mode": "DIAGNOSTIC_PROFILE_NOT_ACCEPTANCE" if profile else "QUALIFICATION",
         "failures": failures,
         "temporary_database_removed": True,
         "result": result,
@@ -132,10 +201,10 @@ def case(report: Path) -> int:
     }
     report.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     signal.alarm(0)
-    return int(bool(failures))
+    return int(bool(failures) or profile)
 
 
-def run(image: str, revision: str, directory: Path) -> int:
+def run(image: str, revision: str, directory: Path, *, profile: bool = False) -> int:
     if sys.platform != "linux" or os.geteuid() != 0 or not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("Linux CI root controller and exact revision required")
     if directory.exists() or directory.is_symlink():
@@ -150,6 +219,7 @@ def run(image: str, revision: str, directory: Path) -> int:
     proof = {
         "source": revision,
         "image": inspected["Id"],
+        "mode": "DIAGNOSTIC_PROFILE_NOT_ACCEPTANCE" if profile else "QUALIFICATION",
         "state": "PREPARED",
         "admission": [],
         "limits": {
@@ -208,6 +278,7 @@ def run(image: str, revision: str, directory: Path) -> int:
             "case",
             "--report",
             "/work/result.json",
+            *(["--profile"] if profile else []),
         ).strip()
         created = True
         proof["container_id"] = cid
@@ -266,6 +337,11 @@ def run(image: str, revision: str, directory: Path) -> int:
                     break
             process.wait(timeout=15)
         proof["exit_code"] = process.returncode
+        if (work / "profile.json").exists():
+            raw = (work / "profile.json").read_bytes()
+            if len(raw) > 8 * 1024**2:
+                raise ValueError("Profile evidence exceeds bound")
+            (directory / "profile.json").write_bytes(raw)
         if (work / "result.json").exists():
             result = json.loads((work / "result.json").read_bytes())
             if result.get("source") != revision:
@@ -303,7 +379,8 @@ def run(image: str, revision: str, directory: Path) -> int:
         (directory / "controller.json").write_text(json.dumps(proof, indent=2))
         signal.alarm(0)
     summary = {
-        key: proof.get(key) for key in ("state", "result_state", "elapsed_seconds", "container_limits")
+        key: proof.get(key)
+        for key in ("state", "mode", "result_state", "elapsed_seconds", "container_limits")
     }
     if (directory / "result.json").exists():
         report = json.loads((directory / "result.json").read_bytes())
@@ -348,14 +425,16 @@ def main() -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     inner = commands.add_parser("case")
     inner.add_argument("--report", type=Path, required=True)
+    inner.add_argument("--profile", action="store_true")
     outer = commands.add_parser("run")
     outer.add_argument("image")
     outer.add_argument("revision")
     outer.add_argument("directory", type=Path)
+    outer.add_argument("--profile", action="store_true")
     args = parser.parse_args()
     if args.command == "case":
-        return case(args.report)
-    return run(args.image, args.revision, args.directory.resolve())
+        return case(args.report, profile=args.profile)
+    return run(args.image, args.revision, args.directory.resolve(), profile=args.profile)
 
 
 if __name__ == "__main__":

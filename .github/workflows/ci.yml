@@ -87,7 +87,7 @@ jobs:
         env:
           REVISION: ${{ github.sha }}
         run: |
-          sudo timeout --signal=INT --kill-after=10s 600s "$(command -v python)" -B scripts/qualify_processing.py run "cw-processing:$REVISION" "$REVISION" ".cache-g1/processing-${{ github.run_id }}-${{ github.run_attempt }}"
+          sudo timeout --signal=INT --kill-after=10s 600s "$(command -v python)" -B scripts/qualify_processing.py run "cw-processing:$REVISION" "$REVISION" ".cache-g1/processing-${{ github.run_id }}-${{ github.run_attempt }}" --profile
       - name: Preserve processing result including resource stops
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
