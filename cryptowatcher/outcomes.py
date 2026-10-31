@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import math
 import time
+from contextlib import nullcontext
 from dataclasses import asdict
 from typing import Any, Callable
 
@@ -231,11 +232,18 @@ class OutcomeWorker:
         request_gap: Callable[[str, int, int], str | None] | None = None,
         *,
         on_outcome: Callable[[dict[str, Any]], None] | None = None,
+        on_outcome_event: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
+        publication_batch_size: int = 1,
     ) -> None:
         self.store = store
         self.history = History(store)
         self.request_gap = request_gap
         self.on_outcome = on_outcome
+        self._snapshot_outcome_callback = on_outcome
+        self.on_outcome_event = on_outcome_event
+        if type(publication_batch_size) is not int or not 1 <= publication_batch_size <= 4:
+            raise ValueError("Outcome publication group outside1..4")
+        self.publication_batch_size = publication_batch_size
         with store.db:
             previous = self.history.get("outcome-method:" + METHOD)
             if previous is not None and previous != DEFINITION:
@@ -243,9 +251,12 @@ class OutcomeWorker:
             if previous is None:
                 self.history.put("outcome-method:" + METHOD, DEFINITION)
 
-    def admit(self, event: dict[str, Any]) -> None:
-        """Called inside the event producer's or initial-admission transaction."""
-        episode = self.history.get("episode-head:" + event["episode_id"])
+    def admit(self, event: dict[str, Any], *, episode: dict[str, Any] | None = None) -> None:
+        """Admit a saved event; the producer can hand off its published episode."""
+        if episode is None:
+            episode = self.history.get("episode-head:" + event["episode_id"])
+        elif episode.get("episode_id") != event["episode_id"]:
+            raise StateError("Conflicting published episode identity")
         if event.get("outcome_unit") not in (None, "EVENT_REFERENCE", "EPISODE"):
             raise StateError("Unsupported frozen outcome unit")
         per_episode = event.get("outcome_unit") == "EPISODE"
@@ -409,26 +420,63 @@ class OutcomeWorker:
         )
         read_seconds = time.monotonic() - started
         applied = 0
-        completed_lags = []
+        completed_lags: list[int] = []
 
-        def apply_prepared(item: Any) -> None:
+        def apply_prepared(group: list[Any]) -> None:
             nonlocal applied
-            job, event, binding, result = item
-            # Owner operations or a restarted worker cannot be overwritten by an old read.
-            if self.history.get("outcome-job:" + job["outcome_id"]) == job:
-                with timing.applying():
-                    self.apply(job, event, binding, result, clock())
-                applied += 1
-                if result["state"] == "COMPLETE":
-                    completed_lags.append(
-                        max(
-                            0,
-                            clock()
-                            - job.get("due_ms", event["reference_time_ms"] + job["horizon_min"] * MINUTE),
-                        )
-                    )
+            # Same immutable job check as singleton publication. No await occurs
+            # between this check and the sole writer's transaction boundary.
+            eligible = [
+                item for item in group if self.history.get("outcome-job:" + item[0]["outcome_id"]) == item[0]
+            ]
+            if not eligible:
+                return
+            # Incomplete work can request recovery (which owns its transaction)
+            # and arbitrary replaced callbacks retain the singleton contract.
+            grouped = len(eligible) > 1
+            committed_due: list[int] = []
+            with timing.applying(0):
+                with self.store.db if grouped else nullcontext():
+                    if grouped:
+                        self.store.db.execute("BEGIN IMMEDIATE")
+                    for job, event, binding, result in eligible:
+                        if grouped:
+                            # Keep CAS inside the publication snapshot too.
+                            if self.history.get("outcome-job:" + job["outcome_id"]) != job:
+                                continue
+                            self.apply(job, event, binding, result, clock(), commit=False)
+                        else:
+                            self.apply(job, event, binding, result, clock())
+                        timing.apply_calls += 1
+                        applied += 1
+                        if result["state"] == "COMPLETE":
+                            committed_due.append(
+                                job.get("due_ms", event["reference_time_ms"] + job["horizon_min"] * MINUTE)
+                            )
+            # Publication latency ends after the outer commit, never before fsync.
+            committed_at = clock()
+            completed_lags.extend(max(0, committed_at - due) for due in committed_due)
 
-        await publish(prepared, apply_prepared)
+        size = (
+            self.publication_batch_size
+            if (
+                self.on_outcome is None
+                or (self.on_outcome is self._snapshot_outcome_callback and self.on_outcome_event is not None)
+            )
+            else 1
+        )
+        groups: list[list[Any]] = []
+        for item in prepared:
+            if (
+                item[3]["state"] == "COMPLETE"
+                and groups
+                and len(groups[-1]) < size
+                and groups[-1][0][3]["state"] == "COMPLETE"
+            ):
+                groups[-1].append(item)
+            else:
+                groups.append([item])
+        await publish(groups, apply_prepared)
         from .queue_health import completed_batch
 
         completed_batch(
@@ -449,7 +497,13 @@ class OutcomeWorker:
         binding: dict[str, Any],
         result: dict[str, Any],
         now_ms: int,
+        *,
+        commit: bool = True,
     ) -> None:
+        if type(commit) is not bool or (
+            not commit and (not self.store.db.in_transaction or result.get("state") != "COMPLETE")
+        ):
+            raise StateError("Grouped complete outcome publication requires its owning transaction")
         reason = None
         locally_ready = False
         if result["state"] == "INCOMPLETE" and self.request_gap is not None:
@@ -474,14 +528,20 @@ class OutcomeWorker:
         changed = previous is None or encode(result) != encode(
             {k: v for k, v in previous.items() if k not in ("revision", "available_at_ms")}
         )
-        with self.store.db:
+        with self.store.db if commit else nullcontext():
             if changed:
                 result.update(
                     revision=1 if previous is None else previous["revision"] + 1, available_at_ms=now_ms
                 )
                 self.history.version("outcome", result)
                 if self.on_outcome is not None:
-                    self.on_outcome(result)
+                    if (
+                        self.on_outcome is self._snapshot_outcome_callback
+                        and self.on_outcome_event is not None
+                    ):
+                        self.on_outcome_event(result, event)
+                    else:
+                        self.on_outcome(result)
             self.history.delete(job["pending_key"])
             if result["state"] == "COMPLETE":
                 protect(self.history, job["stream"], result["source_inputs"])

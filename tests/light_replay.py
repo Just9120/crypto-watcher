@@ -67,9 +67,16 @@ def candle(end: int, tf: str) -> Candle:
     return Candle.parse(row, tf, "websocket", end, end)
 
 
-async def replay(path: Path, *, minutes: int = 30) -> dict[str, Any]:
+async def replay(
+    path: Path, *, minutes: int = 30, instruments_per_market: int = 1, agent_enabled: bool = True
+) -> dict[str, Any]:
     if path.exists() or not 15 <= minutes <= 60:
         raise ValueError("Replay requires a new temporary database and 15..60 logical minutes")
+    if type(instruments_per_market) is not int or not 1 <= instruments_per_market <= 256:
+        raise ValueError("Finite replay instrument count outside1..256")
+    if type(agent_enabled) is not bool:
+        raise ValueError("Invalid replay agent preference")
+    symbols = ["BTCUSDT"] + [f"SIM{i:03}USDT" for i in range(1, instruments_per_market)]
     infrastructure = Infrastructure.from_env(
         {
             "OWNER_USER_ID": "233382575",
@@ -117,7 +124,7 @@ async def replay(path: Path, *, minutes: int = 30) -> dict[str, Any]:
         market.server_now = lambda: clock[0]
         with patch.dict(os.environ, ENV):
             controller = Controller(infrastructure, store, market)
-        controller.agent.enable(True)
+        controller.agent.enable(agent_enabled)
         original = controller.engine.on_event
 
         def admitted(event):
@@ -178,48 +185,50 @@ async def replay(path: Path, *, minutes: int = 30) -> dict[str, Any]:
 
         try:
             for category in ("spot", "linear"):
-                instrument, reason = classify(category, metadata(market=category))
-                assert instrument is not None, reason
-                market.instruments[instrument.key] = instrument
-                market.tickers[instrument.key] = {"turnover24h": "2000000", "lastPrice": "104"}
-                for tf in TIMEFRAMES:
-                    stream = instrument.key + "/" + tf
-                    market.streams.add(stream)
-                    step = int(tf[:-1]) * MINUTE
-                    market.sources.put(
-                        stream, [candle(NOW - i * step, tf) for i in range(24, 0, -1)], recovery=True
-                    )
+                for symbol in symbols:
+                    instrument, reason = classify(category, metadata(symbol=symbol, market=category))
+                    assert instrument is not None, reason
+                    market.instruments[instrument.key] = instrument
+                    market.tickers[instrument.key] = {"turnover24h": "2000000", "lastPrice": "104"}
+                    for tf in TIMEFRAMES:
+                        stream = instrument.key + "/" + tf
+                        market.streams.add(stream)
+                        step = int(tf[:-1]) * MINUTE
+                        market.sources.put(
+                            stream, [candle(NOW - i * step, tf) for i in range(24, 0, -1)], recovery=True
+                        )
             for minute in range(minutes + 1):
                 clock[0] = NOW + minute * MINUTE
                 with measured("offered_ingestion_and_publication"):
                     for category in ("spot", "linear"):
-                        for tf in TIMEFRAMES:
-                            if minute % int(tf[:-1]):
-                                continue
-                            value = candle(clock[0], tf)
-                            stream = category + "/BTCUSDT/" + tf
-                            message = {
-                                "topic": "kline." + tf[:-1] + ".BTCUSDT",
-                                "ts": clock[0],
-                                "data": [
-                                    {
-                                        "interval": tf[:-1],
-                                        "start": value.start,
-                                        "end": value.end - 1,
-                                        "open": value.open,
-                                        "high": value.high,
-                                        "low": value.low,
-                                        "close": value.close,
-                                        "volume": value.volume,
-                                        "turnover": value.turnover,
-                                        "confirm": True,
-                                    }
-                                ],
-                            }
-                            offered.update(encode([category, message]).encode())
-                            offers[stream] += 1
-                            market.accept_message(category, message, market.streams, received_ms=clock[0])
-                            assert market.sources.windows[stream][value.start].row() == value.row()
+                        for symbol in symbols:
+                            for tf in TIMEFRAMES:
+                                if minute % int(tf[:-1]):
+                                    continue
+                                value = candle(clock[0], tf)
+                                stream = category + "/" + symbol + "/" + tf
+                                message = {
+                                    "topic": "kline." + tf[:-1] + "." + symbol,
+                                    "ts": clock[0],
+                                    "data": [
+                                        {
+                                            "interval": tf[:-1],
+                                            "start": value.start,
+                                            "end": value.end - 1,
+                                            "open": value.open,
+                                            "high": value.high,
+                                            "low": value.low,
+                                            "close": value.close,
+                                            "volume": value.volume,
+                                            "turnover": value.turnover,
+                                            "confirm": True,
+                                        }
+                                    ],
+                                }
+                                offered.update(encode([category, message]).encode())
+                                offers[stream] += 1
+                                market.accept_message(category, message, market.streams, received_ms=clock[0])
+                                assert market.sources.windows[stream][value.start].row() == value.row()
                 clock[0] += 2001
                 controller.engine.tick(clock[0])
                 await work()
@@ -228,10 +237,11 @@ async def replay(path: Path, *, minutes: int = 30) -> dict[str, Any]:
             # inputs for its not-yet-due horizons. No new episodes are admitted here.
             with measured("future_inputs"):
                 for category in ("spot", "linear"):
-                    stream = category + "/BTCUSDT/1m"
-                    market.sources.put(
-                        stream, [candle(NOW + i * MINUTE, "1m") for i in range(minutes + 1, minutes + 61)]
-                    )
+                    for symbol in symbols:
+                        stream = category + "/" + symbol + "/1m"
+                        market.sources.put(
+                            stream, [candle(NOW + i * MINUTE, "1m") for i in range(minutes + 1, minutes + 61)]
+                        )
             clock[0] = NOW + (minutes + 60) * MINUTE + 2001
             await work()
             outcomes = [r for _, r in controller.history.items("outcome-head:")]
@@ -252,6 +262,8 @@ async def replay(path: Path, *, minutes: int = 30) -> dict[str, Any]:
                 "schema": "cryptowatcher.light-replay.v1",
                 "environment": sys.platform,
                 "logical_minutes": minutes,
+                "instruments_per_market": instruments_per_market,
+                "agent_enabled": agent_enabled,
                 "offered_sha256": offered.hexdigest(),
                 "offered_closed_candles": sum(offers.values()),
                 "offers_by_stream": dict(offers),
@@ -308,11 +320,20 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--minutes", type=int, default=30)
     parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument("--instruments", type=int, default=1)
+    parser.add_argument("--without-agent", action="store_true")
     args = parser.parse_args()
     if args.report.exists():
         parser.error("Report already exists; do not overwrite evidence")
     with tempfile.TemporaryDirectory(prefix="cw-light-replay-") as temporary:
-        report = asyncio.run(replay(Path(temporary) / "replay.sqlite3", minutes=args.minutes))
+        report = asyncio.run(
+            replay(
+                Path(temporary) / "replay.sqlite3",
+                minutes=args.minutes,
+                instruments_per_market=args.instruments,
+                agent_enabled=not args.without_agent,
+            )
+        )
     report["temporary_database_removed"] = True
     args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(

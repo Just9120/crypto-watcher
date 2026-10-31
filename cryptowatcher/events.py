@@ -178,6 +178,32 @@ class History:
             },
         }
 
+    @staticmethod
+    def revision_reference(kind: str, value: dict[str, Any]) -> dict[str, str]:
+        """Reference an already loaded or just-published immutable snapshot.
+
+        No lookup/existence proof is cached. Every expansion still reads the
+        actual revision and checks its full canonical digest. Legacy episodes
+        have no schema field; their immutable revision identity remains valid.
+        """
+        identity, revision = value.get(f"{kind}_id"), value.get("revision")
+        if (
+            kind not in HEAD_FIELDS
+            or not isinstance(identity, str)
+            or re.fullmatch(r"[a-zA-Z0-9-]+", identity) is None
+            or type(revision) is not int
+            or not 1 <= revision <= 9_999_999_999
+            or value.get("schema")
+            not in (
+                (None, "cryptowatcher.episode.v1") if kind == "episode" else (f"cryptowatcher.{kind}.v1",)
+            )
+        ):
+            raise StateError("Invalid immutable snapshot reference")
+        return {
+            "_cw_revision": f"{kind}:{identity}:{revision:010d}",
+            "sha256": hashlib.sha256(encode(value).encode()).hexdigest(),
+        }
+
     def _freeze_services(self, value: Any, depth: int = 0) -> Any:
         if depth > 24:
             raise StateError("Service snapshot nesting exceeds bound")
@@ -440,6 +466,7 @@ class EventEngine:
         *,
         source_revision: str = "UNSET",
         on_event: Callable[[dict[str, Any]], None] | None = None,
+        on_event_snapshot: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
         on_episode: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         if not re.fullmatch(r"[0-9a-f]{40}|UNSET", source_revision):
@@ -449,6 +476,11 @@ class EventEngine:
         self.detector = detector
         self.source_revision = source_revision
         self.on_event = on_event
+        # Only the explicitly paired independent consumer may use the already
+        # published snapshot. Replacing the public callback restores the normal
+        # condition flush/reload boundary for arbitrary/reentrant callbacks.
+        self._snapshot_event_callback = on_event
+        self.on_event_snapshot = on_event_snapshot
         self.on_episode = on_episode
         with store.db:
             for family in FAMILIES:
@@ -864,10 +896,17 @@ class EventEngine:
                         )
                     self.history.version("episode", episode)
                     if self.on_event is not None:
-                        with exposed_conditions(self.history):
-                            self.on_event(
-                                event
-                            )  # Source, episode and all consumer intents share the transaction.
+                        if (
+                            self.on_event is self._snapshot_event_callback
+                            and self.on_event_snapshot is not None
+                        ):
+                            # Contract: independent intents only; this consumer
+                            # neither reads nor changes producer condition state.
+                            self.on_event_snapshot(event, episode)
+                        else:
+                            with exposed_conditions(self.history):
+                                self.on_event(event)
+                        # Source, episode and consumer intents share this tx.
 
     def _notify(self, episode: dict[str, Any], event: dict[str, Any], now_ms: int) -> None:
         previous = episode["last_notified"]

@@ -455,3 +455,48 @@ all markets/families/TF и весь30d/35d/calendar12mo lifecycle. Numeric/compa
 сравниваются как точные multiset; private settings сохраняются. Это структурное
 доказательство finite retention, не имитация непрерывного universe или load/SLO.
 Отдельный regression case проверяет20 comparator windows и несколько methods.
+
+
+## Изолированная квалификация backup/restore на закрытом снимке
+
+[qualify_framed_backup.py](../../scripts/qualify_framed_backup.py) проверяет текущий
+NATIVE_DISK_FRAMED механизм и отдельное физическое восстановление. Source — явно
+выбранный закрытый snapshot, не working DB. До операции оператор проверяет точный
+source/image/hash сценария, source size/owner, отсутствие конкурентной операции,
+дисковый пик и ресурсный допуск по Current Goal. Старые captures/backups не удаляются.
+
+CLI требует Linux/native, cgroup≤1CPU/4GiB/no swap, inherited CPU limit≤450s
+и source≥2GiB с совпадающим expected size. Внешний foreground controller сохраняет
+35% idle на30s для старта,15% stop, RAM reserve1.5GiB, wall≤510s/outer≤600s и
+идентичность рабочего приложения. Это не отдельный unattended workflow или schedule.
+Windows functional tests явно возвращают FUNCTIONAL_PASS_ONLY.
+
+Сценарий запускается в уже подготовленном isolated контейнере с networknone,
+read-only source mount и новым owned physical work mount; scratch — отдельный
+private64MiB tmpfs. Команда из source checkout внутри такого окружения:
+
+```bash
+python -m scripts.qualify_framed_backup --source /input/snapshot.sqlite3 --expected-source-bytes EXPECTED_BYTES --owner OWNER_ID --work /work/qualification --scratch /validation --seconds 480
+```
+
+Сначала streaming file copy/hash создаёт private input; SQLite никогда не открывает
+оригинал и не создаёт рядом WAL/SHM. Полный native CHECK/FK/byte identity и независимый
+readback архива выполняет прежний backup. Затем standard ZSTD stream восстанавливается
+в новый файл с ограничением точного raw size, deadline и свободного места.
+Полный SHA256 восстановленных bytes совпадает с проверенным snapshot; дополнительно
+сравниваются private state и до8 numeric outcomes без raw secrets в отчёте.
+Оригинал проверяется по inode/size/mtime и повторному полному hash.
+
+До запуска нужны дополнительные3×source bytes+framing overhead+7GiB резерва:
+private input+raw capture+archive, затем input+archive+restore. Исходный snapshot и
+действующая working DB уже входят в занятые bytes файловой системы и повторно не
+прибавляются к additional free-space требованию. Удаление capture raw разрешено
+только штатным successful backup; после persisted result удаляются только созданные
+этой проверкой input/restore duplicates и их empty-WAL sidecars. Отдельный
+cleanup.json подтверждает завершение; его отсутствие означает PENDING cleanup.
+Архив/report остаются до проверки результата;
+failure сохраняет новые материалы для разбора.
+
+Старый многогигабайтный snapshot проверяет механизм и свою population. Он не
+подменяет regression текущих episode tables, прогноз35GB, online нагрузку или
+30min/24h operating acceptance. Все эти evidence отмечаются отдельно.

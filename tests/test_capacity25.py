@@ -943,3 +943,46 @@ def test_interval_reports_real_flow_deltas_and_rejects_counter_reset():
     result = interval(before, after)
     assert result["state"] == "PARTIAL_OR_UNSTABLE" and result["daily_extrapolation_bytes"] is None
     assert result["analytics_flows"]["comparison"]["state"] == "RESET_OR_INCOMPATIBLE"
+
+
+def test_failed_attempt_does_not_hide_due_queue_or_claim_current_source_readiness(store):
+    from cryptowatcher.queue_health import snapshot
+    from tests.test_capacity import bounded
+
+    bounded(store)
+    history = History(store)
+    now = 1800000000000
+    with store.db:
+        history.put("outcome-pending:a", {"outcome_id": "a"})
+        history.put(
+            "outcome-job:a",
+            {"state": "PENDING", "next_attempt_ms": now - 120000, "due_ms": now - 180000},
+        )
+        history.put("outcome-pending:z", {"outcome_id": "z"})
+        history.put(
+            "outcome-job:z",
+            {"state": "INCOMPLETE", "next_attempt_ms": now + 120000, "reason": "missing source"},
+        )
+    changes = store.db.total_changes
+    value = snapshot(store, now)["outcome"]
+    assert value["state"] == "SOURCE_LIMITED_OR_UNKNOWN"
+    assert value["input_readiness"] == "NOT_RECHECKED"
+    assert value["status_basis"] == "LAST_FAILED_ATTEMPT_NOT_CURRENT_INPUTS"
+    assert value["pending_queue"]["state"] == "OVERDUE"
+    assert value["pending_queue"]["due_lag_ms"] == 120000
+    assert value["pending_queue"]["original_due_lag_ms"] == 180000
+    assert store.db.total_changes == changes
+    with store.db:
+        history.put(
+            "outcome-job:a", {"state": "PENDING", "next_attempt_ms": now + 120000, "due_ms": now + 120000}
+        )
+    value = snapshot(store, now)["outcome"]
+    assert value["state"] == "SOURCE_LIMITED_OR_UNKNOWN"
+    assert value["pending_queue"]["state"] == "FUTURE"
+    assert value["pending_queue"]["original_due_lag_ms"] == 0
+    with store.db:
+        history.delete("outcome-pending:a")
+        history.delete("outcome-pending:z")
+    value = snapshot(store, now)["outcome"]
+    assert value["state"] == "SOURCE_LIMITED_OR_UNKNOWN"
+    assert value["pending_queue"] == {"state": "EMPTY", "due_lag_ms": 0}

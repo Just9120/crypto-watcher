@@ -167,7 +167,11 @@ class Controller:
         self.agent = AgentDelivery(store, getattr(market, "client", None))
         self.recovery = AnalyticsRecovery(store, market) if isinstance(market, BybitRadar) else None
         self.outcomes = OutcomeWorker(
-            store, self.recovery.request if self.recovery else None, on_outcome=self.agent.outcome
+            store,
+            self.recovery.request if self.recovery else None,
+            on_outcome=self.agent.outcome,
+            on_outcome_event=self.agent.outcome,
+            publication_batch_size=4,
         )
         self.retention = Retention(store)
         self.digest = Digest(store, infrastructure.delivery_chat_id)
@@ -186,6 +190,7 @@ class Controller:
                 store,
                 source_revision=infrastructure.source_revision,
                 on_event=self.admit_event,
+                on_event_snapshot=self.admit_published_event,
                 on_episode=self.agent.episode_closed,
             )
             if isinstance(market, BybitRadar)
@@ -236,6 +241,12 @@ class Controller:
     def admit_event(self, event: dict[str, Any]) -> None:
         self.outcomes.admit(event)
         self.agent.admit(event)
+
+    def admit_published_event(self, event: dict[str, Any], episode: dict[str, Any]) -> None:
+        # EventEngine just saved both revisions in this transaction. These
+        # consumers own separate queues and do not touch detector conditions.
+        self.outcomes.admit(event, episode=episode)
+        self.agent.admit(event, episode=episode)
 
     def enrichment_context(self, key: str, cutoff: int) -> dict[str, Any]:
         if self.enrichment is None:
@@ -1066,7 +1077,7 @@ class Controller:
         if now <= 0:
             return
         try:
-            await self.agent.work(now)
+            await self.agent.drain(self.market.server_now)
         except Exception as exc:
             self.agent._diagnostic("FAILED_" + type(exc).__name__, now)
             logger.error("Optional agent delivery failure: %s", type(exc).__name__)

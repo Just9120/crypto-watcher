@@ -8,9 +8,10 @@ import hmac
 import json
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 from urllib.parse import urlsplit
 
 import httpx
@@ -125,18 +126,23 @@ class AgentDelivery:
         value = {
             "event_id": event["event_id"],
             "event_revision": event["revision"],
-            "episode": episode,
+            "episode": self.history.revision_reference("episode", episode) if self.store.bounded else episode,
             "due_ms": due,
-            "outcomes": outcomes or [],
+            "outcomes": [self.history.revision_reference("outcome", value) for value in outcomes or []]
+            if self.store.bounded
+            else outcomes or [],
             "historical": historical,
             "replay": replay,
         }
         self.history.put(key, value)
         self.history.put(f"agent:intent-due:{due:016d}:{identity(key)}", {"key": key})
 
-    def admit(self, event: dict[str, Any]) -> None:
+    def admit(self, event: dict[str, Any], *, episode: dict[str, Any] | None = None) -> None:
         if self.enabled() and event["live"]:
-            episode = self.history.get("episode-head:" + event["episode_id"])
+            if episode is None:
+                episode = self.history.get("episode-head:" + event["episode_id"])
+            elif episode.get("episode_id") != event["episode_id"]:
+                raise StateError("Conflicting published episode identity")
             self._intent(episode, event, event["available_at_ms"])
 
     def episode_closed(self, episode: dict[str, Any]) -> None:
@@ -145,9 +151,15 @@ class AgentDelivery:
             event = self.history.get(f"event:{confirmation['event_id']}:{confirmation['revision']:010d}")
             self._intent(episode, event, episode["available_at_ms"])
 
-    def outcome(self, result: dict[str, Any]) -> None:
+    def outcome(self, result: dict[str, Any], event: dict[str, Any] | None = None) -> None:
         if self.enabled():
-            event = self.history.get(f"event:{result['event_id']}:{result['event_revision']:010d}")
+            if event is None:
+                event = self.history.get(f"event:{result['event_id']}:{result['event_revision']:010d}")
+            elif (
+                event.get("event_id") != result["event_id"]
+                or event.get("revision") != result["event_revision"]
+            ):
+                raise StateError("Conflicting published outcome event")
             episode = self.history.get("episode-head:" + event["episode_id"])
             self._intent(episode, event, result["available_at_ms"], [result])
 
@@ -282,6 +294,29 @@ class AgentDelivery:
                     count += 1
             self.history.put("agent:target", {"state": "READY", "at_ms": now, "reason": "OWNER_RETRY"})
         return count
+
+    async def drain(self, clock: Callable[[], int], *, batch: int = 8, seconds: float = 0.25) -> None:
+        """Advance a finite number of existing singleton sends cooperatively.
+
+        Every unit retains the original lock, intent/expiry checks and frozen
+        bytes. Stop after an unknown/negative ACK; never amplify a target error
+        into a batch of requests. Network waits and owner changes remain outside
+        transactions; the real clock is rechecked for every subsequent unit.
+        """
+        if type(batch) is not int or not 1 <= batch <= 8 or not 0 < seconds <= 1:
+            raise ValueError("Invalid finite agent delivery budget")
+        if not self.enabled() or self.config.state != "READY" or self.client is None:
+            return
+        deadline = time.monotonic() + seconds
+        for _ in range(batch):
+            before = [self.history.items(prefix, 1) for prefix in ("agent:intent-due:", "agent:send-due:")]
+            await self.work(clock())
+            if self.history.get("agent:target", {}).get("state") != "DELIVERED":
+                break
+            after = [self.history.items(prefix, 1) for prefix in ("agent:intent-due:", "agent:send-due:")]
+            if before == after or time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(0)
 
     async def work(self, now: int) -> None:
         if not self.enabled() or self.config.state != "READY" or self.lock.locked() or self.client is None:

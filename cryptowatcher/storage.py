@@ -625,14 +625,24 @@ class Store:
         with self.db:
             self.db.execute("INSERT OR REPLACE INTO mutes VALUES (?,?)", (symbol, until))
 
+    def decode_runtime(self, raw: Any) -> Any:
+        # Reuse only a pure transform of these freshly read immutable bytes.
+        # SQL callbacks use the same existing1MiB budget. Return a fresh object;
+        # referenced rows/existence and mixed hot/cold guards are never cached.
+        return (
+            json.loads(self.cached_record_json(raw))
+            if self.bounded and isinstance(raw, bytes)
+            else json_payload(raw)
+        )
+
     def get_runtime(self, key: str, default: Any = None) -> Any:
         row = self.db.execute("SELECT payload_json FROM runtime WHERE key=?", (key,)).fetchone()
         if self.bounded:
             from .catalogue_reader import MISSING, lookup
 
-            value = lookup(self.db, key, json_payload(row[0]) if row else MISSING, self.cached_bytes)
+            value = lookup(self.db, key, self.decode_runtime(row[0]) if row else MISSING, self.cached_bytes)
             return default if value is MISSING else value
-        return json_payload(row[0]) if row else default
+        return self.decode_runtime(row[0]) if row else default
 
     def scan_runtime(
         self,
@@ -654,6 +664,7 @@ class Store:
             after=after,
             before=before,
             cache=self.cached_bytes,
+            decode=self.decode_runtime,
         )
 
     def put_runtime(self, key: str, payload: Any) -> None:

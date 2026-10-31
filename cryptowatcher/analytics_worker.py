@@ -69,7 +69,7 @@ class BatchTiming:
             self.read_cpu_seconds = max(0.0, time.thread_time() - began)
 
     @contextmanager
-    def applying(self) -> Iterator[None]:
+    def applying(self, count: int = 1) -> Iterator[None]:
         # Use the same clock as the enclosing batch. Mixing perf_counter with
         # a coarser monotonic clock can report active work above total elapsed.
         began, cpu = time.monotonic(), time.thread_time()
@@ -78,7 +78,7 @@ class BatchTiming:
         finally:
             self.apply_active_seconds += max(0.0, time.monotonic() - began)
             self.apply_cpu_seconds += max(0.0, time.thread_time() - cpu)
-            self.apply_calls += 1
+            self.apply_calls += count
 
 
 def read_snapshot(path: Any, owner: int, read: Callable[[Store], Any]) -> Any:

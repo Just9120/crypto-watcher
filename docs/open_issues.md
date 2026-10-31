@@ -2,76 +2,301 @@
 
 ## Current Goal и утверждённая последовательность
 
-**LIGHT-RADAR — ACTIVE, Goal 1**, явно поручена владельцем30Oct2026 после выхода из Plan Mode. Отменённую CAPACITY25 не возобновлять. После DoD Goal1 последовательно выполнить Goal2 — Telegram visual/остаточные findings/backup и30min/24h приёмка. Встроенная Goal1 активирована; одновременно Goal2 не активировать.
+**INTERFACE-ACCEPTANCE — незавершена, Goal 2; продолжена по поручению владельца31Oct, native qualification NOT_STARTED_RESOURCE_ADMISSION**, явно поручена владельцем в последовательности30Oct2026; встроенная Goal2 активирована после выполненной Goal1. CAPACITY25 отменена и не возобновляется. Новая параллельная optimization chain, cron/automations и Codex Security запрещены.
 
-Baseline origin/main b254e6e1851dc5662cfcd1156ef13aec31d2e2a8; ветка codex/light-radar-20261030, checkout .cache-g1/git-recovery-20261024. Main/remote/protections/PR/worktrees проверены30Oct: strict ci-required/admins, required approvals0, ранее открытый draftPR57 сохранён. Audit commits dab39e3/6227a5d перенесены как d759311/fd48355 без отдельного docs PR. Прежняя двух-writer ветка ae270373 и материалы аудита внеGit сохранены.
+Baseline origin/main12cf5d48e8d4b13aa77dbbe84ee9d161f81a4619. Branch codex/interface-acceptance-20261030; существующий checkout .cache-g1/git-recovery-20261024. Fresh Git/remotes/worktrees/protections/openPR проверены: strict ci-required15368/admins, approvals0; чужой draftPR57 сохранён. Goal1 task branch безопасно удалена после merge/CD и exact-tree proof; preexisting checkout/audit/two-writer материалы сохранены.
 
-### Scope/AC и DoD Goal1
+### Результат, scope и DoD Goal2
 
-18 исходно неготовыхAC:04-06,05-02,06-01/02/05,07-04/06,08-01/04,09-02/06,11-01,12-04/05,13-02/03/04/06. Кодовая часть13-06 входит вGoal1; полная эксплуатационная приёмка остаётсяGoal2. Сохраняются50READYинвариантов прошлого snapshot; проценты во время реализации не пересчитывать.
+Довести согласованный остаточный scope: финальная AC-13-06; регрессия17AC, завершённых Goal1, и прежних инвариантов; F22/F34/F38/F42, F24/F31/F32, UX-001–UX-041 и применимость всех связанных engineering/security IDs ниже. F26/F49–F56 реализованы и прошли required CI/CD Goal1; применимые пользовательские сценарии повторно проверяются визуально. Каждый оставшийся finding получает подтверждённый итог FIX/REMOVE/CONSOLIDATE/сохранён как используемый/обоснованно неприменим; новый DEFER не закрывает scope. Проценты проекта/эпиков не пересчитывать; audit snapshot ниже исторический.
 
-Результат: independent persisted active_detectors (migration all5; Telegram families отдельно), meaningful episode updates, immutable first origin и один outcome set, uniqueN/digest/aggregates, отсутствиеautomaticN20,72h/30d/12m/finite dependencies, compatible v2/commands/callbacks/export, безопасные dependencies и full no-CD profile. Один основной PR, required checks/review, merge/CD, exact-target discard прежней тестовой market history без архива/конвертации; private/settings/watchlist/credentials/infra иTA/Paper сохранены. Failed post-check — штатный rollback, не продвижение дальше.
+Результат: свежий визуальный аудит доступного Telegram клиента и bot-controlled исправления, объяснимый unified forecast для фактически работающей модели, измеренный ресурсный бюджет CW с запасом соседям, representative multiGB backup/restore и полный physical peak, ограниченное хранение серверных артефактов,30min/24h приёмка после последней поставки на неизменных source/settings/history generation. Один основной PR, required CI/review, merge/CD; необходимые hotfix в том же scope. DONE только по фактическому результату всех этих gates.
 
-Non-goals Goal1: visual polish (Goal2), receiver activation/стратегии/LLM/execution, полный перенос двух writer, новые external schedules, изменения соседних проектов/VPS expansion. Старые archives и уникальные experiments удалять только согласованным точным списком. Working≤35GB и отдельный physical peak обязательны, CPU throttling не заменяет обработку.
+Non-goals: новые функции/прибыльные thresholds, receiver/TA/Paper изменения, двух-writer реализация, увеличение VPS, изменения соседних проектов, самостоятельный полный no-CD regression run. Валидную light history5bb5712dd7144032941f5d7f72766522 повторно не сбрасывать. Working set со служебными файлами≤35GB; physical backup/temp/VPS reserve считаются отдельно. Никакого общего Docker prune. Старые backups/unique experiments/archives — только после нового точного согласованного списка и проверенной замены.
 
-### Validation Plan LIGHT-RADAR
+### Последовательность и Validation Plan Goal2
 
-| Риск/этап | Проверка/ожидание | Команда/среда | Gate |
+| Блок / finding / риск | Проверка и ожидаемый результат | Команда/среда/этап | Gate |
 | --- | --- | --- | --- |
-| Settings/activation | Roundtrip/defaultmigration/CAS/invalid/disabled0history/jobs; delivery mute независимо | Existing config/storage/events/bot tests + существенные regressions; isolated Windows tempDB | REQUIRED local |
-| Full processing | Оба рынка/4TF/5families, одинаковый offered→saved→episode→due→delivery ledger, immutable origin/math/retry/expiry/causality | Minimal complete controlled replay locally; real wall/CPU отдельно от accelerated retention clock | REQUIRED before initial push |
-| Retention/stats | 72h/30d/12month boundaries, used-input ownership/terminal cleanup, uniqueN по overlapping groups, exact export | Profiled existing outcomes/analytics/export/lifecycle fixtures | REQUIRED local/CI |
-| Code quality | Docs/Ruff/format/mypy, targeted tests | Python scripts/checks.py quality изroot; temporary local caches | REQUIRED local |
-| Linux/native/image | Current required CI, source-pinned native/security/recovery/image/qualification | Existing PR CI и trusted release наточнойrevision; Windows неLinux | REQUIRED premerge/CD |
-| Contracts/security | Owner negativeaccess/CAS/corruptstate/HMAC/strictACK/frozen retry/legacycallback/secret hygiene | Existing contract/delivery/release suites, no Codex Security calls | REQUIRED |
-| Delivery/transition | Exactsource/image/health/private equality/freshdata/newgeneration/no-oldalerts/TA untouched, reserve/rollback | Current delivery/reset runbooks through contabo-vps; fresh preflight | REQUIRED postmerge |
-| Server probes |1CPU/4GiB/450CPUs/510wall/600outer,35%idle start/15%stop; physical peak before operation | Only bounded isolated project-owned scenario; coreLinux validation viaCI | REQUIRED if applicable |
-| Final capacity/visual | Fresh screenshots, representative largebackup,30min/24h unchanged | Goal2, existingobserver; no cron/automations | PENDING Goal2 |
+| Прогрев и full path / F22,F42 | Разделить source bootstrap, уже наступившие расчёты, referenced recovery и future horizons; проверить динамику/inputs/terminal expiry. Source grace30s, due calculations60s при доступных inputs | Bounded readonly diagnostics/queue snapshots через contabo-vps, существующий observer; до baseline и тяжёлых операций | REQUIRED |
+| Forecast / F38,F42 | Actual episode/origin/membership/source usage rates и physical pages/journals, без startup churn или N20; единая арифметика с явными limits/reserves | Existing storage_meter/storage_model/capacity; targeted tests, representative isolated writer/retention scenario; steady VPS interval | REQUIRED |
+| Telegram / F32,UX | product-design:audit: fresh captured/screenshotted actual flow, navigation/empty/error/confirmation/cancel; desktop и доступная узкая компоновка. Mobile app не заявлять | Native Telegram available; capture evidence внеGit. Bot-only formatting/copy fixes; existing UI/UTF16/control tests | REQUIRED |
+| Cleanup / F24 и связанные IDs | Caller/script/contract/recovery inventory; доказанный REMOVE, полезное сохранить с основанием, пересечения CONSOLIDATE. Source security regressions без provider scan | rg/current source/tests/primary records; scoped local checks, current CI | REQUIRED |
+| Hardening/resources / F31 | UID/caps/readonly roots и фактический суммарный CPU/RAM/I/O, ordinary против recovery/repack/backup; бюджет с запасом другим проектам | Bounded Contabo/Grafana snapshots;30min/24h, attributable cgroups и whole-host metrics | REQUIRED |
+| Backup/capacity / F34 | Representative multiGB full integrity/independent restore/exact byte/numeric/private equality, actual time/resources и полный disk peak до старта | Canonical backup/qualification procedures; owned isolated data only.1CPU/4GiB/450CPUs/510wall/600outer;35%idle admit/15%stop, existing RAM reserve | REQUIRED |
+| Artifact retention | Latest2verified backups, current+previousgood release; rehearsal after saved proofs/repro, failed capture until investigated/replaced; exact lists for old unique data | Fresh metadata inventory/replacement/recovery requirements; owner decision only where needed, late with concrete list | REQUIRED |
+| Code/release | quality и нужные профильные checks; Linux/native/image required CI на готовом PR; actual merge artifact/source/private/health/smoke | Canonical checks.py quality, existing PR CI/CD. Standalone full workflow не запускать автоматически | REQUIRED |
+| Финальная приёмка | Закончить тестовые действия, принять baseline;30min затем24h unchanged version/settings/generation, сохранение interruptions, source/due/delivery/resource/reserve | Existing observer вручную по процедуре, без scheduled tasks/Actions monitoring | REQUIRED |
 
-### Findings и порядок
+Сначала выявить системный риск и проверить полный эффект, затем достроить подтверждённые интерфейсные/остаточные исправления и единственный основной PR. После новой модели и одного обоснованного исправления измеренного ограничения сохраняющееся общее отставание требует готовой ветки/сопоставимых measurements/вариантов владельцу; бесконечные локальные micro-optimizations не продолжать. Ordinary failures исправлять автономно в текущем scope. Независимую работу продолжать при недоступном UI/внешнем gate; конкретное согласование выносить поздно, с готовыми доказательствами и действием.
 
-Goal1 fixes F26,F49–F56 и кодовая частьF22/F38, использованные F24/F31; Goal2 завершаетF22/F34/F38/F42, F24/F31/F32, все visualUX и связанныеCAP25/CWSEC dispositions. Все прежниеfindingIDs/решения ниже сохранены. Не закрывать finding общим зелёнымCI или переносомвDEFER.
+### Текущий checkpoint Goal2
 
-Сначала новый минимальный полный путь наоднойSQLite; затем остальныеfunctional сценарии, UI routing/contracts и прогноз; локальныеchecks/self-review, одинinitialpush/PR, requiredCI, merge/CD иразовыйпереход. Переноситьстаруютестовуюhistory не нужно. Если после новоймодели иодногообоснованногоисправления fullpath всёещёнеуспевает — показатьготовыйкод/измерения/варианты без новойбесконечнойцепочкиоптимизаций.
+30Oct2026, runtime main12cf5d4/config6/generation5bb5712 неизменны; новых reset/restarts/production changes не было.18:18UTC sources1648/bootstrap0/late0;18:29late506/1644;19:03late1414/1652;20:01late1542/1648, sample source lag~990–1110s.20:01working173.967MB/events13441/episodes7430, forecast439.7GB. Это FAIL эксплуатационной своевременности, не принятый baseline/30min/24h и не доказательство35GB fit. Future horizons отдельно.
 
-### Текущий implementation checkpoint
+19:03analytics256results/45.907s: readonly calculate1.947s/threadCPU0.750s, apply11.352s/threadCPU8.924s,32.538s другие event-loop tasks. Lifetime observation979.034CPU-s/37204calls; closed_ws_source242.986/35432; repack42.491/521.19:21bounded readonly probe:8 старейших INCOMPLETE outcomes уже COMPLETE при повторном расчёте из имеющихся inputs;8старейших PENDING gaps полностью покрыты. Возраст~22min;probe0.503CPU-s/readonly changes0. SOURCE_LIMITED_OR_UNKNOWN — состояние прошлой попытки, не доказательство отсутствия ready backlog. F22/F38/F42 OPEN; observer должен отражать это без тяжёлого постоянного recalculation.
 
-Из18AC текущей Goal код завершён для17, включая6подтверждений06-01/07-04/08-01/09-02/13-03/13-04 поT-AD02/T-EP01/T-EP02/T-FC01/T-GC01/T-FP02. По12-04 обновлены только3affected packages и пройдены88security/transport/config fixtures; image/native CI и deployment остаются обязательными. По09-06 согласованы public v2 projection/handoff и pinned reference consumer qualification42accepted/126negative. По12-05 canonical full no-CD profile добавлен и проверены его guards/результаты; отдельный полный запуск не выполнялся и не требуется для настройки.13-06 — оставшаяся кодовая/эксплуатационная квалификация. Ни один из этих локальных статусов не означает merge/CD или успешную приёмку общего VPS.
+20:01ordinary3s snapshot CW0.678core/534MB cgroup, host20.3%idle/4.9%iowait/6.73GiB available. CW cgroup writes22.36GB since process start18:00 при working174MB; recent+12.48MB/3s и1132writes/3s. Это наблюдение write amplification, не steady budget/причина всех задержек. Earlier3s snapshots0.825–0.861core/31.1–35.4%idle сохранены. Isolated native finite profile NOT_STARTED:30s admission samples idle10.4–39.2%,35% rule сохранено, production unchanged; нового контейнера/тестовойБД наVPS не создано.
 
-**Реализовано по коду17/18AC:04-06,05-02,06-01/02/05,07-04/06,08-01/04,09-02/06,11-01,12-04/05,13-02/03/04.** Это незамерженная implementation branch; audit percentage не пересчитывался. Existing50READYsnapshot остаётся snapshot, затронутые инварианты проходят regression. PR93 открыт на7b11b8c; merge/CD ещё не выполнялись. Scoped read-only VPS snapshot подтвердил runtimeb254, generation8a0e8841, working9.00GB/free20.47GB; staging/DB/runtime не менялись.
+Low-impact passive native profile: same runtime/pid,62.99wall,389samples/no lost, controller0.103CPU-s/children1.472CPU-s; Python/SQLite заметны, compression не установлено как главная причина. Дополнительный allowlisted code-frame sample PARTIAL: ABI sleeping control4/4, strict1.5CPU-s collection cap остановил сбор после14.4s; min sample gate не ослаблялся. Не выдавать смещённые частичные frame proportions за CPU%. Малые profile outputs сохранены внеGit; тяжёлые runtime dumps/DB copies не делались.
 
-| Блок / Evidence IDs | Реализованное и доказательства | Ограничения |
-| --- | --- | --- |
-| T-EP01/T-EP02 | Meaningful live updates, immutable origin/method/horizons, one outcome set; shared result UI/agent/export.66admission и36consumer tests PASS; readonly0writes, origin expiry explicit unavailable | Windows/mock; native export converter SKIP |
-| T-DG01/T-AN01 | Unique episode digest/ranking/cohorts, overlapping groups explicit; same-SQLite numeric result/membership/shared-provenance tables, atomic12month calendar expiry, exact numeric export.51archive/storage tests и38consumer cases PASS | Не physical capacity model |
-| T-ME02 | Historical/rearm repetitions coalesce; separate market/receipt clocks; fresh historical→live promotion сохраняет origin/jobs; first live alert и restart/rearm.110profile tests PASS | Full VPS timing не подтверждён |
-| T-AD02 | Persisted independent active_detectors, migration defaultall5, CAS UI, invalid/stranger/stale/duplicate callbacks, live apply; legacy notification callbacks сохраняют смысл.122tests+corrected readback1test PASS | Visual review Goal2 |
-| T-FP01 | Identical8stream/5family/104frame replay mainb254→candidate72a7308:188→76observations,36→36episodes,752→144completeoutcomes,156→0N20jobs;16initial numeric facts hash совпадает. Wall14.585→3.849s/CPU11.641→2.891s;due0/late0 уобоих | Исторический finite benchmark; не текущая broad capacity/24h/physicalIO. Reports/hashes внеGit |
-| T-N20 | Runtime scheduler не вызывает N20; legacy recompare read-only→episode analytics.63UI/async cancellation/publication/fullpath tests PASS. Old jobs в legacy fixtures создаются явно, assertions сохранены | Canonical scripts переведены на episode units поT-FC01; legacy codecs/scenario qualification сохранены явно |
-| T-WN01 | Default72h/30d, mutable admission rejects incompatible horizons/windows, old snapshots read-only; used-vs-unused source/context expiry и полный4320-candle outcome.67storage/policy tests,16boundary/fullpath cases PASS | Linux/native ещё required CI |
-| T-WN01 transition | Explicit exact-generation light candidate preserves original private recovery/independent restore; только candle_days→3/active migration+revision; verify_private checks deterministic allowlist. Existing receiver/installer поддерживают pinned light mode/consumed-record preservation; valid light history reset refused |50policy/delivery/boundary tests PASS6.72s;4Linux installer cases и1старыйnative case пока SKIP; не Linux/VPS PASS |
-| T-FC01 | Format13 forecast: episode origins и meaningful memberships, measured new SQLite writer/index coefficients, first-used/arrival byte ledger, used-only extra leases, noN20prior,35GB/free pages/journal reserve; same-scope rates.64capacity/archive/model tests PASS138.83s,57targeted forecast cases PASS34.61s;quality PASS335/133 | Windows3.12/SQLite3.49.1. Calibration is scenario, not population bound; actual broad VPS/physical backup peaks remain Goal2 |
-| T-GC01 |62controlled weeks обоих markets/4TF/5families, restart, mixed repack, exact numeric/membership equality, finite final GC. Fixed stale episode aliases/origin/shared result deletion between bounded batches and summary progress reporting.200same-timestamp members→20episodes/80completeoutcomes;analytics unchanged after detail expiry | One fixture default2directions/market; not production arrival rate. Linux dbstat unavailable locally; image CI required |
-| T-FP02 | Current30logical-minute fullpath:104/104closed inputs,76meaningful observations/36episodes,144COMPLETEoutcomes,0N20jobs,all due checkpoints0/late streams0;Telegram2/agent136. Initial16numeric facts hash unchanged. Wall4.137s/CPU3.188s,SQLchanges35742 | Native process IO/RSS unavailable Windows. Counter overhead included; no broad/shared-host capacity claim |
+Подготовлен реальный paced local fullpath: independent finite wire, actual WS receiver shards, partial frames5s/closed TF bursts, both markets/4TF/5detectors, source→meaningful episodes→due outcomes, exact closed mocked referenced REST, signed agent ACK/mockTelegram, competing analytics/retention/repack/backfill/poll/heartbeat. Clock offset1:1, no acceleration; подготовка и measured interval раздельны, future jobs не backlog. Windows baseline1648streams/130s:2472offered/1624accepted,phase~138s/128CPU-s,max source~138s,771due pending; observation97.53CPU-s/1624calls vs source10.78/repack1.23. Этот full-process negative подтверждает bottleneck admission/publication; не native/VPS capacity. First fixture attempt had missing REST stub and teardown lifecycle failure: FAILED, owned local fixture preserved, not accepted comparative evidence. Corrected fixture terminates and includes REST/recovery. Fair final A/B uses frozen identical fixture/source manifests; comparison PENDING.
 
-| T-DEP01 / F26 | Official GHSA/PyPI readback; certifi2026.7.22→2026.10.19,uv0.13.0→0.13.4,setuptools84.0.0→84.1.0. Selective hashed lock regeneration, no unrelated version drift; all artifact hashes match release metadata. Compromised emSign ECC G3 absent in new trust bundle; other roots not removed. uv pip check PASS;88release-security/receiver/vendor/agent/config tests PASS2.08s;quality PASS | Updated isolated Windows environment, not actual Linux image/production. No fresh exhaustive scan or Codex Security calls; required native/image/deployed-version gates pending |
+Один согласованный кандидат системного исправления IN_PROGRESS, ещё не поставлен: producer передаёт уже проверенный episode независимым consumers; outcome callback получает проверенную immutable event metadata; service intents используют прежние checked revision references вместо повторного вложения/проверки schema-less episode/full outcome; raw runtime reads повторно используют только pure validated-byte transform в существующем1MiB budget, без DB existence/authority cache. Actual rows/body references заново проверяются, generic/replaced callbacks сохраняют прежние flush/reload и singleton semantics. Controller opt-in: COMPLETE outcomes atomic groups≤4 с CAS/commit-before-latency/yield между units; incomplete recovery отдельно. Agent finite drain≤8/250ms, существующий singleton transport/lock/bytes/retry и clock recheck; unknown/negative ACK прекращает серию. Это один publication-path candidate, не разрешение на следующую цепочку оптимизаций.
 
-| T-AG02 / F55 | Compatible closed v2 settings projection (internal activation остаётся в domain history/export), own observation reference для meaningful update, late outcomes/replay толькоorigin. Regenerated synthetic example7715bytes/SHA0a9d44ed и frozen public-field fixture.58agent/recovery/export/episode/UI tests PASS3.00s,1native skip;quality PASS | Reference parser v2/v1/base blobs и hash-locked Pydantic2.14.1 изreceiver lock:42accepted,по42authority/unknown-activation/future-time rejected. Только schema boundary, receiver/VPS/config/ingest не менялись; actual live acceptance внеCW |
+Local final quality340formatted/mypy133/docs и diff check PASS. Targeted84tests PASS для snapshot/group/cache/async/catalogue/recovery; дополнительная outcome/admission/recovery группа41PASS, одна ошибка новой test fixture исправлена и отдельно PASS. Small paced joint scenario1PASS/1Linux-only SKIP; Linux/native PASS не заявлен. Проверены group rollback/retry с bounded revision references, cancellation/commit timing, corruption/missing/replaced callbacks, fresh reads/cache bound, signed agent/unknown ACK/owner stop. Final fixture v2 фиксирует endpoint до cleanup и видимость committed outcomes; ранние development runs не объединять в сопоставимый A/B. Далее один frozen Git candidate и одинаковые fixture/seed/offered manifests для baseline/candidate. Native/current CI, representative A/B и operating acceptance ещё REQUIRED. Никакого нового standalone full workflow, PR/push или расходов Actions Goal2 пока нет.
 
-| T-FULL01 / F56 | Canonical `checks.py full` с отдельным manual exact-main read-only workflow; Linux3.11/native/quality/whole pytest/JUnit/image/package roundtrip/joint boundary, noCD/no credentials/no schedules. Wrong SHA/main/dirty/Windows/remote Docker/report reuse fail before work; records actual commands, stages/skips/not-run/residuals, owned package cleanup.37profile/delivery guard tests PASS0.18s;quality PASS337/133; `full --plan` reports PLAN_NOT_EXECUTED | Полный профиль не запускался. Обязательный Linux/native обычногоPR и последующийCD остаются pending; local guard tests не substitute native suite |
+Визуальная часть POSTPONED_OWNER: владелец ответил «Пока продолжай без визуальной проверки». Telegram getApp раньше завершился app approval timeout; fresh screenshots/interactions/test messages не было. Visual/UX не закрыты и не объявлены N/A. Невизуальная работа продолжается; перед финальным baseline нужны завершённые test actions/разрешённый итог этого блока. Agent наVPS сохранён OFF/INTEGRATION_NOT_CONFIGURED, receiver/TA/Paper не менялись.
 
-| T-LEG01 | Self-review: untagged v1 сохраняет собственную reference/method, new EP требуетявныйorigin; metadata-only bootstrap не создаёт старые per-candle jobs. Already-admitted v1 обслуживается прежней declared definition; numeric calculate AST равенb254e6e (SHA8af4425c…). Unknown definition→INVALID_SOURCE без relabel; missing/unknown admission fail-closed.105compatibility/profile tests PASS8.58s+1native skip;62focused final cases PASS7.10s+1skip;quality PASS | Legacy cohort fixtures теперь явноmethod1; current unique-episode path проверяется отдельными new-unit fixtures. Linux/native и full requiredPR пока pending |
+Branch codex/interface-acceptance-20261030/base12cf; основной PR не создан. Detailed proofs/manifests/raw profiles внеGit в acceptance-20261030. Temporary ownership: failed synthetic fixture cw-processing-replay-ok6oe2au заменён завершённым v2 A/B;31Oct удалён только этот owned local root92.94MB и завершённый queue test root10.35MB после проверки paths/reparse points. Reports/source manifests сохранены; прочие pytest roots и bounded uv profiler cache под acceptance archive учтены отдельно. Production data/old experiments не очищались. Старые archives/experiments не удалялись. Next: закончить один source-frozen A/B, подтвердить native full path в допустимом Linux контуре; затем forecast calibration/resource/disk inventory/backup qualification/остаточные findings и единственный PR. При сохраняющемся native/systemic FAIL после этого кандидата — готовая ветка/измерения/варианты владельцу, без следующей серии micro-fixes.
 
-| T-REV01 | Final local review/profile:100analytics-recovery/async/activation/Telegram/episode scenarios PASS; единственный failure — прежнее expectation30GB для отсутствующего budget, исправлено на согласованный35GB и повторено отдельно. Freshorigin/main b254 unchanged; open draftPR57 сохранён, protections ci-required strict/admins, approvals0/conversation resolution | Это не primaryLinuxCI. Передinitialpush fresh GitHub main/protections перепроверены; primary recordPR восстанавливается по head codex/light-radar-20261030; бюджет/observation/VPS не изменялись |
+### Проверенный результат этапа31Oct2026
 
-| T-CI01 | PR93/run41094801697: Linux/native joint proof129572frames/8292608owners/313564240metrics/shared50000groups/1050000packets,13.45GB tempDB removed; docs/native build/quality PASS.29legacy/default-fixture suite failures разобраны и исправлены однимbatch,182affected local cases PASS; no runtime/gate changes | Initial requiredCI FAIL; fresh Linux/native/image/package results pending. Native proof is structural geometry, not capacity/live SLO |
+Local commit2e7a358 сохраняет один publication candidate и paced fixture v2; нового PR/push/CD нет. Fair A/B одинаковых committed fixture/seed/offered SHA: обеим версиям предложено2472closed/1648streams за130s. Windows/fallback baseline12cf:accepted1640,CPU122.83s,max source133.42s,due pending756,max completed due132.66s,TG68/signedagent23. Candidate2e7:accepted1749,CPU119.22s,max source120.94s,due pending336,max completed due131.23s,TG148/signedagent56. Worker/receiver errors0; temporary sources/DB после каждого успешного прогона удалены. Pending delivery/ages сохранены отдельно; agent fixture содержит старые seed intents. Whole-path SLO FAIL в обеих версиях; улучшение отдельных результатов не закрывает F22/F42. Windows shared-machine comparison не native acceptance; короткие независимые checks не являются измерением изолированного CPU budget. Следующего performance candidate не начинать без разбора этого системного результата.
 
+Подготовлен paired Linux/native exact-image/source-overlay test с тем же paced helper: isolated networknone, physical owned work≤1GiB,1CPU/4GiB/450totalCPU-s/510wall/600outer и прежние35%/15%/1.5GiB reserve. До старта требуется7GiB disk headroom. Admission22:10UTC:6пятисекундных samples idle6.9–31.7%, RAM6.99–7.27GB; NOT_STARTED_RESOURCE_ADMISSION. Container/testDB/rehearsal не создавались, runtime ID/start/restarts/config6/settings hash/generation совпали до/после. Бот не приостанавливался. Local Linux отсутствует: WSL distributions не установлены, Docker/Podman CLI не найдены; ничего не устанавливалось. Native source-controlled comparison остаётся REQUIRED, его отсутствие не N/A и не PASS.
 
-Proof archive: локальный light-radar-20261030, включая F26-release-metadata/F26-lock-trust-check/F26-tests-01 и policy-storage-next/policy-boundary/policy-installer/quality-policy records и light-replay-comparison.json. Обе CLI replayDB и extracted main source/ZIP удалены после сохранения hashes/harness; освобождено12,809,356bytes. 23owned temporary directories этого финального блока удалены после сохранения proofs/repro; освобождено337,097,297bytes (temporary-cleanup-b1365db.json внеGit). Fixed Ruff/mypy/uv caches и прежние Goal directories сохранены до отдельной финальной сверки; это не удаление unknown/user data. Новые schedules/платные операции не создавались.
+22:06UTC runtime12cf/config6/generation5bb5712:working328.66MB,events27383/episodes15606,late805/1480; earlier22:02late279/1480, поэтому краткий спад просрочки не устойчивость. Analytics184results/59.626s,referenced recovery33/oldest202s. Native readonly snapshot changes0. Same container/restarts0; virtual host6CPU.3s CW0.78–0.80core/~590–601MB cgroup; snapshot limited, не steady operating budget. Grafana node15min/step60s показывает idle13.95–23.98%; latest node sample age8.4s. Sparse container series требуют5min rate вместо неполной2min выдачи; CW0.58–0.82core в отдельных5min windows, writes~2.10MB/s. Prometheus/cgroup RAM definitions и sample intervals различаются; их не усреднять в один точный budget. Другие проекты и monitoring не менялись; отсутствие ошибок соседей/их SLO этим не доказано.
 
-Следующий шаг: requiredLinux/native/imageCI единственногоPR93 на актуальнойrevision. InitialCI41094801697: docs/quality/native build/joint13.45GB storage boundary PASS; suite2558PASS/29FAIL, image/package не запускались из-за dependency failure. Batch исправляет explicit frozen-v1 archive/cohort fixtures, legacy comparison queue seeds,72h/used30d expectations, meaningful callback rollback и запретN20 в maintenance;182affected Windows cases PASS после2исправлений clock setup, quality PASS. Assertions integrity/rollback/exact facts сохранены, приложение/gates не ослаблялись. Freshorigin/main b254 иprotections подтверждены. Затем controlled CD/light transition. Полный standalone no-CD main профиль не запускать автоматически. Новый объяснимый forecast реализован; его observed rates/physical peak и35GB fit ещё не подтверждены наVPS. Добавлен native-image light transition fixture (syntax PASS; выполнение только required image CI). Root installer Linux tests и representative capacity/runtime обязательны на соответствующих этапах; до них не объявлять поставку/Goal завершёнными.
+F38: штатный текущий прогноз445.70GB явно не accepted forecast. Sensitivity точного текущего episode archive writer/всех indexes на512episodes: unshared vs shared same-source/config provenance —9360→3328B/episode при1membership,14888→4712 при4,43352→12808 при20. Numeric facts/dimensions сохранены; Windows SQLite in-memory measurement не native mature occupancy. Нездоровый4h startup rate~91452episodes/day при3328B даёт~111.4GB только годового архива, при4members~157.7GB. Это условный sensitivity, не прогноз/доказанный нижний bound. Одной поправкой sharing и выбором удобного старого26–27GB расчёта соответствие35GB подтвердить нельзя. Изменений annual schema/rates/thresholds/retention не сделано.
 
-Следующая Goal2 после DoDGoal1: fresh ProductDesign visual review, F24/F31/F32/UX dispositions, representative multigiB backup/recovery и physical peaks,30min/24h на неизменных source/settings/generation. Новую валидную историю не сбрасывать. Backups latest2verified, releases current+previousgood, rehearsals после saved proof/repro scenario, failed captures не размножать; старые уникальныеarchives — отдельный exactlist. Один основной PR наGoal, никаких cron/automations/Security или соседних projects/VPS expansion.
+F34: fresh metadata inventory22:02UTC free28.794GB,backups3.280GB,rehearsals15.216GB,releases0.585GB; обход без partial.3releases включают current12cf/previousb254 и olderd66. Metadata usage scan22:12UTC3.8s/62457FD: открытых rehearsal files нет,103directories,83с небольшими reports; retained stopped CW test containers ссылаются на часть inputs/work. Ancestor read-only mounts monitoring exporters не являются recovery dependency; их не менять. Уникальность inputs и наличие проверенной воспроизводимой замены ещё не установлены; удаления не разрешены. Exact inventory/report identities сохранены внеGit, no general prune. Physical budget вычисляется отдельно от35GB ceiling:source+raw+newarchive+две retained copies+7GiB reserve и уже занятое другими данными. Worst-case compression не предполагается; текущая файловая система не обещает размещение35GB working с таким полным peak. MultiGB backup/restore не выполнялся, gate остаётся REQUIRED.
+
+F24 current disposition: original private wrapper implementations отсутствуют; launcher используется. Controller.diagnostics имеет test_bot caller, сохранён как compatibility. Legacy converters/native readers нужны для archives/negative/parity tests; hardcoded exact-target qualification остаётся историческим tooling, не текущим runtime gate. Two-writer реализация не перенесена; уникальные серверные inputs и stopped test containers — отдельный точный cleanup scope после замены/согласования. Эти объекты не объявлены dead по import map. F31 hardening current UID10001/read-only/capdropALL/nnp подтверждён; resource budget и стабильность OPEN, caps не используются как исправление backlog. F32/UX visual POSTPONED_OWNER сохраняется.
+
+Queue diagnostics candidate теперь показывает pending_queue с retry/original due age отдельно от last failed attempt. NOT_RECHECKED/LAST_FAILED_ATTEMPT_NOT_CURRENT_INPUTS явно исключают вывод о current readiness; прежнее fail-closed SOURCE_LIMITED_OR_UNKNOWN сохраняется. Два bounded samples вместо полного queue scan/recalculation. Existing observer/queue suites45PASS, quality340formatted/mypy133/docs PASS. README/architecture очищены от противоречивых текущих35d/30GB/N20 формулировок; исторические format/recovery процедуры сохранены. Ни AC-13-06, ни общая Goal2 не закрыты. Реализовано по коду17/18 общих AC последовательности, operating evidence REQUIRED.
+
+Следующий зависимый шаг — native whole-path qualification при допустимом resource window; повтор без изменения условий не запускать вслепую. После неё применить согласованное stop rule: при systemic FAIL представить готовую ветку/сопоставимые measurements и варианты изменения подхода, без очередной цепочки micro-fixes. Независимо завершить проверку replacements/retention policy и единый physical ledger; visual возобновлять только по поручению владельца. Не принимать baseline при текущих source/due/forecast failures.
+
+### Qualification tooling и ожидаемое решение31Oct2026
+
+Следующий локальный блок F34 подготовлен без новой performance-оптимизации приложения:
+canonical scripts/qualify_framed_backup.py и процедура closed-snapshot qualification.
+Source≥2GiB с exact size, Linux/native/cgroup≤1CPU/4GiB/no swap и inherited CPU≤450s;
+новый exclusive physical work, additional peak3×source+framing+7GiB. Исходный snapshot
+открывается только как файл: private copy/hash, full current native CHECK/FK/independent
+archive readback, затем независимый physical restore/full SHA256/private+numeric sample
+equality и повторный hash/identity оригинала. Numeric sample≤8 отдельно от полного
+validated snapshot byte equality. Copies/empty-WAL sidecars удаляются только после
+persisted result; отдельный cleanup.json показывает завершение, при ошибке новые
+материалы сохраняются. Оригинал и рабочая light history не меняются.
+
+Local18tests PASS для driver+existing framed-backup; после завершения cleanup guards
+affected4driver tests PASS. Canonical quality342formatted/mypy133/docs PASS. Это
+Windows functional evidence, не multiGB/Linux/VPS qualification. Три собственных
+pytest roots backup-qualification01/02/03 очищены после сохранения small reports и
+cleanup receipts внеGit; рабочие/старые серверные данные не затронуты. На сервере тяжёлая
+проверка backup/restore ещё НЕ запускалась и F34 не закрыт.
+
+22:41UTC immutable readonly source preflight подтвердил потенциальный representative
+input: pre-97592ec15d0716ba7e7072a7c951e0008fb77788-1792737395.sqlite3,2962976768B,
+schema2/config5/old generation710614f1,69tables,>1.37million detail records и другие
+заполненные layouts. Snapshot закрыт, sidecars отсутствуют; changes0 и stat identity
+до/после совпали. Ни полный source hash, ни integrity этим preflight не проверялись.
+Это старое реальное test-history population; текущие episode tables проверяются
+отдельно. Снимок нужен незавершённой F34 qualification и не кандидат удаления сейчас.
+
+22:26cached forecast компонентов:442.28GB total,392.02GB annual,~50.25GB остальных
+категорий. Startup extrapolation/overhead2.17 и staging/repack mix не являются steady
+production footprint. Candle/context effective windows20.56/12.19days учитывают
+использованные inputs доступных30d details; сами по себе не нарушение general72h.
+Current writer sharing sensitivity и эти категории не складывать как два независимых
+готовых прогноза. F38 остаётся OPEN до здорового периода и зрелой модели occupancy.
+
+После изменения фактических условий ресурса выполнены ограниченные resource-only
+admissions22:24/22:25/22:28UTC. Все NOT_STARTED: отдельные intervals достигали63%idle,
+но30s последовательного допуска35% не получено. Последний controller ожидает не более
+60s, сохраняя саму непрерывную30s проверку,35/15 thresholds и все maxima. Shared total
+CPU450 дополнительно ограничен между двумя child cases; внешний deadline резервирует
+cleanup. Containers/fixtureDB/VPS rehearsal files не создавались, before/after runtime
+identity совпадает. Нет активного Linux-test handle для дальнейшего ожидания.
+
+Владельцу отправлен один конкретный запрос на одноразовую паузу только CryptoWatcher
+≤10min для frozen native pair и восстановления того же контейнера с проверкой
+истории/private state. На этапе подготовки ответ был PENDING (разрешение и фактический итог — в последнем checkpoint); подготовлен one-pause-native-pair-manager.py внеGit и
+one-pause-proposal.json с source hash. Manager связан с исходным container StartedAt
+и отказывается от повторной паузы после восстановления; finally пытается восстановить
+тот же бот даже при ошибке probe cleanup. Source/syntax review выполнен, live stop/start
+не выполнялся; Docker outage оставит restoration UNCONFIRMED, не выдуманный PASS.
+Старые one-off approvals отменённой Goal не переиспользуются. До явного ответа stop/start не выполнять, новые CPU gates не ослаблять.
+Визуальная проверка отдельно POSTPONED_OWNER; baseline/30min/24h не приняты.
+
+### Последний checkpoint: ранний Draft PR разрешён31Oct2026
+
+Владелец разрешил продолжить текущую Goal через ранний единственный Draft PR Goal2;
+узкая часть — отдельный capped processing CI job, scope самой Goal/PR не сокращён.
+Встроенный get_goal теперь active; новая Goal не создавалась. Main12cf5d4 независимо
+перечитан через GitHub primary commit. Public fetch и CLI API имеют transport/TLS
+failures; GitHub connector repository/commit/PR reads работают. Current protection
+read через integration403, прежний strict ci-required сохраняется как известное
+основание; перед merge потребуется актуальное primary read без обхода protections.
+DraftPR57 чужой, head5be499d сохранён; remote interface-acceptance branch отсутствует.
+
+Подготовлен scripts/qualify_processing.py, отдельный tests/processing.Dockerfile с
+hash-locked dev dependencies и ограниченным build context. Обычный production image
+не изменён. Native case использует existing tests.processing_replay/assert_joint_result,
+оба рынка/fourTF/fivefamilies/1648streams/2472offered, frozen seed/offered SHA;
+input не облегчён. Actual cgroup/rlimit проверяются внутри, hostcontroller наблюдает
+CPU/RAM/I/O/диск и bound elapsed с прежними1CPU/4GiB/450CPU-s/510wall/600outer/35%/15%.
+Fixture mock-only/networknone; source metadata привязана к image/tested CI SHA.
+
+CI processing-qualification независим от ordinary suite и входит в существующий
+ci-required без ослабления прежних checks. Выполняется в отдельном standard ubuntu
+runner без VPS/SSH/deploy/secrets; dedicated report artifact14days включает actual
+limits, states/errors/resources; resource stop не PASS/FAIL throughput. Собственный
+synthetic work удаляется после reports, production/старые archives не подключаются.
+Сборка ephemeral qualification image не поставляет её на VPS. Canonical manual
+full-main workflow/release/CD не запускается и не меняется. Дополнительные платные
+runners/resources не разрешены и не заказываются; included balance не выдумывается.
+
+Local quality344formatted/mypy133/docs PASS; guard/timeout/workflow-trust4tests PASS. Это
+Windows functional checks, native throughput PENDING required CI. Предыдущие local
+regressions publication/cancellation/CAS/reference/queue/backup остаются применимыми:
+application candidate не менялся в этом блоке. Self-review проверяет cumulative
+patch/CI resource enforcement и сохранение scope/данных. Push/PR/check/run IDs пока
+PENDING; после публикации брать primary records latest revision, не rerun ради статуса.
+
+Publication sourcebranch codex/interface-acceptance-20261030/base12cf5d4;
+предыдущие локальные commits сохранять, unknown/user branches не менять. При публикации
+через connected Git Data проверять exact tree и сохранять локальную prepublication
+историю до безопасной синхронизации. До готового CI результата не делать следующего
+application performance candidate. При systemic failure — ветка/измерения/варианты,
+не очередная серия microfixes. F34/F38/F42/resource/artifact policy, visual
+POSTPONED_OWNER, merge/CD/30min/24h и operating AC-13-06 остаются REQUIRED.
+
+### Предшествующий checkpoint: допуск кандидата не получен31Oct2026
+
+Владелец уточнил статус: CryptoWatcher — тестовый экземпляр, не прошедший все AC,
+он сейчас не используется для торговли. Название production у deployment environment
+не означает продуктовую приёмку.31Oct разрешено остановить этот экземпляр на весь
+необходимый период одной полной проверки; прежний отдельный10min pause cap снят.
+CPU/RAM/test deadlines/35%admission/15%stop, защита данных и соседей не менялись.
+
+Исполнена candidate-only процедура без повторного baseline: operation
+cw-paused-candidate-oa44xl1x, frozen source2e7a358 и прежние fixture/seed/offered SHA.
+Менеджер3e13b347cf76fead37f413f397fafb1d6fc06959b76ceda51a542d8fadbaa0fb,
+inner a67f51f6bab104cd05af46318275f0a9cfdb5ed34f49a7755a3039e1f619f0af.
+08:16:46–08:17:46UTC admission не получил continuous30s idle≥35% за60s: idle
+3.12–69.35%,iowait0.21–41.93%,RAM7.49–7.78GB/freeFS28.25GB. Контейнер/fixtureDB
+не создавались, test CPU/measurement ещё не начинались. Inner state
+NOT_STARTED_RESOURCE_ADMISSION, candidate_slo_pass=null. Внешнее CANDIDATE_FINISHED
+означает завершение controller, не PASS обработки и не доказанный FAIL кандидата.
+
+Тот же e1ff9808 восстановлен08:17:47UTC после82.514s паузы, health healthy; image4288,
+source12cf/config6/generation5bb/private SQL SHA b2f663c5 до/после совпали. Primary
+single-candidate-result01.json сохранён внеGit.08:20:20 bounded readonly snapshot:
+heartbeat/components healthy,1084streams/734unknown/bootstrap734/recovery926; это
+прогрев, не source readiness PASS. Аналитика194outcomes/10.631s. Повторный snapshot08:25:41UTC:1080streams,unknown/bootstrap/recovery0,late186;
+analytics5outcomes/13.732s. Прогрев завершился, но source timeliness FAIL на прежней
+версии; не continuous acceptance и не результат кандидата. Старую history,
+backups/unique experiments/TA/Paper/credentials и другие проекты не меняли.
+
+Grafana node1min подтвердил iowait в том интервале; disk busy~8.9–38.9% на минутных
+окнах не означает saturation100%. Cgroup1min sparse/incomplete;5min rates захватывают
+время до остановки и после восстановления (в том числе CW~1.49–2.44MB/s writes).
+Короткий peak нельзя приписать только соседним проектам или считать исчезнувшей
+нагрузку хранения CW сразу после stop. Источник peak не установлен; no causal claim.
+Сохранён single-candidate-grafana-context01.json, no host process-history coverage.
+
+Повторять ту же VPS попытку/новую паузу без отдельного решения не планируется.
+Предлагаемый выход — тот же frozen candidate-only сценарий в изолированном Linux CI
+с hard1CPU/4GiB/450CPU-s/510wall/600outer; после PASS всё равно нужны shared-VPS
+post-delivery30min/24h. Existing full-validation.yml только exact current main и не
+принимает unmerged candidate. Ordinary PR validation содержит native broad scenario,
+но сама по себе не доказывает1CPU/4GiB caps. Ранний единственный Draft PR Goal2 с
+целенаправленной capped qualification до завершения всего scope — изменение прежнего
+порядка публикации; владелец31Oct явно APPROVED. Это тот же основной PR всей Goal2,
+не отдельный экспериментальный PR. Merge/CD по-прежнему только после оставшихся gates.
+На момент этого checkpoint push/PR/Actions ещё PENDING, результат не предсказывается.
+Остаток included minutes/расходы отдельного запуска пока неизвестны; платные runners
+или дополнительные расходы без согласования не разрешены. Последний fetch
+31Oct08:22UTC завис без ответа и прерван по exact PID/parent/command только своего
+HTTPS transport; tracked worktree не изменён. Последний подтверждённый origin/main
+12cf5d4, актуальность remote на момент публикации нужно установить заново.
+
+Frozen payload13files/65542B собран и byte-roundtrip проверен внеGit:
+single-candidate-linux-payload01.zip SHA5260e1e360e92d8666266a84e64c01dd642f301991c9faa9b99eccd805804177.
+Это только reproducible mock inputs/source overlay/entry/manifests; нет пользовательской
+БД или credentials. Нужны pinned native image и enclosing resource controller;
+архив не выдан за выполняемый готовый CI workflow. Runtime unchanged, operating
+AC-13-06/F22/F34/F38/F42 и прочие gates Goal2 остаются OPEN. Ни baseline, ни суточный
+замер не приняты; новой application optimization chain и schedules нет.
+
+### Предшествующая проверка baseline и восстановление31Oct2026
+
+Владелец разрешил одну паузу только CryptoWatcher≤10min и продолжение существующей
+Goal2. Разрешение ИСПОЛЬЗОВАНО: pause362.510s, тот же container e1ff9808 восстановлен
+31Oct07:15:22UTC; image4288c296/source12cf/config6/generation5bb5712, private SQL hash
+до/после совпали, health PASS. Настройки, история, credentials, TA/Paper и другие
+проекты не изменены. Новая пауза этим разрешением не покрывается. Primary records
+approved-pause-result01.json/postcheck01.json сохранены внеGit. Встроенный get_goal
+после явного resume всё ещё возвращает blocked; доступные tools не имеют операции
+resume. Это ограничение bookkeeping, не новое решение остановить разрешённую работу;
+повторная Goal не создавалась и фиктивная активация не заявляется.
+
+Полный baseline12cf native result получен на frozen paced fixture1648streams:
+2472offered,414accepted; phase140.795s/134.064CPU-s, seed113.519s/94.201CPU-s;
+max source140769ms/p95135623ms, due pending821/oldest140794ms, completed due max125512ms,
+mockTelegram0/signedagent7, worker/receiver errors0. Observation exclusive97.588CPU-s
+при414calls. Baseline SLO FAIL. Это изолированный синтетический синхронный burst
+системного пути, не обычная production нагрузка или суточная приёмка.
+
+До candidate SEED_COMPLETE host idle упал до9.76%<15%; controller корректно остановил
+только тест, exit137/noOOM. Весь probe283.535s/248.373CPU-s,peakRAM167.584MB,
+physical writes1.449GB. Полного native candidate результата нет, verdict PENDING,
+а не FAIL/PASS. Native baseline файл22631B скачан с проверенным SHA; manifest и
+controller report43232B независимо сохранены с SHA6829e99930c16737ee0673f9a11d4da1edf0e4050ca40a663fa0005ededca698.
+
+Две ограниченные попытки candidate-only без дополнительной паузы:07:29UTC не
+получен continuous30s gate35%, контейнер/БД не создавались;07:33UTC gate пройден,
+но через9.462s preparation host idle13.21%<15%, exit137/noOOM,7.956CPU-s,
+peakRAM74.482MB,writes28.742MB. Container удалён; production before/after ID/start,
+image/config/settings hash/generation совпали. Controller report6452B SHA
+c20475b0ed37e0162520c8c127d40da7e2492f692cec136212d8d48828523943 сохранён независимо.
+Эти попытки не дают native performance verdict. Baseline выполнялся с paused live
+bot, candidate-only с работающим: даже завершённые результаты нельзя выдавать за
+причинное native ускорение при разной внешней конкуренции. Следующего application
+performance candidate не начинали, лимиты1CPU/4GiB/450CPU-s/510wall/600outer и35/15
+не менялись. Дальнейшие blind reruns/новые остановки не выполнять.
+
+07:32:44UTC bounded readonly recovery snapshot: source12cf/config6/generation5bb,
+1080measured streams,late0/unknown0/bootstrap0/blocked0/recovery0; analytics16outcomes
+за2.179s,Telegram DELIVERED07:31:05UTC. Readonly changes0. Это подтверждает выход из
+прогрева после паузы, но не отсутствие всех due jobs, не постоянный universe1648 и
+не30min/24h PASS. Повторный bounded snapshot07:53:39UTC:1088streams,
+late0/unknown0/bootstrap0/blocked0/recovery0,Telegram DELIVERED07:50:41UTC,
+source/config/generation прежние,readonly changes0. Это два отдельных снимка,
+не непрерывное наблюдение. Baseline не принимается при остальных открытых gates.
+
+После независимого сохранения proofs/repro убраны ровно6файлов собственных synthetic
+DB/WAL/SHM двух завершённых probes:14541568logicalB. Exact paths/sizes/report SHA,
+receipt и отсутствие файлов подтверждены в native-owned-cleanup03.json; reports,
+source/fixture manifests и небольшой scaffold оставлены для воспроизведения. Старые
+backups/unique experiments, production DB и соседние проекты не тронуты. Новых
+GitHub Actions runs, поставок, schedules и расходов внешних API не было.
+
+Branch codex/interface-acceptance-20261030; fresh origin/main12cf5d4 unchanged,
+publication candidate2e7a358/queue-doc3deabab/backup qualifier04237e3 сохранены локально;
+push/PR нет. GitHub CLI read вернул401 (не вывод о потере connected access: repository
+read через GitHub connector успешен); перед публикацией current protections/review
+проверить через доступный источник. По коду17/18 общих AC последовательности;
+operating AC-13-06 и Goal2 не завершены. Forecast/storage35GB, multiGB backup,
+artifact policy/resource budget, visual POSTPONED_OWNER и CI/CD/30min/24h остаются
+REQUIRED. Следующий зависимый шаг — полный candidate native case в допустимом
+внешнем resource window без новой паузы; при systemic FAIL применить согласованное
+правило остановки цепочки и представить branch/measurements/варианты владельцу.
+
+### Goal1 — DONE по primary records,30Oct2026
+
+PR93: reviewed head5ccfefabb874a5b6591e6ccb71b01a0c1ee96e25, merge12cf5d48e8d4b13aa77dbbe84ee9d161f81a4619. Required CI41097848708:2587Linux/native tests, quality/docs,13.45GB joint structural boundary, image/security/package PASS. Trusted release41100389366:2587tests PASS583.07s, source-pinned image/package, production PASS18:00:55UTC. API metadata запаздывала; full logs, independent artifact/primary VPS receipt и затем final run success сохранены. No standalone full workflow run.
+
+Artifact12997713871/64769770bytes/SHA493539be508d6cb2e8727338a96e2ba7c2295164fe41efe545a5a2b05a65f838; host image4288c29670e684fde336ba8672f1078ba971bc9230a8ace15c277c5ec88b9286. Primary release12cf5d4-493539be508d6cb2/deployment.json SHA72cb850946d0c89c271c98ad6dc94a587c8c650abe6476c4850b6e9b1d63ea8e. Exact-generation transition/private independent restore/verify PASS, config5→6 only candle_days35→3 и absent activation→all5; .env/watchlist/private/notification selection/TA unchanged. Old working DB/wal/shm removed3 only after post-checks; no backups/experiments/other projects touched. PermitCONSUMED; new valid light generation защищена от повторного reset.
+
+По коду READY17/18 shared AC:04-06,05-02,06-01/02/05,07-04/06,08-01/04,09-02/06,11-01,12-04/05,13-02/03/04. Evidence T-EP01/02,T-DG01,T-AN01,T-ME02,T-AD02,T-N20,T-WN01,T-GC01,T-AG02,T-FULL01,T-LEG01,T-CI01 и primary CI/CD; прежний audit% не пересчитывался. AC-13-06 code control реализован, final operating acceptance намеренно Goal2. Functional regression и visual подтверждения продолжаются.
+
+Finite identical104inputs fullpath:188→76observations,752→144outcomes,156→0N20,36episodes,16initial numeric facts hash unchanged; due0/late0/Telegram2/signedagent136. Windows finite timings не выдаются за sharedVPS capacity; Linux structural boundary не live SLO.62week lifecycle/used30d/general72h/calendar12month/exact numeric export/finiteGC и v1 frozen formula compatibility проходят tests. Public receiver schema qualification42accepted/126negative; actual agent OFF/unconfigured отдельно, receiver не менялся. F26 actual image certifi2026.10.19/setuptools84.1.0, compromised emSign ECC G3 absent; build uv0.13.4 locked, no exhaustive scan claim.
+
+Scope closure не означает устойчивую широкую нагрузку, окончательный forecast, multiGB backup, visual или24h PASS. Эти явно согласованные остатки остаются Goal2, не скрыто перенесены вDEFER. Goal1 учёт5h55m; обе её task branches удалены по merge/tree/CAS proof; preexisting checkout и экспериментальные ветки сохранены.
 
 ## Последний полный аудит 30Oct2026
 

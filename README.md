@@ -13,11 +13,12 @@ Radar обрабатывает широкий metadata/liquidity universe обо
 - [Handoff в trading agent: contract, example, границы и checklist подключения](docs/runbooks/agent-delivery.md#handoff-принимающему-проекту)
 - [CI/CD, VPS target, первая поставка и recovery](docs/runbooks/delivery.md)
 - [Хранение, routine disk backup и разовый reset](docs/runbooks/bounded-storage-reset.md)
+- [Изолированная проверка многогигабайтного backup/restore](docs/runbooks/bounded-storage-reset.md#изолированная-квалификация-backuprestore-на-закрытом-снимке)
 - [Исторический tooling: конвертация qualified history backup](docs/runbooks/delivery.md#изолированная-конвертация-legacy-history-backup)
 - [Исторический tooling: compact snapshot](docs/runbooks/delivery.md#read-only-измерение-compact-current-dataset)
 - [Repository procedures](AGENTS.md) и [CI/CD configuration contract](ci-cd-rules.md)
 
-Хранение обновляется по [D22/E13](docs/product_scope.md#e13--компактное-хранение-сроки-и-новый-период-истории): подробности30d, свечи35d, quality summaries12mo; желаемый объём25GB, допустимый предел30GB вместе с indexes/free pages/WAL/SHM/journal. Прежний разовый сброс тестовой market history завершён; текущая Goal сохраняет накопленные данные и не разрешает повторный reset. Статус реализации — в плане.
+Действующая policy [E13](docs/product_scope.md#e13--компактное-хранение-сроки-и-новый-период-истории): общие свечи72h, подробности30d, описательные результаты12 календарных месяцев. Только действительно использованные inputs доступных подробностей удерживаются дольше общего окна. Рабочий набор с indexes/free pages/WAL/SHM/journal ограничен35GB; желательный ориентир25GB. Backups, временные копии и физический резерв VPS учитываются отдельно. Разовый переход LIGHT-RADAR завершён; валидная история сохраняется, повторный reset запрещён. Кодовая реализация и эксплуатационная приёмка различаются в [плане](docs/open_issues.md).
 
 ## Stack и установка
 
@@ -129,6 +130,36 @@ python scripts/checks.py all
 python -m ruff format .
 ```
 
+### Ограниченная проверка полного пути обработки
+
+PR job `processing-qualification` отдельно от обычной suite выполняет тот же
+`tests.processing_replay`: оба рынка,1648streams,2472closed candles,130s реального
+поступления, события, наступившие outcomes, mockTelegram/signedagent и обслуживание
+хранения вместе. Frozen seed/offered SHA сверяются с сохранённым baseline; input
+не уменьшается ради PASS. Используются существующие joint assertions.
+
+На отдельном Linux CI runner собрать обычный image текущего SHA и disposable
+[qualification image](tests/processing.Dockerfile), затем выполнить canonical controller:
+
+```bash
+docker build --build-arg SOURCE_REVISION="$REVISION" --build-arg BUILD_RUN="$RUN_ID" -t "cryptowatcher:$REVISION" .
+docker build -f tests/processing.Dockerfile --build-arg BASE_IMAGE="cryptowatcher:$REVISION" -t "cw-processing:$REVISION" .
+sudo timeout --signal=INT --kill-after=10s 600s "$(command -v python)" -B scripts/qualify_processing.py run "cw-processing:$REVISION" "$REVISION" .cache-g1/processing-UNIQUE_ID
+```
+
+Новый owned work UID10001/mode0700; networknone/read-only/capdropALL/no-new-privileges,
+1CPU/4GiB/no swap,450CPU-s,510s test wall/600s external deadline. Native process
+независимо проверяет inherited limits. Host controller сохраняет35%idle continuous30s
+admission/15%stop,1.5GiB RAM reserve и1GiB fixture+6GiB disk reserve; sampleCPU/RAM/I/O
+и фактические Docker limits входят в reports. Resource refusal/interruption не PASS
+и не доказательство недостаточной производительности кандидата.
+
+Небольшие result/controller JSON и logs сохраняются14days; только собственный
+synthetic work удаляется после сохранения proof. Production DB/config/credentials
+не подключаются. Обычные PR checks и storage boundary сохраняются; `ci-required`
+также требует эту qualification для code changes. Нет CD/manual full-main запуска.
+Isolated native PASS не заменяет shared-VPS resource/backup/capacity и30min/24h.
+
 ### Полная регрессия exact main без поставки
 
 Canonical entrypoint: `python scripts/checks.py full`; inventory без выполнения:
@@ -218,7 +249,7 @@ Episodes разделены по instrument/market/direction. Новый detecto
 
 `/digest` показывает preference и interval; `/digest on 60` включает, `/digest off` выключает независимо от `/alerts` и mutes. Default OFF/60min; первый digest — следующий закрытый UTC interval. Digest использует оба рынка/все detector events, strongest period episodes и ongoing episodes на момент сборки. Restart отправляет последний завершённый период, фиксирует skipped intervals и сохраняет delivery identity/frozen text. Unknown acknowledgement допускает повтор того же сообщения; подтверждённый interval не отправляется повторно.
 
-Outcomes используют полный subsequent1m диапазон от immutable observation/reference close. Gaps/invalid sources означают INCOMPLETE/INVALID_SOURCE без нулевого return; recovery работает и для inactive instruments в shared REST budget ниже current ingestion. Historical composite comparator требует действительно доступного prior ticker snapshot: будущая liquidity не подставляется. Малые N и partial prior28days history явно ограничивают comparisons; результаты замораживаются, более поздняя source history не переписывает их автоматически. Это оценка информативности detector, не Strategy backtest или доходность.
+Новые outcomes используют полный subsequent1m диапазон от неизменной первой reference point episode: один набор horizons, MFE/MAE и результатов на episode. Значимые подтверждения не перемещают начало расчёта; внутри выбранной группы N считает episode один раз. Gaps/invalid sources означают INCOMPLETE/INVALID_SOURCE без нулевого return; recovery работает и для inactive instruments в shared REST budget ниже current ingestion. Постоянные N20/comparator исследования не создаются. Исторические comparator results сохраняют исходные prior-only provenance и ограничения малой выборки; прежние команды и callbacks объясняют переход к доступной episode analytics. Это описательная оценка активности detector, не Strategy backtest или доходность.
 
 Read-only CLI из root, существующая owner-bound DB и `OWNER_USER_ID`/`DATABASE_FILE` из environment. Production используется этот же CLI внутри текущего container; export не требует Telegram/trading credentials и не включает transport/infrastructure state. `--destination` создаёт только новый файл; существующий не перезаписывается.
 
@@ -250,13 +281,13 @@ Metadata refresh10min, liquidity refresh5min, REST budget5req/s/concurrency4, he
 
 Native closed candles сохраняются в общей SQLite, memory window≤256 на active stream. Schema2 bootstrap получает нужные detector lookbacks (default22), максимум256 closed bars; gaps приоритетно восстанавливают текущий window, затем older missing history постранично без live alerts. Cursor переживает restart; optional historical work не опережает current recovery. Initial bootstrap progressive: status показывает actual available/requested и причины ограничений. CLI diagnostics включает metadata counts/quarantine/acks/TF/buffers/pending/gaps. Новые subscribers проверяются только по validated metadata/liquidity.
 
-Подробные events/revisions/episodes/outcomes хранятся30d, small-TF candles35d плюс ограниченные зависимости сохраняемых расчетов. До удаления подробностей сохраняются quality summaries12mo с provenance/N/limitations; служебные зависимости имеют конечный срок. Истекшие подробности недоступны и не подменяются агрегатом. Coarse context90/180d применим только при его фактическом использовании; текущие detector/comparator/enrichment paths используют small-TF inputs и snapshots, отдельного coarse source нет.
+Подробные events/revisions/episodes/outcomes хранятся30d; общие свечи и context —72h, затем только использованные inputs ещё доступных подробностей. До удаления подробностей сохраняются описательные episode results12 календарных месяцев с точными metrics/provenance/N/limitations. Расчётные задания не переживают detail retention; доставка имеет собственную freshness/expiry policy. Истекшие подробности недоступны и не подменяются агрегатом. Отдельный постоянный coarse context archive90/180d не ведётся.
 
 ## Компактный market layout v2
 
 Новая generation использует нормализованные immutable candle revisions и отдельные context values; history windows содержат координаты, а не копии перекрывающихся OHLC arrays. Settings/context используют shared bodies, outcome heads не дублируют metrics; finished jobs удаляются после сохранения результатов, успешная доставка оставляет компактный receipt. Binary JSON records используют frozen dictionary/checksum/SHA256 без изменения public values. Schema1 читается для совместимости; обычный open/restart не конвертирует старую историю и не включает reset.
 
-`storage` возвращает actual working files/counts/encoded category bytes, durable repack progress и явно помеченный forecast. Retained inserts считаются отдельно от net queue occupancy; эффект repack не выдается за изменение потока событий. Quality baseline и сценарии density/comparators измеряют текущий codec/SQLite table+indexes на isolated synthetic данных; они не production measurement и не upper bound. Initial small-file index measurement ограничен; `storage-indexes` запрашивает отдельный bounded exact snapshot. Автоматический control не сканирует постоянно все страницы, samples ограничены26 записями; соответствие пределу30GB при желаемых25GB не считается доказанным по fixture или короткому post-deploy окну. Windows без dbstat показывает UNAVAILABLE, required Linux verification остается обязательной.
+`storage` возвращает actual working files/counts/encoded category bytes, durable repack progress и явно помеченный forecast. Retained inserts считаются отдельно от net queue occupancy; эффект repack не выдается за изменение потока событий. Текущая модель использует частоту новых episodes и значимых memberships с измеренными коэффициентами всех summary tables/indexes. Коэффициенты содержат unshared provenance; actual production sharing и зрелая occupancy требуют отдельной квалификации. Исторические CQ5/N20 scenarios доступны только явно через legacy tooling. Синтетические коэффициенты не являются production measurement или upper bound. Initial small-file index measurement ограничен; `storage-indexes` запрашивает отдельный bounded exact snapshot. Автоматический control не сканирует постоянно все страницы, samples ограничены26 записями; соответствие пределу35GB при желаемых25GB не считается доказанным по fixture или короткому post-deploy окну. Windows без dbstat показывает UNAVAILABLE, required Linux verification остается обязательной.
 
 Backfill и resumable repack обслуживаются отдельными jobs каждую секунду, независимо
 от долгих outcome/comparator calculations. Repack сохраняет конечные границы прохода
@@ -301,3 +332,20 @@ backup/temp reserve из synthetic fixture не выводятся. Состав
 Logical market time ускорен, wall/CPU измеряются отдельно. Это finite regression
 и сравнение одинакового входа, не доказательство broad-Universe ёмкости VPS.
 Подробные limits и текущие gates — в [плане](docs/open_issues.md).
+
+
+### Совместная проверка поступления и обработки
+
+`python -m tests.processing_replay --instruments 206 --seconds 130 --report <новый-путь.json>`
+создаёт только временную локальную БД. Независимый конечный источник подаёт закрытые
+свечи обоих рынков/четырёх TF и открытые обновления, а production receivers,
+вычисления, публикация, две доставки, retention/repack и recovery работают вместе.
+Clock offset сохраняет реальный темп1:1; предварительная подготовка измеряется
+отдельно. Все внешние сервисы заглушены; working DB и credentials не используются.
+Endpoint фиксируется до отмены/cleanup, future horizons отдельно от due очереди.
+Возраст и состояние очередей доставки показываются отдельно, с действующей
+freshness/expiry policy; вход содержит одновременный stress-сигнал всех инструментов.
+Общий VPS/resource/backup пик и30min/24h приёмка проверяются самостоятельно.
+Windows/fallback и Linux/native результаты различаются. Native broad test включён в обычную Linux suite; отдельный
+полный workflow этим не запускается. Подробности текущего этапа — в
+[плане](docs/open_issues.md).
