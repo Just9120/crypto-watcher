@@ -133,7 +133,7 @@ class History:
                 raise StateError("Missing or conflicting decision revision")
         compact = isinstance(value, dict) and value.get("schema") == HEAD_SCHEMA
         value = (
-            self.codec.project(value, projection)
+            self.codec.project(value, projection | {"schema"})
             if projection is not None and not compact
             else self.codec.unpack(value, omit_fields=omit_fields)
         )
@@ -154,7 +154,7 @@ class History:
             raise StateError("Invalid history head reference")
         raw_record = self.store.get_runtime(PREFIX + value["revision_key"])
         record = (
-            self.codec.project(raw_record, projection)
+            self.codec.project(raw_record, projection | {"schema"})
             if projection is not None
             else self.codec.unpack(raw_record, omit_fields=omit_fields)
         )

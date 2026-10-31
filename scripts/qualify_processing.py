@@ -78,7 +78,7 @@ def admit(samples: list[dict], free: int) -> bool:
     )
 
 
-def verdict(result: dict) -> list[str]:
+def verdict(result: dict, *, direct_sqlite: bool = False) -> list[str]:
     # Reuse the exact existing joint assertions, including freshness, maintenance,
     # unique families, independent delivery and the exclusion of future horizons.
     from tests.test_processing_replay import assert_joint_result
@@ -94,6 +94,15 @@ def verdict(result: dict) -> list[str]:
         failures.append("BROAD_INPUT_CHANGED")
     if result.get("seed_sha256") != SEED or result.get("offered_sha256") != OFFERED:
         failures.append("FROZEN_INPUT_IDENTITY_CHANGED")
+    if direct_sqlite:
+        direct = result.get("direct_sqlite", {})
+        if (
+            direct.get("mode") != "ISOLATED_DIRECT_SQLITE_REPOSITORY"
+            or direct.get("foreign_key_violations") != []
+            or any(direct.get("revisions", {}).get(kind, 0) <= 0 for kind in ("event", "episode", "outcome"))
+            or result.get("repack", {}).get("state") != "DIRECT_SQLITE_CORE"
+        ):
+            failures.append("DIRECT_SQLITE_EVIDENCE_REQUIRED")
     return failures
 
 
@@ -159,7 +168,7 @@ class PhaseProfile:
         )
 
 
-def case(report: Path, *, profile: bool = False) -> int:
+def case(report: Path, *, profile: bool = False, direct_sqlite: bool = False) -> int:
     sys.path.insert(0, str(ROOT))
     from scripts.qualify_framed_backup import require_native_limits
     from tests.processing_replay import replay
@@ -183,17 +192,22 @@ def case(report: Path, *, profile: bool = False) -> int:
         with tempfile.TemporaryDirectory(prefix="paced-", dir="/work") as temporary:
             result = asyncio.run(
                 replay(
-                    Path(temporary) / "processing.sqlite3", instruments=206, seconds=130, progress=progress
+                    Path(temporary) / "processing.sqlite3",
+                    instruments=206,
+                    seconds=130,
+                    progress=progress,
+                    direct_sqlite=direct_sqlite,
                 )
             )
     finally:
         capture.save(report.parent / "profile.json")
-    failures = verdict(result)
+    failures = verdict(result, direct_sqlite=direct_sqlite)
     payload = {
         "schema": "cryptowatcher.processing-qualification.v1",
         "source": os.environ.get("SOURCE_REVISION"),
         "state": "FAIL" if failures else ("PROFILE_ONLY" if profile else "PASS"),
         "mode": "DIAGNOSTIC_PROFILE_NOT_ACCEPTANCE" if profile else "QUALIFICATION",
+        "repository": "DIRECT_SQLITE_PROTOTYPE" if direct_sqlite else "CURRENT_APPLICATION",
         "failures": failures,
         "temporary_database_removed": True,
         "result": result,
@@ -204,7 +218,9 @@ def case(report: Path, *, profile: bool = False) -> int:
     return int(bool(failures) or profile)
 
 
-def run(image: str, revision: str, directory: Path, *, profile: bool = False) -> int:
+def run(
+    image: str, revision: str, directory: Path, *, profile: bool = False, direct_sqlite: bool = False
+) -> int:
     if sys.platform != "linux" or os.geteuid() != 0 or not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("Linux CI root controller and exact revision required")
     if directory.exists() or directory.is_symlink():
@@ -220,6 +236,7 @@ def run(image: str, revision: str, directory: Path, *, profile: bool = False) ->
         "source": revision,
         "image": inspected["Id"],
         "mode": "DIAGNOSTIC_PROFILE_NOT_ACCEPTANCE" if profile else "QUALIFICATION",
+        "repository": "DIRECT_SQLITE_PROTOTYPE" if direct_sqlite else "CURRENT_APPLICATION",
         "state": "PREPARED",
         "admission": [],
         "limits": {
@@ -279,6 +296,7 @@ def run(image: str, revision: str, directory: Path, *, profile: bool = False) ->
             "--report",
             "/work/result.json",
             *(["--profile"] if profile else []),
+            *(["--direct-sqlite"] if direct_sqlite else []),
         ).strip()
         created = True
         proof["container_id"] = cid
@@ -426,15 +444,23 @@ def main() -> int:
     inner = commands.add_parser("case")
     inner.add_argument("--report", type=Path, required=True)
     inner.add_argument("--profile", action="store_true")
+    inner.add_argument("--direct-sqlite", action="store_true")
     outer = commands.add_parser("run")
     outer.add_argument("image")
     outer.add_argument("revision")
     outer.add_argument("directory", type=Path)
     outer.add_argument("--profile", action="store_true")
+    outer.add_argument("--direct-sqlite", action="store_true")
     args = parser.parse_args()
     if args.command == "case":
-        return case(args.report, profile=args.profile)
-    return run(args.image, args.revision, args.directory.resolve(), profile=args.profile)
+        return case(args.report, profile=args.profile, direct_sqlite=args.direct_sqlite)
+    return run(
+        args.image,
+        args.revision,
+        args.directory.resolve(),
+        profile=args.profile,
+        direct_sqlite=args.direct_sqlite,
+    )
 
 
 if __name__ == "__main__":

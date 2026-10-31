@@ -2,7 +2,7 @@
 
 ## Current Goal и утверждённая последовательность
 
-**INTERFACE-ACCEPTANCE — незавершена, Goal 2 BLOCKED после sole prototype FAIL; полный scope сохранён, пересмотр ядра PROPOSED для решения владельца31Oct**, явно поручена владельцем в последовательности30Oct2026; встроенная Goal2 активирована после выполненной Goal1. CAPACITY25 отменена и не возобновляется. Новая параллельная optimization chain, cron/automations и Codex Security запрещены.
+**INTERFACE-ACCEPTANCE — незавершена, Goal 2 ACTIVE: разрешён один ограниченный direct-SQLite prototype31Oct; полный scope сохранён, большая переработка не одобрена**, явно поручена владельцем в последовательности30Oct2026; встроенная Goal2 активирована после выполненной Goal1. CAPACITY25 отменена и не возобновляется. Новая параллельная optimization chain, cron/automations и Codex Security запрещены.
 
 Baseline origin/main12cf5d48e8d4b13aa77dbbe84ee9d161f81a4619. Branch codex/interface-acceptance-20261030; существующий checkout .cache-g1/git-recovery-20261024. Fresh Git/remotes/worktrees/protections/openPR проверены: strict ci-required15368/admins, approvals0; чужой draftPR57 сохранён. Goal1 task branch безопасно удалена после merge/CD и exact-tree proof; preexisting checkout/audit/two-writer материалы сохранены.
 
@@ -30,23 +30,51 @@ Non-goals: новые функции/прибыльные thresholds, receiver/T
 
 Сначала выявить системный риск и проверить полный эффект, затем достроить подтверждённые интерфейсные/остаточные исправления и единственный основной PR. После новой модели и одного обоснованного исправления измеренного ограничения сохраняющееся общее отставание требует готовой ветки/сопоставимых measurements/вариантов владельцу; бесконечные локальные micro-optimizations не продолжать. Ordinary failures исправлять автономно в текущем scope. Независимую работу продолжать при недоступном UI/внешнем gate; конкретное согласование выносить поздно, с готовыми доказательствами и действием.
 
-### Текущий checkpoint Goal2 — stop rule и пересмотр ядра31Oct2026
+### Текущий checkpoint Goal2 — один ограниченный SQLite prototype31Oct2026
 
-Goal2 незавершена; встроенный статус BLOCKED после трёх последовательных goal turns
-с одним условием: sole authorized structural prototype не выдержал SLO. Владелец
-31Oct выбрал сохранить ВЕСЬ scope и поручил подготовить пересмотр ядра с новой
-оценкой для решения. Это разрешение на проектирование, не на следующий implementation
-prototype/смену runtime. Отдельно явно разрешена публикация именно этого файла в
-public repository; прежний auto-review publication blocker этим owner decision снят.
+Goal2 возобновлена явным поручением владельца31Oct: сначала один ограниченный
+сквозной prototype нового способа SQLite, не полная переделка. При PASS показать
+результат и минимальную интеграцию для решения; при FAIL остановить работу над
+подходом с измеренным выводом. Не переносить все подсистемы, не мигрировать историю,
+не менять VPS/рабочую БД. Большой план ниже остаётся PROPOSED; его сроки не обещаны.
+Отдельное разрешение на публикацию именно этого plan в public repository сохраняется.
 
-Main12cf5d48e8d4b13aa77dbbe84ee9d161f81a4619 не менялся. Единственный основной PR94
-остаётся Draft/unmerged, published application headf38cff0c8ddaf51475dd244d2b73fc5de704db80,
-tested mergeb4391eea367def0f81c4c02a0743a001e04825e7. Checkout/branch прежние.
-Local494f617 сохраняет дополнительный nested-head schema guard и negative test,
-не опубликованные и не прошедшие Linux CI; не выдавать их за qualification PASS.
-Текущая публикация меняет только plan, не приложение и не gates. Автоматический PR CI
-при такой публикации повторяет обычную проверку existing application diff; это не
-новый performance candidate и не основание снять прежний FAIL при смене только docs.
+Baseline main12cf5d48e8d4b13aa77dbbe84ee9d161f81a4619; PR94 Draft/unmerged,
+remote head8fb8db9902aeebd7cc7ef611d6eff81c7aed4c6c, предыдущий applicationf38cff0.
+Local494f617 — дополнительный nested-head corruption guard, включается в текущую
+проверку. Checkout/branch прежние; новые ветки/PR и production hooks не создаются.
+
+Изолированный адаптер только tests/sqlite_repository.py: прямые неизменяемые SQLite
+revisions и shared exact inputs, small compatibility heads, foreign keys/checksums,
+те же source/detectors/episode/outcome/retry/retention и обе доставки. Process layout
+не меняется. Заменяется только хранение immutable публикаций; generic mutable queues,
+source и annual storage остаются реальными текущими компонентами. Это не полное
+выполнение предложенного ниже ядра и не доказательство зрелой ёмкости35GB.
+
+Validation REQUIRED: focused golden canonical equality обеих реализаций, rollback,
+immutable origin, повтор/повреждение fresh head/inputs, actual signed retry/restart,
+TTL/annual facts; local quality. Один дополнительный Linux/native capped CI job
+в PR94: unchanged1648streams/2472closed arrivals/130real seconds/seed+offered SHA,
+1CPU aggregate/4GiB/no swap/450CPUs/510wall/600outer,35%idle admission/15%stop,
+source≤30s/due≤60s, future отдельно; real maintenance/FK checks и полный resource
+report. Existing production qualification и required CI не ослабляются и не
+заменяются prototype. Windows small PASS не substitute. External transports mocked,
+реальные Telegram/TA/VPS и30min/24h здесь не проверяются. После единственного full
+result остановиться; merge/CD/baseline автоматически не начинать. Temporary DBs
+только новые локальные/CI; учёт и cleanup, маленькие proofs внеGit.
+
+Local validation31Oct:13focused tests PASS14.64s (test_sqlite_repository и
+ test_processing_qualification), quality PASS: docs/Ruff/format/mypy133source files.
+Windows3.12 fallback; native и capped result PENDING. Readonly calculation threads
+явно завершаются перед снятием adapters; snapshot cancellation не считается join.
+Canonical extra case: `scripts/qualify_processing.py run IMAGE REVISION NEW_REPORT_DIR --direct-sqlite`.
+Он создаёт только owned isolated Docker/SQLite с networknone, сохраняет JSON/log,
+проверяет native/fixture SHA/actual direct tables/FK/maintenance и удаляет fixture.
+
+Предыдущий sole prototype остаётся FAIL и служит основным сохранённым сравнением;
+последующий docs-only run41206428542 не новый candidate: requiredFAIL, capped accepted1287,
+source133425ms/due805 на другом runner. Новая попытка меняет изолированный storage
+adapter; numerical/transaction correctness отдельно от performance.
 
 | Проверка | Факт, evidence и ограничения |
 | --- | --- |

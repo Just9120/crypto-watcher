@@ -104,3 +104,19 @@ def test_full_legacy_head_still_checks_non_clock_body_fields(store):
     with pytest.raises(StateError, match="Conflicting new history head projection"):
         store.put_runtime(head_key(coordinate), {**body, "confirmations": {"injected": True}})
     assert list(store.db.iterdump()) == before
+
+
+def test_clock_projection_cannot_hide_nested_head_schema(store):
+    from cryptowatcher.events import HEAD_SCHEMA
+
+    bounded(store)
+    engine = EventEngine(store)
+    engine.observe("spot/BTCUSDT/1m", window(), 1e6, 0.01, NOW, live=True)
+    event = engine.history.events()[0]
+    key = "episode-head:" + event["episode_id"]
+    full = engine.history.get(key)
+    version_key = f"episode:{event['episode_id']}:{full['revision']:010d}"
+    with store.db:
+        store.db.execute(RUNTIME_UPSERT, (PREFIX + version_key, encode({**full, "schema": HEAD_SCHEMA})))
+    with pytest.raises(StateError, match="conflicting history head"):
+        engine.history.episode_clock(key)

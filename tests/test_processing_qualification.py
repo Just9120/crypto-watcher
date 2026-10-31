@@ -84,3 +84,8 @@ def test_cpu_profile_covers_measured_phase_and_excludes_seed_and_cleanup(tmp_pat
     assert not names.intersection({"unprofiled_seed", "unprofiled_cleanup"})
     assert report["phase_started"] is report["phase_ended"] is True
     assert report["mode"] == "DIAGNOSTIC_PROFILE_NOT_ACCEPTANCE"
+
+
+def test_prototype_qualification_cannot_fall_back_to_legacy_repository():
+    assert "DIRECT_SQLITE_EVIDENCE_REQUIRED" in verdict({}, direct_sqlite=True)
+    assert "DIRECT_SQLITE_EVIDENCE_REQUIRED" not in verdict({})

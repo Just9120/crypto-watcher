@@ -20,6 +20,7 @@ import tempfile
 import threading
 import time
 from collections import Counter
+from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -64,7 +65,9 @@ def candle(end: int, tf: str) -> Candle:
     )
 
 
-async def replay(path: Path, *, instruments: int = 32, seconds: int = 130, progress=None) -> dict:
+async def replay(
+    path: Path, *, instruments: int = 32, seconds: int = 130, progress=None, direct_sqlite: bool = False
+) -> dict:
     if path.exists() or type(instruments) is not int or not 1 <= instruments <= 256:
         raise ValueError("Qualification needs a new owned database and1..256 instruments per market")
     if type(seconds) is not int or not 4 <= seconds <= 190:
@@ -100,12 +103,22 @@ async def replay(path: Path, *, instruments: int = 32, seconds: int = 130, progr
 
     # One fixed exchange/wall offset; the scheduler and independent arrival wire
     # keep their real monotonic clock. No global machine clock is changed.
-    with patch("time.time", lambda: now() / 1000), patch.dict(os.environ, ENV):
-        store = Store(path, infrastructure.owner_id)
+    from .sqlite_repository import repository_context
+
+    with (
+        patch("time.time", lambda: now() / 1000),
+        patch.dict(os.environ, ENV),
+        repository_context(direct_sqlite) as finish_readers,
+        closing(Store(path, infrastructure.owner_id)) as store,
+    ):
         store.initialize(OwnerSettings())
         enable(store.db)
         store.bounded = True
         store.clock_ms = now
+        if direct_sqlite:
+            from .sqlite_repository import install
+
+            install(store)
         agents = []
 
         rest_requests = []
@@ -395,6 +408,8 @@ async def replay(path: Path, *, instruments: int = 32, seconds: int = 130, progr
                     if task.done() and not task.cancelled() and task.exception() is not None
                 ]
                 await market.close()
+                if finish_readers is not None:
+                    await finish_readers()
                 stage("FIXTURE_WORKERS_STOPPED")
             pending_due = [job for job in jobs if job["due_ms"] <= finished]
             result = {
@@ -469,7 +484,10 @@ async def replay(path: Path, *, instruments: int = 32, seconds: int = 130, progr
                 }
             else:
                 result["process_usage"] = {"state": "UNAVAILABLE_NATIVE_RESOURCE_COUNTERS"}
-            store.close()
+            if direct_sqlite:
+                from .sqlite_repository import stats
+
+                result["direct_sqlite"] = stats(store)
             return result
 
 
