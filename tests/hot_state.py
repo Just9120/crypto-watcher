@@ -13,6 +13,7 @@ from contextlib import ExitStack, contextmanager
 from unittest.mock import patch
 
 from cryptowatcher.storage import StateError, encode
+from tests.episode_reads import EpisodeReads
 
 DELETE = object()
 PREFIXES = (
@@ -94,6 +95,13 @@ class Connection(sqlite3.Connection):
             or "owner_settings" in sql.lower()
         ):
             self.hot.headers.clear()
+            self.hot.episodes.clear()
+
+    def set_authorizer(self, callback):
+        if self.hot is not None:
+            self.hot.headers.clear()
+            self.hot.episodes.clear()
+        return super().set_authorizer(callback)
 
     def cursor(self, factory=Cursor):
         return super().cursor(factory)
@@ -145,6 +153,8 @@ class Batch:
         self.history, self.put, self.delete, self.stats = history, put, delete, stats
         self.headers, self.writes, self.sizes = {}, {}, {}
         self.flushing = False
+        self.episodes = EpisodeReads(stats)
+        self.owner = None if history is None else (history.store.owner_id, history.store.readonly)
 
     def write(self, key, value):
         frozen = DELETE if value is DELETE else copy.deepcopy(value)
@@ -185,6 +195,10 @@ def installed(enabled):
             "peak_keys",
             "metadata_hits",
             "metadata_misses",
+            "episode_row_hits",
+            "episode_row_misses",
+            "episode_record_hits",
+            "episode_peak_bytes",
         ),
         0,
     )

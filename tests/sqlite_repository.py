@@ -142,6 +142,11 @@ class History(OriginalHistory):
                 (identity, revision),
             ).fetchone()
         if row is not None:
+            from tests.episode_reads import current
+
+            memo = current(self, key)
+            if memo is not None and memo.checked(key, row):
+                return row
             if row[3] != self.checksum(row[7], row[8], row[0], row[1], row[2], row[4], row[5], row[6]):
                 raise StateError("Corrupt direct immutable revision")
             if revision is None:
@@ -151,12 +156,23 @@ class History(OriginalHistory):
                 )
                 if encode(expected) != encode(json.loads(row[9])):
                     raise StateError("Conflicting direct history head projection")
+            if memo is not None:
+                memo.remember(key, row)
         return row
 
     def _record(self, key: str, *, metadata: bool = False):
         row = self._row(key)
         if row is None:
             return None
+        from tests.episode_reads import current
+
+        # A linked body can be independently removed/corrupted. Keep those reads
+        # and validations on every request; memoize only self-contained episodes.
+        memo = current(self, key) if row[1] == "{}" else None
+        if memo is not None:
+            cached = memo.record(key, row)
+            if cached is not None:
+                return {k: v for k, v in cached.items() if k not in OMIT} if metadata else cached
         value, fields = json.loads(row[0]), json.loads(row[1])
         point = self.point(key)
         assert point is not None
@@ -186,6 +202,8 @@ class History(OriginalHistory):
             if raw is None or hashlib.sha256(raw[0].encode()).hexdigest() != digest:
                 raise StateError("Missing or corrupt direct snapshot")
             value[name] = json.loads(raw[0])
+        if memo is not None:
+            memo.record(key, row, value)
         if metadata:
             value = {k: v for k, v in value.items() if k not in OMIT}
         return value
