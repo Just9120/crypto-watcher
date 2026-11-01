@@ -107,7 +107,12 @@ async def replay(
     direct_sqlite: bool = False,
     bounded_pool: bool = False,
     diagnostic: bool = False,
+    hot_state: bool = False,
 ) -> dict:
+    if hot_state and (not bounded_pool or diagnostic):
+        raise ValueError("Hot-state qualification requires the unprofiled bounded-pool scenario")
+    from .hot_state import installed as hot_context
+
     if diagnostic and not bounded_pool:
         raise ValueError("Diagnostic trace requires the unchanged bounded-pool scenario")
     from .processing_trace import Trace
@@ -158,6 +163,7 @@ async def replay(
         patch.dict(os.environ, ENV),
         repository_context(direct_sqlite) as finish_readers,
         trace,
+        hot_context(hot_state) as hot_stats,
         closing(Store(path, infrastructure.owner_id)) as store,
     ):
         store.initialize(OwnerSettings())
@@ -627,6 +633,8 @@ async def replay(
                 }
             else:
                 result["process_usage"] = {"state": "UNAVAILABLE_NATIVE_RESOURCE_COUNTERS"}
+            if hot_state:
+                result["hot_state"] = {"mode": "ISOLATED_JOINED_HOT_STATE", **hot_stats}
             if direct_sqlite:
                 from .sqlite_repository import stats
 

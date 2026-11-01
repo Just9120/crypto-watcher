@@ -206,6 +206,7 @@ def case(
     direct_sqlite: bool = False,
     bounded_pool: bool = False,
     diagnostic: bool = False,
+    hot_state: bool = False,
 ) -> int:
     sys.path.insert(0, str(ROOT))
     from scripts.qualify_framed_backup import require_native_limits
@@ -237,6 +238,7 @@ def case(
                     direct_sqlite=direct_sqlite,
                     bounded_pool=bounded_pool,
                     diagnostic=diagnostic,
+                    hot_state=hot_state,
                 )
             )
     finally:
@@ -244,6 +246,8 @@ def case(
     failures = verdict(result, direct_sqlite=direct_sqlite, bounded_pool=bounded_pool)
     if diagnostic and result.get("diagnostic", {}).get("complete") is not True:
         failures.append("DIAGNOSTIC_TRACE_INCOMPLETE")
+    if hot_state and result.get("hot_state", {}).get("observations", 0) <= 0:
+        failures.append("JOINED_HOT_STATE_EVIDENCE_REQUIRED")
     payload = {
         "schema": "cryptowatcher.processing-qualification.v1",
         "source": os.environ.get("SOURCE_REVISION"),
@@ -274,6 +278,7 @@ def run(
     direct_sqlite: bool = False,
     bounded_pool: bool = False,
     diagnostic: bool = False,
+    hot_state: bool = False,
 ) -> int:
     if sys.platform != "linux" or os.geteuid() != 0 or not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("Linux CI root controller and exact revision required")
@@ -358,6 +363,7 @@ def run(
             *(["--direct-sqlite"] if direct_sqlite else []),
             *(["--bounded-pool"] if bounded_pool else []),
             *(["--diagnostic"] if diagnostic else []),
+            *(["--hot-state"] if hot_state else []),
         ).strip()
         created = True
         proof["container_id"] = cid
@@ -508,6 +514,7 @@ def main() -> int:
     inner.add_argument("--direct-sqlite", action="store_true")
     inner.add_argument("--bounded-pool", action="store_true")
     inner.add_argument("--diagnostic", action="store_true")
+    inner.add_argument("--hot-state", action="store_true")
     outer = commands.add_parser("run")
     outer.add_argument("image")
     outer.add_argument("revision")
@@ -516,6 +523,7 @@ def main() -> int:
     outer.add_argument("--direct-sqlite", action="store_true")
     outer.add_argument("--bounded-pool", action="store_true")
     outer.add_argument("--diagnostic", action="store_true")
+    outer.add_argument("--hot-state", action="store_true")
     args = parser.parse_args()
     if args.command == "case":
         return case(
@@ -524,6 +532,7 @@ def main() -> int:
             direct_sqlite=args.direct_sqlite or args.bounded_pool,
             bounded_pool=args.bounded_pool,
             diagnostic=args.diagnostic,
+            hot_state=args.hot_state,
         )
     return run(
         args.image,
@@ -533,6 +542,7 @@ def main() -> int:
         direct_sqlite=args.direct_sqlite or args.bounded_pool,
         bounded_pool=args.bounded_pool,
         diagnostic=args.diagnostic,
+        hot_state=args.hot_state,
     )
 
 

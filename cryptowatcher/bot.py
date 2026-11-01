@@ -1077,7 +1077,7 @@ class Controller:
         if now <= 0:
             return
         try:
-            await self.agent.drain(self.market.server_now)
+            await self.agent.run_ready(self.market.server_now)
         except Exception as exc:
             self.agent._diagnostic("FAILED_" + type(exc).__name__, now)
             logger.error("Optional agent delivery failure: %s", type(exc).__name__)

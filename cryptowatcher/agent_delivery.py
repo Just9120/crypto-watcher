@@ -78,6 +78,10 @@ class AgentDelivery:
         self.client = client
         self.config = config or AgentConfig.from_env()
         self.lock = asyncio.Lock()
+        from .agent_ready import Ready
+
+        self.ready = Ready(self.history)
+        self._progress = 0
 
     def enabled(self) -> bool:
         preference = self.history.get("agent:preference", {"schema": 1, "enabled": False})
@@ -135,7 +139,16 @@ class AgentDelivery:
             "replay": replay,
         }
         self.history.put(key, value)
-        self.history.put(f"agent:intent-due:{due:016d}:{identity(key)}", {"key": key})
+        due_key = f"agent:intent-due:{due:016d}:{identity(key)}"
+        self.history.put(due_key, {"key": key})
+        self.ready.publish(
+            "intent",
+            due_key,
+            historical,
+            event["event_id"],
+            event["fresh_until_ms"],
+            previous["historical"] if previous else None,
+        )
 
     def admit(self, event: dict[str, Any], *, episode: dict[str, Any] | None = None) -> None:
         if self.enabled() and event["live"]:
@@ -194,12 +207,15 @@ class AgentDelivery:
         }
 
     def _freeze(self, now: int) -> None:
-        for due_key, binding in self.history.items("agent:intent-due:", 1):
+        selected = self.ready.pick("intent", now)
+        for due_key, binding in () if selected is None else (selected,):
             key = binding["key"]
             intent = self.history.get(key)
             if intent is None:
                 with self.store.db:
                     self.history.delete(due_key)
+                    self.ready.remove("intent", due_key, False)
+                    self.ready.remove("intent", due_key, True)
                 continue
             if intent["due_ms"] > now:
                 return
@@ -270,11 +286,15 @@ class AgentDelivery:
                     self.history.put(sequence_key, revision)
                     self.history.put("agent:outbox:" + delivery_id, record)
                     if state == "PENDING":
-                        self.history.put(
-                            f"agent:send-due:{now:016d}:{delivery_id}", {"delivery_id": delivery_id}
+                        send_key = f"agent:send-due:{now:016d}:{delivery_id}"
+                        self.history.put(send_key, {"delivery_id": delivery_id})
+                        self.ready.publish(
+                            "send", send_key, historical, event["event_id"], event["fresh_until_ms"]
                         )
                 self.history.delete(key)
                 self.history.delete(due_key)
+                self.ready.remove("intent", due_key, intent["historical"])
+                self._progress += 1
 
     def _diagnostic(self, state: str, now: int) -> None:
         with self.store.db:
@@ -290,6 +310,13 @@ class AgentDelivery:
                     self.history.put(
                         f"agent:send-due:{now:016d}:{record['delivery_id']}",
                         {"delivery_id": record["delivery_id"]},
+                    )
+                    self.ready.publish(
+                        "send",
+                        f"agent:send-due:{now:016d}:{record['delivery_id']}",
+                        record["kind"] == "HISTORICAL_OUTCOME_UPDATE",
+                        record["event_id"],
+                        record["expires_ms"],
                     )
                     count += 1
             self.history.put("agent:target", {"state": "READY", "at_ms": now, "reason": "OWNER_RETRY"})
@@ -309,12 +336,30 @@ class AgentDelivery:
             return
         deadline = time.monotonic() + seconds
         for _ in range(batch):
-            before = [self.history.items(prefix, 1) for prefix in ("agent:intent-due:", "agent:send-due:")]
+            before = self._progress
             await self.work(clock())
             if self.history.get("agent:target", {}).get("state") != "DELIVERED":
                 break
-            after = [self.history.items(prefix, 1) for prefix in ("agent:intent-due:", "agent:send-due:")]
+            after = self._progress
             if before == after or time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(0)
+
+    async def run_ready(self, clock: Callable[[], int]) -> None:
+        """At most eight existing finite slices, with a cooperative0.75s budget.
+
+        The per-send timeout, frozen retries and negative/unknown ACK stop remain
+        unchanged. A pending queue no longer waits two seconds after every slice.
+        """
+        deadline = time.monotonic() + 0.75
+        for _ in range(8):
+            before = self._progress
+            await self.drain(clock)
+            if (
+                self.history.get("agent:target", {}).get("state") != "DELIVERED"
+                or time.monotonic() >= deadline
+                or self._progress == before
+            ):
                 break
             await asyncio.sleep(0)
 
@@ -325,14 +370,16 @@ class AgentDelivery:
             return
         async with self.lock:
             self._freeze(now)
-            pending = self.history.items("agent:send-due:", 1)
-            if not pending:
+            pending = self.ready.pick("send", now)
+            if pending is None:
                 return
-            due_key, binding = pending[0]
+            due_key, binding = pending
             record = self.history.get("agent:outbox:" + binding["delivery_id"])
             if record is None:
                 with self.store.db:
                     self.history.delete(due_key)
+                    self.ready.remove("send", due_key, False)
+                    self.ready.remove("send", due_key, True)
                 return
             if record["next_ms"] > now:
                 return
@@ -343,6 +390,7 @@ class AgentDelivery:
                     record.update(state="SUPERSEDED", reason="EXPIRED_OR_SETTINGS_CHANGED")
                     self.history.put("agent:outbox:" + record["delivery_id"], record)
                     self.history.delete(due_key)
+                    self.ready.remove("send", due_key, record["kind"] == "HISTORICAL_OUTCOME_UPDATE")
                     intent = record["intent"]
                     event = self.history.get(f"event:{intent['event_id']}:{intent['event_revision']:010d}")
                     self._intent(intent["episode"], event, now, intent["outcomes"], replay=True)
@@ -377,6 +425,7 @@ class AgentDelivery:
                     )
                 record.update(state="IN_FLIGHT", attempts=record["attempts"] + 1)
                 self.history.put("agent:outbox:" + record["delivery_id"], record)
+                self.ready.advance()
             status, acknowledged, retry_after = None, False, 0
             try:
                 # Shared client receives these secrets only on this qualified request.
@@ -422,6 +471,7 @@ class AgentDelivery:
                 pass  # Errors/response bodies may contain secrets; persist only classifications.
             with self.store.db:
                 self.history.delete(due_key)
+                self.ready.remove("send", due_key, record["kind"] == "HISTORICAL_OUTCOME_UPDATE")
                 record["state"] = (
                     "DELIVERED"
                     if acknowledged
@@ -455,9 +505,18 @@ class AgentDelivery:
                         {"delivery_id": record["delivery_id"]},
                     )
                 self.history.put("agent:outbox:" + record["delivery_id"], record)
+                if record["state"] == "PENDING":
+                    self.ready.publish(
+                        "send",
+                        f"agent:send-due:{record['next_ms']:016d}:{record['delivery_id']}",
+                        record["kind"] == "HISTORICAL_OUTCOME_UPDATE",
+                        record["event_id"],
+                        record["expires_ms"],
+                    )
                 self.history.put(
                     "agent:target", {"state": record["state"], "reason": record["reason"], "at_ms": now}
                 )
+                self._progress += 1
 
     def diagnostics(self) -> dict[str, Any]:
         start = PREFIX + "agent:outbox:"
