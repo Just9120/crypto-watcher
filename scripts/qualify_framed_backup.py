@@ -60,7 +60,9 @@ def data_signature(path: Path, owner: int) -> dict:
         }
 
 
-def require_native_limits() -> None:
+def require_native_limits(*, cpu_limit: float = 1) -> None:
+    if cpu_limit not in (1, 1.5):
+        raise StateError("Unsupported explicit qualification CPU budget")
     if sys.platform != "linux" or not frozen_codec_native.available():
         raise StateError("Linux/native qualification environment required")
     import resource
@@ -74,12 +76,12 @@ def require_native_limits() -> None:
     swap = (cgroup / "memory.swap.max").read_text().strip()
     if (
         quota == "max"
-        or int(quota) > int(period)
+        or int(quota) > cpu_limit * int(period)
         or memory == "max"
         or int(memory) > 4 * 1024**3
         or swap != "0"
     ):
-        raise StateError("Qualification requires at most1CPU/4GiB without swap")
+        raise StateError(f"Qualification requires at most{cpu_limit}CPU/4GiB without swap")
 
 
 def qualify(

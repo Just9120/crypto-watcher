@@ -207,12 +207,13 @@ def case(
     bounded_pool: bool = False,
     diagnostic: bool = False,
     hot_state: bool = False,
+    cpu_limit: float = 1,
 ) -> int:
     sys.path.insert(0, str(ROOT))
     from scripts.qualify_framed_backup import require_native_limits
     from tests.processing_replay import replay
 
-    require_native_limits()
+    require_native_limits(cpu_limit=cpu_limit)
     if sys.version_info[:2] != (3, 11) or report.exists() or report.parent != Path("/work"):
         raise ValueError("New Linux3.11 /work report required")
 
@@ -515,6 +516,7 @@ def main() -> int:
     inner.add_argument("--bounded-pool", action="store_true")
     inner.add_argument("--diagnostic", action="store_true")
     inner.add_argument("--hot-state", action="store_true")
+    inner.add_argument("--cpu-limit", type=float, choices=(1, 1.5), default=1)
     outer = commands.add_parser("run")
     outer.add_argument("image")
     outer.add_argument("revision")
@@ -533,6 +535,7 @@ def main() -> int:
             bounded_pool=args.bounded_pool,
             diagnostic=args.diagnostic,
             hot_state=args.hot_state,
+            cpu_limit=args.cpu_limit,
         )
     return run(
         args.image,

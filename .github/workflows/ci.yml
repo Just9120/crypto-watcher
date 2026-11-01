@@ -106,26 +106,34 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
-      - name: Build isolated native qualification image; no delivery
+      - name: Build frozen runtime and explicit measurement overlay; no delivery
         env:
           REVISION: ${{ github.sha }}
           RUN_ID: ${{ github.run_id }}
         run: |
-          docker build --build-arg SOURCE_REVISION="$REVISION" --build-arg BUILD_RUN="$RUN_ID" -t "cryptowatcher:$REVISION" .
-          docker build -f tests/processing.Dockerfile --build-arg BASE_IMAGE="cryptowatcher:$REVISION" -t "cw-processing:$REVISION" .
-      - name: One bounded analytics pool prototype; global detection and delivery unchanged
+          RUNTIME=52d31a11a993b3bd765722c8ebf2c6a0e3dc4205
+          FROZEN=".cache-g1/cpu-frozen-${RUN_ID}"
+          mkdir -p .cache-g1
+          mkdir "$FROZEN"
+          git archive "$RUNTIME" | tar -x -C "$FROZEN"
+          docker build --build-arg SOURCE_REVISION="$RUNTIME" --build-arg BUILD_RUN="$RUN_ID" -t "cryptowatcher:$RUNTIME" "$FROZEN"
+          docker build -f "$FROZEN/tests/processing.Dockerfile" --build-arg BASE_IMAGE="cryptowatcher:$RUNTIME" -t "cw-processing-frozen:$RUNTIME" "$FROZEN"
+          docker build -f tests/cpu_pair.Dockerfile --build-arg BASE_IMAGE="cw-processing-frozen:$RUNTIME" --build-arg MEASUREMENT_REVISION="$REVISION" -t "cw-cpu-pair:$REVISION" .
+      - name: One paired1CPU and1.5CPU full scenario; shared450CPU510wall600outer
         env:
           REVISION: ${{ github.sha }}
         run: |
-          sudo timeout --signal=INT --kill-after=10s 600s "$(command -v python)" -B scripts/qualify_processing.py run "cw-processing:$REVISION" "$REVISION" ".cache-g1/processing-direct-${{ github.run_id }}-${{ github.run_attempt }}" --bounded-pool --hot-state
+          sudo timeout --signal=INT --kill-after=10s 600s "$(command -v python)" -B -m scripts.qualify_cpu_pair run "cw-cpu-pair:$REVISION" "$REVISION" ".cache-g1/processing-pair-${{ github.run_id }}-${{ github.run_attempt }}"
       - name: Preserve processing result including resource stops
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: processing-direct-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: processing-pair-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             .cache-g1/processing-*/*.json
             .cache-g1/processing-*/*.log
