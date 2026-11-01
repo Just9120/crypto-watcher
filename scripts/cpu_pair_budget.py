@@ -47,7 +47,7 @@ class Budget:
 
 def tail_upper(sample_cpu, sampled_at, finished_at, cpu_limit):
     if (
-        cpu_limit not in (1, 1.5)
+        cpu_limit not in (1, 1.5, 2)
         or not all(math.isfinite(v) for v in (sample_cpu, sampled_at, finished_at))
         or sample_cpu < 0
         or finished_at < sampled_at
@@ -58,11 +58,13 @@ def tail_upper(sample_cpu, sampled_at, finished_at, cpu_limit):
     return sample_cpu + cpu_limit * (finished_at - sampled_at + 0.2)
 
 
-def admission(samples, free, cores=None):
+def admission(samples, free, cores=None, *, cpu_limit=1.5):
     cores = os.cpu_count() if cores is None else cores
     if not cores or cores < 1:
         return False
-    required_idle = max(35, 15 + 150 / cores)
+    if cpu_limit not in (1, 1.5, 2):
+        raise ValueError("Unsupported measurement CPU ceiling")
+    required_idle = max(35, 15 + 100 * max(1.5, cpu_limit) / cores)
     return q.admit(samples, free) and all(s["idle_pct"] >= required_idle for s in samples[-6:])
 
 

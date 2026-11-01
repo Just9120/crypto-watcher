@@ -61,7 +61,7 @@ def data_signature(path: Path, owner: int) -> dict:
 
 
 def require_native_limits(*, cpu_limit: float = 1) -> None:
-    if cpu_limit not in (1, 1.5):
+    if cpu_limit not in (1, 1.5, 2):
         raise StateError("Unsupported explicit qualification CPU budget")
     if sys.platform != "linux" or not frozen_codec_native.available():
         raise StateError("Linux/native qualification environment required")

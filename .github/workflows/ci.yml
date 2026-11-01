@@ -111,6 +111,11 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
+      - name: Install locked finalizer dependencies and fail before measurement if unavailable
+        run: |
+          python -m pip install --require-hashes -r requirements-dev.txt
+          python -m pip check
+          python -c "from tests.test_processing_replay import assert_joint_result; from scripts.cpu_pair_budget import processing_ok"
       - name: Build frozen runtime and explicit measurement overlay; no delivery
         env:
           REVISION: ${{ github.sha }}
@@ -124,16 +129,16 @@ jobs:
           docker build --build-arg SOURCE_REVISION="$RUNTIME" --build-arg BUILD_RUN="$RUN_ID" -t "cryptowatcher:$RUNTIME" "$FROZEN"
           docker build -f "$FROZEN/tests/processing.Dockerfile" --build-arg BASE_IMAGE="cryptowatcher:$RUNTIME" -t "cw-processing-frozen:$RUNTIME" "$FROZEN"
           docker build -f tests/cpu_pair.Dockerfile --build-arg BASE_IMAGE="cw-processing-frozen:$RUNTIME" --build-arg MEASUREMENT_REVISION="$REVISION" -t "cw-cpu-pair:$REVISION" .
-      - name: One paired1CPU and1.5CPU full scenario; shared450CPU510wall600outer
+      - name: One2CPU full scenario;450CPU510wall600outer unchanged
         env:
           REVISION: ${{ github.sha }}
         run: |
-          sudo timeout --signal=INT --kill-after=10s 600s "$(command -v python)" -B -m scripts.qualify_cpu_pair run "cw-cpu-pair:$REVISION" "$REVISION" ".cache-g1/processing-pair-${{ github.run_id }}-${{ github.run_attempt }}"
+          sudo timeout --signal=INT --kill-after=10s 600s "$(command -v python)" -B -m scripts.qualify_cpu_pair run "cw-cpu-pair:$REVISION" "$REVISION" ".cache-g1/processing-cpu2-${{ github.run_id }}-${{ github.run_attempt }}" --single-cpu 2
       - name: Preserve processing result including resource stops
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: processing-pair-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: processing-cpu2-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             .cache-g1/processing-*/*.json
             .cache-g1/processing-*/*.log

@@ -1,4 +1,4 @@
-"""One fixed1/1.5CPU pair; run as python -m scripts.qualify_cpu_pair."""
+"""Fixed1/1.5CPU pair or explicit single2CPU case with the same finite budget."""
 
 from __future__ import annotations
 
@@ -102,9 +102,9 @@ def one(image, measurement, directory, label, cpu_limit, budget):
                 proof["state"] = budget.reason()
                 return proof
             proof["admission"].append(q.interval(5))
-            if b.admission(proof["admission"], shutil.disk_usage(directory).free):
+            if b.admission(proof["admission"], shutil.disk_usage(directory).free, cpu_limit=cpu_limit):
                 break
-        if not b.admission(proof["admission"], shutil.disk_usage(directory).free):
+        if not b.admission(proof["admission"], shutil.disk_usage(directory).free, cpu_limit=cpu_limit):
             proof["state"] = "NOT_STARTED_RESOURCE_ADMISSION"
             return proof
         if not budget.admit_second():
@@ -273,7 +273,10 @@ def one(image, measurement, directory, label, cpu_limit, budget):
     return proof
 
 
-def run(image, measurement, directory):
+def run(image, measurement, directory, *, single_cpu=None):
+    if single_cpu not in (None, 2):
+        raise ValueError("Only the authorized single2CPU exception is supported")
+    cases = (("cpu2", 2),) if single_cpu == 2 else (("cpu1", 1), ("cpu1_5", 1.5))
     if sys.platform != "linux" or os.geteuid() != 0 or not re.fullmatch(r"[0-9a-f]{40}", measurement):
         raise ValueError("Linux root and exact measurement revision required")
     if directory.exists() or directory.is_symlink() or directory.parent.resolve() != directory.parent:
@@ -289,6 +292,7 @@ def run(image, measurement, directory):
     budget = b.Budget()
     proof = {
         "schema": "cryptowatcher.cpu-pair.v1",
+        "mode": "SINGLE_CPU" if single_cpu else "FIXED_PAIR",
         "runtime": b.RUNTIME,
         "measurement": measurement,
         "image": image_info["Id"],
@@ -299,7 +303,7 @@ def run(image, measurement, directory):
             "wall_seconds_pair_total": 510,
             "outer_seconds_pair_total": 600,
             "memory_bytes": q.MEMORY,
-            "cpu_order": [1, 1.5],
+            "cpu_order": [cpu for _, cpu in cases],
         },
         "limitations": [
             "Single fixed order; host/caches still affect inference",
@@ -316,7 +320,7 @@ def run(image, measurement, directory):
     signal.signal(signal.SIGTERM, expire)
     signal.alarm(570)
     try:
-        for label, cpu in (("cpu1", 1), ("cpu1_5", 1.5)):
+        for label, cpu in cases:
             if budget.reason() or not budget.admit_second():
                 proof["state"] = "PAIR_INCOMPLETE_REMAINING_BUDGET"
                 break
@@ -325,10 +329,23 @@ def run(image, measurement, directory):
             if case["state"] != "CASE_COMPLETE" or case.get("fixture_cleanup") != "COMPLETE":
                 proof["state"] = "PAIR_INCOMPLETE"
                 break
-        complete = len(proof["cases"]) == 2 and all(c["state"] == "CASE_COMPLETE" for c in proof["cases"])
+        complete = len(proof["cases"]) == len(cases) and all(
+            c["state"] == "CASE_COMPLETE" for c in proof["cases"]
+        )
         complete = complete and budget.used() <= 450 and budget.elapsed() <= 510
         proof["comparison_complete"] = complete
-        proof["cpu_hypothesis"] = b.interpretation(proof["cases"], complete)
+        if single_cpu:
+            proof["cpu_hypothesis"] = (
+                "INCOMPLETE"
+                if not complete
+                else (
+                    "SINGLE_CASE_PROCESSING_GATES_MET"
+                    if b.processing_ok(proof["cases"][0]["result"])
+                    else "SINGLE_CASE_PROCESSING_GATES_FAILED"
+                )
+            )
+        else:
+            proof["cpu_hypothesis"] = b.interpretation(proof["cases"], complete)
         if proof["state"] == "PREPARED":
             proof["state"] = "QUALIFICATION_FAIL" if complete else "PAIR_INCOMPLETE"
             # Preserve all existing case gates. A budget hypothesis can be useful
@@ -369,18 +386,19 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     child = sub.add_parser("supervise")
-    child.add_argument("--cpu-limit", type=float, choices=(1, 1.5), required=True)
+    child.add_argument("--cpu-limit", type=float, choices=(1, 1.5, 2), required=True)
     child.add_argument("--seconds", type=float, required=True)
     parent = sub.add_parser("run")
     parent.add_argument("image")
     parent.add_argument("measurement")
     parent.add_argument("directory", type=Path)
+    parent.add_argument("--single-cpu", type=float, choices=(2,))
     args = parser.parse_args()
     if args.command == "supervise":
         if not 0 < args.seconds <= 510:
             raise ValueError("Finite supervisor wall limit required")
         return supervise(args.cpu_limit, args.seconds)
-    return run(args.image, args.measurement, args.directory.resolve())
+    return run(args.image, args.measurement, args.directory.resolve(), single_cpu=args.single_cpu)
 
 
 if __name__ == "__main__":

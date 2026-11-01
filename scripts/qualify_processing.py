@@ -516,7 +516,7 @@ def main() -> int:
     inner.add_argument("--bounded-pool", action="store_true")
     inner.add_argument("--diagnostic", action="store_true")
     inner.add_argument("--hot-state", action="store_true")
-    inner.add_argument("--cpu-limit", type=float, choices=(1, 1.5), default=1)
+    inner.add_argument("--cpu-limit", type=float, choices=(1, 1.5, 2), default=1)
     outer = commands.add_parser("run")
     outer.add_argument("image")
     outer.add_argument("revision")

@@ -26,7 +26,7 @@ def test_shared_budget_charges_both_cases_controller_and_final_tail():
     with pytest.raises(ValueError):
         b.tail_upper(1, 2, 1, 1.5)
     with pytest.raises(ValueError):
-        b.tail_upper(1, 1, 2, 2)
+        b.tail_upper(1, 1, 2, 2.5)
 
 
 def test_pair_admission_preserves_reserve_for_the_larger_cpu_ceiling():
@@ -68,8 +68,13 @@ def test_native_cpu_exception_is_explicit_and_other_guards_are_unchanged(monkeyp
     values["memory.max"] = str(q.MEMORY + 1)
     with pytest.raises(f.StateError):
         f.require_native_limits(cpu_limit=1.5)
+    values["memory.max"] = str(q.MEMORY)
+    values["cpu.max"] = "200000 100000"
+    f.require_native_limits(cpu_limit=2)
+    with pytest.raises(f.StateError):
+        f.require_native_limits(cpu_limit=1.5)
     with pytest.raises(f.StateError, match="Unsupported"):
-        f.require_native_limits(cpu_limit=2)
+        f.require_native_limits(cpu_limit=2.5)
 
 
 def test_pair_recomputes_gates_and_never_promotes_incomplete_or_coverage_failures(monkeypatch):
@@ -249,7 +254,10 @@ def test_pair_lifecycle_accounts_final_cpu_and_cleans_same_object_without_restar
         assert proof["cpu_seconds_upper"] > 20
 
 
-def test_complete_pair_runs_each_ceiling_once_and_keeps_qualification_failure(tmp_path, monkeypatch):
+@pytest.mark.parametrize("single_cpu,expected", [(None, [1, 1.5]), (2, [2])])
+def test_complete_pair_runs_each_ceiling_once_and_keeps_qualification_failure(
+    tmp_path, monkeypatch, single_cpu, expected
+):
     from types import SimpleNamespace
 
     from scripts import qualify_cpu_pair as pair
@@ -296,11 +304,23 @@ def test_complete_pair_runs_each_ceiling_once_and_keeps_qualification_failure(tm
 
     monkeypatch.setattr(pair, "one", case)
     output = tmp_path / "pair"
-    assert pair.run("tag", measurement, output) == 1
+    monkeypatch.setattr(b, "processing_ok", lambda _: False)
+    assert pair.run("tag", measurement, output, single_cpu=single_cpu) == 1
     result = json.loads((output / "pair.json").read_text())
-    assert [c[2] for c in calls] == [1, 1.5]
+    assert [c[2] for c in calls] == expected
+    assert result["limits"]["cpu_order"] == expected
+    if single_cpu:
+        assert result["mode"] == "SINGLE_CPU"
+        assert result["cpu_hypothesis"] == "SINGLE_CASE_PROCESSING_GATES_FAILED"
     assert len({c[0] for c in calls}) == 1
     assert result["comparison_complete"] is True
     assert result["state"] == "QUALIFICATION_FAIL"
     assert result["cpu_seconds_upper_including_controller"] == 250
     assert result["limits"]["cpu_seconds_pair_total"] == 450
+
+
+def test_two_cpu_admission_and_tail_keep_host_reserve_and_explicit_ceiling():
+    sample = {"idle_pct": 65, "available_bytes": q.MEMORY + q.RESERVE}
+    assert b.admission([sample] * 6, 7 * 1024**3, 4, cpu_limit=2)
+    assert not b.admission([{**sample, "idle_pct": 64.9}] * 6, 7 * 1024**3, 4, cpu_limit=2)
+    assert b.tail_upper(10, 5, 6, 2) == pytest.approx(12.4)
