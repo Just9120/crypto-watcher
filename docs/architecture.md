@@ -531,3 +531,21 @@ coalesce внутри source transaction. Отсутствующий direct diag
 owner/settings guards, fresh reads, TTL и rollback сохраняются. Эти изменения не
 доказывают capacity или live timeliness; acceptance определяется полным CI/runtime
 сценарием и последующим shared-VPS наблюдением.
+
+
+### Учёт предметного repository и отбора аналитики
+
+Для direct/domain и analytics-pool таблиц flow counters меняются атомарно с
+фактами и откатом транзакции. Логические bytes не включают физические страницы,
+индексы, freelist и journals: эти составляющие учитываются отдельно. Модель
+годовых результатов использует фактические admissions пула, а membership flow —
+все глобальные значимые события. Выборка outcomes не является случайной выборкой
+всего рынка. Исчезновение ledger либо обратный ход cumulative admissions делают
+прогноз неизвестным, а не нулевым. Новый формат samples отделён от прежних оценок;
+исходная история, settings и observer baseline при этом не меняются.
+
+Свежая additive установка пуста; совместимая старая непоставленная population
+инициализируется только до512строк на таблицу. Больший немеренный repository
+требует отдельной явной инициализации: startup не сканирует его целиком и не
+удаляет данные. Периодическая диагностика читает bounded slots/jobs/waitlist и
+cumulative admitted point, не материализует30дней selection records.

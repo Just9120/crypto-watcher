@@ -77,6 +77,8 @@ def boundary_blockers(value: dict[str, Any]) -> list[str]:
         reasons.append("BOUNDARY_SHARED_RECORD_LEDGER_INCOMPLETE")
     if not re.fullmatch(r"[0-9a-f]{40}", value.get("source_revision", "")):
         reasons.append("BOUNDARY_SOURCE_UNSET")
+    if value.get("storage", {}).get("subject_repository_layout", {}).get("state") == "INCOMPLETE":
+        reasons.append("BOUNDARY_SUBJECT_REPOSITORY_LEDGER_INCOMPLETE")
     generation = value.get("history_generation") or {}
     instance = value.get("runtime_instance") or {}
     if not generation.get("id") or not instance.get("id"):

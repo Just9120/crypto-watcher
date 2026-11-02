@@ -62,8 +62,29 @@ class Pool:
             CREATE TABLE IF NOT EXISTS analytics_pool_cutover(
                 id INTEGER PRIMARY KEY CHECK(id=1),cursor TEXT NOT NULL,complete INTEGER NOT NULL CHECK(complete IN(0,1)));
             INSERT OR IGNORE INTO analytics_pool_cutover VALUES(1,'',0);
+            CREATE TABLE IF NOT EXISTS analytics_pool_totals(
+                id INTEGER PRIMARY KEY CHECK(id=1),admitted INTEGER NOT NULL CHECK(admitted>=0));
+            CREATE TRIGGER IF NOT EXISTS analytics_pool_count_admitted AFTER UPDATE OF admitted_ms ON analytics_pool_choices
+                WHEN OLD.admitted_ms IS NULL AND NEW.admitted_ms IS NOT NULL BEGIN
+                SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM analytics_pool_totals WHERE id=1) THEN RAISE(ABORT,'Missing pool admission counter') END;
+                UPDATE analytics_pool_totals SET admitted=admitted+1 WHERE id=1;
+            END;
             COMMIT;
         """)
+        if self.store.db.execute("SELECT 1 FROM analytics_pool_totals WHERE id=1").fetchone() is None:
+            prior = self.store.db.execute(
+                "SELECT admitted_ms FROM analytics_pool_choices LIMIT 513"
+            ).fetchall()
+            if len(prior) > 512:
+                raise StateError("Large unmetered pool requires explicit initialization; data preserved")
+            with self.store.db:
+                self.store.db.execute(
+                    "INSERT INTO analytics_pool_totals VALUES(1,?)", (sum(r[0] is not None for r in prior),)
+                )
+        from .repository_meter import POOL
+        from .repository_meter import install as install_meter
+
+        install_meter(self.store, "pool", POOL)
         policy = encode({"limits": LIMITS, "manual": self.manual, "method": "bounded-pool-v1"})
         previous = self.store.db.execute("SELECT body FROM analytics_pool_policy WHERE id=1").fetchone()
         if previous and previous[0] != policy:
@@ -351,3 +372,45 @@ class Pool:
                 "Pool limits do not bound global signals or 30-day turnover",
             ],
         }
+
+
+def selection_status(store: Any, event: dict[str, Any]) -> dict[str, Any] | None:
+    """Current display metadata, never added to an immutable event/envelope."""
+    if store.db.execute("SELECT 1 FROM sqlite_master WHERE name='analytics_pool_choices'").fetchone() is None:
+        return None
+    row = store.db.execute(
+        "SELECT status,reason,admitted_ms FROM analytics_pool_choices WHERE id=?", (event.get("episode_id"),)
+    ).fetchone()
+    return (
+        {"state": row[0], "reason": row[1], "admitted_ms": row[2]}
+        if row
+        else {"state": "LEGACY_OR_UNRECORDED", "reason": "No retained selection record"}
+    )
+
+
+def summary(store: Any) -> dict[str, Any]:
+    """Bounded live slots/waitlist only; never materialize30days of choices."""
+    if store.db.execute("SELECT 1 FROM sqlite_master WHERE name='analytics_pool_choices'").fetchone() is None:
+        return {"state": "NOT_INSTALLED"}
+    counts = dict(store.db.execute("SELECT state,COUNT(*) FROM analytics_pool_slots GROUP BY state"))
+    has_totals = store.db.execute("SELECT 1 FROM sqlite_master WHERE name='analytics_pool_totals'").fetchone()
+    total = (
+        store.db.execute("SELECT admitted FROM analytics_pool_totals WHERE id=1").fetchone()
+        if has_totals
+        else None
+    )
+    return {
+        "state": "BOUNDED_POOL" if total is not None else "INCOMPLETE",
+        "obligations": sum(counts.values()),
+        "slots": counts,
+        "limits": LIMITS,
+        "horizon_jobs": store.db.execute("SELECT COUNT(*) FROM analytics_pool_jobs").fetchone()[0],
+        "waiting": store.db.execute(
+            "SELECT COUNT(*) FROM analytics_pool_choices WHERE status='WAITING'"
+        ).fetchone()[0],
+        "admitted_total": total[0] if total else None,
+        "population": "OUTCOMES_OF_AUTOMATICALLY_SELECTED_EPISODES",
+        "limitations": [
+            "Selected sample is not an unbiased whole-market population; global detection/delivery are independent"
+        ],
+    }

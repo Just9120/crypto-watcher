@@ -180,7 +180,7 @@ class Controller:
         from .analytics_pool import Pool
 
         self.analytics_pool: Pool | None = None
-        if store.bounded and store.writer_connection:
+        if store.writer_connection:
             self.analytics_pool = Pool(self.outcomes)
             self.analytics_pool.activate()
         self.retention = Retention(store)
@@ -517,11 +517,14 @@ class Controller:
                 await self.send(update, self.history_notice() + "История пока пуста или событие не найдено.")
             else:
                 for event in events:
+                    from .analytics_pool import selection_status
                     from .outcomes import episode_results
 
                     origin, horizons, outcomes = episode_results(self.history, event)
                     body = (
-                        outcome_text(origin, outcomes, horizons)
+                        outcome_text(
+                            origin, outcomes, horizons, selection=selection_status(self.store, event)
+                        )
                         if origin is not None
                         else "Исходные подробности episode уже недоступны в сроке хранения."
                     )

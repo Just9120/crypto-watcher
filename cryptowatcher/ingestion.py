@@ -894,7 +894,24 @@ class BybitRadar(BybitREST):
             ]
         )
 
+    async def _receive_compat(self, websocket: Any, name: str, market: str, allowed: set[str]) -> None:
+        """Preserve the original frame-at-a-time contract for legacy callers."""
+        started, processed = time.monotonic(), 0
+        while True:
+            async with asyncio.timeout(65):
+                raw = await websocket.recv()
+            received = raw if isinstance(raw, ReceivedFrame) else ReceivedFrame(raw, int(time.time() * 1000))
+            self.accept_message(market, json.loads(received.raw), allowed, received_ms=received.received_ms)
+            self.connections[name]["last_received_ms"] = received.received_ms
+            processed += 1
+            if processed >= 16 or time.monotonic() - started >= 0.005:
+                await asyncio.sleep(0)
+                started, processed = time.monotonic(), 0
+
     async def _receive_messages(self, websocket: Any, name: str, market: str, allowed: set[str]) -> None:
+        if not (self.store.bounded and self.store.writer_connection):
+            await self._receive_compat(websocket, name, market, allowed)
+            return
         queue: asyncio.Queue[Any] = asyncio.Queue(SUBSCRIPTION_BUFFER_MESSAGES)
         pending: dict[int, int] = {}
         self._ingress_pending[name] = pending

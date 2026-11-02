@@ -19,7 +19,7 @@ QUALITY_CATEGORIES = frozenset(
         "quality_episodes",
     }
 )
-SAMPLE_FORMAT = 13
+SAMPLE_FORMAT = 14
 
 
 def install_source_usage(db: Any) -> None:
@@ -149,6 +149,40 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         if frequency_base and frequency_elapsed > 0
         else None
     )
+    from .repository_meter import state as subject_meter_state
+
+    subject_layout = subject_meter_state(store)
+    pool_row = store.db.execute("SELECT 1 FROM sqlite_master WHERE name='analytics_pool_choices'").fetchone()
+    has_totals = store.db.execute("SELECT 1 FROM sqlite_master WHERE name='analytics_pool_totals'").fetchone()
+    totals = (
+        store.db.execute("SELECT admitted FROM analytics_pool_totals WHERE id=1").fetchone()
+        if has_totals
+        else None
+    )
+    selected_total = totals[0] if totals is not None else None
+    previous_selected = (frequency_base or {}).get("selected_episode_total")
+    selected_rate = (
+        (selected_total - previous_selected) / frequency_elapsed
+        if type(selected_total) is int
+        and type(previous_selected) is int
+        and selected_total >= previous_selected
+        and frequency_elapsed > 0
+        else None
+    )
+    if pool_row is not None and (
+        selected_total is None
+        or (
+            type(previous_selected) is int
+            and type(selected_total) is int
+            and selected_total < previous_selected
+        )
+    ):
+        subject_layout = {
+            **subject_layout,
+            "state": "INCOMPLETE",
+            "missing": [*subject_layout.get("missing", []), "pool:admission_counter_epoch"],
+        }
+    result_episode_rate = selected_rate if pool_row is not None else episode_rate
     usage = (
         {
             row[0]: {"arrived_bytes": row[1], "first_used_bytes": row[2]}
@@ -190,6 +224,8 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
     )
     occupancy = {
         "services",
+        "direct_state",
+        "pool_state",
         "service_indexes",
         "pending_holds",
         "context",
@@ -284,12 +320,12 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
     )
     quality_projection = (
         (
-            episode_rate * len(settings.outcome_horizons) * EPISODE_RESULT_LOGICAL
+            result_episode_rate * len(settings.outcome_horizons) * EPISODE_RESULT_LOGICAL
             + (event_rate or 0) * EPISODE_MEMBER_LOGICAL
         )
         * 86400
         * 366
-        if episode_rate is not None
+        if result_episode_rate is not None
         else None
     )
     quality = next((r for r in forecast if r["category"] == "quality"), None)
@@ -323,18 +359,23 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
     )
     quality_physical = (
         (
-            episode_rate * len(settings.outcome_horizons) * EPISODE_RESULT_PHYSICAL
+            result_episode_rate * len(settings.outcome_horizons) * EPISODE_RESULT_PHYSICAL
             + (event_rate or 0) * EPISODE_MEMBER_PHYSICAL
         )
         * 86400
         * 366
-        if episode_rate is not None
+        if result_episode_rate is not None
         else 0
     )
-    quality_physical = max(quality_physical, quality_flow * factor)
+    retained_quality = sum(
+        v["logical_bytes"] for category, v in counts.items() if category in QUALITY_CATEGORIES
+    )
+    quality_physical = max(quality_physical, quality_flow * factor, retained_quality * factor)
     projected = (
         max(sum(files.values()), projected_without_quality + quality_physical + free * page + journal_reserve)
         if elapsed > 0
+        and subject_layout["state"] != "INCOMPLETE"
+        and (pool_row is None or selected_rate is not None)
         else None
     )
     alternatives: list[dict[str, Any]] = []
@@ -345,7 +386,7 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
     }
     from .candle_access import installed as source_tiles_installed
 
-    source_tables: set[str] = set()
+    source_tables: set[str] = set(subject_layout.get("tables", []))
     if source_tiles_installed(store.db):
         from .candle_blocks import summary as source_summary
 
@@ -515,6 +556,11 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "target_exceeded": actual > TARGET,
         "catalogue_layout": catalogue_layout,
         "quality_frame_layout": frame_layout,
+        "subject_repository_layout": subject_layout,
+        "observed_selected_episodes_total": selected_total,
+        "observed_selected_episodes_per_day_extrapolated": selected_rate * 86400
+        if selected_rate is not None
+        else None,
         "context_tile_layout": context_tile_layout,
         "parent_affinity_layout": affinity_layout,
         "shared_record_layout": shared_layout,
@@ -579,6 +625,10 @@ def report(store: Store, now_ms: int | None = None) -> dict[str, Any]:
         "observed_events_per_day_extrapolated": event_rate * 86400 if event_rate is not None else None,
         "quality_forecast_model": {
             "kind": EPISODE_MODEL_VERSION,
+            "result_population": "OBSERVED_POOL_ADMISSIONS"
+            if pool_row is not None
+            else "ALL_LEGACY_EPISODES",
+            "membership_population": "ALL_GLOBAL_MEANINGFUL_EVENTS",
             "physical_bytes_per_result_with_provenance": EPISODE_RESULT_PHYSICAL,
             "physical_bytes_per_membership_with_provenance": EPISODE_MEMBER_PHYSICAL,
             "assumption": "UNSHARED_PROVENANCE; DISTINCT_MEANINGFUL_EVENTS_BOUND_MEMBERSHIPS",
@@ -646,6 +696,7 @@ def sample(store: Store, now_ms: int) -> None:
             "categories": value["categories"],
             "event_total": value["observed_events_total"],
             "episode_total": value["observed_episodes_total"],
+            "selected_episode_total": value["observed_selected_episodes_total"],
             "scope_key": value["scope_key"],
             "source_usage": value["source_usage"],
         }

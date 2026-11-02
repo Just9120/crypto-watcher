@@ -44,6 +44,10 @@ def install(store: Store, *, extra_sql: str = "") -> None:
     if store.readonly or store.db.in_transaction or not store.bounded:
         raise StateError("Direct installation requires an idle bounded writable connection")
     if installed(store):
+        from .repository_meter import DIRECT
+        from .repository_meter import install as install_meter
+
+        install_meter(store, "direct", DIRECT)
         return
     if store.db.execute("PRAGMA foreign_keys").fetchone()[0] != 1:
         raise StateError("Direct repository requires SQLite foreign keys")
@@ -84,6 +88,10 @@ def install(store: Store, *, extra_sql: str = "") -> None:
     except BaseException:
         store.db.rollback()
         raise
+    from .repository_meter import DIRECT
+    from .repository_meter import install as install_meter
+
+    install_meter(store, "direct", DIRECT)
 
 
 def retained_deadline(store: Store, kind: str, identity: str, value: dict[str, Any]) -> int:

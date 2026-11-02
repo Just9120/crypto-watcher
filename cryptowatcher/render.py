@@ -168,7 +168,13 @@ def digest_keyboard(enabled: bool) -> InlineKeyboardMarkup:
     )
 
 
-def outcome_text(event: dict[str, Any], outcomes: list[Any], horizons: tuple[int, ...]) -> str:
+def outcome_text(
+    event: dict[str, Any],
+    outcomes: list[Any],
+    horizons: tuple[int, ...],
+    *,
+    selection: dict[str, Any] | None = None,
+) -> str:
     lines = [
         "📍 Результат наблюдения",
         f"{event['symbol']} · {market_label(OwnerSettings(bybit_category=event['market_type']))}",
@@ -176,6 +182,25 @@ def outcome_text(event: dict[str, Any], outcomes: list[Any], horizons: tuple[int
         f"Исходное время: {when(event['reference_time_ms'])}",
         f"Цена отсчёта: {amount(event['reference_price'])} USDT",
     ]
+    selection_state = str(selection.get("state")) if selection else ""
+    selection_text = {
+        "WAITING": "⏳ Эпизод ожидает отбора в ограниченный пул; расчёты пока не назначены.",
+        "NOT_SELECTED": "ℹ️ Эпизод не отобран для подробного сопровождения. Outcomes и MFE/MAE для него не назначены.",
+        "SELECTED": "🔎 Эпизод отобран для подробного сопровождения; ниже — состояние каждого срока.",
+        "FINISHED": "✅ Подробное сопровождение завершено; ниже — сохранённые результаты.",
+        "LEGACY_OR_UNRECORDED": "ℹ️ Запись отбора для прежней истории недоступна; имеющиеся результаты сохраняются.",
+    }.get(selection_state)
+    if selection_text:
+        lines += [
+            "",
+            selection_text,
+            "Сигнал сохранён; обнаружение и доставка уведомлений от наличия места в пуле не зависят.",
+        ]
+    if selection_state in ("WAITING", "NOT_SELECTED") and not any(outcomes):
+        lines.append(
+            "Отсутствие расчёта не является нулевым результатом и не входит в N завершённых outcomes."
+        )
+        return "\n".join(lines)
     states = {
         "COMPLETE": "готово",
         "INCOMPLETE": "данные неполные",

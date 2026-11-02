@@ -1580,7 +1580,9 @@ def test_replaced_observer_retains_standalone_post_commit_semantics(radar, infra
     assert not History(radar.store).events()
 
 
+@pytest.mark.parametrize("radar", ["normalized"], indirect=True)
 async def test_receipt_role_preserves_fifo_clock_barrier_and_cleans_up_on_cancel(radar, monkeypatch):
+    monkeypatch.setattr(radar.store, "writer_connection", True)
     incoming = asyncio.Queue()
     receipts = [NOW + n for n in (1, 2, 3)]
     for at in receipts:
@@ -1608,7 +1610,9 @@ async def test_receipt_role_preserves_fifo_clock_barrier_and_cleans_up_on_cancel
         await radar.close()
 
 
+@pytest.mark.parametrize("radar", ["normalized"], indirect=True)
 async def test_receipt_overflow_is_explicit_and_does_not_leave_clock_barriers(radar, monkeypatch):
+    monkeypatch.setattr(radar.store, "writer_connection", True)
     incoming = asyncio.Queue()
     for n in range(3):
         incoming.put_nowait(ingestion.ReceivedFrame(json.dumps(message("1m")), NOW + n))
