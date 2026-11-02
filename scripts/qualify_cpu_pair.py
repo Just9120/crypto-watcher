@@ -325,6 +325,12 @@ def run(image, measurement, directory, *, single_cpu=None):
                 proof["state"] = "PAIR_INCOMPLETE_REMAINING_BUDGET"
                 break
             case = one(image_info["Id"], measurement, directory, label, cpu, budget)
+            publication = labels.get("io.cryptowatcher.publication-unit")
+            if publication is not None:
+                unit = case.get("result", {}).get("result", {}).get("publication_unit", {})
+                if publication != "one-pass-v1" or unit.get("mode") != publication:
+                    case.update(state="CASE_INCOMPLETE", error="PUBLICATION_UNIT_EVIDENCE_MISSING")
+                    save(directory, label, case)
             proof["cases"].append(case)
             if case["state"] != "CASE_COMPLETE" or case.get("fixture_cleanup") != "COMPLETE":
                 proof["state"] = "PAIR_INCOMPLETE"

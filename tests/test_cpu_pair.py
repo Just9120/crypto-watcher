@@ -254,9 +254,11 @@ def test_pair_lifecycle_accounts_final_cpu_and_cleans_same_object_without_restar
         assert proof["cpu_seconds_upper"] > 20
 
 
-@pytest.mark.parametrize("single_cpu,expected", [(None, [1, 1.5]), (2, [2])])
+@pytest.mark.parametrize(
+    "single_cpu,expected,missing_unit", [(None, [1, 1.5], False), (2, [2], False), (2, [2], True)]
+)
 def test_complete_pair_runs_each_ceiling_once_and_keeps_qualification_failure(
-    tmp_path, monkeypatch, single_cpu, expected
+    tmp_path, monkeypatch, single_cpu, expected, missing_unit
 ):
     from types import SimpleNamespace
 
@@ -275,6 +277,8 @@ def test_complete_pair_runs_each_ceiling_once_and_keeps_qualification_failure(
             },
         }
     ]
+    if missing_unit:
+        image[0]["Config"]["Labels"]["io.cryptowatcher.publication-unit"] = "one-pass-v1"
     monkeypatch.setattr(pair.sys, "platform", "linux")
     monkeypatch.setattr(pair.os, "geteuid", lambda: 0, raising=False)
     monkeypatch.setattr(q, "docker", lambda *a, **k: json.dumps(image))
@@ -311,10 +315,14 @@ def test_complete_pair_runs_each_ceiling_once_and_keeps_qualification_failure(
     assert result["limits"]["cpu_order"] == expected
     if single_cpu:
         assert result["mode"] == "SINGLE_CPU"
-        assert result["cpu_hypothesis"] == "SINGLE_CASE_PROCESSING_GATES_FAILED"
+        assert result["cpu_hypothesis"] == (
+            "INCOMPLETE" if missing_unit else "SINGLE_CASE_PROCESSING_GATES_FAILED"
+        )
     assert len({c[0] for c in calls}) == 1
-    assert result["comparison_complete"] is True
-    assert result["state"] == "QUALIFICATION_FAIL"
+    assert result["comparison_complete"] is (not missing_unit)
+    assert result["state"] == ("PAIR_INCOMPLETE" if missing_unit else "QUALIFICATION_FAIL")
+    if missing_unit:
+        assert result["cases"][0]["error"] == "PUBLICATION_UNIT_EVIDENCE_MISSING"
     assert result["cpu_seconds_upper_including_controller"] == 250
     assert result["limits"]["cpu_seconds_pair_total"] == 450
 

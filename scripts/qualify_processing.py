@@ -134,6 +134,20 @@ def verdict(result: dict, *, direct_sqlite: bool = False, bounded_pool: bool = F
             failures.append("MATURE_CAPACITY_UNPROVEN")
         if any(q.get("pending_total", 0) for q in result.get("delivery_queues_at_endpoint", {}).values()):
             failures.append("DELIVERY_DRAIN_UNPROVEN")
+    if "publication_unit" in result:
+        unit = result["publication_unit"]
+        if (
+            unit.get("mode") != "one-pass-v1"
+            or unit.get("observations") != result.get("accepted_closed")
+            or unit.get("completed_units") != unit.get("observations")
+            or unit.get("failed_units") != 0
+            or unit.get("prepared_revisions", 0) <= 0
+            or unit.get("body_encodes") != unit.get("prepared_revisions")
+            or unit.get("reused_records", 0) <= 0
+            or not 0 < unit.get("peak_keys", 0) <= 128
+            or not 0 < unit.get("peak_serialized_bytes", 0) <= 1024**2
+        ):
+            failures.append("PUBLICATION_UNIT_EVIDENCE_INCOMPLETE")
     return failures
 
 
@@ -229,7 +243,22 @@ def case(
         print(json.dumps(value), file=sys.stderr, flush=True)
 
     try:
-        with tempfile.TemporaryDirectory(prefix="paced-", dir="/work") as temporary:
+        from contextlib import nullcontext
+
+        publication = os.environ.get("CW_ISOLATED_PUBLICATION_UNIT")
+        if publication not in (None, "one-pass-v1"):
+            raise ValueError("Unknown isolated publication selection")
+        if publication and (not direct_sqlite or not bounded_pool or not hot_state or diagnostic or profile):
+            raise ValueError("Publication qualification requires the unchanged hot bounded-pool flow")
+        context = nullcontext(None)
+        if publication:
+            from tests.publication_unit import installed
+
+            context = installed()
+        with (
+            context as publication_stats,
+            tempfile.TemporaryDirectory(prefix="paced-", dir="/work") as temporary,
+        ):
             result = asyncio.run(
                 replay(
                     Path(temporary) / "processing.sqlite3",
@@ -244,6 +273,8 @@ def case(
             )
     finally:
         capture.save(report.parent / "profile.json")
+    if publication:
+        result["publication_unit"] = {"mode": publication, **publication_stats}
     failures = verdict(result, direct_sqlite=direct_sqlite, bounded_pool=bounded_pool)
     if diagnostic and result.get("diagnostic", {}).get("complete") is not True:
         failures.append("DIAGNOSTIC_TRACE_INCOMPLETE")

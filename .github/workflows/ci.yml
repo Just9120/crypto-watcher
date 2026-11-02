@@ -129,16 +129,17 @@ jobs:
           docker build --build-arg SOURCE_REVISION="$RUNTIME" --build-arg BUILD_RUN="$RUN_ID" -t "cryptowatcher:$RUNTIME" "$FROZEN"
           docker build -f "$FROZEN/tests/processing.Dockerfile" --build-arg BASE_IMAGE="cryptowatcher:$RUNTIME" -t "cw-processing-frozen:$RUNTIME" "$FROZEN"
           docker build -f tests/cpu_pair.Dockerfile --build-arg BASE_IMAGE="cw-processing-frozen:$RUNTIME" --build-arg MEASUREMENT_REVISION="$REVISION" -t "cw-cpu-pair:$REVISION" .
-      - name: One2CPU full scenario;450CPU510wall600outer unchanged
+          docker build -f tests/publication_unit.Dockerfile --build-arg BASE_IMAGE="cw-cpu-pair:$REVISION" -t "cw-publication:$REVISION" .
+      - name: One publication unit2CPU full scenario;450CPU510wall600outer unchanged
         env:
           REVISION: ${{ github.sha }}
         run: |
-          sudo timeout --signal=INT --kill-after=10s 600s "$(command -v python)" -B -m scripts.qualify_cpu_pair run "cw-cpu-pair:$REVISION" "$REVISION" ".cache-g1/processing-cpu2-${{ github.run_id }}-${{ github.run_attempt }}" --single-cpu 2
+          sudo timeout --signal=INT --kill-after=10s 600s "$(command -v python)" -B -m scripts.qualify_cpu_pair run "cw-publication:$REVISION" "$REVISION" ".cache-g1/processing-publication-${{ github.run_id }}-${{ github.run_attempt }}" --single-cpu 2
       - name: Preserve processing result including resource stops
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: processing-cpu2-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: processing-publication-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             .cache-g1/processing-*/*.json
             .cache-g1/processing-*/*.log
