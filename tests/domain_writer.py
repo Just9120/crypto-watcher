@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -284,8 +285,9 @@ class PreparedState:
 
     _condition_batch = None
 
-    def __init__(self, values, allowed):
+    def __init__(self, values, allowed, condition_groups=None):
         self.values, self.allowed, self.changes = values, allowed, []
+        self.condition_groups = condition_groups or {}
         self.store = SimpleNamespace(bounded=False)
 
     def get(self, key, default=None):
@@ -413,12 +415,14 @@ class Kernel(EventEngine):
         )
 
 
-def prepare(engine, stream, candles):
+def prepare(engine, stream, candles, snapshot=None):
     history, store = engine.history, engine.store
     if not isinstance(history, History):
         raise StateError("Domain writer needs its explicit repository")
+    snapshot = snapshot or store.snapshot()
     instrument = stream.rsplit("/", 1)[0]
     values, allowed = {}, set()
+    condition_groups = {}
     streams = {stream}
     for namespace in ("active", "historical-active", "suppressed-active"):
         for direction in ("UP", "DOWN", "NEUTRAL"):
@@ -441,16 +445,18 @@ def prepare(engine, stream, candles):
                 allowed.add(candidate_key)
             for confirmation in episode["confirmations"].values():
                 key = f"event:{confirmation['event_id']}:{confirmation['revision']:010d}"
-                # Parameter comparison needs the pinned original settings only.
-                values[key] = history.metadata(key)
+                # The transition compares original parameters only across a
+                # settings revision change; unchanged confirmations need no read.
+                if confirmation["settings_revision"] != snapshot.revision:
+                    values[key] = history.metadata(key)
     for item in streams:
         group = history.condition_group(item)
+        condition_groups[item] = {name: dict(value) for name, value in group.items()}
         for member in MEMBERS:
             key = "condition:" + item + ":" + member
             allowed.add(key)
             if member in group:
                 values[key] = group[member]
-    snapshot = store.snapshot()
     for family in snapshot.settings.active_detectors:
         identity = event_identity(
             stream, family, events.VERSIONS[family], snapshot.revision, candles[-1].start
@@ -466,7 +472,7 @@ def prepare(engine, stream, candles):
                 values[key] = previous
     if len(values) > 384:
         raise StateError("Prepared observation state exceeds finite budget")
-    return PreparedState(values, allowed), snapshot
+    return PreparedState(values, allowed, condition_groups), snapshot
 
 
 def maintenance(store, now):
@@ -499,7 +505,13 @@ def maintenance(store, now):
 def installed(enabled=True):
     stats = {
         "mode": "typed-domain-v1",
+        "adapter_revision": "transaction-regression-fix-v1",
         "observations": 0,
+        "mutable_buffered": 0,
+        "mutable_flushed": 0,
+        "condition_read_reuse": 0,
+        "optional_agent_failures": 0,
+        "cpu_seconds": {"prepare": 0.0, "transition": 0.0, "apply_excluding_consumer": 0.0, "consumer": 0.0},
         "pure_transitions": 0,
         "facts": 0,
         "episode_revisions": 0,
@@ -535,7 +547,9 @@ def installed(enabled=True):
         owner = store.owner_id
         try:
             with store.db if commit else nullcontext():
-                prepared, snapshot = prepare(engine, stream, candles)
+                began = time.thread_time()
+                prepared, snapshot = prepare(engine, stream, candles, snapshot)
+                stats["cpu_seconds"]["prepare"] += time.thread_time() - began
                 stats["max_prepared_keys"] = max(stats["max_prepared_keys"], len(prepared.values))
                 # External context is captured only for a meaningful fact and
                 # outside the pure transition; silent candles do not query it.
@@ -571,9 +585,11 @@ def installed(enabled=True):
                     if kwargs.get("live") and candles[-1].source == "websocket"
                     else now_ms
                 )
+                began = time.thread_time()
                 original_observe(
                     kernel, stream, candles, liquidity, tick_size, domain_now, commit=True, **kwargs
                 )
+                stats["cpu_seconds"]["transition"] += time.thread_time() - began
                 stats["pure_transitions"] += 1
                 if provider is not None and any(
                     c.operation == "version" and c.key == "event" for c in prepared.changes
@@ -594,67 +610,108 @@ def installed(enabled=True):
                             )
                 if owner != store.owner_id or snapshot.revision != store.snapshot().revision:
                     raise StateError("Domain owner/settings revision changed")
-                groups = {}
+                groups, mutable, published = {}, {}, {}
+
+                def flush_mutable():
+                    for key, (operation, value) in mutable.items():
+                        if operation == "delete":
+                            engine.history.delete(key)
+                        else:
+                            engine.history.put(key, value)
+                        stats["mutable_flushed"] += 1
+                    mutable.clear()
+                    for item, group in groups.items():
+                        engine.history.conditions(item, group)
+                        stats["condition_groups"] += 1
+                    groups.clear()
+
+                apply_started, consumer_used = time.thread_time(), 0.0
                 for change in prepared.changes:
                     if change.operation == "consumer":
+                        consumer_started = time.thread_time()
                         if change.key == "event":
                             event, episode = change.value
-                            event["detection_ms"] = event["available_at_ms"] = now_ms
-                            episode["available_at_ms"] = now_ms
+                            event = dict(published[("event", event["event_id"], event["revision"])])
+                            episode = freeze_episode(
+                                published[("episode", episode["episode_id"], episode["revision"])]
+                            )
                             if (
                                 engine.on_event is engine._snapshot_event_callback
                                 and engine.on_event_snapshot is not None
                             ):
                                 engine.on_event_snapshot(event, episode)
                             elif engine.on_event is not None:
-                                # Preserve observable writer order for arbitrary
-                                # callbacks, including exposed condition state.
-                                for item, group in groups.items():
-                                    engine.history.conditions(item, group)
-                                    stats["condition_groups"] += 1
-                                groups.clear()
+                                flush_mutable()
                                 engine.on_event(event)
                         elif engine.on_episode is not None:
-                            engine.on_episode(change.value)
+                            episode = change.value
+                            # Use exactly the normalized revision just persisted,
+                            # never the pure ingress-time copy or a later head.
+                            engine.on_episode(
+                                freeze_episode(
+                                    published[("episode", episode["episode_id"], episode["revision"])]
+                                )
+                            )
+                        consumer_used += time.thread_time() - consumer_started
                     elif change.operation == "version":
                         value = change.value
+                        value["available_at_ms"] = now_ms
                         if change.key == "event":
-                            value["detection_ms"] = value["available_at_ms"] = now_ms
+                            value["detection_ms"] = now_ms
                             stats["facts"] += 1
                         else:
-                            value["available_at_ms"] = now_ms
                             stats["episode_revisions"] += 1
                         engine.history.version(change.key, value)
+                        published[(change.key, value[change.key + "_id"], value["revision"])] = value
                     elif change.key.startswith("condition:"):
                         _, item, family, direction = change.key.split(":")
                         if item not in groups:
-                            groups[item] = engine.history.condition_group(item)
+                            groups[item] = dict(prepared.condition_groups[item])
+                            stats["condition_read_reuse"] += 1
                         groups[item][family + ":" + direction] = change.value
+                    elif change.key.startswith(STATE_PREFIXES):
+                        mutable[change.key] = (change.operation, change.value)
+                        stats["mutable_buffered"] += 1
                     elif change.operation == "delete":
                         engine.history.delete(change.key)
                     else:
                         value = change.value
                         if isinstance(value, dict) and "episode_snapshot" in value:
-                            value = {
-                                **value,
-                                "episode_snapshot": {**value["episode_snapshot"], "available_at_ms": now_ms},
-                            }
+                            episode = value["episode_snapshot"]
+                            point = ("episode", episode["episode_id"], episode["revision"])
+                            # A Telegram candidate may precede publication of its
+                            # revision. Normalize the same availability once here;
+                            # consumer callbacks use the persisted projection above.
+                            snapshot_value = published.get(point, {**episode, "available_at_ms": now_ms})
+                            value = {**value, "episode_snapshot": freeze_episode(snapshot_value)}
                         engine.history.put(change.key, value)
-                for item, group in groups.items():
-                    engine.history.conditions(item, group)
-                    stats["condition_groups"] += 1
+                flush_mutable()
+                stats["cpu_seconds"]["consumer"] += consumer_used
+                stats["cpu_seconds"]["apply_excluding_consumer"] += (
+                    time.thread_time() - apply_started - consumer_used
+                )
             stats["observations"] += 1
         except BaseException:
             stats["failed"] += 1
             raise
 
+    from cryptowatcher.agent_delivery import AgentDelivery
     from cryptowatcher.ingestion import BybitRadar
+
+    original_diagnostic = AgentDelivery._diagnostic
+
+    def agent_diagnostic(agent, state, now):
+        if state.startswith("FAILED_"):
+            stats["optional_agent_failures"] += 1
+        return original_diagnostic(agent, state, now)
+
     from tests.domain_roles import LOCK, PENDING, receive
 
     with LOCK:
         if PENDING:
             raise StateError("Previous isolated ingress has not been cleaned")
     with ExitStack() as stack:
+        stack.enter_context(patch.object(AgentDelivery, "_diagnostic", agent_diagnostic))
         stack.enter_context(patch.object(EventEngine, "tick", tick))
         stack.enter_context(patch.object(BybitRadar, "_receive_messages", receive))
         stack.enter_context(patch.object(repository, "History", History))

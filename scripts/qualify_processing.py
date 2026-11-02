@@ -166,6 +166,13 @@ def verdict(result: dict, *, direct_sqlite: bool = False, bounded_pool: bool = F
             or unit.get("unprocessed_ingress_at_cleanup") != 0
         ):
             failures.append("DOMAIN_SLICE_EVIDENCE_INCOMPLETE")
+    if result.get("domain_writer", {}).get("adapter_revision") == "transaction-regression-fix-v1":
+        unit = result["domain_writer"]
+        hot = result.get("hot_state") or {}
+        if unit.get("optional_agent_failures") != 0:
+            failures.append("CAUGHT_AGENT_FAILURES")
+        if hot.get("observations") != result.get("accepted_closed") or hot.get("metadata_hits", 0) <= 0:
+            failures.append("TRANSACTION_REUSE_EVIDENCE_REQUIRED")
     return failures
 
 
@@ -282,6 +289,12 @@ def case(
 
     def progress(value):
         capture.stage(value)
+        if value.get("stage") == "SEED_COMPLETE" and domain:
+            publication_stats["seed_component_cpu_seconds"] = dict(publication_stats["cpu_seconds"])
+            publication_stats["cpu_seconds"] = {key: 0.0 for key in publication_stats["cpu_seconds"]}
+            publication_stats["component_cpu_scope"] = (
+                "PACED_OBSERVATIONS_ONLY; enclosing legacy transaction flush is covered by input_timing.observation"
+            )
         print(json.dumps(value), file=sys.stderr, flush=True)
 
     try:
@@ -300,7 +313,9 @@ def case(
         ):
             raise ValueError("Invalid explicit domain writer selection")
         if domain:
-            hot_state = False  # New domain transition replaces the old hot-view experiment.
+            # Preserve the validated transaction metadata and service coalescing.
+            # Typed producer state remains owned by the domain adapter.
+            hot_state = True
         context = nullcontext(None)
         if publication:
             from tests.publication_unit import installed

@@ -131,18 +131,18 @@ jobs:
           docker build -f tests/cpu_pair.Dockerfile --build-arg BASE_IMAGE="cw-processing-frozen:$RUNTIME" --build-arg MEASUREMENT_REVISION="$REVISION" -t "cw-cpu-pair:$REVISION" .
           OVERLAY=".cache-g1/domain-overlay-${RUN_ID}"
           mkdir -p "$OVERLAY/tests"
-          cp tests/domain_writer.py tests/domain_roles.py tests/processing_replay.py "$OVERLAY/tests/"
+          cp tests/domain_writer.py tests/domain_roles.py tests/processing_replay.py tests/hot_state.py tests/episode_reads.py "$OVERLAY/tests/"
           docker build -f tests/domain_writer.Dockerfile --build-arg BASE_IMAGE="cw-cpu-pair:$REVISION" -t "cw-domain:$REVISION" "$OVERLAY"
-      - name: One baseline/candidate pair2CPU4GiB; shared450CPU510wall600outer
+      - name: One corrected candidate2CPU4GiB;450CPU510wall600outer
         env:
           REVISION: ${{ github.sha }}
         run: |
-          sudo timeout --signal=INT --kill-after=10s 600s "$(command -v python)" -B -m scripts.qualify_cpu_pair run "cw-cpu-pair:$REVISION" "$REVISION" ".cache-g1/processing-domain-${{ github.run_id }}-${{ github.run_attempt }}" --candidate-image "cw-domain:$REVISION"
+          sudo timeout --signal=INT --kill-after=10s 600s "$(command -v python)" -B -m scripts.qualify_cpu_pair run "cw-domain:$REVISION" "$REVISION" ".cache-g1/processing-domain-fix02-${{ github.run_id }}-${{ github.run_attempt }}" --single-cpu 2
       - name: Preserve processing result including resource stops
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: processing-domain-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: processing-domain-fix02-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             .cache-g1/processing-*/*.json
             .cache-g1/processing-*/*.log

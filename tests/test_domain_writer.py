@@ -111,6 +111,7 @@ async def test_small_complete_sqlite_flow_and_both_transports(tmp_path):
             direct_sqlite=True,
             bounded_pool=True,
             domain_roles=True,
+            hot_state=True,
         )
     assert result["seed_sha256"] == baseline["seed_sha256"]
     assert result["offered_sha256"] == baseline["offered_sha256"]
@@ -123,6 +124,9 @@ async def test_small_complete_sqlite_flow_and_both_transports(tmp_path):
     assert result["telegram_attempts"] > 0 and result["signed_agent_receipts"] > 0
     assert result["isolated_ingress"]["state"] == "COMPLETE" and result["isolated_ingress"]["joined"]
     assert stats["facts"] > 0 and stats["failed"] == 0
+    assert stats["mutable_buffered"] > stats["mutable_flushed"] > 0
+    assert result["hot_state"]["metadata_hits"] > 0
+    assert stats["optional_agent_failures"] == 0
 
 
 @pytest.fixture
@@ -272,14 +276,14 @@ def test_image_context_and_report_fit_are_explicit():
         if line.startswith("COPY")
     ]
     assert copies == [
-        "COPY tests/domain_writer.py tests/domain_roles.py tests/processing_replay.py /app/tests/"
+        "COPY tests/domain_writer.py tests/domain_roles.py tests/processing_replay.py tests/hot_state.py tests/episode_reads.py /app/tests/"
     ]
     workflow = (root / ".github/workflows/ci.yml").read_text()
     assert (
-        'cp tests/domain_writer.py tests/domain_roles.py tests/processing_replay.py "$OVERLAY/tests/"'
+        'cp tests/domain_writer.py tests/domain_roles.py tests/processing_replay.py tests/hot_state.py tests/episode_reads.py "$OVERLAY/tests/"'
         in workflow
     )
-    assert '--candidate-image "cw-domain:$REVISION"' in workflow
+    assert "--single-cpu 2" in workflow and '--candidate-image "cw-domain:$REVISION"' not in workflow
     # All10300 fact IDs/hashes/clocks and expected IDs fit the unchanged2MiB report guard.
     facts = ["|".join(("a" * 36, "b" * 64, "129999", "129999", "R", "0"))] * 10300
     expected = ["c" * 36] * 10300
@@ -372,3 +376,141 @@ def test_external_context_is_only_captured_for_meaningful_changes(domain_core):
     assert all(
         e["enrichment"] == {"state": "UNAVAILABLE", "detector_input": False} for e in engine.history.events()
     )
+
+
+async def test_delayed_closed_episode_uses_exact_persisted_revision_for_signed_agent(domain_core):
+    from dataclasses import replace
+
+    import httpx
+
+    from cryptowatcher.agent_delivery import AgentConfig, AgentDelivery
+    from tests.test_agent_delivery import ENV, SOURCE, ack
+
+    requests = []
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda r: requests.append(json.loads(r.content)) or ack(r))
+    ) as client:
+        agent = AgentDelivery(domain_core, client, AgentConfig.from_env(ENV))
+        agent.enable(True)
+        closed = []
+        engine = None
+
+        def closure(episode):
+            saved = engine.history.get(f"episode:{episode['episode_id']}:{episode['revision']:010d}")
+            assert saved == episode
+            closed.append(episode)
+            agent.episode_closed(episode)
+
+        engine = EventEngine(
+            domain_core,
+            source_revision=SOURCE,
+            on_event=lambda e: None,
+            on_event_snapshot=lambda e, p: agent.admit(e, episode=p),
+            on_episode=closure,
+        )
+        reference = NOW - 300000
+        engine.observe("spot/BTCUSDT/1m", window(reference), 1e6, 0.01, reference, live=True)
+        candles = [replace(c, source="websocket", received_ms=NOW) for c in window()]
+        engine.observe("spot/BTCUSDT/1m", candles, 1e6, 0.01, NOW + 5000, live=True)
+        assert closed and all(p["available_at_ms"] == NOW + 5000 for p in closed)
+        for _ in range(4):
+            await agent.run_ready(lambda: NOW + 7000)
+        assert requests and {r["delivery_kind"] for r in requests} >= {
+            "LIVE_EVENT",
+            "HISTORICAL_OUTCOME_UPDATE",
+        }
+        assert engine.history.count("agent:intent-due:") == engine.history.count("agent:send-due:") == 0
+        assert all(r["trading_authorized"] is False for r in requests)
+
+
+def test_unchanged_settings_do_not_read_prior_confirmation_events(domain_core):
+    engine = EventEngine(domain_core)
+    engine.observe("spot/BTCUSDT/1m", window(), 1e6, 0.01, NOW, live=True)
+    original = engine.history.metadata
+
+    def metadata(key):
+        if key.startswith("event:"):
+            pytest.fail("Unchanged confirmation caused an eager full event read")
+        return original(key)
+
+    with patch.object(engine.history, "metadata", metadata):
+        state, _ = unit.prepare(engine, "spot/BTCUSDT/1m", window(NOW + 60000))
+    assert state.condition_groups
+
+
+def test_existing_transacted_rights_and_settings_invalidation_remain_authoritative(tmp_path):
+    import sqlite3
+
+    from tests.hot_state import installed as hot
+
+    with (
+        unit.installed(),
+        repository.repository_context(True),
+        hot(True) as stats,
+        closing(Store(tmp_path / "rights.sqlite3", 233382575)) as store,
+    ):
+        store.initialize(OwnerSettings())
+        enable(store.db)
+        store.bounded = True
+        store.clock_ms = lambda: NOW
+        repository.install(store)
+        engine = EventEngine(store, on_event=lambda e: None, on_event_snapshot=lambda e, p: None)
+        from tests.hot_state import Batch
+
+        batch = Batch(
+            engine.history, repository.OriginalHistory._put_raw, repository.OriginalHistory._delete_raw, stats
+        )
+        with store.db:
+            store.db.hot = batch
+            try:
+                snapshot = store.snapshot()
+                assert store.snapshot() == snapshot
+                assert stats["metadata_hits"] > 0
+                store.db.set_authorizer(
+                    lambda action, table, *_: (
+                        sqlite3.SQLITE_DENY
+                        if action == sqlite3.SQLITE_READ and table == "owner_settings"
+                        else sqlite3.SQLITE_OK
+                    )
+                )
+                with pytest.raises(sqlite3.DatabaseError):
+                    store.snapshot()
+                store.db.set_authorizer(None)
+                store.db.execute(
+                    "UPDATE owner_settings SET revision=revision+1 WHERE owner_id=?", (store.owner_id,)
+                )
+                assert store.snapshot().revision == snapshot.revision + 1
+            finally:
+                store.db.hot = None
+
+
+def test_changed_settings_load_pinned_prior_parameters(domain_core):
+    engine = EventEngine(domain_core)
+    engine.observe("spot/BTCUSDT/1m", window(), 1e6, 0.01, NOW, live=True)
+    snapshot = domain_core.snapshot()
+    domain_core.update(snapshot.revision, snapshot.settings.changed(digest_interval_min=30))
+    reads = []
+    original = engine.history.metadata
+
+    def metadata(key):
+        if key.startswith("event:"):
+            reads.append(key)
+        return original(key)
+
+    with patch.object(engine.history, "metadata", metadata):
+        engine.observe("spot/BTCUSDT/1m", window(NOW + 60000), 1e6, 0.01, NOW + 60000, live=True)
+    assert reads
+    assert domain_core.db.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_caught_agent_errors_and_missing_transaction_evidence_cannot_pass():
+    from scripts.qualify_processing import verdict
+
+    result = {
+        "domain_writer": {"adapter_revision": "transaction-regression-fix-v1", "optional_agent_failures": 1},
+        "hot_state": None,
+        "accepted_closed": 2472,
+    }
+    failures = verdict(result, direct_sqlite=True, bounded_pool=True)
+    assert "CAUGHT_AGENT_FAILURES" in failures
+    assert "TRANSACTION_REUSE_EVIDENCE_REQUIRED" in failures
