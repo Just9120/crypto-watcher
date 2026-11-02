@@ -231,11 +231,14 @@ def _immutable_size(value: Any) -> int | None:
 
 
 class Store:
-    def __init__(self, path: Path, owner_id: int, *, readonly: bool = False) -> None:
+    def __init__(
+        self, path: Path, owner_id: int, *, readonly: bool = False, writer_connection: bool = False
+    ) -> None:
         number(owner_id, "owner_id", integer=True)
         self.path = path
         self.owner_id = owner_id
         self.readonly = readonly
+        self.writer_connection = writer_connection
         # One population, scoped to a single fixed read transaction. Never used
         # by the writer or carried across snapshots.
         self.comparison_population: tuple[Any, Any] | None = None
@@ -261,10 +264,13 @@ class Store:
             raise StateError("Database missing")
         else:
             path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        self.db = sqlite3.connect(
-            f"{path.resolve().as_uri()}?mode=ro" if readonly else str(path),
-            uri=readonly,
-            timeout=5,
+        from .writer_memory import Connection
+
+        location = f"{path.resolve().as_uri()}?mode=ro" if readonly else str(path)
+        self.db = (
+            sqlite3.connect(location, uri=readonly, timeout=5, factory=Connection)
+            if writer_connection and not readonly
+            else sqlite3.connect(location, uri=readonly, timeout=5)
         )
         try:
             if readonly:

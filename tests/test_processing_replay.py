@@ -24,6 +24,29 @@ def assert_joint_result(result):
     assert result["source_freshness_at_endpoint"]["unknown_streams"] == 0
     assert result["repack"]
 
+    if result.get("runtime_mode") == "NORMAL_APPLICATION_BOUNDED_POOL":
+        pool = result["bounded_pool"]
+        assert pool["mode"] == "BOUNDED_ANALYTICS_POOL"
+        assert pool["global_expected"] == pool["global_actual"] > 0
+        assert pool["global_expected_sha256"] == pool["global_actual_sha256"]
+        assert pool["selected_outcome_ids"] == pool["actual_outcome_ids"]
+        assert pool["selected"]
+        if result["streams"] >= 1648:
+            assert pool["states"].get("NOT_SELECTED", 0) > 0
+        else:
+            assert pool["states"].get("NOT_SELECTED", 0) + pool["states"].get("WAITING", 0) > 0
+        assert pool["peaks"]["obligations"] <= pool["limits"]["obligations"]
+        assert pool["peaks"]["horizon_jobs"] <= pool["limits"]["horizon_jobs"]
+        assert pool["refresh_receiver_checks"] and all(
+            v["preserved"] for v in pool["refresh_receiver_checks"]
+        )
+        if result["real_seconds_requested"] > 60:
+            assert pool["accepted_closed_after_refresh"] > 0
+        assert result["runtime_writer"]["observations"] >= result["accepted_closed"]
+        assert result["runtime_writer"]["failed"] == 0
+        assert result["runtime_agent_failures"] == 0
+        assert not any(v["pending_total"] for v in result["delivery_queues_at_endpoint"].values())
+
 
 async def test_paced_receivers_calculations_delivery_and_maintenance_share_one_writer(tmp_path, caplog):
     result = await replay(tmp_path / "paced.sqlite3", instruments=2, seconds=12)

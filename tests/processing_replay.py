@@ -125,6 +125,9 @@ async def replay(
         raise ValueError("Qualification needs a new owned database and1..256 instruments per market")
     if type(seconds) is not int or not 4 <= seconds <= 190:
         raise ValueError("Qualification duration outside4..190 real seconds")
+    runtime_pool = not direct_sqlite
+    if runtime_pool:
+        bounded_pool = True
     infrastructure = Infrastructure.from_env(
         {
             "OWNER_USER_ID": "233382575",
@@ -165,7 +168,9 @@ async def replay(
         repository_context(direct_sqlite) as finish_readers,
         trace,
         hot_context(hot_state) as hot_stats,
-        closing(Store(path, infrastructure.owner_id)) as store,
+        closing(
+            Store(path, infrastructure.owner_id, **({"writer_connection": True} if runtime_pool else {}))
+        ) as store,
     ):
         store.initialize(OwnerSettings())
         enable(store.db)
@@ -233,7 +238,12 @@ async def replay(
             if bounded_pool:
                 from .bounded_pool import Pool
 
-                pool = Pool(controller.outcomes, manual=("spot/BTCUSDT", "linear/BTCUSDT"))
+                pool = (
+                    controller.analytics_pool
+                    if runtime_pool
+                    else Pool(controller.outcomes, manual=("spot/BTCUSDT", "linear/BTCUSDT"))
+                )
+                assert pool is not None
                 original_publish = controller.engine.on_event_snapshot
 
                 def published(event, episode):
@@ -300,6 +310,11 @@ async def replay(
                     market.tickers_at[category] -= 301
             seed_seconds = time.monotonic() - wall_started
             seed_cpu = time.process_time() - cpu_started
+            runtime_seed_stats = None
+            if runtime_pool:
+                runtime_seed_stats = json.loads(encode(controller.engine.writer_stats))
+                for key in controller.engine.writer_stats["cpu_seconds"]:
+                    controller.engine.writer_stats["cpu_seconds"][key] = 0.0
             stage("SEED_COMPLETE")
             controller.maintenance_started_at = NOW / 1000
             market._scope_revision = store.snapshot().revision
@@ -746,6 +761,12 @@ async def replay(
                         ],
                     },
                 }
+            if runtime_pool:
+                result["runtime_mode"] = "NORMAL_APPLICATION_BOUNDED_POOL"
+                result["runtime_writer"] = dict(controller.engine.writer_stats)
+                result["runtime_writer"]["cpu_basis"] = "PACED_PHASE_ONLY; seed separately reported"
+                result["runtime_writer_seed"] = runtime_seed_stats
+                result["runtime_agent_failures"] = controller.agent.failure_count
             return result
 
 

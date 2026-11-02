@@ -82,6 +82,7 @@ class AgentDelivery:
 
         self.ready = Ready(self.history)
         self._progress = 0
+        self.failure_count = 0
 
     def enabled(self) -> bool:
         preference = self.history.get("agent:preference", {"schema": 1, "enabled": False})
@@ -297,6 +298,8 @@ class AgentDelivery:
                 self._progress += 1
 
     def _diagnostic(self, state: str, now: int) -> None:
+        if state.startswith("FAILED_"):
+            self.failure_count += 1
         with self.store.db:
             self.history.put("agent:target", {"state": state, "at_ms": now})
 

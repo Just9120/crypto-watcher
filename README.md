@@ -206,6 +206,23 @@ Telegram/agent и30min/24h observation: для них нужны свои усл
 полный manual профиль их не запускает и не выдаёт себя за поставку.
 
 
+Штатный`run` использует явное writer-соединение и additive direct repository для
+новых immutable identities. Existing history/settings/jobs не конвертируются и
+не сбрасываются: прежние identities сохраняют свой writer/reader, SQL history и
+readonly analytics объединяют оба формата. Прежняя переупаковка остаётся в работе;
+новые таблицы имеют отдельный конечный GC. Runtime не импортирует`tests`.
+
+Глобальные5detectors/4TF и обе доставки сохраняются. Новые подробные outcomes
+проходят persisted admission pool; полный пул не подавляет signal. Исходный профиль
+64episode obligations/256horizon jobs и конечный waitlist не доказывают mature35GB
+capacity. Активные/draining обязательства не вытесняются; старые jobs сохраняются
+и блокируют новый admission до drain. Bootstrap также проходит эту policy.
+
+Required processing qualification проверяет normal runtime на прежнем1CPU/4GiB/
+450CPU-s/510wall/600outer с30s/60s deadlines. Одноразовый frozen prototype job
+завершён и не повторяется при push; его fixtures/records сохранены для воспроизведения.
+ShortPASS не заменяет backup/recovery/capacity и sharedVPS30min/24h.
+
 `quality` проверяет canonical doc links/fences, Ruff lint/format и mypy. `test` запускает meaningful regression suite; `all` объединяет оба этапа. PR CI исполняет оба с конечной numeric qualification между ними; trusted release проверяет `all`. Во время разработки допустим точечный pytest по затронутому риску. Coverage target не задан. Основной merge gate — GitHub `ci-required` на актуальной PR test merge revision; local PASS его не заменяет.
 
 После native build и quality Linux PR CI выполняет `python scripts/qualify_numeric_boundary.py`:

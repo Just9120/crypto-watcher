@@ -76,6 +76,16 @@ def event_identity(stream: str, family: str, version: str, settings_revision: in
 
 
 class History:
+    def __new__(cls, store: Store) -> Any:
+        if cls is History and store.bounded:
+            from .revision_repository import installed
+
+            if installed(store):
+                from .domain_repository import History as DomainHistory
+
+                return object.__new__(DomainHistory)
+        return object.__new__(cls)
+
     def __init__(self, store: Store) -> None:
         self.store = store
         self.codec = Codec(store.db, binary_cache=store.cached_bytes)
@@ -496,6 +506,25 @@ class EventEngine:
         if not re.fullmatch(r"[0-9a-f]{40}|UNSET", source_revision):
             raise ValueError("Invalid detector source revision")
         self.store = store
+        self.writer_stats: dict[str, Any] = {
+            "mode": "runtime-domain-v1",
+            "observations": 0,
+            "pure_transitions": 0,
+            "facts": 0,
+            "episode_revisions": 0,
+            "condition_groups": 0,
+            "failed": 0,
+            "max_prepared_keys": 0,
+            "mutable_buffered": 0,
+            "mutable_flushed": 0,
+            "condition_read_reuse": 0,
+            "cpu_seconds": {
+                "prepare": 0.0,
+                "transition": 0.0,
+                "apply_excluding_consumer": 0.0,
+                "consumer": 0.0,
+            },
+        }
         self.history = History(store)
         self.detector = detector
         self.source_revision = source_revision
@@ -610,6 +639,57 @@ class EventEngine:
             self._close_due(now_ms, namespace="suppressed-active")
 
     def observe(
+        self,
+        stream: str,
+        candles: list[Candle],
+        liquidity: float,
+        tick_size: float,
+        now_ms: int,
+        *,
+        live: bool,
+        source_context: dict[str, Any] | None = None,
+        enrichment: dict[str, Any] | None = None,
+        context_provider: Callable[[], tuple[dict[str, Any], dict[str, Any]]] | None = None,
+        commit: bool = True,
+    ) -> None:
+        if type(commit) is not bool or not commit and not self.store.db.in_transaction:
+            raise StateError("Joined observation requires a producer transaction")
+        if context_provider is not None and (source_context is not None or enrichment is not None):
+            raise ValueError("Choose captured context or a synchronous context provider")
+        from .domain_repository import History as DomainHistory
+
+        if isinstance(self.history, DomainHistory):
+            from .domain_transition import observe
+
+            observe(
+                self,
+                stream,
+                candles,
+                liquidity,
+                tick_size,
+                now_ms,
+                transition=EventEngine._observe_legacy,
+                live=live,
+                source_context=source_context,
+                enrichment=enrichment,
+                context_provider=context_provider,
+                commit=commit,
+            )
+            return
+        self._observe_legacy(
+            stream,
+            candles,
+            liquidity,
+            tick_size,
+            now_ms,
+            live=live,
+            source_context=source_context,
+            enrichment=enrichment,
+            context_provider=context_provider,
+            commit=commit,
+        )
+
+    def _observe_legacy(
         self,
         stream: str,
         candles: list[Candle],

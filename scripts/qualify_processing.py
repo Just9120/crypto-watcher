@@ -95,6 +95,8 @@ def verdict(result: dict, *, direct_sqlite: bool = False, bounded_pool: bool = F
         failures.append("BROAD_INPUT_CHANGED")
     if result.get("seed_sha256") != SEED or result.get("offered_sha256") != OFFERED:
         failures.append("FROZEN_INPUT_IDENTITY_CHANGED")
+    if not direct_sqlite and result.get("runtime_mode") != "NORMAL_APPLICATION_BOUNDED_POOL":
+        failures.append("NORMAL_RUNTIME_EVIDENCE_REQUIRED")
     if direct_sqlite:
         direct = result.get("direct_sqlite", {})
         if (
@@ -364,7 +366,7 @@ def case(
         if profile
         else "QUALIFICATION",
         "repository": "DIRECT_SQLITE_PROTOTYPE" if direct_sqlite else "CURRENT_APPLICATION",
-        "analytics_scope": "BOUNDED_POOL" if bounded_pool else "ALL_EPISODES",
+        "analytics_scope": "BOUNDED_POOL" if bounded_pool or not direct_sqlite else "ALL_EPISODES",
         "failures": failures,
         "temporary_database_removed": True,
         "result": result,
@@ -406,7 +408,7 @@ def run(
         if profile
         else "QUALIFICATION",
         "repository": "DIRECT_SQLITE_PROTOTYPE" if direct_sqlite else "CURRENT_APPLICATION",
-        "analytics_scope": "BOUNDED_POOL" if bounded_pool else "ALL_EPISODES",
+        "analytics_scope": "BOUNDED_POOL" if bounded_pool or not direct_sqlite else "ALL_EPISODES",
         "state": "PREPARED",
         "admission": [],
         "limits": {

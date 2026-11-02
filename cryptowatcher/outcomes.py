@@ -244,6 +244,7 @@ class OutcomeWorker:
         if type(publication_batch_size) is not int or not 1 <= publication_batch_size <= 4:
             raise ValueError("Outcome publication group outside1..4")
         self.publication_batch_size = publication_batch_size
+        self.admission_policy: Callable[..., None] | None = None
         with store.db:
             previous = self.history.get("outcome-method:" + METHOD)
             if previous is not None and previous != DEFINITION:
@@ -252,7 +253,14 @@ class OutcomeWorker:
                 self.history.put("outcome-method:" + METHOD, DEFINITION)
 
     def admit(self, event: dict[str, Any], *, episode: dict[str, Any] | None = None) -> None:
-        """Admit a saved event; the producer can hand off its published episode."""
+        """Apply the runtime admission policy before reserving detailed analytics."""
+        if self.admission_policy is not None:
+            self.admission_policy(event, episode=episode)
+            return
+        self.admit_selected(event, episode=episode)
+
+    def admit_selected(self, event: dict[str, Any], *, episode: dict[str, Any] | None = None) -> None:
+        """Reserve a selected obligation; caller owns the admission transaction."""
         if episode is None:
             episode = self.history.get("episode-head:" + event["episode_id"])
         elif episode.get("episode_id") != event["episode_id"]:

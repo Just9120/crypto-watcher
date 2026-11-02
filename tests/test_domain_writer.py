@@ -279,11 +279,11 @@ def test_image_context_and_report_fit_are_explicit():
         "COPY tests/domain_writer.py tests/domain_roles.py tests/processing_replay.py tests/hot_state.py tests/episode_reads.py /app/tests/"
     ]
     workflow = (root / ".github/workflows/ci.yml").read_text()
-    assert (
-        'cp tests/domain_writer.py tests/domain_roles.py tests/processing_replay.py tests/hot_state.py tests/episode_reads.py "$OVERLAY/tests/"'
-        in workflow
-    )
-    assert "--single-cpu 2" in workflow and '--candidate-image "cw-domain:$REVISION"' not in workflow
+    # Retain the historical fixture, not its exhausted one-off CI invocation.
+    # Branch protection still requires ci-required with all its unchanged jobs.
+    assert "sqlite-repository-prototype:" not in workflow
+    assert "--single-cpu 2" not in workflow
+    assert 'scripts/qualify_processing.py run "cw-processing:$REVISION"' in workflow
     # All10300 fact IDs/hashes/clocks and expected IDs fit the unchanged2MiB report guard.
     facts = ["|".join(("a" * 36, "b" * 64, "129999", "129999", "R", "0"))] * 10300
     expected = ["c" * 36] * 10300

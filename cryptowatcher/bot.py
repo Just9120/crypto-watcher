@@ -160,6 +160,10 @@ class Controller:
     def __init__(self, infrastructure: Infrastructure, store: Store, market: BybitREST) -> None:
         self.infrastructure = infrastructure
         self.store = store
+        if store.bounded and store.writer_connection:
+            from .domain_repository import install
+
+            install(store)
         store.put_runtime("runtime_instance", {"id": uuid.uuid4().hex, "started_ms": int(time.time() * 1000)})
         self.market = market
         self.history = History(store)
@@ -173,6 +177,12 @@ class Controller:
             on_outcome_event=self.agent.outcome,
             publication_batch_size=4,
         )
+        from .analytics_pool import Pool
+
+        self.analytics_pool: Pool | None = None
+        if store.bounded and store.writer_connection:
+            self.analytics_pool = Pool(self.outcomes)
+            self.analytics_pool.activate()
         self.retention = Retention(store)
         self.digest = Digest(store, infrastructure.delivery_chat_id)
         self.analytics_lock = asyncio.Lock()
@@ -803,6 +813,8 @@ class Controller:
             phase = "OUTCOMES"
             try:
                 started = time.monotonic()
+                if self.analytics_pool is not None:
+                    self.analytics_pool.tick(now)
                 processed_outcomes = await self.outcomes.async_work(self.market.server_now)
                 # Legacy comparison records stay readable until their normal
                 # retention/explicit test-history transition. No N20 worker runs.
@@ -862,6 +874,10 @@ class Controller:
 
         async with self.repack_lock:
             try:
+                if self.analytics_pool is not None:
+                    from .domain_repository import maintenance
+
+                    maintenance(self.store, now)
                 retention_slices = await self.retention_priority()
                 defer_compaction = (
                     self.retention_pressure_current()
