@@ -157,6 +157,17 @@ class AgentDelivery:
                 episode = self.history.get("episode-head:" + event["episode_id"])
             elif episode.get("episode_id") != event["episode_id"]:
                 raise StateError("Conflicting published episode identity")
+            previous = self.history.get("agent:successful:" + episode["episode_id"])
+            if (
+                previous is not None
+                and episode["state"] == "ACTIVE"
+                and self.store.clock_ms() <= event["fresh_until_ms"]
+                and event["settings_revision"] == self.store.snapshot().revision
+                and any(c["event_id"] == event["event_id"] for c in episode["confirmations"].values())
+                and not self.meaningful(episode, previous)
+                and self.history.get("agent:intent:" + episode["episode_id"]) is None
+            ):
+                return  # Same rule as freeze; no redundant job after an acknowledged unchanged episode.
             self._intent(episode, event, event["available_at_ms"])
 
     def episode_closed(self, episode: dict[str, Any]) -> None:
@@ -207,6 +218,17 @@ class AgentDelivery:
             "state": episode["state"],
         }
 
+    @classmethod
+    def meaningful(cls, episode: dict[str, Any], previous: dict[str, Any] | None) -> bool:
+        notice = cls._notice(episode)
+        return bool(
+            previous is None
+            or notice["state"] != previous["state"]
+            or set(notice["families"]) - set(previous["families"])
+            or set(notice["timeframes"]) - set(previous["timeframes"])
+            or notice["strength"] >= 1.5 * previous["strength"]
+        )
+
     def _freeze(self, now: int) -> None:
         selected = self.ready.pick("intent", now)
         for due_key, binding in () if selected is None else (selected,):
@@ -234,13 +256,7 @@ class AgentDelivery:
             historical = intent["historical"] or now > event["fresh_until_ms"]
             notice = self._notice(episode)
             previous = self.history.get("agent:successful:" + episode["episode_id"])
-            meaningful = (
-                previous is None
-                or notice["state"] != previous["state"]
-                or set(notice["families"]) - set(previous["families"])
-                or set(notice["timeframes"]) - set(previous["timeframes"])
-                or notice["strength"] >= 1.5 * previous["strength"]
-            )
+            meaningful = self.meaningful(episode, previous)
             if not historical and event["settings_revision"] != self.store.snapshot().revision:
                 historical = True
             with self.store.db:
@@ -325,7 +341,14 @@ class AgentDelivery:
             self.history.put("agent:target", {"state": "READY", "at_ms": now, "reason": "OWNER_RETRY"})
         return count
 
-    async def drain(self, clock: Callable[[], int], *, batch: int = 8, seconds: float = 0.25) -> None:
+    async def drain(
+        self,
+        clock: Callable[[], int],
+        *,
+        batch: int = 8,
+        seconds: float = 0.25,
+        source_pending: Callable[[], bool] | None = None,
+    ) -> None:
         """Advance a finite number of existing singleton sends cooperatively.
 
         Every unit retains the original lock, intent/expiry checks and frozen
@@ -339,6 +362,8 @@ class AgentDelivery:
             return
         deadline = time.monotonic() + seconds
         for _ in range(batch):
+            if source_pending is not None and source_pending():
+                return
             before = self._progress
             await self.work(clock())
             if self.history.get("agent:target", {}).get("state") != "DELIVERED":
@@ -348,16 +373,18 @@ class AgentDelivery:
                 break
             await asyncio.sleep(0)
 
-    async def run_ready(self, clock: Callable[[], int]) -> None:
-        """At most eight existing finite slices, with a cooperative0.75s budget.
+    async def run_ready(
+        self, clock: Callable[[], int], *, source_pending: Callable[[], bool] | None = None
+    ) -> None:
+        """At most32 finite slices/1.5s; stop between sends for ready closed sources.
 
         The per-send timeout, frozen retries and negative/unknown ACK stop remain
         unchanged. A pending queue no longer waits two seconds after every slice.
         """
-        deadline = time.monotonic() + 0.75
-        for _ in range(8):
+        deadline = time.monotonic() + 1.5
+        for _ in range(32):
             before = self._progress
-            await self.drain(clock)
+            await self.drain(clock, source_pending=source_pending)
             if (
                 self.history.get("agent:target", {}).get("state") != "DELIVERED"
                 or time.monotonic() >= deadline

@@ -155,3 +155,77 @@ def test_repeated_revision_requires_identical_canonical_numeric_bytes(tmp_path):
         assert encode(engine.history.get(f"event:{event['event_id']}:{event['revision']:010d}")) == encode(
             event
         )
+
+
+def test_immutable_metadata_does_not_flush_unrelated_mutable_intents(tmp_path):
+    from cryptowatcher.writer_memory import transaction
+
+    with closing(opened(tmp_path / "coalescing.sqlite3", True)) as store:
+        install(store)
+        history = History(store)
+        with store.db:
+            store.db.execute("BEGIN IMMEDIATE")
+            with transaction(history):
+                history.put("agent:intent:fixture", {"marker": 1})
+                assert history.metadata("event-head:absent") is None
+                assert store.get_runtime("radar:v1:agent:intent:fixture") is None
+                assert history.get("agent:intent:fixture") == {"marker": 1}
+                history.put("agent:intent:fixture", {"marker": 2})
+                # A scan is a visibility barrier; it sees only the final value.
+                assert history.items("agent:intent:") == [("agent:intent:fixture", {"marker": 2})]
+        assert history.get("agent:intent:fixture") == {"marker": 2}
+        assert store.db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+@pytest.mark.parametrize("fail_second", [False, True])
+def test_received_group_publishes_only_after_full_commit_and_rolls_back_whole_overlay(tmp_path, fail_second):
+    from cryptowatcher.ingestion import BybitRadar
+    from cryptowatcher.market_storage import read
+
+    with closing(opened(tmp_path / "source-group.sqlite3", True)) as store:
+        install(store)
+        engine = EventEngine(store)
+        market = BybitRadar(store)
+        frames = [({"stream": stream}, NOW) for stream in ("spot/BTCUSDT/1m", "linear/ETHUSDT/1m")]
+        committed = []
+        with closing(Store(store.path, store.owner_id, readonly=True)) as observer:
+
+            def accepted(category, message, allowed, *, received_ms):
+                stream = message["stream"]
+                market.sources.put(
+                    stream,
+                    window(),
+                    live=True,
+                    after_write=lambda source, advanced: engine.observe(
+                        stream, list(source.windows[stream].values()), 1e6, 0.01, NOW, live=True, commit=False
+                    ),
+                )
+                assert store.db.in_transaction
+                assert not read(observer.db, "spot/BTCUSDT/1m")
+                assert not History(observer).items("event:")
+                market.sources.after_commit(lambda: committed.append(not store.db.in_transaction))
+                if fail_second and stream.startswith("linear"):
+                    raise RuntimeError("late grouped consumer failure")
+
+            market.accept_message = accepted
+            statements = []
+            store.db.set_trace_callback(statements.append)
+            try:
+                if fail_second:
+                    with pytest.raises(RuntimeError, match="late grouped"):
+                        market.accept_received_group("spot", frames, set())
+                    assert not market.sources.windows and not market.sources.live
+                    assert not History(store).items("event:")
+                    assert not read(observer.db, "spot/BTCUSDT/1m")
+                    assert not committed
+                else:
+                    market.accept_received_group("spot", frames, set())
+                    assert statements.count("COMMIT") == 1
+                    assert set(market.sources.windows) == {m[0]["stream"] for m in frames}
+                    assert committed == [True, True]
+                    assert read(observer.db, "spot/BTCUSDT/1m")
+                    assert History(observer).items("event:")
+                assert not store.db.in_transaction and not market.sources.joined
+                assert store.db.execute("PRAGMA foreign_key_check").fetchall() == []
+            finally:
+                store.db.set_trace_callback(None)

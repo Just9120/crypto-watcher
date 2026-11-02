@@ -9,6 +9,7 @@ import time
 from collections import Counter
 from collections.abc import Callable
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Any, Iterator
 
 import httpx
@@ -35,6 +36,14 @@ SUBSCRIPTION_SHARD_TOPICS = 100
 SESSION_SHUTDOWN_SECONDS = 15
 MANAGER_INTERVAL_SECONDS = 5
 ObservationCallback = Callable[[str, list[Candle], float, float, int, bool], None]
+
+
+@dataclass(frozen=True)
+class ReceivedFrame:
+    """Transport receipt, before any SQLite/detector work; also used by mock wire."""
+
+    raw: str | bytes
+    received_ms: int
 
 
 def topic(stream: str) -> str:
@@ -125,6 +134,8 @@ class BybitRadar(BybitREST):
         self._tasks: list[asyncio.Task[Any]] = []
         self._sessions: dict[str, asyncio.Task[Any]] = {}
         self._groups: dict[str, tuple[str, ...]] = {}
+        self._ingress_pending: dict[str, dict[int, int]] = {}
+        self._ingress_reading: dict[str, int] = {}
         self._work_ready = asyncio.Event()
         self._pending: dict[str, tuple[int, int]] = {}
         self._working: set[str] = set()
@@ -141,6 +152,7 @@ class BybitRadar(BybitREST):
             name: {"calls": 0, "failures": 0, "active_seconds": 0.0, "cpu_seconds": 0.0}
             for name in (
                 "closed_ws_source",
+                "source_group_commit",
                 "observation",
                 "recovery_source",
                 "referenced_recovery_response",
@@ -835,22 +847,136 @@ class BybitRadar(BybitREST):
         finally:
             await websocket.close()
 
+    def accept_received_group(
+        self, market: str, frames: list[tuple[dict[str, Any], int]], allowed: set[str]
+    ) -> None:
+        """One small durable group, private source overlay until outer commit."""
+        if not 1 <= len(frames) <= 8:
+            raise ValueError("Invalid finite received source group")
+        if not (self.store.bounded and self.store.writer_connection) or len(frames) == 1:
+            for message, received_ms in frames:
+                self.accept_message(market, message, allowed, received_ms=received_ms)
+            return
+        if self.store.db.in_transaction:
+            raise MarketError("source_group_requires_idle_writer")
+        published = self.sources
+        staged = Sources(self.store)
+        staged.windows = dict(published.windows)  # Shallow map only; touched windows are copy-on-write.
+        staged.live, staged.blocked = dict(published.live), dict(published.blocked)
+        staged.joined = True
+        try:
+            self.sources = staged
+            with self._timed("source_group_commit"), self.store.db:
+                self.store.db.execute("BEGIN IMMEDIATE")
+                for message, received_ms in frames:
+                    self.accept_message(market, message, allowed, received_ms=received_ms)
+            # No await/callback can expose these windows before durable commit.
+            for stream in staged.touched:
+                published.windows[stream] = staged.windows[stream]
+            for stream in staged.windows.keys() - published.windows.keys():
+                published.windows[stream] = staged.windows[stream]
+            published.live, published.blocked = staged.live, staged.blocked
+        finally:
+            self.sources = published
+        for callback in staged.committed_callbacks:
+            callback()
+
+    def has_pending_observations(self) -> bool:
+        return any(self._ingress_pending.values())
+
+    def observation_watermark(self, now_ms: int) -> int:
+        """Do not close episodes ahead of accepted but unprocessed receipts."""
+        return min(
+            [
+                now_ms,
+                *self._ingress_reading.values(),
+                *(at for group in self._ingress_pending.values() for at in group.values()),
+            ]
+        )
+
     async def _receive_messages(self, websocket: Any, name: str, market: str, allowed: set[str]) -> None:
-        started, processed = time.monotonic(), 0
-        while True:
-            # Python3.11 wait_for creates a separate task even for a buffered
-            # frame. Under writer contention its extra turns delay confirmed
-            # candles behind already received partial updates. Keep the same
-            # cancellation/deadline, and bound draining to preserve fairness.
-            async with asyncio.timeout(65):
-                raw = await websocket.recv()
-            received_ms = int(time.time() * 1000)
-            self.accept_message(market, json.loads(raw), allowed, received_ms=received_ms)
-            self.connections[name]["last_received_ms"] = int(time.time() * 1000)
-            processed += 1
-            if processed >= 16 or time.monotonic() - started >= 0.005:
+        queue: asyncio.Queue[Any] = asyncio.Queue(SUBSCRIPTION_BUFFER_MESSAGES)
+        pending: dict[int, int] = {}
+        self._ingress_pending[name] = pending
+        buffered_bytes = 0
+        sequence = 0
+        failure: BaseException | None = None
+        ready = asyncio.Event()
+
+        async def read() -> None:
+            nonlocal buffered_bytes, sequence, failure
+            processed, started = 0, time.monotonic()
+            try:
+                while True:
+                    # A suspended recv has drained the transport's ready frames.
+                    # A cooperative yield while draining retains a clock barrier.
+                    self._ingress_reading.pop(name, None)
+                    async with asyncio.timeout(65):
+                        raw = await websocket.recv()
+                    received = (
+                        raw if isinstance(raw, ReceivedFrame) else ReceivedFrame(raw, int(time.time() * 1000))
+                    )
+                    self._ingress_reading[name] = received.received_ms
+                    message = json.loads(received.raw)
+                    self.connections[name]["last_received_ms"] = received.received_ms
+                    parts = str(message.get("topic", "")).split(".")
+                    if (
+                        len(parts) == 3
+                        and parts[0] == "kline"
+                        and f"{market}/{parts[2]}/{parts[1]}m" in allowed & self.streams
+                    ):
+                        self.observe_clock(message["ts"])
+                        if any(row.get("confirm") is True for row in message.get("data", [])):
+                            size = (
+                                len(received.raw.encode())
+                                if isinstance(received.raw, str)
+                                else len(received.raw)
+                            )
+                            if queue.full() or buffered_bytes + size > SUBSCRIPTION_BUFFER_BYTES:
+                                raise MarketError("receive_buffer_overflow")
+                            sequence += 1
+                            pending[sequence] = received.received_ms
+                            queue.put_nowait((sequence, message, received.received_ms, size))
+                            buffered_bytes += size
+                            ready.set()
+                    processed += 1
+                    if processed >= 16 or time.monotonic() - started >= 0.005:
+                        await asyncio.sleep(0)
+                        processed, started = 0, time.monotonic()
+            except BaseException as exc:
+                failure = exc
+                ready.set()
+
+        reader = asyncio.create_task(read(), name="ingestion:receipt:" + name)
+        try:
+            while True:
+                if queue.empty():
+                    if failure is not None:
+                        raise failure
+                    ready.clear()
+                    await ready.wait()
+                    continue
+                frames = [queue.get_nowait()]
+                # At most8 frames/~100KiB in ordinary wire traffic. The queue's
+                # existing2MiB bound also bounds the worst transaction payload.
+                while len(frames) < 8 and not queue.empty():
+                    frames.append(queue.get_nowait())
+                try:
+                    self.accept_received_group(
+                        market, [(message, received_ms) for _, message, received_ms, _ in frames], allowed
+                    )
+                finally:
+                    for token, _, _, size in frames:
+                        pending.pop(token, None)
+                        buffered_bytes -= size
+                # A source transaction is indivisible; between sources give
+                # receipts, delivery, cancellation and commands an actual turn.
                 await asyncio.sleep(0)
-                started, processed = time.monotonic(), 0
+        finally:
+            reader.cancel()
+            await asyncio.gather(reader, return_exceptions=True)
+            self._ingress_pending.pop(name, None)
+            self._ingress_reading.pop(name, None)
 
     async def _session(self, name: str, market: str, streams: list[str]) -> None:
         allowed = set(streams)
@@ -1199,7 +1325,7 @@ class BybitRadar(BybitREST):
                 "manager_failures": dict(self._manager_failures),
                 "work_timing": {
                     "schema": "cryptowatcher.ingestion-work.v1",
-                    "basis": "process-lifetime exclusive thread CPU and synchronous active wall; nested stages are subtracted from parents; includes source/observation/recovery writes, referenced response, repack/retention, ticker/metadata persistence including commit, status snapshot and diagnostics; excludes wire parsing, discovery requests/processing outside persistence, REST/async waits, recovery selection/retirement and shared readonly preparation; current diagnostic call completes after its counter snapshot",
+                    "basis": "process-lifetime exclusive thread CPU and synchronous active wall; nested stages are subtracted from parents; includes source/observation/recovery writes and outer grouped FULL commit, referenced response, repack/retention, ticker/metadata persistence including commit, status snapshot and diagnostics; excludes wire parsing, discovery requests/processing outside persistence, REST/async waits, recovery selection/retirement and shared readonly preparation; current diagnostic call completes after its counter snapshot",
                     "stages": {name: dict(value) for name, value in self._work_timing.items()},
                 },
                 "scope_synced": self.scope_synced(),
@@ -1214,6 +1340,20 @@ class BybitRadar(BybitREST):
                 },
                 "active_streams": len(self.streams),
                 "confirmed_sources": self.confirmed_source_diagnostic(self.server_now()),
+                "received_work": {
+                    "pending_closed_messages": sum(len(group) for group in self._ingress_pending.values()),
+                    "oldest_received_lag_ms": max(
+                        (
+                            max(0, int(time.time() * 1000) - at)
+                            for group in self._ingress_pending.values()
+                            for at in group.values()
+                        ),
+                        default=0,
+                    ),
+                    "per_connection_message_bound": SUBSCRIPTION_BUFFER_MESSAGES,
+                    "per_connection_byte_bound": SUBSCRIPTION_BUFFER_BYTES,
+                    "basis": "transport receipt before source transaction; not future outcome work",
+                },
                 "startup_recovered_buckets": sorted("/".join(bucket) for bucket in self._recovered_buckets),
                 "bootstrap_pending_streams": len(self.streams - self.sources.windows.keys()),
                 "recovery_pending": len(self._pending),

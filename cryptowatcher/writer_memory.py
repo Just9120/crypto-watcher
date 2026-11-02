@@ -24,6 +24,8 @@ PREFIXES = (
     "agent:intent:",
     "agent:intent-due:",
     "agent:ready:",
+    "outbox:telegram:",
+    "pending:telegram:",
 )
 COUNTERS = ("event-counter", "episode-counter")
 QUERIES = frozenset(

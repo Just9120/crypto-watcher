@@ -496,3 +496,38 @@ NOT_RECHECKED явно обозначает отсутствие повторн�
 их удаление требует проверки воспроизводимости/уникальности и отдельного точного
 списка. Reports/manifests/hashes сохраняются отдельно от тяжёлых copies. Общий
 Docker prune и очистка соседних проектов не входят в процедуру.
+
+
+### PR94 normal-runtime bounded receipt and publication
+
+Штатный schema2 runtime использует direct immutable revisions и member deltas,
+сохранённые legacy identities остаются на прежнем writer. Новые consumers читают
+обе формы; source/episode/reference bytes и настройки не конвертируются при startup.
+Rollback к reader без direct support запрещён после первого нового write; recovery
+требует совместимого образа/forward-fix, не app-only downgrade.
+
+Socket receipt отделён от SQL отдельной coroutine: FIFO ограничен128closed
+messages/2MiB на connection. Overflow явный, reconnect/current recovery восстанавливает
+источник. Время приёма записывается до detector work; clock barrier удерживает tick
+позади ожидающих receipts. Источники сохраняются с исходным FULL synchronous commit, до8уже принятых
+frames в одной transaction. Copy-on-write source overlay публикуется только после
+общего commit; ошибка в позднем frame откатывает всю группу. Измерение accepted
+sources и их lag выполняется после durable commit, не после промежуточного put.
+Отдельный exclusive counter учитывает group commit wait. При отмене не остаются reader task или watermark. Read role не владеет SQL.
+
+Finite source bursts получают приоритет перед transport preparation и repack;
+наступившие outcomes продолжают свой bounded worker. Delivery возобновляется после
+source drain. Telegram обрабатывает до8готовых прежних20-unit slices за0.25s с yield;
+Agent — до32прежних8-unit slices за1.5s, проверяя source priority между sends.
+Unknown/negative ACK не усиливается; idempotency/frozen bytes/HMAC v2 прежние.
+Уже ACKed unchanged episode не создаёт redundant intent; historical/expired,
+closure, outcomes и ранее ожидающий intent сохраняют прежний путь.
+
+Metadata immutable rows не сбрасывает unrelated mutable buffer. Fresh SQL head
+проверяется один раз в synchronous publication, промежуточные outbox/intent updates
+coalesce внутри source transaction. Отсутствующий direct diagnostic не проходит
+удаление несуществующих legacy body/expiry indexes; legacy rows удаляются штатно.
+Неизменный frozen retention binding повторно не переписывается. Checksums,
+owner/settings guards, fresh reads, TTL и rollback сохраняются. Эти изменения не
+доказывают capacity или live timeliness; acceptance определяется полным CI/runtime
+сценарием и последующим shared-VPS наблюдением.

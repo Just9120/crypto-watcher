@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any, Callable
 
 from telegram import MessageEntity
@@ -169,6 +170,27 @@ class TelegramDelivery:
                 )
                 if self.on_success is not None:
                     self.on_success(candidate["episode_id"], clock())
+
+    async def run_ready(self, bot: Any, now_ms: int, *, clock: Callable[[], int]) -> None:
+        """Drain ready slices cooperatively; a future/retry/blocked head ends the turn.
+
+        Each send retains its frozen bytes, durable attempt and original retry
+        handling. The budget limits synchronous service between scheduler turns,
+        not an external request's existing timeout.
+        """
+        deadline = time.monotonic() + 0.25
+        for _ in range(8):
+            before = self.history.items("pending:telegram:", 1)
+            if not before or int(before[0][0].split(":")[2]) > clock():
+                return
+            await self.send_due(bot, now_ms, clock=clock)
+            if (
+                self.history.items("pending:telegram:", 1) == before
+                or self.store.get_runtime("telegram_delivery", {}).get("state") == "FAILED"
+                or time.monotonic() >= deadline
+            ):
+                return
+            await asyncio.sleep(0)
 
     def resume(self) -> None:
         with self.store.db:

@@ -345,10 +345,15 @@ async def replay(
                     source = market.sources.windows[stream][message["data"][0]["start"]]
                     assert source.end == message["data"][0]["end"] + 1
                     assert source.close == message["data"][0]["close"]
-                    accepted[stream] += 1
-                    source_lags.append(max(0, now() - message["data"][0]["end"] - 1))
-                    if refresh_checks:
-                        post_refresh_closed[0] += 1
+
+                    def committed():
+                        assert not store.db.in_transaction
+                        accepted[stream] += 1
+                        source_lags.append(max(0, now() - message["data"][0]["end"] - 1))
+                        if refresh_checks:
+                            post_refresh_closed[0] += 1
+
+                    market.sources.after_commit(committed)
 
             market.accept_message = accept
             completed = []
@@ -430,7 +435,9 @@ async def replay(
                                 offered_hash.update(encode([frozen_group_label(name), raw]).encode())
                                 if confirmed:
                                     offered[stream] += 1
-                                queues[name].put_nowait(raw)
+                                from cryptowatcher.ingestion import ReceivedFrame
+
+                                queues[name].put_nowait(ReceivedFrame(raw, now()))
                                 loop.call_soon_threadsafe(arrivals[name].set)
                 except BaseException as exc:
                     producer_errors.append(type(exc).__name__)
@@ -714,6 +721,8 @@ async def replay(
                         for h in event["settings_snapshot"]["outcome_horizons"]
                     )
                 scheduled_ids = {r["outcome_id"] for r in results} | {j["outcome_id"] for j in jobs}
+                from .processing_trace import point_difference
+
                 result["bounded_pool"] = {
                     **measured_pool,
                     "global_fact_evidence": global_evidence if domain_roles else None,
@@ -729,6 +738,7 @@ async def replay(
                     ]
                     if domain_roles
                     else None,
+                    "global_difference": point_difference(expected, actual),
                     "global_expected": len(expected),
                     "global_actual": len(actual),
                     "global_expected_sha256": hashlib.sha256(encode(expected).encode()).hexdigest(),

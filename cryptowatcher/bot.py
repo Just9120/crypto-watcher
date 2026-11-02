@@ -798,8 +798,10 @@ class Controller:
         now_ms = self.market.server_now()
         if now_ms <= 0:
             return  # Establish exchange clock after restart before deciding pending expiry.
-        self.engine.tick(now_ms)
-        await self.delivery.send_due(context.bot, now_ms, clock=self.market.server_now)
+        if self.market.has_pending_observations():
+            return  # A source transition also closes its instrument at its receipt clock.
+        self.engine.tick(self.market.observation_watermark(now_ms))
+        await self.delivery.run_ready(context.bot, now_ms, clock=self.market.server_now)
         self.digest.schedule(self.market.server_now())
         await self.digest.send_due(context.bot, self.market.server_now())
 
@@ -867,7 +869,7 @@ class Controller:
         now = self.market.server_now()
         if now <= 0:
             return
-        if not self.maintenance_ready():
+        if not self.maintenance_ready() or self.market.has_pending_observations():
             return
         from .catalogue_repack import busy
         from .storage_repack import async_work
@@ -1089,11 +1091,15 @@ class Controller:
     async def agent_job(self, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not isinstance(self.market, BybitRadar):
             return
+        if self.market.has_pending_observations():
+            return  # Resume ready delivery as soon as the finite source burst drains.
         now = self.market.server_now()
         if now <= 0:
             return
         try:
-            await self.agent.run_ready(self.market.server_now)
+            await self.agent.run_ready(
+                self.market.server_now, source_pending=self.market.has_pending_observations
+            )
         except Exception as exc:
             self.agent._diagnostic("FAILED_" + type(exc).__name__, now)
             logger.error("Optional agent delivery failure: %s", type(exc).__name__)

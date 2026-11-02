@@ -80,7 +80,9 @@ class History(BASE_HISTORY):
 
     def metadata(self, key: str) -> Any:
         batch = getattr(self.store, "_writer_batch", None)
-        if batch is not None:
+        # Immutable revisions are written immediately. Flushing unrelated
+        # mutable intents here defeats their per-source coalescing.
+        if batch is not None and self.point(key) is None:
             batch.flush()
         return super().metadata(key)
 
@@ -154,7 +156,10 @@ class History(BASE_HISTORY):
     def delete(self, key: Any) -> Any:
         if key.startswith(STATE_PREFIXES):
             self.store.db.execute("DELETE FROM domain_state WHERE key=?", (key,))
-            super().delete(key)
+            # Direct mutable rows never own legacy body/expiry indexes. Delete
+            # those only when a real legacy row is present (including cutover).
+            if self.store.get_runtime(PREFIX + key) is not None:
+                super().delete(key)
         else:
             super().delete(key)
 
@@ -233,25 +238,29 @@ class History(BASE_HISTORY):
             raise StateError("Invalid domain revision")
         if self.store.readonly:
             raise StateError("Readonly domain writer")
+        if not self.store.db.in_transaction:
+            self.store.db.execute("BEGIN IMMEDIATE")
+        checked_head = self._row(kind + "-head:" + identity)
         if (
-            self._row(kind + "-head:" + identity) is None
+            checked_head is None
             and repository.OriginalHistory.metadata(self, kind + "-head:" + identity) is not None
         ):
             return repository.LegacyHistory(self.store).version(kind, value)
-        if not self.store.db.in_transaction:
-            self.store.db.execute("BEGIN IMMEDIATE")
         from .packet_store import atomic
 
         with atomic(self.store.db):
-            self._publish(kind, identity, revision, value)
+            self._publish(kind, identity, revision, value, checked_head)
 
-    def _publish(self, kind: Any, identity: Any, revision: Any, value: Any) -> Any:
+    def _publish(self, kind: Any, identity: Any, revision: Any, value: Any, checked_head: Any) -> Any:
         key = f"{kind}:{identity}:{revision:010d}"
         db = self.store.db
-        head = db.execute(
-            f"SELECT r.revision,r.origin,r.reference,r.reference_ms FROM direct_{kind}_heads h JOIN direct_{kind}_revisions r ON r.id=h.id AND r.revision=h.revision WHERE h.id=?",
-            (identity,),
-        ).fetchone()
+        # Reuse the row checked in this same synchronous writer boundary.
+        # No intervening callback/await and no persistent existence cache.
+        head = (
+            None
+            if checked_head is None
+            else (checked_head[8], checked_head[4], checked_head[5], checked_head[6])
+        )
         if head is not None and head[0] >= revision:
             if encode(self.get(key)) != encode(value):
                 raise StateError("Conflicting immutable domain revision")
@@ -273,16 +282,7 @@ class History(BASE_HISTORY):
         if kind == "episode":
             members = {"f:" + k: v for k, v in body.pop("confirmations").items()}
             members.update({"c:" + c: c for c in body.pop("conditions")})
-            prior = (
-                {}
-                if head is None
-                else json.loads(
-                    db.execute(
-                        "SELECT fields FROM direct_episode_revisions WHERE id=? AND revision=?",
-                        (identity, head[0]),
-                    ).fetchone()[0]
-                )
-            )
+            prior = {} if checked_head is None else json.loads(checked_head[1])
             for name, member in members.items():
                 raw = encode(member)
                 fields[name] = digest(raw)
@@ -329,16 +329,18 @@ class History(BASE_HISTORY):
         )
         if revision == 1:
             self.put(kind + "-counter", self.get(kind + "-counter", 0) + 1)
+        from .expiry_index import hot_binding
         from .expiry_index import put as put_expiry
 
-        expiry = repository.retained_deadline(self.store, kind, identity, value)
-        put_expiry(
-            db,
-            PREFIX + kind + "-head:" + identity,
-            expiry,
-            kind + "-head",
-            identity if kind == "event" else value.get("origin_event_id"),
+        public_head = PREFIX + kind + "-head:" + identity
+        category = kind + "-head"
+        parent = identity if kind == "event" else value.get("origin_event_id")
+        saved = hot_binding(db, public_head)
+        expiry = (
+            saved[0] if saved is not None else repository.retained_deadline(self.store, kind, identity, value)
         )
+        if saved != (expiry, category, parent):
+            put_expiry(db, public_head, expiry, category, parent)
 
 
 def maintenance(store: Any, now: int) -> dict[str, Any]:
