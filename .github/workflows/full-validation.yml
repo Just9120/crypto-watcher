@@ -80,7 +80,9 @@ jobs:
       - name: Install locked controller dependencies
         run: python -m pip install --require-hashes -r requirements-dev.txt
       - name: Validate measurement identity, limits, rollback and cleanup
-        run: python -m pytest -q tests/test_revision_pair.py tests/test_cpu_pair.py tests/test_full_validation.py tests/test_processing_qualification.py --basetemp .cache-g1/pair-controller-tests
+        run: |
+          mkdir -p .cache-g1
+          python -m pytest -q tests/test_revision_pair.py tests/test_cpu_pair.py tests/test_full_validation.py tests/test_processing_qualification.py --basetemp .cache-g1/pair-controller-tests
       - name: Build two exact versions with identical frozen scenario and measurement
         shell: bash
         run: |
