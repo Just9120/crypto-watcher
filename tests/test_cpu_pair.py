@@ -332,3 +332,67 @@ def test_two_cpu_admission_and_tail_keep_host_reserve_and_explicit_ceiling():
     assert b.admission([sample] * 6, 7 * 1024**3, 4, cpu_limit=2)
     assert not b.admission([{**sample, "idle_pct": 64.9}] * 6, 7 * 1024**3, 4, cpu_limit=2)
     assert b.tail_upper(10, 5, 6, 2) == pytest.approx(12.4)
+
+
+@pytest.mark.parametrize("missing,changed_input", [(False, False), (True, False), (False, True)])
+def test_domain_pair_uses_two_images_once_under_one_budget(tmp_path, monkeypatch, missing, changed_input):
+    from types import SimpleNamespace
+
+    from scripts import qualify_cpu_pair as pair
+
+    revision = "a" * 40
+    labels = {
+        "org.opencontainers.image.revision": b.RUNTIME,
+        "io.cryptowatcher.measurement-revision": revision,
+    }
+    images = {
+        "base": {"Id": "base-id", "Config": {"Labels": labels}},
+        "candidate": {
+            "Id": "candidate-id",
+            "Config": {"Labels": {**labels, "io.cryptowatcher.domain-writer": "typed-domain-v1"}},
+        },
+    }
+    monkeypatch.setattr(pair.sys, "platform", "linux")
+    monkeypatch.setattr(pair.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(q, "docker", lambda *a: json.dumps([images[a[-1]]]))
+    monkeypatch.setattr(
+        pair,
+        "signal",
+        SimpleNamespace(SIGALRM=1, SIGINT=2, SIGTERM=3, signal=lambda *a: None, alarm=lambda *a: None),
+    )
+    budget = SimpleNamespace(
+        reason=lambda: None, admit_second=lambda: True, used=lambda: 300, elapsed=lambda: 400
+    )
+    monkeypatch.setattr(b, "Budget", lambda: budget)
+    monkeypatch.setattr(b, "processing_ok", lambda envelope: True)
+    calls = []
+
+    def case(image, revision, directory, label, cpu, current_budget):
+        assert current_budget is budget
+        calls.append((image, label, cpu))
+        result = {"seed_sha256": "seed", "offered_sha256": "wire", "streams": 1648, "offered_closed": 2472}
+        if label == "candidate2":
+            if not missing:
+                result["domain_writer"] = {"mode": "typed-domain-v1"}
+            if changed_input:
+                result["offered_sha256"] = "changed"
+        return {
+            "state": "CASE_COMPLETE",
+            "fixture_cleanup": "COMPLETE",
+            "result": {"state": "FAIL", "result": result},
+        }
+
+    monkeypatch.setattr(pair, "one", case)
+    directory = tmp_path / "pair"
+    assert pair.run("base", revision, directory, candidate_image="candidate") == 1
+    assert calls == [("base-id", "baseline2", 2), ("candidate-id", "candidate2", 2)]
+    proof = json.loads((directory / "pair.json").read_text())
+    assert (
+        proof["limits"]["cpu_seconds_pair_total"] == 450 and proof["limits"]["wall_seconds_pair_total"] == 510
+    )
+    assert proof["limits"]["cpu_order"] == [2, 2]
+    assert proof["mode"] == "DOMAIN_COMPARISON"
+    assert proof["cpu_hypothesis"] == (
+        "INCOMPLETE" if missing or changed_input else "DOMAIN_PROCESSING_GATES_MET"
+    )
+    assert proof["state"] != "PASS"

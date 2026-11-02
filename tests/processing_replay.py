@@ -108,6 +108,7 @@ async def replay(
     bounded_pool: bool = False,
     diagnostic: bool = False,
     hot_state: bool = False,
+    domain_roles: bool = False,
 ) -> dict:
     if hot_state and (not bounded_pool or diagnostic):
         raise ValueError("Hot-state qualification requires the unprofiled bounded-pool scenario")
@@ -228,6 +229,7 @@ async def replay(
             controller.agent.enable(True)
             pool = None
             global_trace = []
+            global_evidence = []
             if bounded_pool:
                 from .bounded_pool import Pool
 
@@ -237,6 +239,26 @@ async def replay(
                 def published(event, episode):
                     point = signal_point(event)
                     global_trace.append(point)
+                    if domain_roles:
+                        reason = {
+                            "live_observation": "L",
+                            "historical_observation": "H",
+                            "awaiting_rearm": "R",
+                        }.get(event["observation_reason"], "?")
+                        global_evidence.append(
+                            "|".join(
+                                (
+                                    event["event_id"],
+                                    hashlib.sha256(encode(point).encode()).hexdigest(),
+                                    str(event["receipt_ms"] - event["market_observation_ms"]),
+                                    str(event["detection_ms"] - event["market_observation_ms"]),
+                                    reason,
+                                    str(int(event["live"])),
+                                )
+                            )
+                        )
+                        if len(global_evidence) > 20000:
+                            raise RuntimeError("Global fact evidence budget exceeded")
                     trace.published(event, point)
                     original_publish(event, episode)
 
@@ -361,8 +383,27 @@ async def replay(
                     ],
                 }
 
+            role_stats = {}
+
             def wire():
+                nonlocal offered_hash
                 try:
+                    if domain_roles:
+                        from tests.domain_roles import wire as independent_wire
+
+                        offered_hash = independent_wire(
+                            groups,
+                            seconds,
+                            steady_started[0],
+                            NOW,
+                            stop,
+                            queues,
+                            arrivals,
+                            loop,
+                            offered,
+                            role_stats,
+                        )
+                        return
                     for offset in range(0, seconds, 5):
                         if stop.wait(max(0, steady_started[0] + offset - time.monotonic())):
                             return
@@ -568,7 +609,9 @@ async def replay(
                 "streams": len(streams),
                 "real_seconds_requested": seconds,
                 "phase_seconds": phase_seconds,
-                "phase_cpu_seconds": phase_used_cpu,
+                "phase_cpu_seconds": phase_used_cpu + role_stats.get("child_cpu_seconds", 0),
+                "phase_writer_cpu_seconds": phase_used_cpu,
+                "isolated_ingress": role_stats if domain_roles else None,
                 "seed_seconds": seed_seconds,
                 "seed_cpu_seconds": seed_cpu,
                 "seed_sha256": seed_digest.hexdigest(),
@@ -646,7 +689,7 @@ async def replay(
                     result["diagnostic"] = trace.report(
                         path.with_name("aligned-oracle.sqlite3"), expected, global_trace, signal_point
                     )
-                from cryptowatcher.events import identity
+                from cryptowatcher.events import VERSIONS, event_identity, identity
 
                 selected_ids = set()
                 for row in measured_pool["selected"]:
@@ -658,6 +701,19 @@ async def replay(
                 scheduled_ids = {r["outcome_id"] for r in results} | {j["outcome_id"] for j in jobs}
                 result["bounded_pool"] = {
                     **measured_pool,
+                    "global_fact_evidence": global_evidence if domain_roles else None,
+                    "global_expected_ids": [
+                        event_identity(
+                            p["market_type"] + "/" + p["symbol"] + "/" + p["timeframe"],
+                            p["detector_id"],
+                            VERSIONS[p["detector_id"]],
+                            1,
+                            p["market_observation_ms"] - int(p["timeframe"][:-1]) * MINUTE,
+                        )
+                        for p in map(json.loads, expected)
+                    ]
+                    if domain_roles
+                    else None,
                     "global_expected": len(expected),
                     "global_actual": len(actual),
                     "global_expected_sha256": hashlib.sha256(encode(expected).encode()).hexdigest(),

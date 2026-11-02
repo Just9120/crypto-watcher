@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -226,6 +227,20 @@ def one(image, measurement, directory, label, cpu_limit, budget):
                 raise ValueError("Frozen source mismatch")
             (directory / f"{label}-result.json").write_bytes(raw)
             proof["result"] = result
+            if result.get("result", {}).get("domain_writer"):
+                evidence = result["result"].get("fact_evidence", {})
+                if evidence.get("file") != "fact-evidence.json":
+                    raise ValueError("Missing bounded domain fact evidence")
+                path = work / "fact-evidence.json"
+                if path.is_symlink() or path.stat().st_size > 5 * 1024**2:
+                    raise ValueError("Invalid domain fact evidence file")
+                raw = path.read_bytes()
+                if len(raw) != evidence.get("bytes") or hashlib.sha256(raw).hexdigest() != evidence.get(
+                    "sha256"
+                ):
+                    raise ValueError("Domain fact evidence digest mismatch")
+                (directory / f"{label}-facts.json").write_bytes(raw)
+                proof["fact_evidence"] = evidence
         if proof["state"] == "PREPARED":
             proof["state"] = (
                 "CASE_COMPLETE"
@@ -273,10 +288,16 @@ def one(image, measurement, directory, label, cpu_limit, budget):
     return proof
 
 
-def run(image, measurement, directory, *, single_cpu=None):
+def run(image, measurement, directory, *, single_cpu=None, candidate_image=None):
     if single_cpu not in (None, 2):
         raise ValueError("Only the authorized single2CPU exception is supported")
-    cases = (("cpu2", 2),) if single_cpu == 2 else (("cpu1", 1), ("cpu1_5", 1.5))
+    if candidate_image and single_cpu:
+        raise ValueError("Domain comparison and single case are mutually exclusive")
+    cases = (
+        (("baseline2", 2), ("candidate2", 2))
+        if candidate_image
+        else ((("cpu2", 2),) if single_cpu == 2 else (("cpu1", 1), ("cpu1_5", 1.5)))
+    )
     if sys.platform != "linux" or os.geteuid() != 0 or not re.fullmatch(r"[0-9a-f]{40}", measurement):
         raise ValueError("Linux root and exact measurement revision required")
     if directory.exists() or directory.is_symlink() or directory.parent.resolve() != directory.parent:
@@ -288,11 +309,22 @@ def run(image, measurement, directory, *, single_cpu=None):
         or labels.get("io.cryptowatcher.measurement-revision") != measurement
     ):
         raise ValueError("Runtime/measurement image identity mismatch")
+    candidate_info = None
+    if candidate_image:
+        candidate_info = json.loads(q.docker("image", "inspect", candidate_image))[0]
+        candidate_labels = candidate_info["Config"]["Labels"]
+        if (
+            candidate_labels.get("org.opencontainers.image.revision") != b.RUNTIME
+            or candidate_labels.get("io.cryptowatcher.measurement-revision") != measurement
+            or candidate_labels.get("io.cryptowatcher.domain-writer") != "typed-domain-v1"
+            or labels.get("io.cryptowatcher.domain-writer") is not None
+        ):
+            raise ValueError("Explicit baseline/candidate image identities required")
     directory.mkdir(mode=0o755)
     budget = b.Budget()
     proof = {
         "schema": "cryptowatcher.cpu-pair.v1",
-        "mode": "SINGLE_CPU" if single_cpu else "FIXED_PAIR",
+        "mode": "DOMAIN_COMPARISON" if candidate_image else ("SINGLE_CPU" if single_cpu else "FIXED_PAIR"),
         "runtime": b.RUNTIME,
         "measurement": measurement,
         "image": image_info["Id"],
@@ -324,7 +356,16 @@ def run(image, measurement, directory, *, single_cpu=None):
             if budget.reason() or not budget.admit_second():
                 proof["state"] = "PAIR_INCOMPLETE_REMAINING_BUDGET"
                 break
-            case = one(image_info["Id"], measurement, directory, label, cpu, budget)
+            selected = candidate_info if candidate_image and label == "candidate2" else image_info
+            case = one(selected["Id"], measurement, directory, label, cpu, budget)
+            if (
+                candidate_image
+                and label == "candidate2"
+                and case.get("result", {}).get("result", {}).get("domain_writer", {}).get("mode")
+                != "typed-domain-v1"
+            ):
+                case.update(state="CASE_INCOMPLETE", error="DOMAIN_WRITER_EVIDENCE_MISSING")
+                save(directory, label, case)
             publication = labels.get("io.cryptowatcher.publication-unit")
             if publication is not None:
                 unit = case.get("result", {}).get("result", {}).get("publication_unit", {})
@@ -340,7 +381,25 @@ def run(image, measurement, directory, *, single_cpu=None):
         )
         complete = complete and budget.used() <= 450 and budget.elapsed() <= 510
         proof["comparison_complete"] = complete
-        if single_cpu:
+        if candidate_image:
+            same_input = complete and all(
+                proof["cases"][0]["result"]["result"].get(key)
+                == proof["cases"][1]["result"]["result"].get(key)
+                for key in ("seed_sha256", "offered_sha256", "streams", "offered_closed")
+            )
+            proof["same_input"] = same_input
+            proof["cpu_hypothesis"] = (
+                "INCOMPLETE"
+                if not same_input
+                else (
+                    "DOMAIN_PROCESSING_GATES_MET"
+                    if b.processing_ok(proof["cases"][1]["result"])
+                    else "DOMAIN_PROCESSING_GATES_FAILED"
+                )
+            )
+            if not same_input:
+                proof["state"] = "PAIR_INCOMPLETE_INPUT_IDENTITY"
+        elif single_cpu:
             proof["cpu_hypothesis"] = (
                 "INCOMPLETE"
                 if not complete
@@ -399,12 +458,19 @@ def main():
     parent.add_argument("measurement")
     parent.add_argument("directory", type=Path)
     parent.add_argument("--single-cpu", type=float, choices=(2,))
+    parent.add_argument("--candidate-image")
     args = parser.parse_args()
     if args.command == "supervise":
         if not 0 < args.seconds <= 510:
             raise ValueError("Finite supervisor wall limit required")
         return supervise(args.cpu_limit, args.seconds)
-    return run(args.image, args.measurement, args.directory.resolve(), single_cpu=args.single_cpu)
+    return run(
+        args.image,
+        args.measurement,
+        args.directory.resolve(),
+        single_cpu=args.single_cpu,
+        candidate_image=args.candidate_image,
+    )
 
 
 if __name__ == "__main__":

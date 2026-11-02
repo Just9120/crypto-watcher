@@ -129,20 +129,20 @@ jobs:
           docker build --build-arg SOURCE_REVISION="$RUNTIME" --build-arg BUILD_RUN="$RUN_ID" -t "cryptowatcher:$RUNTIME" "$FROZEN"
           docker build -f "$FROZEN/tests/processing.Dockerfile" --build-arg BASE_IMAGE="cryptowatcher:$RUNTIME" -t "cw-processing-frozen:$RUNTIME" "$FROZEN"
           docker build -f tests/cpu_pair.Dockerfile --build-arg BASE_IMAGE="cw-processing-frozen:$RUNTIME" --build-arg MEASUREMENT_REVISION="$REVISION" -t "cw-cpu-pair:$REVISION" .
-          OVERLAY=".cache-g1/publication-overlay-${RUN_ID}"
+          OVERLAY=".cache-g1/domain-overlay-${RUN_ID}"
           mkdir -p "$OVERLAY/tests"
-          cp tests/publication_unit.py "$OVERLAY/tests/publication_unit.py"
-          docker build -f tests/publication_unit.Dockerfile --build-arg BASE_IMAGE="cw-cpu-pair:$REVISION" -t "cw-publication:$REVISION" "$OVERLAY"
-      - name: One publication unit2CPU full scenario;450CPU510wall600outer unchanged
+          cp tests/domain_writer.py tests/domain_roles.py tests/processing_replay.py "$OVERLAY/tests/"
+          docker build -f tests/domain_writer.Dockerfile --build-arg BASE_IMAGE="cw-cpu-pair:$REVISION" -t "cw-domain:$REVISION" "$OVERLAY"
+      - name: One baseline/candidate pair2CPU4GiB; shared450CPU510wall600outer
         env:
           REVISION: ${{ github.sha }}
         run: |
-          sudo timeout --signal=INT --kill-after=10s 600s "$(command -v python)" -B -m scripts.qualify_cpu_pair run "cw-publication:$REVISION" "$REVISION" ".cache-g1/processing-publication-${{ github.run_id }}-${{ github.run_attempt }}" --single-cpu 2
+          sudo timeout --signal=INT --kill-after=10s 600s "$(command -v python)" -B -m scripts.qualify_cpu_pair run "cw-cpu-pair:$REVISION" "$REVISION" ".cache-g1/processing-domain-${{ github.run_id }}-${{ github.run_attempt }}" --candidate-image "cw-domain:$REVISION"
       - name: Preserve processing result including resource stops
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: processing-publication-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: processing-domain-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             .cache-g1/processing-*/*.json
             .cache-g1/processing-*/*.log

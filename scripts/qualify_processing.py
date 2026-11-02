@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -148,6 +149,23 @@ def verdict(result: dict, *, direct_sqlite: bool = False, bounded_pool: bool = F
             or not 0 < unit.get("peak_serialized_bytes", 0) <= 1024**2
         ):
             failures.append("PUBLICATION_UNIT_EVIDENCE_INCOMPLETE")
+    if "domain_writer" in result:
+        unit = result["domain_writer"]
+        ingress = result.get("isolated_ingress") or {}
+        if (
+            unit.get("mode") != "typed-domain-v1"
+            or unit.get("failed") != 0
+            or unit.get("observations", 0) < result.get("accepted_closed", 0)
+            or unit.get("pure_transitions") != unit.get("observations")
+            or unit.get("facts", 0) <= 0
+            or unit.get("episode_revisions", 0) <= 0
+            or not 0 < unit.get("max_prepared_keys", 0) <= 384
+            or ingress.get("state") != "COMPLETE"
+            or ingress.get("joined") is not True
+            or ingress.get("exitcode") != 0
+            or unit.get("unprocessed_ingress_at_cleanup") != 0
+        ):
+            failures.append("DOMAIN_SLICE_EVIDENCE_INCOMPLETE")
     return failures
 
 
@@ -213,6 +231,30 @@ class PhaseProfile:
         )
 
 
+def save_fact_evidence(result, directory):
+    """Keep bounded trace separate so a mismatch cannot lose core metrics."""
+    pool = result["bounded_pool"]
+    evidence = {
+        "schema": "cryptowatcher.domain-fact-evidence.v1",
+        "actual": pool.pop("global_fact_evidence"),
+        "expected_ids": pool.pop("global_expected_ids"),
+        "actual_format": "event_id|point_sha256|receipt_minus_market_ms|detection_minus_market_ms|reason_L_H_R|live",
+    }
+    raw = json.dumps(evidence, separators=(",", ":")).encode()
+    if len(raw) > 5 * 1024**2:
+        raise ValueError("Domain fact evidence exceeds finite byte bound")
+    path = directory / "fact-evidence.json"
+    with path.open("xb") as handle:
+        handle.write(raw)
+    result["fact_evidence"] = {
+        "file": path.name,
+        "bytes": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "actual_count": len(evidence["actual"]),
+        "expected_count": len(evidence["expected_ids"]),
+    }
+
+
 def case(
     report: Path,
     *,
@@ -250,9 +292,22 @@ def case(
             raise ValueError("Unknown isolated publication selection")
         if publication and (not direct_sqlite or not bounded_pool or not hot_state or diagnostic or profile):
             raise ValueError("Publication qualification requires the unchanged hot bounded-pool flow")
+        domain = os.environ.get("CW_ISOLATED_DOMAIN_WRITER")
+        if (
+            domain not in (None, "typed-domain-v1")
+            or domain
+            and (publication or not direct_sqlite or not bounded_pool or diagnostic or profile)
+        ):
+            raise ValueError("Invalid explicit domain writer selection")
+        if domain:
+            hot_state = False  # New domain transition replaces the old hot-view experiment.
         context = nullcontext(None)
         if publication:
             from tests.publication_unit import installed
+
+            context = installed()
+        if domain:
+            from tests.domain_writer import installed
 
             context = installed()
         with (
@@ -269,12 +324,16 @@ def case(
                     bounded_pool=bounded_pool,
                     diagnostic=diagnostic,
                     hot_state=hot_state,
+                    **({"domain_roles": True} if domain else {}),
                 )
             )
     finally:
         capture.save(report.parent / "profile.json")
     if publication:
         result["publication_unit"] = {"mode": publication, **publication_stats}
+    if domain:
+        result["domain_writer"] = dict(publication_stats)
+        save_fact_evidence(result, report.parent)
     failures = verdict(result, direct_sqlite=direct_sqlite, bounded_pool=bounded_pool)
     if diagnostic and result.get("diagnostic", {}).get("complete") is not True:
         failures.append("DIAGNOSTIC_TRACE_INCOMPLETE")
