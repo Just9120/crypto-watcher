@@ -508,6 +508,8 @@ class EventEngine:
         self.store = store
         self.writer_stats: dict[str, Any] = {
             "mode": "runtime-domain-v1",
+            "publication_mode": "explicit-subject-v1",
+            "publication_units": 0,
             "observations": 0,
             "pure_transitions": 0,
             "facts": 0,
@@ -535,6 +537,7 @@ class EventEngine:
         self._snapshot_event_callback = on_event
         self.on_event_snapshot = on_event_snapshot
         self.on_episode = on_episode
+        self._publication_consumers: tuple[Any, ...] = ()
         with store.db:
             for family in FAMILIES:
                 key = f"detector-metadata:{family}:{VERSIONS[family]}"

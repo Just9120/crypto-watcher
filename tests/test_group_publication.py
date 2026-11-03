@@ -1,45 +1,20 @@
-"""Group publication integrity on disposable real SQLite; no capacity claim."""
+"""Explicit publication integrity on disposable real SQLite."""
 
-import json
 import sqlite3
 from contextlib import closing
 
 import pytest
 
+from cryptowatcher.domain_publication import publication
 from cryptowatcher.domain_repository import History, install
 from cryptowatcher.events import EventEngine
 from cryptowatcher.storage import StateError, encode
-from cryptowatcher.writer_memory import source_group, transaction
 from tests.test_events import NOW, window
 from tests.test_runtime_repository import opened
 
 
-def test_group_reuses_context_and_publishes_final_state_at_read_barrier(tmp_path):
-    with closing(opened(tmp_path / "group.sqlite3", True)) as store:
-        install(store)
-        history = History(store)
-        with store.db:
-            store.db.execute("BEGIN IMMEDIATE")
-            with source_group(store) as group:
-                for value in (1, 2):
-                    with transaction(history) as nested:
-                        assert nested is group
-                        history.put("active:fixture", {"marker": value})
-                        assert history.get("active:fixture") == {"marker": value}
-                assert group.stats["domain_buffered"] == 2
-                assert group.stats["domain_flushed"] == 0
-                # Even direct SQL is a visibility barrier for mutable domain rows.
-                row = store.db.execute(
-                    "SELECT payload FROM domain_state WHERE key=?", ("active:fixture",)
-                ).fetchone()
-                assert json.loads(row[0]) == {"marker": 2}
-                assert group.stats["domain_flushed"] == 1
-            assert store.db.hot is None and store._writer_batch is None
-        assert history.get("active:fixture") == {"marker": 2}
-
-
 @pytest.mark.parametrize("abort", [False, True])
-def test_group_savepoint_rollback_and_outer_failure_preserve_state(tmp_path, abort):
+def test_savepoint_and_outer_failure_preserve_state(tmp_path, abort):
     with closing(opened(tmp_path / "savepoint.sqlite3", True)) as store:
         install(store)
         history = History(store)
@@ -47,15 +22,16 @@ def test_group_savepoint_rollback_and_outer_failure_preserve_state(tmp_path, abo
         try:
             with store.db:
                 store.db.execute("BEGIN IMMEDIATE")
-                with source_group(store):
+                with publication(history) as unit:
                     history.put("active:fixture", {"marker": 1})
-                    store.db.execute("SAVEPOINT fixture")
-                    history.put("active:fixture", {"marker": 2})
-                    history.put("agent:intent:fixture", {"marker": 2})
-                    store.db.execute("ROLLBACK TO fixture")
-                    store.db.execute("RELEASE fixture")
-                    assert history.get("active:fixture") == {"marker": 1}
-                    assert history.get("agent:intent:fixture") is None
+                    with unit.callback():
+                        store.db.execute("SAVEPOINT fixture")
+                        history.put("active:fixture", {"marker": 2})
+                        history.put("agent:intent:fixture", {"marker": 2})
+                        store.db.execute("ROLLBACK TO fixture")
+                        store.db.execute("RELEASE fixture")
+                        assert history.get("active:fixture") == {"marker": 1}
+                        assert history.get("agent:intent:fixture") is None
                     if abort:
                         raise RuntimeError("abort complete group")
         except RuntimeError:
@@ -67,13 +43,13 @@ def test_group_savepoint_rollback_and_outer_failure_preserve_state(tmp_path, abo
             assert history.get("active:fixture") == {"marker": 1}
 
 
-def test_group_authorizer_change_cannot_reuse_deferred_read(tmp_path):
+def test_authorizer_change_cannot_reuse_previously_allowed_read(tmp_path):
     with closing(opened(tmp_path / "authority.sqlite3", True)) as store:
         install(store)
         history = History(store)
         with store.db:
             store.db.execute("BEGIN IMMEDIATE")
-            with source_group(store):
+            with publication(history):
                 history.put("active:fixture", {"marker": 1})
 
                 def deny(action, table, column, database, context):
@@ -93,7 +69,7 @@ def test_group_authorizer_change_cannot_reuse_deferred_read(tmp_path):
 
 
 @pytest.mark.parametrize("change", ["owner", "readonly"])
-def test_changed_authority_rolls_back_group_and_discards_context(tmp_path, change):
+def test_changed_authority_rolls_back_and_discards_context(tmp_path, change):
     with closing(opened(tmp_path / "owner.sqlite3", True)) as store:
         install(store)
         history = History(store)
@@ -102,7 +78,7 @@ def test_changed_authority_rolls_back_group_and_discards_context(tmp_path, chang
         try:
             with pytest.raises(StateError, match="owner or transaction"), store.db:
                 store.db.execute("BEGIN IMMEDIATE")
-                with source_group(store):
+                with publication(history):
                     history.put("active:fixture", {"marker": 1})
                     if change == "owner":
                         store.owner_id += 1
@@ -114,8 +90,8 @@ def test_changed_authority_rolls_back_group_and_discards_context(tmp_path, chang
         assert list(store.db.iterdump()) == before
 
 
-def test_group_exact_revisions_match_individual_publications(tmp_path):
-    def run(path, grouped):
+def test_explicit_revisions_match_individual_publications(tmp_path):
+    def run(path, joined):
         with closing(opened(path, True)) as store:
             install(store)
             engine = EventEngine(store)
@@ -124,14 +100,11 @@ def test_group_exact_revisions_match_individual_publications(tmp_path):
                 ("spot/BTCUSDT/3m", NOW + 180000, "3m", 110),
                 ("linear/ETHUSDT/5m", NOW + 300000, "5m", 108),
             ]
-            if grouped:
+            if joined:
                 with store.db:
                     store.db.execute("BEGIN IMMEDIATE")
-                    with source_group(store):
-                        for stream, at, tf, price in points:
-                            engine.observe(
-                                stream, window(at, tf, price), 1e6, 0.01, at, live=True, commit=False
-                            )
+                    for stream, at, tf, price in points:
+                        engine.observe(stream, window(at, tf, price), 1e6, 0.01, at, live=True, commit=False)
             else:
                 for stream, at, tf, price in points:
                     engine.observe(stream, window(at, tf, price), 1e6, 0.01, at, live=True)
@@ -142,7 +115,7 @@ def test_group_exact_revisions_match_individual_publications(tmp_path):
             assert store.db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
             return encode(facts)
 
-    assert run(tmp_path / "individual.sqlite3", False) == run(tmp_path / "grouped.sqlite3", True)
+    assert run(tmp_path / "individual.sqlite3", False) == run(tmp_path / "joined.sqlite3", True)
 
 
 def test_snapshot_reuse_still_checks_the_actual_stored_bytes(tmp_path):
@@ -166,27 +139,26 @@ def test_snapshot_reuse_still_checks_the_actual_stored_bytes(tmp_path):
         before = list(store.db.iterdump())
         with pytest.raises(StateError, match="snapshot"), store.db:
             store.db.execute("BEGIN IMMEDIATE")
-            with source_group(store):
+            with publication(engine.history):
                 engine.history.version("event", {**event, "event_id": "new-test-identity"})
         assert list(store.db.iterdump()) == before
 
 
-def test_finite_group_buffer_flushes_instead_of_dropping_updates(tmp_path):
+def test_explicit_mutation_plan_rejects_overflow_without_partial_changes(tmp_path):
     with closing(opened(tmp_path / "finite.sqlite3", True)) as store:
         install(store)
         history = History(store)
-        with store.db:
+        before = list(store.db.iterdump())
+        with pytest.raises(StateError, match="budget"), store.db:
             store.db.execute("BEGIN IMMEDIATE")
-            with source_group(store) as group:
-                for index in range(140):
-                    history.put(f"active:fixture-{index}", {"index": index})
-                    assert len(group.direct) <= 128
-                assert history.get("active:fixture-0") == {"index": 0}
-        assert len(history.items("active:fixture-")) == 140
-        assert store.db.hot is None
+            with publication(history) as unit:
+                history.apply_mutations(
+                    unit, {f"active:fixture-{i}": ("put", {"index": i}) for i in range(129)}, {}
+                )
+        assert list(store.db.iterdump()) == before
 
 
-def test_group_metadata_rechecks_trigger_side_settings_mutation(tmp_path):
+def test_trigger_side_settings_mutation_rolls_back_entire_observation(tmp_path):
     with closing(opened(tmp_path / "trigger-settings.sqlite3", True)) as store:
         install(store)
         engine = EventEngine(store)
@@ -195,9 +167,7 @@ def test_group_metadata_rechecks_trigger_side_settings_mutation(tmp_path):
             UPDATE owner_settings SET revision=revision+1; END""")
         store.db.commit()
         before = list(store.db.iterdump())
-        with pytest.raises(StateError, match="settings"), store.db:
-            store.db.execute("BEGIN IMMEDIATE")
-            with source_group(store):
-                engine.observe("spot/BTCUSDT/1m", window(), 1e6, 0.01, NOW, live=True, commit=False)
+        with pytest.raises(StateError, match="settings"):
+            engine.observe("spot/BTCUSDT/1m", window(), 1e6, 0.01, NOW, live=True)
         assert list(store.db.iterdump()) == before
         assert store.snapshot().revision == 1

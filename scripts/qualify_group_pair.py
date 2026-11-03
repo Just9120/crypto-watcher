@@ -131,6 +131,15 @@ def run(images, candidate, directory):
                 admission=admission,
                 supervisor_module="scripts.qualify_group_pair",
             )
+            if label == "candidate" and case.get("state") == "CASE_COMPLETE":
+                writer = case.get("result", {}).get("result", {}).get("runtime_writer", {})
+                if (
+                    writer.get("publication_mode") != "explicit-subject-v1"
+                    or not writer.get("publication_units")
+                    or writer["publication_units"] != writer.get("observations")
+                ):
+                    case.update(state="CASE_INCOMPLETE", error="EXPLICIT_PUBLICATION_NOT_EXERCISED")
+                    pair.save(directory, label, case)
             proof["cases"].append(case)
             if case["state"] != "CASE_COMPLETE" or case.get("fixture_cleanup") != "COMPLETE":
                 proof["state"] = "PAIR_INCOMPLETE"

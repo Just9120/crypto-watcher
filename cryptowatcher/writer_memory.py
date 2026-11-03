@@ -84,41 +84,86 @@ class Cursor(sqlite3.Cursor):
 
 class Connection(sqlite3.Connection):
     hot: Any = None
+    publication_depth = 0
+    _metadata_epoch = 0
+    _guard_rows: Any = None
+    _guards_ready = False
 
-    def invalidate(self, sql: Any) -> Any:
-        if self.hot is None:
-            return
-        verb = sql.lstrip().split(None, 1)[0].upper() if sql.strip() else ""
-        if (
-            self.hot.grouped
-            and not self.hot.flushing
-            and (
-                verb in ("SAVEPOINT", "RELEASE", "ROLLBACK", "WITH", "CREATE", "DROP", "ALTER")
-                or "domain_state" in sql.lower()
-                or "domain_conditions" in sql.lower()
-            )
-        ):
-            # Raw SQL and savepoints are visibility/rollback barriers. Never
-            # retain a deferred mutation across an untracked SQL boundary.
-            self.hot.flush()
-        if verb in ("COMMIT", "END") or (verb == "ROLLBACK" and " TO " not in " " + sql.upper() + " "):
-            raise StateError("Joined producer cannot end its source transaction")
-        if (verb == "WITH" or verb == "PRAGMA" and ("=" in sql or "(" in sql)) or (
-            verb not in ("SELECT", "PRAGMA")
-            and (
-                verb in ("CREATE", "DROP", "ALTER", "ROLLBACK")
-                or "market_meta" in sql.lower()
-                or "owner_settings" in sql.lower()
-            )
-        ):
+    def metadata_changed(self) -> int:
+        self._metadata_epoch += 1
+        if self.hot is not None:
             self.hot.headers.clear()
             self.hot.episodes.clear()
+        return self._metadata_epoch
+
+    def install_metadata_guards(self) -> None:
+        if self._guard_rows is not None:
+            self.require_metadata_guards()
+            return
+        if self.in_transaction:
+            raise StateError("Metadata guards require installed idle domain storage")
+        # Connection-local TEMP triggers: no persistent schema/history change.
+        self.create_function("cw_publication_metadata_changed", 0, self.metadata_changed)
+        keys = "'record_catalogue_runtime','record_catalog','record_ownership','catalogue_cohorts'"
+        names = []
+        for table in ("owner_settings", "market_meta"):
+            for operation in ("INSERT", "UPDATE", "DELETE"):
+                name = "cw_pub_" + table + "_" + operation.lower()
+                names.append(name)
+                aliases = (
+                    ("NEW",)
+                    if operation == "INSERT"
+                    else ("OLD",)
+                    if operation == "DELETE"
+                    else ("OLD", "NEW")
+                )
+                condition = (
+                    ""
+                    if table == "owner_settings"
+                    else (" WHEN " + " OR ".join(alias + ".key IN(" + keys + ")" for alias in aliases))
+                )
+                self.execute(
+                    f"CREATE TEMP TRIGGER {name} AFTER {operation} ON main.{table}{condition} "
+                    "BEGIN SELECT cw_publication_metadata_changed(); END"
+                )
+        self._guard_rows = tuple(
+            self.execute(
+                "SELECT name,sql FROM sqlite_temp_master WHERE name LIKE 'cw_pub_%' ORDER BY name"
+            ).fetchall()
+        )
+        if len(self._guard_rows) != len(names):
+            raise StateError("Unexpected publication metadata guards")
+        self._guards_ready = True
+
+    def require_metadata_guards(self) -> None:
+        if self._guard_rows is None:
+            raise StateError("Publication metadata guards not installed")
+        if not self._guards_ready:
+            actual = tuple(
+                super()
+                .execute("SELECT name,sql FROM sqlite_temp_master WHERE name LIKE 'cw_pub_%' ORDER BY name")
+                .fetchall()
+            )
+            if actual != self._guard_rows:
+                raise StateError("Publication metadata guards changed; state preserved")
+            self._guards_ready = True
+
+    def invalidate(self, sql: Any) -> Any:
+        verb = sql.lstrip().split(None, 1)[0].upper() if sql.strip() else ""
+        if verb in ("CREATE", "DROP", "ALTER"):
+            self._guards_ready = False
+            self.metadata_changed()
+        if self.hot is None and not self.publication_depth:
+            return
+        if verb in ("COMMIT", "END") or (verb == "ROLLBACK" and " TO " not in " " + sql.upper() + " "):
+            raise StateError("Joined producer cannot end its source transaction")
+        if verb == "ROLLBACK" or verb == "PRAGMA" and ("=" in sql or "(" in sql):
+            self.metadata_changed()
 
     def set_authorizer(self, callback: Any) -> Any:
         if self.hot is not None:
             self.hot.flush()
-            self.hot.headers.clear()
-            self.hot.episodes.clear()
+        self.metadata_changed()
         return super().set_authorizer(callback)
 
     def cursor(self, factory: Any = Cursor) -> Any:
@@ -127,11 +172,7 @@ class Connection(sqlite3.Connection):
     def execute(self, sql: Any, parameters: Any = ()) -> Any:
         self.invalidate(sql)
         if self.hot is not None and sql in QUERIES:
-            if self.hot.grouped and self.hot.header_epoch != self.total_changes:
-                # Include trigger-side changes, not merely SQL text. A group
-                # must not reuse pre-write owner/configuration evidence.
-                self.hot.headers.clear()
-                self.hot.header_epoch = self.total_changes
+            self.require_metadata_guards()
             key = (sql, tuple(parameters))
             previous = self.hot.headers.get(key)
             if previous is None:
@@ -156,17 +197,17 @@ class Connection(sqlite3.Connection):
         return super().executescript(script)
 
     def commit(self) -> Any:
-        if self.hot is not None:
+        if self.hot is not None or self.publication_depth:
             raise StateError("Joined producer cannot commit its source transaction")
         return super().commit()
 
     def rollback(self) -> Any:
-        if self.hot is not None:
+        if self.hot is not None or self.publication_depth:
             raise StateError("Joined producer cannot roll back its source transaction")
         return super().rollback()
 
     def __exit__(self, *args: Any) -> Any:
-        if self.hot is not None:
+        if self.hot is not None or self.publication_depth:
             raise StateError("Joined producer cannot end its source transaction")
         return super().__exit__(*args)
 
@@ -178,38 +219,16 @@ class Batch:
         self.writes: dict[Any, Any] = {}
         self.sizes: dict[Any, int] = {}
         self.flushing = False
-        self.grouped = False
-        self.header_epoch = -1
-        self.failed = False
-        self.direct: dict[Any, Any] = {}
-        self.direct_sizes: dict[Any, int] = {}
         self.episodes = EpisodeReads(stats)
         self.owner = None if history is None else (history.store.owner_id, history.store.readonly)
 
     def check(self) -> None:
         if (
-            self.failed
-            or self.owner != (self.history.store.owner_id, self.history.store.readonly)
+            self.owner != (self.history.store.owner_id, self.history.store.readonly)
             or self.history.store.readonly
             or not self.history.store.db.in_transaction
         ):
-            raise StateError("Writer group owner or transaction changed")
-
-    def domain(self, kind: str, key: str, value: Any) -> None:
-        self.check()
-        raw = None if value is DELETE else encode(value)
-        size = len(key.encode()) + (0 if raw is None else len(raw.encode()))
-        identity = (kind, key)
-        if (
-            len(self.direct) + (identity not in self.direct) > 128
-            or sum(self.direct_sizes.values()) - self.direct_sizes.get(identity, 0) + size > 1024**2
-        ):
-            self.flush()
-        if size > 1024**2:
-            raise StateError("Joined domain-state budget exceeded")
-        self.direct[identity] = raw
-        self.direct_sizes[identity] = size
-        self.stats["domain_buffered"] += 1
+            raise StateError("Publication owner or transaction changed")
 
     def write(self, key: Any, value: Any) -> Any:
         self.check()
@@ -219,11 +238,7 @@ class Batch:
             len(self.writes) + (key not in self.writes) > 128
             or sum(self.sizes.values()) - self.sizes.get(key, 0) + size > 1024**2
         ):
-            if not self.grouped:
-                raise StateError("Joined mutable-state budget exceeded")
-            self.flush()
-            if size > 1024**2:
-                raise StateError("Joined mutable-state budget exceeded")
+            raise StateError("Joined mutable-state budget exceeded")
         self.stats["buffered_mutations"] += 1
         self.writes[key], self.sizes[key] = frozen, size
         self.stats["peak_keys"] = max(self.stats["peak_keys"], len(self.writes))
@@ -234,12 +249,7 @@ class Batch:
         self.check()
         self.flushing = True
         try:
-            if self.direct:
-                self.history.flush_domain(self.direct)
-                self.stats["domain_flushed"] += len(self.direct)
-                self.direct.clear()
-                self.direct_sizes.clear()
-            for key, value in list(self.writes.items()):
+            for key, value in self.writes.items():
                 if value is DELETE:
                     self.delete(self.history, key)
                 else:
@@ -254,24 +264,11 @@ class Batch:
 @contextmanager
 def transaction(history: Any) -> Iterator[Any]:
     db = history.store.db
-    existing = getattr(history.store, "_writer_batch", None)
-    if existing is not None:
-        if not existing.grouped or existing.history.store is not history.store:
-            raise StateError("Writer batch requires its existing source transaction")
-        existing.check()
-        try:
-            yield existing
-        except BaseException:
-            existing.failed = True
-            raise
-        return
-    if not db.in_transaction:
+    if not db.in_transaction or getattr(history.store, "_writer_batch", None) is not None:
         raise StateError("Writer batch requires its existing source transaction")
     stats = dict.fromkeys(
         (
             "observations",
-            "domain_buffered",
-            "domain_flushed",
             "buffered_mutations",
             "flushed_mutations",
             "peak_keys",
@@ -295,20 +292,3 @@ def transaction(history: Any) -> Iterator[Any]:
         if isinstance(db, Connection):
             db.hot = None
         setattr(history.store, "_writer_batch", None)
-
-
-@contextmanager
-def source_group(store: Any) -> Iterator[Any]:
-    """Reuse one finite publication context, never beyond the durable group."""
-    from .events import History
-
-    history = History(store)
-    # Keep legacy installations and non-writer callers on their original path.
-    from .domain_repository import History as DomainHistory
-
-    if not isinstance(history, DomainHistory) or not isinstance(store.db, Connection):
-        yield None
-        return
-    with transaction(history) as batch:
-        batch.grouped = True
-        yield batch

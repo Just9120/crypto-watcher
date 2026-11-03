@@ -206,6 +206,13 @@ class Controller:
             if isinstance(market, BybitRadar)
             else None
         )
+        if self.engine is not None:
+            # These concrete runtime consumers participate in the producer unit.
+            # Replaced/public callbacks keep ordinary SQL/savepoint semantics.
+            self.engine._publication_consumers = (
+                self.engine.on_event_snapshot,
+                self.engine.on_episode,
+            )
         self.delivery = TelegramDelivery(
             store,
             infrastructure.delivery_chat_id,

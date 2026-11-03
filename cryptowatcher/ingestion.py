@@ -868,11 +868,8 @@ class BybitRadar(BybitREST):
             self.sources = staged
             with self._timed("source_group_commit"), self.store.db:
                 self.store.db.execute("BEGIN IMMEDIATE")
-                from .writer_memory import source_group
-
-                with source_group(self.store):
-                    for message, received_ms in frames:
-                        self.accept_message(market, message, allowed, received_ms=received_ms)
+                for message, received_ms in frames:
+                    self.accept_message(market, message, allowed, received_ms=received_ms)
             # No await/callback can expose these windows before durable commit.
             for stream in staged.touched:
                 published.windows[stream] = staged.windows[stream]

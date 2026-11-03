@@ -14,10 +14,10 @@ from typing import Any, Callable
 
 from . import events
 from .condition_state import MEMBERS
+from .domain_publication import publication
 from .domain_repository import STATE_PREFIXES, History
 from .events import EventEngine, event_identity, identity
 from .storage import StateError
-from .writer_memory import transaction
 
 
 def freeze_episode(value: Any) -> Any:
@@ -257,7 +257,7 @@ def observe(
         with store.db if commit else nullcontext():
             if not store.db.in_transaction:
                 store.db.execute("BEGIN IMMEDIATE")
-            with transaction(engine.history):
+            with publication(engine.history) as unit:
                 binding_query = "SELECT revision,settings_json FROM owner_settings WHERE owner_id=?"
                 expected_binding = store.db.execute(binding_query, (owner,)).fetchone()
 
@@ -317,7 +317,8 @@ def observe(
                 if provider is not None and any(
                     c.operation == "version" and c.key == "event" for c in prepared.changes
                 ):
-                    source_context, enrichment = provider()
+                    with unit.callback():
+                        source_context, enrichment = provider()
                     source_context = source_context or {"ticker": None, "instrument": None}
                     enrichment = enrichment or {"state": "UNAVAILABLE", "detector_input": False}
                     for change in prepared.changes:
@@ -338,17 +339,25 @@ def observe(
                 published: dict[Any, Any] = {}
 
                 def flush_mutable() -> Any:
-                    for key, (operation, value) in mutable.items():
-                        if operation == "delete":
-                            engine.history.delete(key)
-                        else:
-                            engine.history.put(key, value)
-                        stats["mutable_flushed"] += 1
+                    engine.history.apply_mutations(unit, mutable, groups)
+                    stats["mutable_flushed"] += len(mutable)
+                    stats["condition_groups"] += len(groups)
+                    # A later change in this observation must build on the
+                    # state already exposed before the callback, not ingress.
+                    for stream, group in groups.items():
+                        prepared.condition_groups[stream] = dict(group)
                     mutable.clear()
-                    for item, group in groups.items():
-                        engine.history.conditions(item, group)
-                        stats["condition_groups"] += 1
                     groups.clear()
+
+                def consume(callback: Any, *args: Any) -> None:
+                    if any(callback is item for item in engine._publication_consumers):
+                        callback(*args)
+                    else:
+                        # Snapshot consumers retain the original contract: the
+                        # supplied immutable projections are current; mutable
+                        # detector conditions are exposed only for legacy on_event.
+                        with unit.callback():
+                            callback(*args)
 
                 apply_started, consumer_used = time.thread_time(), 0.0
                 for change in prepared.changes:
@@ -365,18 +374,19 @@ def observe(
                                 engine.on_event is engine._snapshot_event_callback
                                 and engine.on_event_snapshot is not None
                             ):
-                                engine.on_event_snapshot(event, episode)
+                                consume(engine.on_event_snapshot, event, episode)
                             elif engine.on_event is not None:
                                 flush_mutable()
-                                engine.on_event(event)
+                                consume(engine.on_event, event)
                         elif engine.on_episode is not None:
                             episode = change.value
                             # Use exactly the normalized revision just persisted,
                             # never the pure ingress-time copy or a later head.
-                            engine.on_episode(
+                            consume(
+                                engine.on_episode,
                                 freeze_episode(
                                     published[("episode", episode["episode_id"], episode["revision"])]
-                                )
+                                ),
                             )
                         consumer_used += time.thread_time() - consumer_started
                     elif change.operation == "version":
@@ -387,7 +397,7 @@ def observe(
                             stats["facts"] += 1
                         else:
                             stats["episode_revisions"] += 1
-                        engine.history.version(change.key, value)
+                        engine.history.publish_prepared(unit, change.key, value)
                         published[(change.key, value[change.key + "_id"], value["revision"])] = value
                     elif change.key.startswith("condition:"):
                         _, item, family, direction = change.key.split(":")
@@ -418,6 +428,7 @@ def observe(
                     time.thread_time() - apply_started - consumer_used
                 )
         stats["observations"] += 1
+        stats["publication_units"] += 1
     except BaseException:
         stats["failed"] += 1
         raise

@@ -58,16 +58,27 @@ commit; prospective source window используется только синх
 Ошибка consumer откатывает эту единицу целиком. Standalone/replaced observers
 сохраняют прежний вызов после source commit. Нового durable queue или формата нет.
 
-Существующая WS-группа до восьми frames использует один конечный publication context
-на той же connection и до внешнего commit. Mutable domain state/conditions и consumer
-state объединяются в ограниченных буферах (каждый до128ключей/1MiB); revisions,
-публичные heads и source provenance сохраняются без пропусков. Raw domain SQL,
-сканирование, savepoint и смена authorizer — barriers, публикующие pending state
-внутри текущей транзакции; внешний reader видит только committed данные. Context
-сбрасывается при выходе и не переносит права/settings между транзакциями.
-Ссылки на shared inputs проверяются одним bounded SQL lookup на публикацию;
-существующие payload bytes проверяются, missing inputs вставляются и перечитываются
-после triggers. Доказательство наличия inputs не кешируется между публикациями.
+WS-группа до восьми frames сохраняет прежний внешний source commit. Внутри неё
+каждое подготовленное observation публикуется явной единицей domain_publication:
+один savepoint для producer changes и consumers. Подготовленные immutable revisions
+пишутся в исходном порядке до соответствующих consumers; public History.version
+сохраняет отдельный savepoint для обычных вызовов и пойманных ошибок callback.
+Mutable detector state получает finite typed write plan<=128keys/1MiB; отдельного
+общего group buffer и flush по распознаванию произвольного SQL больше нет.
+Snapshot consumers получают сохранённые projections; legacy on_event сохраняет
+exposed mutable-state boundary. Arbitrary callbacks выполняются с обычной SQL
+видимостью и защищённым внешним transaction ownership; их savepoint rollback не
+оставляет отложенных consumer intents. Финальная owner/settings проверка выполняется
+после фактической выгрузки consumer writes, до release producer unit.
+
+Configuration/layout metadata на writer connection инвалидируются отдельно от
+рыночных строк. Шесть connection-local TEMP triggers отслеживают owner_settings
+и четыре используемых market_meta flags, включая trigger-side updates. Они не
+меняют persistent schema/history и не копируются reader connections. Изменение
+schema/authorizer/rollback инвалидирует соответствующие proofs; повреждённый TEMP
+watch set останавливает publication. Context завершается до outer commit и не
+переносит права/settings между транзакциями. Existing readers продолжают проверять
+actual immutable rows и pinned inputs; presence proof не кешируется.
 
 Readonly outcome/comparison preparation выполняется последовательно. Controller
 сохраняет256/64result batches и four publication lanes; comparison preparation

@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from contextlib import nullcontext
 from typing import Any
 
 from . import events
@@ -41,6 +42,11 @@ def install(store: Any) -> Any:
             SELECT RAISE(ABORT,'Immutable domain member'); END;
     """,
     )
+
+    from .writer_memory import Connection
+
+    if isinstance(store.db, Connection):
+        store.db.install_metadata_guards()
 
 
 class History(BASE_HISTORY):
@@ -87,12 +93,6 @@ class History(BASE_HISTORY):
         return super().metadata(key)
 
     def condition_group(self, stream: Any) -> Any:
-        batch = getattr(self.store, "_writer_batch", None)
-        if batch is not None and not batch.flushing:
-            batch.check()
-            pending = batch.direct.get(("conditions", stream))
-            if pending is not None:
-                return json.loads(pending)
         row = self.store.db.execute(
             "SELECT payload,sha FROM domain_conditions WHERE stream=?", (stream,)
         ).fetchone()
@@ -112,13 +112,6 @@ class History(BASE_HISTORY):
             _, stream, family, direction = key.split(":")
             return self.condition_group(stream).get(family + ":" + direction, default)
         if key.startswith(STATE_PREFIXES):
-            batch = getattr(self.store, "_writer_batch", None)
-            if batch is not None and not batch.flushing:
-                batch.check()
-                identity = ("state", key)
-                if identity in batch.direct:
-                    raw = batch.direct[identity]
-                    return default if raw is None else json.loads(raw)
             row = self.store.db.execute("SELECT payload,sha FROM domain_state WHERE key=?", (key,)).fetchone()
             if row is None:
                 return super().get(key, default)
@@ -134,10 +127,6 @@ class History(BASE_HISTORY):
             group[family + ":" + direction] = value
             self.conditions(stream, group)
         elif key.startswith(STATE_PREFIXES):
-            batch = getattr(self.store, "_writer_batch", None)
-            if batch is not None and batch.grouped and not batch.flushing:
-                batch.domain("state", key, value)
-                return
             if self.store.get_runtime(PREFIX + key) is not None:
                 repository.OriginalHistory.delete(self, key)
             raw = encode(value)
@@ -164,10 +153,6 @@ class History(BASE_HISTORY):
                 old._delete_raw(GROUP + stream)
             for key in legacy.legacy:
                 old._delete_raw(key)
-        batch = getattr(self.store, "_writer_batch", None)
-        if batch is not None and batch.grouped and not batch.flushing:
-            batch.domain("conditions", stream, value)
-            return
         raw = encode(value)
         self.store.db.execute(
             "INSERT INTO domain_conditions VALUES(?,?,?) ON CONFLICT(stream) DO UPDATE SET payload=excluded.payload,sha=excluded.sha",
@@ -176,12 +161,6 @@ class History(BASE_HISTORY):
 
     def delete(self, key: Any) -> Any:
         if key.startswith(STATE_PREFIXES):
-            batch = getattr(self.store, "_writer_batch", None)
-            if batch is not None and batch.grouped and not batch.flushing:
-                from .writer_memory import DELETE
-
-                batch.domain("state", key, DELETE)
-                return
             self.store.db.execute("DELETE FROM domain_state WHERE key=?", (key,))
             # Direct mutable rows never own legacy body/expiry indexes. Delete
             # those only when a real legacy row is present (including cutover).
@@ -189,24 +168,6 @@ class History(BASE_HISTORY):
                 super().delete(key)
         else:
             super().delete(key)
-
-    def flush_domain(self, pending: Any) -> None:
-        """Flush bounded, already encoded mutable state without per-row wrappers."""
-        states = [(key, raw) for (kind, key), raw in pending.items() if kind == "state"]
-        for key, _ in states:
-            if self.store.get_runtime(PREFIX + key) is not None:
-                repository.OriginalHistory.delete(self, key)
-        self.store.db.executemany(
-            "INSERT INTO domain_state VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload,sha=excluded.sha",
-            [(key, raw, digest(raw)) for key, raw in states if raw is not None],
-        )
-        self.store.db.executemany(
-            "DELETE FROM domain_state WHERE key=?", [(key,) for key, raw in states if raw is None]
-        )
-        self.store.db.executemany(
-            "INSERT INTO domain_conditions VALUES(?,?,?) ON CONFLICT(stream) DO UPDATE SET payload=excluded.payload,sha=excluded.sha",
-            [(key, raw, digest(raw)) for (kind, key), raw in pending.items() if kind == "conditions"],
-        )
 
     def items(self, prefix: Any, limit: Any = None, *, reverse: Any = False) -> Any:
         batch = getattr(self.store, "_writer_batch", None)
@@ -269,7 +230,51 @@ class History(BASE_HISTORY):
             raise StateError("Conflicting domain episode identity")
         return value
 
+    def apply_mutations(self, publication: Any, changes: Any, groups: Any) -> None:
+        from .domain_publication import Publication
+
+        if not isinstance(publication, Publication) or publication.history is not self:
+            raise StateError("Invalid explicit mutation owner")
+        publication.check()
+        if len(changes) + len(groups) > 128:
+            raise StateError("Finite publication mutation budget exceeded")
+        states, deletes = [], []
+        size = 0
+        for key, (operation, value) in changes.items():
+            if not key.startswith(STATE_PREFIXES) or operation not in ("put", "delete"):
+                raise StateError("Unprepared publication mutation")
+            raw = None if operation == "delete" else encode(value)
+            size += len(key.encode()) + (0 if raw is None else len(raw.encode()))
+            if size > 1024**2:
+                raise StateError("Finite publication byte budget exceeded")
+            if self.store.get_runtime(PREFIX + key) is not None:
+                repository.OriginalHistory.delete(self, key)
+            if raw is None:
+                deletes.append((key,))
+            else:
+                states.append((key, raw, digest(raw)))
+        if states:
+            self.store.db.executemany(
+                "INSERT INTO domain_state VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload,sha=excluded.sha",
+                states,
+            )
+        if deletes:
+            self.store.db.executemany("DELETE FROM domain_state WHERE key=?", deletes)
+        for stream, value in groups.items():
+            self.conditions(stream, value)
+
     def version(self, kind: Any, value: Any) -> Any:
+        return self._version(kind, value)
+
+    def publish_prepared(self, publication: Any, kind: Any, value: Any) -> Any:
+        from .domain_publication import Publication
+
+        if not isinstance(publication, Publication) or publication.history is not self:
+            raise StateError("Invalid explicit publication owner")
+        publication.check()
+        return self._version(kind, value, joined=True)
+
+    def _version(self, kind: Any, value: Any, *, joined: bool = False) -> Any:
         if kind not in ("event", "episode"):
             return super().version(kind, value)
         identity, revision = value.get(kind + "_id"), value.get("revision")
@@ -293,7 +298,7 @@ class History(BASE_HISTORY):
             return repository.LegacyHistory(self.store).version(kind, value)
         from .packet_store import atomic
 
-        with atomic(self.store.db):
+        with nullcontext() if joined else atomic(self.store.db):
             self._publish(kind, identity, revision, value, checked_head)
 
     def _publish(self, kind: Any, identity: Any, revision: Any, value: Any, checked_head: Any) -> Any:

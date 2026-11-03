@@ -160,7 +160,7 @@ synthetic work удаляется после сохранения proof. Product
 также требует эту qualification для code changes. Нет CD/manual full-main запуска.
 Isolated native PASS не заменяет shared-VPS resource/backup/capacity и30min/24h.
 
-### Разовое сравнение групповой публикации
+### Разовое сравнение пути публикации
 
 По явному поручению владельца workflow `full-validation.yml` поддерживает режим
 `group-publication` на ветке PR94. `revision` — exact SHA кандидата; baseline
@@ -169,6 +169,8 @@ Isolated native PASS не заменяет shared-VPS resource/backup/capacity �
 Общий бюджет пары —1CPU/4GiB/450CPU-s/510wall/600outer; исходные assertions остаются.
 `COMPARISON_COMPLETE` означает полноту сравнения, а не приёмочный PASS: `pair.json`
 сохраняет failures обеих версий, exact input/oracle identity, CPU/RAM/I/O и cleanup.
+Для текущего кандидата дополнительно требуется runtime evidence explicit publication;
+прежний baseline до group buffer сохраняется для сопоставления.
 Профиль не запускается из PR автоматически и не выполняет merge или deployment.
 
 ### Полная регрессия exact main без поставки
