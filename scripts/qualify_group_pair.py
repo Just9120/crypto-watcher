@@ -17,7 +17,7 @@ from scripts import cpu_pair_budget as b
 from scripts import qualify_cpu_pair as pair
 from scripts import qualify_processing as q
 
-BASELINE = "04a894c95ff186c2983387eb74a93219670b17b0"
+BASELINE = "19e0051b3ed009c90d6badd93a75b14a6d097e6a"
 
 
 def admission(samples, free, *, cpu_limit):

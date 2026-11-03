@@ -105,7 +105,7 @@ def test_manual_profile_cannot_deploy_or_replace_required_pr_workflow():
     assert workflow["on"]["workflow_dispatch"]["inputs"]["mode"]["default"] == "full-main"
     group = workflow["jobs"]["group-publication"]
     assert "github.run_attempt == 1" in group["if"]
-    assert "codex/interface-acceptance-20261030" in group["if"]
+    assert "codex/processing-research-20261104" in group["if"]
     assert "secrets." not in text and "environment:" not in text
     assert "600s" in text and "qualify_group_pair run" in text
     assert (root / "scripts/qualify_group_pair.py").read_text().count("pair.one(") == 1
@@ -144,3 +144,18 @@ def test_both_images_use_the_reviewed_observation_overlay_and_keep_frozen_assert
                 assert (root / source).is_file()
                 assert "!" + source in allowed
                 assert "!" + source.split("/")[0] + "/" in allowed
+
+
+def test_profile_only_runs_on_research_branch_and_never_accepts_changed_application():
+    root = Path(__file__).resolve().parents[1]
+    workflow = yaml.load((root / ".github/workflows/full-validation.yml").read_text(), Loader=yaml.BaseLoader)
+    job = workflow["jobs"]["research-profile"]
+    assert "codex/processing-research-20261104" in job["if"]
+    assert "github.run_attempt == 1" in job["if"]
+    source = next(
+        step["run"] for step in job["steps"] if step.get("name", "").startswith("Verify diagnostic")
+    )
+    assert "'--','cryptowatcher/'" in source
+    measured = next(step["run"] for step in job["steps"] if step.get("name", "").startswith("One bounded"))
+    assert "--profile" in measured and "600s" in measured
+    assert workflow["permissions"] == {"contents": "read"}

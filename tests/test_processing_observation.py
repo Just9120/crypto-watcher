@@ -69,3 +69,18 @@ async def test_clean_replay_proves_unmodified_consumers_and_exact_persisted_orac
     assert pool["global_difference"]["missing_count"] == pool["global_difference"]["extra_count"] == 0
     assert result["signed_agent_receipts"] > 0 and result["telegram_attempts"] > 0
     assert not any(queue["pending_total"] for queue in result["delivery_queues_at_endpoint"].values())
+
+
+def test_experimental_evidence_does_not_invent_a_producer_count(tmp_path):
+    from cryptowatcher.events import EventEngine
+
+    with closing(opened(tmp_path / "legacy.sqlite3", False)) as store:
+        engine = EventEngine(store)
+        observer = Observation(engine, runtime_counter=False)
+        engine.observe("spot/BTCUSDT/1m", window(), 1e6, 0.01, NOW, live=True)
+        events, proof = observer.collect(engine.history)
+        assert events
+        assert engine.writer_stats["facts"] == 0
+        assert proof["producer_facts"] is None
+        assert proof["fact_count_source"] == "INDEPENDENT_ORACLE_REQUIRED"
+        assert proof["events_read"] == len(events)
