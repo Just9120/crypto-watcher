@@ -57,6 +57,12 @@ def instrument_key(raw: str, default_market: str = "spot") -> str:
     return f"{market}/{normalize_pair(symbol)}"
 
 
+def _immutable_setting(value: Any) -> bool:
+    if type(value) in (str, int, float, bool, type(None)):
+        return True
+    return type(value) is tuple and all(_immutable_setting(item) for item in value)
+
+
 @dataclass(frozen=True)
 class OwnerSettings:
     bybit_category: str = "spot"
@@ -158,7 +164,12 @@ class OwnerSettings:
         return self.watchlist or tuple(instrument_key(x, self.bybit_category) for x in self.custom_pairs)
 
     def payload(self) -> dict[str, Any]:
-        return asdict(self)
+        # Exact scalars/tuples cannot be mutated through the returned fresh dict.
+        # Nonstandard subclasses or mutable values retain the original deep copy.
+        if type(self) is not OwnerSettings:
+            return asdict(self)
+        values = {key: getattr(self, key) for key in self.__dataclass_fields__}
+        return values if all(_immutable_setting(value) for value in values.values()) else asdict(self)
 
     @classmethod
     def from_payload(cls, values: Mapping[str, Any]) -> OwnerSettings:

@@ -5,3 +5,7 @@
 !scripts/
 !scripts/qualify_processing.py
 !scripts/qualify_framed_backup.py
+!pyproject.toml
+!.github/
+!.github/workflows/
+!.github/workflows/ci.yml

@@ -6,7 +6,8 @@ import re
 import time
 from typing import Any
 
-from .expiry_index import member_deadline, paired_expiries
+from .expiry_index import expires as saved_expiry
+from .expiry_index import member_deadline
 from .expiry_index import put as put_expiry
 from .expiry_index import remove as remove_expiry
 from .expiry_index import renew as renew_expiry
@@ -138,9 +139,7 @@ def track(store: Store, key: str, value: Any) -> None:
     now = store.clock_ms()
     event_id = parent_event(store, value, name)
     days = store.snapshot().settings.detail_retention_days
-    parent_key = PREFIX + "event-head:" + (event_id or "")
-    hot, leases, canonical = paired_expiries(store, (key, parent_key) if parent_key else (key,))
-    previous = leases[key]
+    previous = saved_expiry(store.db, key)
     expiry = previous[0] if previous else now + days * DAY
     if isinstance(value, dict):
         anchor = value.get(
@@ -150,7 +149,7 @@ def track(store: Store, key: str, value: Any) -> None:
         if type(anchor) is int:
             expiry = anchor + days * DAY
     if event_id:
-        parent = leases[parent_key]
+        parent = saved_expiry(store.db, PREFIX + "event-head:" + event_id)
         from .catalogue_lifecycle import parent_expiry
 
         cold_parent = parent_expiry(store.db, event_id)
@@ -168,8 +167,7 @@ def track(store: Store, key: str, value: Any) -> None:
         expiry = now + days * DAY
     elif category in ("condition", "diagnostic", "oi-attempt"):
         expiry = now + store.snapshot().settings.candle_retention_days * DAY
-    if key not in canonical or hot[key] != (expiry, category, event_id):
-        put_expiry(store.db, key, expiry, category, event_id)
+    put_expiry(store.db, key, expiry, category, event_id)
     if (
         isinstance(value, dict)
         and value.get("state") in TERMINAL_DELIVERY | {"COMPLETE", "EXPIRED_RETENTION_INCOMPLETE"}

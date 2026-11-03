@@ -182,3 +182,28 @@ def test_native_prechecks_have_writable_temporary_files_with_readonly_applicatio
     assert "--basetemp /work/pytest" in command
     assert "-o asyncio_mode=auto" in command
     assert "-o asyncio_default_fixture_loop_scope=function" in command
+
+
+def test_full_native_prechecks_have_the_repository_configuration_in_the_image():
+    root = Path(__file__).resolve().parents[1]
+    recipe = (root / "tests/processing.Dockerfile").read_text()
+    allowed = set((root / "tests/processing.Dockerfile.dockerignore").read_text().splitlines())
+    for source, destination in (
+        ("pyproject.toml", "/app/pyproject.toml"),
+        (".github/workflows/ci.yml", "/app/.github/workflows/ci.yml"),
+    ):
+        assert f"COPY {source} {destination}" in recipe
+        assert "!" + source in allowed
+    workflow = yaml.load((root / ".github/workflows/full-validation.yml").read_text(), Loader=yaml.BaseLoader)
+    command = next(
+        step["run"]
+        for step in workflow["jobs"]["group-publication"]["steps"]
+        if step.get("name", "").startswith("Focused native retention")
+    )
+    for path in (
+        "test_bounded_pool.py",
+        "test_domain_writer.py",
+        "test_hot_agent.py",
+        "test_publication_unit.py",
+    ):
+        assert " tests/" + path + " " in command
