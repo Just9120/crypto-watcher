@@ -2,6 +2,7 @@
 
 import sqlite3
 from contextlib import closing
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -138,3 +139,185 @@ def test_unselected_result_is_not_a_pending_calculation_or_zero(tmp_path, state)
         assert "не назначены" in shown and "не входит в N" in shown
         assert "ожидается срок" not in shown and "0%" not in shown
         assert summary(store)["admitted_total"] == 0
+
+
+def fixture_meter(store):
+    with store.db:
+        store.db.execute("CREATE TABLE meter_fixture(id INTEGER PRIMARY KEY,payload BLOB,refs INTEGER)")
+    install_meter(store, "direct", {"meter_fixture": "direct_shared"})
+
+
+def fixture_counts(store):
+    return tuple(
+        store.db.execute(
+            "SELECT records,logical_bytes,inserted_bytes,deleted_bytes FROM market_counts WHERE category='direct_shared'"
+        ).fetchone()
+    )
+
+
+def logical_row(row):
+    return sum(
+        0
+        if value is None
+        else 8
+        if isinstance(value, (int, float))
+        else len(value.encode("utf-8"))
+        if isinstance(value, str)
+        else len(value)
+        for value in row
+    )
+
+
+@pytest.mark.parametrize("writer", [False, True])
+def test_exact_bytes_and_net_flow_across_sqlite_types_rollback_and_reopen(tmp_path, writer):
+    path = tmp_path / "exact.sqlite3"
+    with closing(opened(path, writer)) as store:
+        fixture_meter(store)
+        inserted, deleted = 0, 0
+        actions = [
+            ("INSERT INTO meter_fixture VALUES(1,?,?)", ("Привет\x00😀", 1)),
+            ("INSERT INTO meter_fixture VALUES(2,?,?)", (b"a" * 65536, None)),
+            ("UPDATE meter_fixture SET refs=? WHERE id=1", (2,)),
+            ("UPDATE meter_fixture SET payload=?,refs=? WHERE id=1", ("12345678", "12345678")),
+            ("UPDATE meter_fixture SET payload=?,refs=? WHERE id=1", (12345678, 1.5)),
+            ("UPDATE meter_fixture SET payload=?,refs=? WHERE id=1", (None, "abcdefghijklmnop")),
+            ("UPDATE meter_fixture SET payload=?,refs=? WHERE id=1", (b"x" * 70000, -9)),
+            ("UPDATE meter_fixture SET payload=?,refs=? WHERE id=1", (float("inf"), 2)),
+            ("DELETE FROM meter_fixture WHERE id=2", ()),
+        ]
+        for sql, parameters in actions:
+            old = sum(logical_row(r) for r in store.db.execute("SELECT * FROM meter_fixture"))
+            with store.db:
+                store.db.execute(sql, parameters)
+            rows = list(store.db.execute("SELECT * FROM meter_fixture"))
+            current = sum(logical_row(r) for r in rows)
+            inserted += max(0, current - old)
+            deleted += max(0, old - current)
+            assert fixture_counts(store) == (len(rows), current, inserted, deleted)
+        before = list(store.db.iterdump())
+        with pytest.raises(RuntimeError), store.db:
+            store.db.execute("UPDATE meter_fixture SET payload=?", (b"rollback",))
+            raise RuntimeError("abort")
+        assert list(store.db.iterdump()) == before
+        expected = fixture_counts(store)
+    with closing(opened(path, writer)) as store:
+        install_meter(store, "direct", {"meter_fixture": "direct_shared"})
+        assert fixture_counts(store) == expected
+        assert store.db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+def test_unchanged_large_blob_is_not_remeasured_and_changed_bytes_are_measured_once(tmp_path):
+    with closing(opened(tmp_path / "measure.sqlite3", True)) as store:
+        fixture_meter(store)
+        measured = []
+
+        def length(value):
+            measured.append(len(value))
+            return len(value)
+
+        store.db.create_function("length", 1, length)
+        with store.db:
+            store.db.execute("INSERT INTO meter_fixture VALUES(1,?,1)", (b"a" * 65536,))
+        assert measured == [65536]
+        measured.clear()
+        with store.db:
+            store.db.execute("UPDATE meter_fixture SET refs=refs+1 WHERE id=1")
+        assert measured == []
+        with store.db:
+            store.db.execute("UPDATE meter_fixture SET payload=? WHERE id=1", (b"b" * 70000,))
+        assert sorted(measured) == [65536, 70000]
+        measured.clear()
+        with store.db:
+            store.db.execute("DELETE FROM meter_fixture WHERE id=1")
+        assert measured == [70000]
+
+
+def frozen_v1(store):
+    for operation in ("insert", "delete", "update"):
+        store.db.execute("DROP TRIGGER cw_meter_meter_fixture_" + operation)
+    store.db.execute("DELETE FROM market_meta WHERE key='direct_flow_meter_triggers'")
+    store.db.commit()
+    store.db.executescript((Path(__file__).parent / "fixtures" / "repository_meter_v1.sql").read_text())
+
+
+def test_frozen_v1_trigger_upgrade_preserves_existing_epoch_private_state_and_counters(tmp_path):
+    path = tmp_path / "upgrade.sqlite3"
+    with closing(opened(path, True)) as store:
+        fixture_meter(store)
+        frozen_v1(store)
+        with store.db:
+            store.db.executemany(
+                "INSERT INTO meter_fixture VALUES(?,?,?)", [(i, "сохранить", i) for i in range(600)]
+            )
+        private = store.snapshot()
+        counts = fixture_counts(store)
+        # An existing v1 population exceeds the fresh-install512-row limit.
+        # Trigger-only upgrade must neither scan/reseed nor reject this history.
+        install_meter(store, "direct", {"meter_fixture": "direct_shared"})
+        assert store.snapshot() == private
+        assert fixture_counts(store) == counts
+        assert (
+            store.db.execute("SELECT value FROM market_meta WHERE key='direct_flow_meter'").fetchone()[0]
+            == "1"
+        )
+        assert (
+            store.db.execute(
+                "SELECT value FROM market_meta WHERE key='direct_flow_meter_triggers'"
+            ).fetchone()[0]
+            == "2"
+        )
+        with store.db:
+            store.db.execute("UPDATE meter_fixture SET payload=? WHERE id=1", (b"x",))
+        expected = fixture_counts(store)
+    with closing(opened(path, True)) as store:
+        install_meter(store, "direct", {"meter_fixture": "direct_shared"})
+        assert fixture_counts(store) == expected
+        assert store.snapshot() == private
+        assert store.db.execute("SELECT COUNT(*) FROM meter_fixture").fetchone()[0] == 600
+
+
+@pytest.mark.parametrize("damage", ["counter", "trigger", "definition", "epoch"])
+def test_unknown_upgrade_state_fails_closed_without_replacing_triggers_or_data(tmp_path, damage):
+    with closing(opened(tmp_path / "damaged.sqlite3", True)) as store:
+        fixture_meter(store)
+        frozen_v1(store)
+        with store.db:
+            store.db.execute("INSERT INTO meter_fixture VALUES(1,'preserve',1)")
+            if damage == "counter":
+                store.db.execute("DELETE FROM market_counts WHERE category='direct_shared'")
+            elif damage in ("trigger", "definition"):
+                store.db.execute("DROP TRIGGER cw_meter_meter_fixture_update")
+                if damage == "definition":
+                    store.db.execute(
+                        "CREATE TRIGGER cw_meter_meter_fixture_update AFTER UPDATE ON meter_fixture BEGIN SELECT 1; END"
+                    )
+            else:
+                store.db.execute("INSERT INTO market_meta VALUES('direct_flow_meter_triggers','999')")
+        before = list(store.db.iterdump())
+        with pytest.raises(StateError, match="preserved"):
+            install_meter(store, "direct", {"meter_fixture": "direct_shared"})
+        assert list(store.db.iterdump()) == before
+
+
+def test_upgrade_ddl_failure_restores_all_old_triggers_and_meter_epoch(tmp_path):
+    with closing(opened(tmp_path / "ddl-rollback.sqlite3", True)) as store:
+        fixture_meter(store)
+        frozen_v1(store)
+        with store.db:
+            store.db.execute("INSERT INTO meter_fixture VALUES(1,'keep',1)")
+        before = list(store.db.iterdump())
+
+        def authorizer(operation, name, *rest):
+            if operation == sqlite3.SQLITE_CREATE_TRIGGER and name.endswith("_update"):
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+
+        store.db.set_authorizer(authorizer)
+        try:
+            with pytest.raises(sqlite3.DatabaseError):
+                install_meter(store, "direct", {"meter_fixture": "direct_shared"})
+        finally:
+            store.db.set_authorizer(None)
+        assert list(store.db.iterdump()) == before
+        install_meter(store, "direct", {"meter_fixture": "direct_shared"})
+        assert fixture_counts(store) == (1, 20, 20, 0)
