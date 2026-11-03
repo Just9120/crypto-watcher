@@ -137,3 +137,10 @@ def test_both_images_use_the_reviewed_observation_overlay_and_keep_frozen_assert
     overlay = (root / "tests/group_publication.Dockerfile").read_text()
     assert "COPY tests/processing_replay.py tests/processing_observation.py /app/tests/" in overlay
     assert "cryptowatcher/" not in overlay
+    allowed = set((root / "tests/group_publication.Dockerfile.dockerignore").read_text().splitlines())
+    for line in overlay.splitlines():
+        if line.startswith("COPY "):
+            for source in line.split()[1:-1]:
+                assert (root / source).is_file()
+                assert "!" + source in allowed
+                assert "!" + source.split("/")[0] + "/" in allowed
