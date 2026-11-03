@@ -1,0 +1,7 @@
+**
+!requirements-dev.txt
+!tests/
+!tests/**
+!scripts/
+!scripts/qualify_processing.py
+!scripts/qualify_framed_backup.py

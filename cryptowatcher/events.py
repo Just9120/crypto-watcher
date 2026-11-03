@@ -7,8 +7,7 @@ import json
 import math
 import re
 import uuid
-from contextlib import nullcontext
-from dataclasses import asdict
+from contextlib import AbstractContextManager, nullcontext
 from itertools import islice
 from typing import Any, Callable, Iterator
 
@@ -77,6 +76,16 @@ def event_identity(stream: str, family: str, version: str, settings_revision: in
 
 
 class History:
+    def __new__(cls, store: Store) -> Any:
+        if cls is History and store.bounded:
+            from .revision_repository import installed
+
+            if installed(store):
+                from .domain_repository import History as DomainHistory
+
+                return object.__new__(DomainHistory)
+        return object.__new__(cls)
+
     def __init__(self, store: Store) -> None:
         self.store = store
         self.codec = Codec(store.db, binary_cache=store.cached_bytes)
@@ -107,7 +116,12 @@ class History:
         return self._resolve_with_head(key, value, omit_fields=omit_fields)[0]
 
     def _resolve_with_head(
-        self, key: str, value: Any, *, omit_fields: frozenset[str] = frozenset()
+        self,
+        key: str,
+        value: Any,
+        *,
+        omit_fields: frozenset[str] = frozenset(),
+        projection: frozenset[str] | None = None,
     ) -> tuple[Any, bool]:
         """Return whether this call fully checked a compact head and its record."""
         if isinstance(value, dict) and DECISION_HEAD in value:
@@ -127,7 +141,12 @@ class History:
                 or DECISION_HEAD in value
             ):
                 raise StateError("Missing or conflicting decision revision")
-        value = self.codec.unpack(value, omit_fields=omit_fields)
+        compact = isinstance(value, dict) and value.get("schema") == HEAD_SCHEMA
+        value = (
+            self.codec.project(value, projection | {"schema"})
+            if projection is not None and not compact
+            else self.codec.unpack(value, omit_fields=omit_fields)
+        )
         if self.store.bounded:
             value = self._expand_services(value)
         if not isinstance(value, dict) or value.get("schema") != HEAD_SCHEMA:
@@ -143,8 +162,11 @@ class History:
             or value.get("revision_key") != f"{kind}:{record_id}:{revision:010d}"
         ):
             raise StateError("Invalid history head reference")
-        record = self.codec.unpack(
-            self.store.get_runtime(PREFIX + value["revision_key"]), omit_fields=omit_fields
+        raw_record = self.store.get_runtime(PREFIX + value["revision_key"])
+        record = (
+            self.codec.project(raw_record, projection | {"schema"})
+            if projection is not None
+            else self.codec.unpack(raw_record, omit_fields=omit_fields)
         )
         if (
             not isinstance(record, dict)
@@ -156,6 +178,15 @@ class History:
         ):
             raise StateError("Missing or conflicting history head revision")
         return record, True
+
+    def episode_clock(self, key: str) -> Any:
+        """Fresh, identity-checked episode lifecycle projection, never a public body."""
+        fields = frozenset(HEAD_FIELDS["episode"]) | {
+            "origin_event_id",
+            "reference_price",
+            "reference_time_ms",
+        }
+        return self._resolve_with_head(key, self.store.get_runtime(PREFIX + key), projection=fields)[0]
 
     @staticmethod
     def _head(
@@ -176,6 +207,32 @@ class History:
                     and field in ("metrics", "classification", "noise_threshold_pct")
                 )
             },
+        }
+
+    @staticmethod
+    def revision_reference(kind: str, value: dict[str, Any]) -> dict[str, str]:
+        """Reference an already loaded or just-published immutable snapshot.
+
+        No lookup/existence proof is cached. Every expansion still reads the
+        actual revision and checks its full canonical digest. Legacy episodes
+        have no schema field; their immutable revision identity remains valid.
+        """
+        identity, revision = value.get(f"{kind}_id"), value.get("revision")
+        if (
+            kind not in HEAD_FIELDS
+            or not isinstance(identity, str)
+            or re.fullmatch(r"[a-zA-Z0-9-]+", identity) is None
+            or type(revision) is not int
+            or not 1 <= revision <= 9_999_999_999
+            or value.get("schema")
+            not in (
+                (None, "cryptowatcher.episode.v1") if kind == "episode" else (f"cryptowatcher.{kind}.v1",)
+            )
+        ):
+            raise StateError("Invalid immutable snapshot reference")
+        return {
+            "_cw_revision": f"{kind}:{identity}:{revision:010d}",
+            "sha256": hashlib.sha256(encode(value).encode()).hexdigest(),
         }
 
     def _freeze_services(self, value: Any, depth: int = 0) -> Any:
@@ -346,7 +403,11 @@ class History:
         existing = self.get(version_key)
         if existing is not None and encode(existing) != encode(value):
             raise StateError("Conflicting immutable history revision")
-        head = self.metadata(f"{kind}-head:{key}")
+        head = (
+            self.episode_clock(f"episode-head:{key}")
+            if kind == "episode"
+            else self.metadata(f"{kind}-head:{key}")
+        )
         if (
             kind == "event"
             and head
@@ -354,9 +415,8 @@ class History:
         ):
             raise StateError("Event outcome reference is immutable")
         if kind == "episode" and head:
-            previous_episode = self.get(f"episode-head:{key}")
             if any(
-                field in previous_episode and value.get(field) != previous_episode[field]
+                field in head and value.get(field) != head[field]
                 for field in ("origin_event_id", "reference_price", "reference_time_ms")
             ):
                 raise StateError("Episode outcome reference is immutable")
@@ -440,16 +500,44 @@ class EventEngine:
         *,
         source_revision: str = "UNSET",
         on_event: Callable[[dict[str, Any]], None] | None = None,
+        on_event_snapshot: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
         on_episode: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         if not re.fullmatch(r"[0-9a-f]{40}|UNSET", source_revision):
             raise ValueError("Invalid detector source revision")
         self.store = store
+        self.writer_stats: dict[str, Any] = {
+            "mode": "runtime-domain-v1",
+            "publication_mode": "explicit-subject-v1",
+            "publication_units": 0,
+            "observations": 0,
+            "pure_transitions": 0,
+            "facts": 0,
+            "episode_revisions": 0,
+            "condition_groups": 0,
+            "failed": 0,
+            "max_prepared_keys": 0,
+            "mutable_buffered": 0,
+            "mutable_flushed": 0,
+            "condition_read_reuse": 0,
+            "cpu_seconds": {
+                "prepare": 0.0,
+                "transition": 0.0,
+                "apply_excluding_consumer": 0.0,
+                "consumer": 0.0,
+            },
+        }
         self.history = History(store)
         self.detector = detector
         self.source_revision = source_revision
         self.on_event = on_event
+        # Only the explicitly paired independent consumer may use the already
+        # published snapshot. Replacing the public callback restores the normal
+        # condition flush/reload boundary for arbitrary/reentrant callbacks.
+        self._snapshot_event_callback = on_event
+        self.on_event_snapshot = on_event_snapshot
         self.on_episode = on_episode
+        self._publication_consumers: tuple[Any, ...] = ()
         with store.db:
             for family in FAMILIES:
                 key = f"detector-metadata:{family}:{VERSIONS[family]}"
@@ -486,7 +574,8 @@ class EventEngine:
         passive = namespace != "active"
         prefix = namespace + ":" + (f"{instrument}/" if instrument is not None else "")
         for key, binding in self.history.items(prefix):
-            episode = self.history.get("episode-head:" + binding["episode_id"])
+            episode_key = "episode-head:" + binding["episode_id"]
+            episode = self.history.episode_clock(episode_key)
             if passive:
                 # Historical market time can lag wall time by hours. Replays
                 # advance that clock; wall time bounds stalled/restarted work.
@@ -505,6 +594,10 @@ class EventEngine:
                 )
             if not (max_life or inactive):
                 continue
+            # Materialize confirmations only when this episode is actually due.
+            # Both reads share the writer snapshot; callbacks still receive the
+            # complete immutable closure and observe prior condition writes.
+            episode = self.history.get(episode_key)
             episode.update(
                 state="CLOSED", closed_ms=now_ms, close_reason="max_lifetime" if max_life else "inactivity"
             )
@@ -517,11 +610,30 @@ class EventEngine:
             self.history.delete(key)
             if passive:
                 continue  # Historical closure never blocks live re-arm.
+            # A closure updates a stream as one state unit, not one complete
+            # migration/CAS/flush cycle per detector condition.
+            by_stream: dict[str, list[str]] = {}
             for condition in episode["conditions"]:
-                runtime = self.history.get(condition, {})
-                if runtime.get("non_signal_bars", 0) < 2:
-                    runtime["blocked"] = True
-                    self.history.put(condition, runtime)
+                by_stream.setdefault(condition.split(":")[1], []).append(condition)
+            for stream, conditions in by_stream.items():
+                current = self.history._condition_batch
+                boundary: AbstractContextManager[None]
+                if current is not None and current.stream == stream:
+                    boundary = nullcontext()
+                else:
+                    boundary = exposed_conditions(self.history)
+                with boundary:
+                    group = (
+                        nullcontext()
+                        if current is not None and current.stream == stream
+                        else condition_batch(self.history, stream)
+                    )
+                    with group:
+                        for condition in conditions:
+                            runtime = self.history.get(condition, {})
+                            if runtime.get("non_signal_bars", 0) < 2:
+                                runtime["blocked"] = True
+                                self.history.put(condition, runtime)
 
     def tick(self, now_ms: int) -> None:
         with self.store.db:
@@ -530,6 +642,57 @@ class EventEngine:
             self._close_due(now_ms, namespace="suppressed-active")
 
     def observe(
+        self,
+        stream: str,
+        candles: list[Candle],
+        liquidity: float,
+        tick_size: float,
+        now_ms: int,
+        *,
+        live: bool,
+        source_context: dict[str, Any] | None = None,
+        enrichment: dict[str, Any] | None = None,
+        context_provider: Callable[[], tuple[dict[str, Any], dict[str, Any]]] | None = None,
+        commit: bool = True,
+    ) -> None:
+        if type(commit) is not bool or not commit and not self.store.db.in_transaction:
+            raise StateError("Joined observation requires a producer transaction")
+        if context_provider is not None and (source_context is not None or enrichment is not None):
+            raise ValueError("Choose captured context or a synchronous context provider")
+        from .domain_repository import History as DomainHistory
+
+        if isinstance(self.history, DomainHistory):
+            from .domain_transition import observe
+
+            observe(
+                self,
+                stream,
+                candles,
+                liquidity,
+                tick_size,
+                now_ms,
+                transition=EventEngine._observe_legacy,
+                live=live,
+                source_context=source_context,
+                enrichment=enrichment,
+                context_provider=context_provider,
+                commit=commit,
+            )
+            return
+        self._observe_legacy(
+            stream,
+            candles,
+            liquidity,
+            tick_size,
+            now_ms,
+            live=live,
+            source_context=source_context,
+            enrichment=enrichment,
+            context_provider=context_provider,
+            commit=commit,
+        )
+
+    def _observe_legacy(
         self,
         stream: str,
         candles: list[Candle],
@@ -557,6 +720,7 @@ class EventEngine:
             return
         market, symbol, tf = stream.split("/")
         instrument = f"{market}/{symbol}"
+        frame_inputs: dict[int, tuple[list[dict[str, Any]], str]] = {}
         outputs: list[tuple[str, Detection | Exception]] = []
         for family in snapshot.settings.active_detectors:
             try:
@@ -783,6 +947,15 @@ class EventEngine:
                             ) :
                         ]
                     )
+                    if len(inputs) not in frame_inputs:
+                        prepared = [
+                            {name: getattr(c, name) for name in Candle.__dataclass_fields__} for c in inputs
+                        ]
+                        frame_inputs[len(inputs)] = (
+                            prepared,
+                            hashlib.sha256(encode(prepared).encode()).hexdigest(),
+                        )
+                    prepared, source_window_id = frame_inputs[len(inputs)]
                     event = {
                         "schema": "cryptowatcher.event.v1",
                         "event_id": event_id,
@@ -818,10 +991,10 @@ class EventEngine:
                         "tick_size": tick_size,
                         "reference_atr14": atr,
                         "continuation_threshold_pct": noise,
-                        "source_window_id": hashlib.sha256(
-                            encode([asdict(c) for c in inputs]).encode()
-                        ).hexdigest(),
-                        "source_inputs": [asdict(c) for c in inputs],
+                        "source_window_id": source_window_id,
+                        # Each event owns mutable public dictionaries; a replaced
+                        # callback cannot corrupt another family's frozen input.
+                        "source_inputs": [dict(c) for c in prepared],
                         "source_context": source_context or {"ticker": None, "instrument": None},
                         "enrichment": enrichment or {"state": "UNAVAILABLE", "detector_input": False},
                         "producer_source_revision": self.source_revision,
@@ -864,10 +1037,17 @@ class EventEngine:
                         )
                     self.history.version("episode", episode)
                     if self.on_event is not None:
-                        with exposed_conditions(self.history):
-                            self.on_event(
-                                event
-                            )  # Source, episode and all consumer intents share the transaction.
+                        if (
+                            self.on_event is self._snapshot_event_callback
+                            and self.on_event_snapshot is not None
+                        ):
+                            # Contract: independent intents only; this consumer
+                            # neither reads nor changes producer condition state.
+                            self.on_event_snapshot(event, episode)
+                        else:
+                            with exposed_conditions(self.history):
+                                self.on_event(event)
+                        # Source, episode and consumer intents share this tx.
 
     def _notify(self, episode: dict[str, Any], event: dict[str, Any], now_ms: int) -> None:
         previous = episode["last_notified"]

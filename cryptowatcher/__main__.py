@@ -336,7 +336,7 @@ def main() -> int:
         from .ingestion import BybitRadar
 
         with RuntimeLease(infrastructure.database):
-            store = Store(infrastructure.database, infrastructure.owner_id)
+            store = Store(infrastructure.database, infrastructure.owner_id, writer_connection=True)
             try:
                 store.initialize(infrastructure.defaults, legacy=infrastructure.legacy_state)
                 controller = Controller(infrastructure, store, BybitRadar(store))

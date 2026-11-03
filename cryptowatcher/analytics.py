@@ -787,6 +787,7 @@ def _cohorts(store: Store, groups: tuple[str, ...], *, cutoff_ms: int | None, li
             "Detector/TF/settings groups may overlap; their N are not additive",
             "Legacy event samples and cross-event comparator overlap may correlate samples",
             "Small N and incomplete prior source history constrain interpretation",
+            "When bounded selection is enabled, outcome N describes selected episodes, not an unbiased whole-market sample",
         ],
         "cutoff_ms": cutoff_ms,
         "history_period": store.get_runtime("history_generation", {"state": "LEGACY"}),

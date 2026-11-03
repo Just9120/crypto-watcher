@@ -72,6 +72,7 @@ class ControlDeck:
     async def show_event(
         self, update: Update, event_id: str, token: str = "", *, result: bool = False
     ) -> None:
+        from .analytics_pool import selection_status
         from .outcomes import episode_results
         from .render import event_keyboard, event_text, outcome_text
 
@@ -93,7 +94,7 @@ class ControlDeck:
         if result:
             origin, horizons, outcomes = episode_results(self.c.history, event)
             body = (
-                outcome_text(origin, outcomes, horizons)
+                outcome_text(origin, outcomes, horizons, selection=selection_status(self.c.store, event))
                 if origin is not None
                 else "Исходные подробности episode уже недоступны в сроке хранения."
             )
@@ -378,6 +379,10 @@ class ControlDeck:
         lines.append(
             f"Неполных результатов: {data['incomplete_outcomes']}. Каждый срок оценивается отдельно. События могут быть зависимы; малое N ограничивает выводы. Это не доходность стратегии."
         )
+        if self.c.analytics_pool is not None:
+            lines.append(
+                "Подробные outcomes относятся к автоматически отобранным эпизодам; N не представляет весь рынок без смещения отбора."
+            )
         if data["truncated"]:
             lines.append("Снимок ограничен первыми 20 группами. Полная выборка доступна через CLI export.")
         controls = []

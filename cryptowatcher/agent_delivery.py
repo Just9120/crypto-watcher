@@ -8,9 +8,10 @@ import hmac
 import json
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 from urllib.parse import urlsplit
 
 import httpx
@@ -77,6 +78,11 @@ class AgentDelivery:
         self.client = client
         self.config = config or AgentConfig.from_env()
         self.lock = asyncio.Lock()
+        from .agent_ready import Ready
+
+        self.ready = Ready(self.history)
+        self._progress = 0
+        self.failure_count = 0
 
     def enabled(self) -> bool:
         preference = self.history.get("agent:preference", {"schema": 1, "enabled": False})
@@ -125,18 +131,43 @@ class AgentDelivery:
         value = {
             "event_id": event["event_id"],
             "event_revision": event["revision"],
-            "episode": episode,
+            "episode": self.history.revision_reference("episode", episode) if self.store.bounded else episode,
             "due_ms": due,
-            "outcomes": outcomes or [],
+            "outcomes": [self.history.revision_reference("outcome", value) for value in outcomes or []]
+            if self.store.bounded
+            else outcomes or [],
             "historical": historical,
             "replay": replay,
         }
         self.history.put(key, value)
-        self.history.put(f"agent:intent-due:{due:016d}:{identity(key)}", {"key": key})
+        due_key = f"agent:intent-due:{due:016d}:{identity(key)}"
+        self.history.put(due_key, {"key": key})
+        self.ready.publish(
+            "intent",
+            due_key,
+            historical,
+            event["event_id"],
+            event["fresh_until_ms"],
+            previous["historical"] if previous else None,
+        )
 
-    def admit(self, event: dict[str, Any]) -> None:
+    def admit(self, event: dict[str, Any], *, episode: dict[str, Any] | None = None) -> None:
         if self.enabled() and event["live"]:
-            episode = self.history.get("episode-head:" + event["episode_id"])
+            if episode is None:
+                episode = self.history.get("episode-head:" + event["episode_id"])
+            elif episode.get("episode_id") != event["episode_id"]:
+                raise StateError("Conflicting published episode identity")
+            previous = self.history.get("agent:successful:" + episode["episode_id"])
+            if (
+                previous is not None
+                and episode["state"] == "ACTIVE"
+                and self.store.clock_ms() <= event["fresh_until_ms"]
+                and event["settings_revision"] == self.store.snapshot().revision
+                and any(c["event_id"] == event["event_id"] for c in episode["confirmations"].values())
+                and not self.meaningful(episode, previous)
+                and self.history.get("agent:intent:" + episode["episode_id"]) is None
+            ):
+                return  # Same rule as freeze; no redundant job after an acknowledged unchanged episode.
             self._intent(episode, event, event["available_at_ms"])
 
     def episode_closed(self, episode: dict[str, Any]) -> None:
@@ -145,9 +176,15 @@ class AgentDelivery:
             event = self.history.get(f"event:{confirmation['event_id']}:{confirmation['revision']:010d}")
             self._intent(episode, event, episode["available_at_ms"])
 
-    def outcome(self, result: dict[str, Any]) -> None:
+    def outcome(self, result: dict[str, Any], event: dict[str, Any] | None = None) -> None:
         if self.enabled():
-            event = self.history.get(f"event:{result['event_id']}:{result['event_revision']:010d}")
+            if event is None:
+                event = self.history.get(f"event:{result['event_id']}:{result['event_revision']:010d}")
+            elif (
+                event.get("event_id") != result["event_id"]
+                or event.get("revision") != result["event_revision"]
+            ):
+                raise StateError("Conflicting published outcome event")
             episode = self.history.get("episode-head:" + event["episode_id"])
             self._intent(episode, event, result["available_at_ms"], [result])
 
@@ -181,13 +218,27 @@ class AgentDelivery:
             "state": episode["state"],
         }
 
+    @classmethod
+    def meaningful(cls, episode: dict[str, Any], previous: dict[str, Any] | None) -> bool:
+        notice = cls._notice(episode)
+        return bool(
+            previous is None
+            or notice["state"] != previous["state"]
+            or set(notice["families"]) - set(previous["families"])
+            or set(notice["timeframes"]) - set(previous["timeframes"])
+            or notice["strength"] >= 1.5 * previous["strength"]
+        )
+
     def _freeze(self, now: int) -> None:
-        for due_key, binding in self.history.items("agent:intent-due:", 1):
+        selected = self.ready.pick("intent", now)
+        for due_key, binding in () if selected is None else (selected,):
             key = binding["key"]
             intent = self.history.get(key)
             if intent is None:
                 with self.store.db:
                     self.history.delete(due_key)
+                    self.ready.remove("intent", due_key, False)
+                    self.ready.remove("intent", due_key, True)
                 continue
             if intent["due_ms"] > now:
                 return
@@ -205,13 +256,7 @@ class AgentDelivery:
             historical = intent["historical"] or now > event["fresh_until_ms"]
             notice = self._notice(episode)
             previous = self.history.get("agent:successful:" + episode["episode_id"])
-            meaningful = (
-                previous is None
-                or notice["state"] != previous["state"]
-                or set(notice["families"]) - set(previous["families"])
-                or set(notice["timeframes"]) - set(previous["timeframes"])
-                or notice["strength"] >= 1.5 * previous["strength"]
-            )
+            meaningful = self.meaningful(episode, previous)
             if not historical and event["settings_revision"] != self.store.snapshot().revision:
                 historical = True
             with self.store.db:
@@ -258,13 +303,19 @@ class AgentDelivery:
                     self.history.put(sequence_key, revision)
                     self.history.put("agent:outbox:" + delivery_id, record)
                     if state == "PENDING":
-                        self.history.put(
-                            f"agent:send-due:{now:016d}:{delivery_id}", {"delivery_id": delivery_id}
+                        send_key = f"agent:send-due:{now:016d}:{delivery_id}"
+                        self.history.put(send_key, {"delivery_id": delivery_id})
+                        self.ready.publish(
+                            "send", send_key, historical, event["event_id"], event["fresh_until_ms"]
                         )
                 self.history.delete(key)
                 self.history.delete(due_key)
+                self.ready.remove("intent", due_key, intent["historical"])
+                self._progress += 1
 
     def _diagnostic(self, state: str, now: int) -> None:
+        if state.startswith("FAILED_"):
+            self.failure_count += 1
         with self.store.db:
             self.history.put("agent:target", {"state": state, "at_ms": now})
 
@@ -279,9 +330,68 @@ class AgentDelivery:
                         f"agent:send-due:{now:016d}:{record['delivery_id']}",
                         {"delivery_id": record["delivery_id"]},
                     )
+                    self.ready.publish(
+                        "send",
+                        f"agent:send-due:{now:016d}:{record['delivery_id']}",
+                        record["kind"] == "HISTORICAL_OUTCOME_UPDATE",
+                        record["event_id"],
+                        record["expires_ms"],
+                    )
                     count += 1
             self.history.put("agent:target", {"state": "READY", "at_ms": now, "reason": "OWNER_RETRY"})
         return count
+
+    async def drain(
+        self,
+        clock: Callable[[], int],
+        *,
+        batch: int = 8,
+        seconds: float = 0.25,
+        source_pending: Callable[[], bool] | None = None,
+    ) -> None:
+        """Advance a finite number of existing singleton sends cooperatively.
+
+        Every unit retains the original lock, intent/expiry checks and frozen
+        bytes. Stop after an unknown/negative ACK; never amplify a target error
+        into a batch of requests. Network waits and owner changes remain outside
+        transactions; the real clock is rechecked for every subsequent unit.
+        """
+        if type(batch) is not int or not 1 <= batch <= 8 or not 0 < seconds <= 1:
+            raise ValueError("Invalid finite agent delivery budget")
+        if not self.enabled() or self.config.state != "READY" or self.client is None:
+            return
+        deadline = time.monotonic() + seconds
+        for _ in range(batch):
+            if source_pending is not None and source_pending():
+                return
+            before = self._progress
+            await self.work(clock())
+            if self.history.get("agent:target", {}).get("state") != "DELIVERED":
+                break
+            after = self._progress
+            if before == after or time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(0)
+
+    async def run_ready(
+        self, clock: Callable[[], int], *, source_pending: Callable[[], bool] | None = None
+    ) -> None:
+        """At most32 finite slices/1.5s; stop between sends for ready closed sources.
+
+        The per-send timeout, frozen retries and negative/unknown ACK stop remain
+        unchanged. A pending queue no longer waits two seconds after every slice.
+        """
+        deadline = time.monotonic() + 1.5
+        for _ in range(32):
+            before = self._progress
+            await self.drain(clock, source_pending=source_pending)
+            if (
+                self.history.get("agent:target", {}).get("state") != "DELIVERED"
+                or time.monotonic() >= deadline
+                or self._progress == before
+            ):
+                break
+            await asyncio.sleep(0)
 
     async def work(self, now: int) -> None:
         if not self.enabled() or self.config.state != "READY" or self.lock.locked() or self.client is None:
@@ -290,14 +400,16 @@ class AgentDelivery:
             return
         async with self.lock:
             self._freeze(now)
-            pending = self.history.items("agent:send-due:", 1)
-            if not pending:
+            pending = self.ready.pick("send", now)
+            if pending is None:
                 return
-            due_key, binding = pending[0]
+            due_key, binding = pending
             record = self.history.get("agent:outbox:" + binding["delivery_id"])
             if record is None:
                 with self.store.db:
                     self.history.delete(due_key)
+                    self.ready.remove("send", due_key, False)
+                    self.ready.remove("send", due_key, True)
                 return
             if record["next_ms"] > now:
                 return
@@ -308,6 +420,7 @@ class AgentDelivery:
                     record.update(state="SUPERSEDED", reason="EXPIRED_OR_SETTINGS_CHANGED")
                     self.history.put("agent:outbox:" + record["delivery_id"], record)
                     self.history.delete(due_key)
+                    self.ready.remove("send", due_key, record["kind"] == "HISTORICAL_OUTCOME_UPDATE")
                     intent = record["intent"]
                     event = self.history.get(f"event:{intent['event_id']}:{intent['event_revision']:010d}")
                     self._intent(intent["episode"], event, now, intent["outcomes"], replay=True)
@@ -342,6 +455,7 @@ class AgentDelivery:
                     )
                 record.update(state="IN_FLIGHT", attempts=record["attempts"] + 1)
                 self.history.put("agent:outbox:" + record["delivery_id"], record)
+                self.ready.advance()
             status, acknowledged, retry_after = None, False, 0
             try:
                 # Shared client receives these secrets only on this qualified request.
@@ -387,6 +501,7 @@ class AgentDelivery:
                 pass  # Errors/response bodies may contain secrets; persist only classifications.
             with self.store.db:
                 self.history.delete(due_key)
+                self.ready.remove("send", due_key, record["kind"] == "HISTORICAL_OUTCOME_UPDATE")
                 record["state"] = (
                     "DELIVERED"
                     if acknowledged
@@ -420,9 +535,18 @@ class AgentDelivery:
                         {"delivery_id": record["delivery_id"]},
                     )
                 self.history.put("agent:outbox:" + record["delivery_id"], record)
+                if record["state"] == "PENDING":
+                    self.ready.publish(
+                        "send",
+                        f"agent:send-due:{record['next_ms']:016d}:{record['delivery_id']}",
+                        record["kind"] == "HISTORICAL_OUTCOME_UPDATE",
+                        record["event_id"],
+                        record["expires_ms"],
+                    )
                 self.history.put(
                     "agent:target", {"state": record["state"], "reason": record["reason"], "at_ms": now}
                 )
+                self._progress += 1
 
     def diagnostics(self) -> dict[str, Any]:
         start = PREFIX + "agent:outbox:"

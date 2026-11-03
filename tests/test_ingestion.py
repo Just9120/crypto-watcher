@@ -1578,3 +1578,52 @@ def test_replaced_observer_retains_standalone_post_commit_semantics(radar, infra
     radar.accept_message("spot", message("1m"), radar.streams)
     assert seen == [("spot/BTCUSDT/1m", True)]
     assert not History(radar.store).events()
+
+
+@pytest.mark.parametrize("radar", ["normalized"], indirect=True)
+async def test_receipt_role_preserves_fifo_clock_barrier_and_cleans_up_on_cancel(radar, monkeypatch):
+    monkeypatch.setattr(radar.store, "writer_connection", True)
+    incoming = asyncio.Queue()
+    receipts = [NOW + n for n in (1, 2, 3)]
+    for at in receipts:
+        incoming.put_nowait(ingestion.ReceivedFrame(json.dumps(message("1m")), at))
+    seen = []
+    radar.connections["spot:fixture"] = {}
+
+    def accepted(category, value, allowed, *, received_ms):
+        seen.append(received_ms)
+        assert radar.observation_watermark(NOW + 100000) <= received_ms
+
+    monkeypatch.setattr(radar, "accept_message", accepted)
+    task = asyncio.create_task(
+        radar._receive_messages(SimpleNamespace(recv=incoming.get), "spot:fixture", "spot", radar.streams)
+    )
+    try:
+        await wait_condition(lambda: len(seen) == 3)
+        assert seen == receipts
+        assert radar.observation_watermark(NOW + 100000) == NOW + 100000
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        assert not radar._ingress_pending and not radar._ingress_reading
+        assert not [t for t in asyncio.all_tasks() if t.get_name() == "ingestion:receipt:spot:fixture"]
+        await radar.close()
+
+
+@pytest.mark.parametrize("radar", ["normalized"], indirect=True)
+async def test_receipt_overflow_is_explicit_and_does_not_leave_clock_barriers(radar, monkeypatch):
+    monkeypatch.setattr(radar.store, "writer_connection", True)
+    incoming = asyncio.Queue()
+    for n in range(3):
+        incoming.put_nowait(ingestion.ReceivedFrame(json.dumps(message("1m")), NOW + n))
+    monkeypatch.setattr(ingestion, "SUBSCRIPTION_BUFFER_MESSAGES", 2)
+    seen = []
+    monkeypatch.setattr(radar, "accept_message", lambda *a, **kw: seen.append(kw["received_ms"]))
+    radar.connections["spot:fixture"] = {}
+    with pytest.raises(MarketError, match="receive_buffer_overflow"):
+        await radar._receive_messages(
+            SimpleNamespace(recv=incoming.get), "spot:fixture", "spot", radar.streams
+        )
+    assert seen == [NOW, NOW + 1]
+    assert not radar._ingress_pending and not radar._ingress_reading
+    await radar.close()

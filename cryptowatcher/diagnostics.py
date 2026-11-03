@@ -35,6 +35,7 @@ def snapshot(store: Store, seconds: float = 3) -> dict[str, Any]:
     ingestion.update(
         diagnostic_age_seconds=round(age, 1), diagnostic_state="FRESH" if 0 <= age <= 30 else "STALE"
     )
+    from .analytics_pool import summary as pool_summary
     from .storage_meter import report
 
     return {
@@ -60,6 +61,7 @@ def snapshot(store: Store, seconds: float = 3) -> dict[str, Any]:
             "admission": history.get("outcome-admission", {}),
         },
         "analytics": store.get_runtime("analytics", {"state": "PENDING"}),
+        "analytics_pool": bounded(lambda: pool_summary(store)),
         "analytics_queues": bounded(lambda: queue_snapshot(store, int(time.time() * 1000))),
         "analytics_recovery": {"pending": bounded(lambda: history.count("analytics-gap-pending:"))},
         "retired_pending": history.get("orphaned-pending-summary", {}),

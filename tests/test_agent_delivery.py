@@ -552,3 +552,28 @@ async def test_replay_of_later_confirmation_delivers_original_episode_reference_
         and o["target_at"] == timestamp(origin["reference_time_ms"] + o["horizon_minutes"] * 60000)
         for o in value["historical_outcomes"]
     )
+
+
+async def test_acknowledged_unchanged_admission_skips_job_but_expired_context_still_delivers(store):
+    requests = []
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda r: requests.append(r) or ack(r))
+    ) as client:
+        delivery = AgentDelivery(store, client, AgentConfig.from_env(ENV))
+        delivery.enable(True)
+        radar = engine(store, delivery, "price")
+        observe(radar)
+        await delivery.work(NOW + 2000)
+        event = delivery.history.events()[0]
+        episode = delivery.history.get("episode-head:" + event["episode_id"])
+        store.clock_ms = lambda: NOW + 3000
+        delivery.admit(event, episode=episode)
+        assert delivery.history.count("agent:intent:") == 0
+        assert len(requests) == 1
+        store.clock_ms = lambda: event["fresh_until_ms"] + 1
+        delivery.admit(event, episode=episode)
+        assert delivery.history.count("agent:intent:") == 1
+        await delivery.run_ready(store.clock_ms)
+        assert len(requests) == 2
+        assert json.loads(requests[-1].content)["delivery_kind"] == "HISTORICAL_OUTCOME_UPDATE"
+        assert delivery.history.count("agent:intent:") == 0

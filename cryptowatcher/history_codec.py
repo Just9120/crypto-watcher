@@ -513,6 +513,23 @@ class Codec:
             result[MARKER] = {"schema": SCHEMA, "fields": references}
         return result
 
+    def project(self, value: Any, fields: frozenset[str]) -> Any:
+        """Restore only requested top-level fields, still checking their references.
+
+        Scheduling and head validation need scalar episode identity/clock fields,
+        not confirmation bodies. Full public reads keep using unpack(). Unknown
+        storage metadata and every retained reference actually used still fail
+        closed; no SQL lookup, ownership proof or mutable value is cached.
+        """
+        value = self.record_value(value)
+        if not isinstance(value, dict):
+            return self.unpack(value)
+        omitted = frozenset(value) - fields - {MARKER}
+        storage = value.get(MARKER)
+        if isinstance(storage, dict) and isinstance(storage.get("fields"), dict):
+            omitted |= frozenset(storage["fields"]) - fields
+        return self.unpack(value, omit_fields=omitted)
+
     def unpack(self, value: Any, *, omit_fields: frozenset[str] = frozenset()) -> Any:
         from .numeric_pool import load_many, metric_ids
 

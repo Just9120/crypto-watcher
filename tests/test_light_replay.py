@@ -23,3 +23,17 @@ async def test_full_offered_source_episode_outcome_and_independent_delivery_path
         result["initial_root_numeric_sha256"]
         == "bf172fb0a0533ad4d74526a9b54f0e612d0045447ddd648711c34c63b8777559"
     )
+
+
+async def test_multi_instrument_replay_preserves_both_markets_with_agent_off(tmp_path):
+    result = await replay(
+        tmp_path / "scaled.sqlite3", minutes=15, instruments_per_market=2, agent_enabled=False
+    )
+    assert len(result["offers_by_stream"]) == 16
+    assert result["offered_closed_candles"] == result["persisted_and_confirmed"]
+    assert {stream.split("/")[0] for stream in result["offers_by_stream"]} == {"spot", "linear"}
+    assert result["outcome_states"] == {"COMPLETE": result["episodes"] * 4}
+    assert all(point["due_outcomes"] == 0 for point in result["debt_checkpoints"])
+    assert result["telegram_attempts"] > 0 and result["agent_receipts"] == 0
+    assert result["comparison_jobs"] == 0
+    assert result["source_freshness_at_offer_end"]["late_streams"] == 0

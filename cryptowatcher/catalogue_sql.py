@@ -61,6 +61,26 @@ def install_functions(store: Store) -> None:
 def source(store: Store, kind: str, *, head: bool = False) -> str:
     if kind not in ("event", "outcome", "episode", "comparison") or type(head) is not bool:
         raise ValueError("Unsupported SQL domain namespace")
+    from .revision_repository import installed
+
+    if store.bounded and installed(store):
+        from .domain_repository import History
+
+        History(store)
+        root = catalogue_reader.PREFIX + kind + ("-head:" if head else ":")
+        if head:
+            direct = f"SELECT key FROM main.runtime WHERE key>='{root}' AND key<'{root}~'"
+        else:
+            direct = f"SELECT '{catalogue_reader.PREFIX}'||public_key AS key FROM direct_{kind}_revisions"
+        if catalogue_reader.reading(store.db):
+            legacy_key = f"cw_catalogue_public_key(r.kind,r.public_uuid,r.revision,{int(head)})"
+            current = " AND r.current=1" if head else ""
+            hot = f"SELECT key FROM main.runtime WHERE key>='{root}' AND key<'{root}~'"
+            legacy = f"SELECT {legacy_key} AS key FROM market_records r WHERE r.kind={record_blocks.KINDS.index(kind)}{current}"
+            keys = f"({hot} UNION {legacy} UNION {direct})"
+        else:
+            keys = f"(SELECT key FROM main.runtime WHERE key>='{root}' AND key<'{root}~' UNION {direct})"
+        return f"(SELECT key,cw_runtime_payload(key) AS payload_json FROM {keys})"
     if not store.bounded or not catalogue_reader.reading(store.db):
         return "runtime"
     root = catalogue_reader.PREFIX + kind + ("-head:" if head else ":")

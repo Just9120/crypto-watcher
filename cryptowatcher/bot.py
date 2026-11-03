@@ -160,6 +160,10 @@ class Controller:
     def __init__(self, infrastructure: Infrastructure, store: Store, market: BybitREST) -> None:
         self.infrastructure = infrastructure
         self.store = store
+        if store.bounded and store.writer_connection:
+            from .domain_repository import install
+
+            install(store)
         store.put_runtime("runtime_instance", {"id": uuid.uuid4().hex, "started_ms": int(time.time() * 1000)})
         self.market = market
         self.history = History(store)
@@ -167,8 +171,18 @@ class Controller:
         self.agent = AgentDelivery(store, getattr(market, "client", None))
         self.recovery = AnalyticsRecovery(store, market) if isinstance(market, BybitRadar) else None
         self.outcomes = OutcomeWorker(
-            store, self.recovery.request if self.recovery else None, on_outcome=self.agent.outcome
+            store,
+            self.recovery.request if self.recovery else None,
+            on_outcome=self.agent.outcome,
+            on_outcome_event=self.agent.outcome,
+            publication_batch_size=4,
         )
+        from .analytics_pool import Pool
+
+        self.analytics_pool: Pool | None = None
+        if store.writer_connection:
+            self.analytics_pool = Pool(self.outcomes)
+            self.analytics_pool.activate()
         self.retention = Retention(store)
         self.digest = Digest(store, infrastructure.delivery_chat_id)
         self.analytics_lock = asyncio.Lock()
@@ -186,11 +200,19 @@ class Controller:
                 store,
                 source_revision=infrastructure.source_revision,
                 on_event=self.admit_event,
+                on_event_snapshot=self.admit_published_event,
                 on_episode=self.agent.episode_closed,
             )
             if isinstance(market, BybitRadar)
             else None
         )
+        if self.engine is not None:
+            # These concrete runtime consumers participate in the producer unit.
+            # Replaced/public callbacks keep ordinary SQL/savepoint semantics.
+            self.engine._publication_consumers = (
+                self.engine.on_event_snapshot,
+                self.engine.on_episode,
+            )
         self.delivery = TelegramDelivery(
             store,
             infrastructure.delivery_chat_id,
@@ -236,6 +258,12 @@ class Controller:
     def admit_event(self, event: dict[str, Any]) -> None:
         self.outcomes.admit(event)
         self.agent.admit(event)
+
+    def admit_published_event(self, event: dict[str, Any], episode: dict[str, Any]) -> None:
+        # EventEngine just saved both revisions in this transaction. These
+        # consumers own separate queues and do not touch detector conditions.
+        self.outcomes.admit(event, episode=episode)
+        self.agent.admit(event, episode=episode)
 
     def enrichment_context(self, key: str, cutoff: int) -> dict[str, Any]:
         if self.enrichment is None:
@@ -496,11 +524,14 @@ class Controller:
                 await self.send(update, self.history_notice() + "История пока пуста или событие не найдено.")
             else:
                 for event in events:
+                    from .analytics_pool import selection_status
                     from .outcomes import episode_results
 
                     origin, horizons, outcomes = episode_results(self.history, event)
                     body = (
-                        outcome_text(origin, outcomes, horizons)
+                        outcome_text(
+                            origin, outcomes, horizons, selection=selection_status(self.store, event)
+                        )
                         if origin is not None
                         else "Исходные подробности episode уже недоступны в сроке хранения."
                     )
@@ -777,8 +808,10 @@ class Controller:
         now_ms = self.market.server_now()
         if now_ms <= 0:
             return  # Establish exchange clock after restart before deciding pending expiry.
-        self.engine.tick(now_ms)
-        await self.delivery.send_due(context.bot, now_ms, clock=self.market.server_now)
+        if self.market.has_pending_observations():
+            return  # A source transition also closes its instrument at its receipt clock.
+        self.engine.tick(self.market.observation_watermark(now_ms))
+        await self.delivery.run_ready(context.bot, now_ms, clock=self.market.server_now)
         self.digest.schedule(self.market.server_now())
         await self.digest.send_due(context.bot, self.market.server_now())
 
@@ -792,6 +825,8 @@ class Controller:
             phase = "OUTCOMES"
             try:
                 started = time.monotonic()
+                if self.analytics_pool is not None:
+                    self.analytics_pool.tick(now)
                 processed_outcomes = await self.outcomes.async_work(self.market.server_now)
                 # Legacy comparison records stay readable until their normal
                 # retention/explicit test-history transition. No N20 worker runs.
@@ -844,13 +879,17 @@ class Controller:
         now = self.market.server_now()
         if now <= 0:
             return
-        if not self.maintenance_ready():
+        if not self.maintenance_ready() or self.market.has_pending_observations():
             return
         from .catalogue_repack import busy
         from .storage_repack import async_work
 
         async with self.repack_lock:
             try:
+                if self.analytics_pool is not None:
+                    from .domain_repository import maintenance
+
+                    maintenance(self.store, now)
                 retention_slices = await self.retention_priority()
                 defer_compaction = (
                     self.retention_pressure_current()
@@ -1062,11 +1101,15 @@ class Controller:
     async def agent_job(self, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not isinstance(self.market, BybitRadar):
             return
+        if self.market.has_pending_observations():
+            return  # Resume ready delivery as soon as the finite source burst drains.
         now = self.market.server_now()
         if now <= 0:
             return
         try:
-            await self.agent.work(now)
+            await self.agent.run_ready(
+                self.market.server_now, source_pending=self.market.has_pending_observations
+            )
         except Exception as exc:
             self.agent._diagnostic("FAILED_" + type(exc).__name__, now)
             logger.error("Optional agent delivery failure: %s", type(exc).__name__)

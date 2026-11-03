@@ -235,3 +235,15 @@ Activation требует qualified consumer config/secret/HTTPS и bounded
 joint runtime verification; binary deployment не выдаётся за включённую integration.
 Forward-fix/compatible binary; без DB downgrade/restore поверх живых producer/consumer данных.
 Operational activation не меняет Strategies, allowed symbols или trading credentials.
+
+
+### Bounded detailed analytics without a v2 shape change
+
+Global five-detector/four-TF detection and allowed meaningful deliveries are not
+conditioned on a pool slot. `historical_outcomes` may be empty because the episode
+was not selected or a horizon is not available yet; it never means a zero return.
+The receiver must not assume every global signal will later receive outcomes.
+Late outcome updates refer only to selected episode origins (plus preserved
+pre-cutover obligations). Selection is not an unbiased whole-market sample.
+The existing v2 fields, HMAC, frozen retries, idempotency and no-trading-authority
+boundary remain unchanged. These rules do not authorize receiver/Paper changes.

@@ -231,11 +231,14 @@ def _immutable_size(value: Any) -> int | None:
 
 
 class Store:
-    def __init__(self, path: Path, owner_id: int, *, readonly: bool = False) -> None:
+    def __init__(
+        self, path: Path, owner_id: int, *, readonly: bool = False, writer_connection: bool = False
+    ) -> None:
         number(owner_id, "owner_id", integer=True)
         self.path = path
         self.owner_id = owner_id
         self.readonly = readonly
+        self.writer_connection = writer_connection
         # One population, scoped to a single fixed read transaction. Never used
         # by the writer or carried across snapshots.
         self.comparison_population: tuple[Any, Any] | None = None
@@ -261,10 +264,13 @@ class Store:
             raise StateError("Database missing")
         else:
             path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        self.db = sqlite3.connect(
-            f"{path.resolve().as_uri()}?mode=ro" if readonly else str(path),
-            uri=readonly,
-            timeout=5,
+        from .writer_memory import Connection
+
+        location = f"{path.resolve().as_uri()}?mode=ro" if readonly else str(path)
+        self.db = (
+            sqlite3.connect(location, uri=readonly, timeout=5, factory=Connection)
+            if writer_connection and not readonly
+            else sqlite3.connect(location, uri=readonly, timeout=5)
         )
         try:
             if readonly:
@@ -625,14 +631,24 @@ class Store:
         with self.db:
             self.db.execute("INSERT OR REPLACE INTO mutes VALUES (?,?)", (symbol, until))
 
+    def decode_runtime(self, raw: Any) -> Any:
+        # Reuse only a pure transform of these freshly read immutable bytes.
+        # SQL callbacks use the same existing1MiB budget. Return a fresh object;
+        # referenced rows/existence and mixed hot/cold guards are never cached.
+        return (
+            json.loads(self.cached_record_json(raw))
+            if self.bounded and isinstance(raw, bytes)
+            else json_payload(raw)
+        )
+
     def get_runtime(self, key: str, default: Any = None) -> Any:
         row = self.db.execute("SELECT payload_json FROM runtime WHERE key=?", (key,)).fetchone()
         if self.bounded:
             from .catalogue_reader import MISSING, lookup
 
-            value = lookup(self.db, key, json_payload(row[0]) if row else MISSING, self.cached_bytes)
+            value = lookup(self.db, key, self.decode_runtime(row[0]) if row else MISSING, self.cached_bytes)
             return default if value is MISSING else value
-        return json_payload(row[0]) if row else default
+        return self.decode_runtime(row[0]) if row else default
 
     def scan_runtime(
         self,
@@ -654,6 +670,7 @@ class Store:
             after=after,
             before=before,
             cache=self.cached_bytes,
+            decode=self.decode_runtime,
         )
 
     def put_runtime(self, key: str, payload: Any) -> None:

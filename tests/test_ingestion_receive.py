@@ -46,8 +46,16 @@ async def test_buffered_receive_preserves_all_frames_and_yields_to_other_work(st
         await radar.close()
 
 
+@pytest.mark.parametrize("normalized", [False, True])
 @pytest.mark.parametrize("expired", [False, True])
-async def test_receive_timeout_and_external_cancel_join_underlying_receive(store, monkeypatch, expired):
+async def test_receive_timeout_and_external_cancel_join_underlying_receive(
+    store, monkeypatch, expired, normalized
+):
+    if normalized:
+        from cryptowatcher.market_storage import enable
+
+        enable(store.db)
+        store.bounded = store.writer_connection = True
     radar = BybitRadar(store)
     radar.connections["spot:0"] = {"state": "CONNECTED"}
     entered, released = asyncio.Event(), asyncio.Event()
@@ -83,7 +91,13 @@ async def test_receive_timeout_and_external_cancel_join_underlying_receive(store
         await radar.close()
 
 
-async def test_receive_does_not_hide_malformed_input_or_publish_a_new_receipt(store):
+@pytest.mark.parametrize("normalized", [False, True])
+async def test_receive_does_not_hide_malformed_input_or_publish_a_new_receipt(store, normalized):
+    if normalized:
+        from cryptowatcher.market_storage import enable
+
+        enable(store.db)
+        store.bounded = store.writer_connection = True
     radar = BybitRadar(store)
     radar.connections["spot:0"] = {"state": "CONNECTED", "last_received_ms": 123}
 
@@ -99,7 +113,13 @@ async def test_receive_does_not_hide_malformed_input_or_publish_a_new_receipt(st
         await radar.close()
 
 
-async def test_cancel_at_buffered_receive_completion_is_not_lost(store):
+@pytest.mark.parametrize("normalized", [False, True])
+async def test_cancel_at_buffered_receive_completion_is_not_lost(store, normalized):
+    if normalized:
+        from cryptowatcher.market_storage import enable
+
+        enable(store.db)
+        store.bounded = store.writer_connection = True
     radar = BybitRadar(store)
     radar.connections["spot:0"] = {"state": "CONNECTED"}
     calls = 0

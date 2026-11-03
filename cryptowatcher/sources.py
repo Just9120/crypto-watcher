@@ -7,6 +7,7 @@ backup includes them without a second DB or a rewrite of owner configuration.
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass
 from typing import Any, Callable
 
@@ -64,6 +65,9 @@ class Sources:
         self.windows: dict[str, dict[int, Candle]] = {}
         self.live: dict[str, int] = {}
         self.blocked: dict[str, str] = {}
+        self.joined = False
+        self.touched: set[str] = set()
+        self.committed_callbacks: list[Callable[[], None]] = []
 
     @staticmethod
     def prefix(stream: str) -> str:
@@ -151,7 +155,9 @@ class Sources:
             next_live = latest
         if any(b - a != prospective[b].step for a, b in zip(ordered, ordered[1:])):
             next_blocked, next_live = "candle_gap", None
-        with self.store.db:
+        if self.joined and not self.store.db.in_transaction:
+            raise MarketError("missing_source_group_transaction")
+        with nullcontext() if self.joined else self.store.db:
             if self.store.bounded:
                 market_storage.admit_many(
                     self.store.db,
@@ -169,8 +175,13 @@ class Sources:
                 if next_blocked is not None:
                     candidate.blocked[stream] = next_blocked
                 after_write(candidate, advanced)
-        window.clear()
-        window.update(prospective)
+        if self.joined:
+            # A private overlay: never mutate a window published by the parent.
+            self.windows[stream] = prospective
+            self.touched.add(stream)
+        else:
+            window.clear()
+            window.update(prospective)
         if next_live is None:
             self.live.pop(stream, None)
         else:
@@ -180,6 +191,12 @@ class Sources:
         else:
             self.blocked[stream] = next_blocked
         return advanced
+
+    def after_commit(self, callback: Callable[[], None]) -> None:
+        if self.joined:
+            self.committed_callbacks.append(callback)
+        else:
+            callback()
 
     def rows(self, stream: str, count: int) -> list[list[Any]]:
         self.load(stream)

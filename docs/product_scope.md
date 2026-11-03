@@ -2,9 +2,9 @@
 
 Canonical spec: этот файл. Canonical plan: [open_issues.md](open_issues.md). Статусы и Evidence — в плане, не в spec.
 
-## Действующая основа 30 октября 2026
+## Действующая основа 30 октября и уточнение 2 ноября 2026
 
-Текущий нормативный источник — S12. D29 ниже заменяет несовместимые положения D01–D28; они сохранены как история решений. Старые 25/30GB,35d general candles, постоянный N20 и требование сохранять/конвертировать прежнюю тестовую историю больше не являются текущим scope. Цель аудита не включает реализацию этих изменений.
+Текущий нормативный источник — S12 с явно принятым уточнением S17/D30. D29 ниже заменяет несовместимые положения D01–D28; они сохранены как история решений. Старые 25/30GB,35d general candles, постоянный N20 и требование сохранять/конвертировать прежнюю тестовую историю больше не являются текущим scope. Цель аудита не включает реализацию этих изменений.
 
 ## Источники и revisions
 
@@ -15,6 +15,7 @@ Canonical spec: этот файл. Canonical plan: [open_issues.md](open_issues.
 | S14 | Общий шаблон 30Oct; Drive ID 1QW21f6KpxNJmvf5UBMBXbHhiC9cTxd4nMVv3keZJfls; modified 2026-10-30T08:35:05.587Z; revision AHj4eMSJG1kB8gox_AT-nj7hRCnDm3kgKvyku0Y_Q2JPpsjVQ8EbIxKsgNMBH0yOLc0cGfsJR4rxtw8VkKzE7d2obIUeET42NIoZqywv1DE | Полный t.0, все разделы; project/template отличаются только repository/requirements bindings |
 | S15 | Переданные 29Oct2026 [AGENTS.md](../AGENTS.md) SHA256 d5339b8fb9b0d0e7be2d4007613d2c916ce33c6cdb9a1c678281720b865049df; [ci-cd-rules.md](../ci-cd-rules.md) SHA256 41236d79440871b65692de5f3c1a13760009ae25c6948b6b43f5407953086b34 | Универсальные repository/CI правила, без прежнего project-specific tail |
 | S16 | Явно утверждённый план полного аудита в текущем чате 30Oct2026 | Функциональность Telegram включена; visual/layout исключены. Только root instructions/spec/plan/local commit, без push/PR/merge/app fixes/production changes/нагрузки/schedules |
+| S17 | Явные решения владельца в текущем чате: принято ограничение подробной аналитики при глобальных пяти detectors/четырёх TF; 02Nov2026 отдельно подтверждено подключение writer/pool к штатному runtime PR94 | Все разрешённые signals сохраняются и доставляются вне зависимости от места в пуле; outcomes/MFE/MAE ограничены пулом. Валидная история и обязательства сохраняются; новый reset не поручен |
 | S01–S11 | Прежние источники и решения 10–24Oct2026 в истории этого файла и Git | Исторические; применяются только если совместимы с S12/D29. Не создают полномочий на новую production операцию |
 
 ## D29 — Облегчённый scope и приоритет источников
@@ -26,6 +27,33 @@ S12 требует отдельной активации detector, meaningful ep
 Будущий разовый переход удаляет только прежнюю тестовую market history CW/research queues без архива/полной конвертации. Private state/owner settings/watchlist/credentials/infra сохраняются, TA/Paper не затрагиваются, обычный restart/deploy историю не сбрасывает. Источник задаёт будущую процедуру, текущий аудит её не выполняет.
 
 35GB — допустимый верхний предел рабочего набора, не цель заполнить диск. Backups/experiments/temp учитываются отдельно; физический admission и резерв общего VPS обязательны. Доказательство устойчивости новой версии: сначала 30min, затем 24h при неизменной версии/settings, с различением due и future horizons.
+
+## D30 — Глобальное обнаружение и ограниченное подробное сопровождение
+
+S17 заменяет обязательность новых outcomes для каждого глобального episode.
+Пять detectors на1m/3m/5m/15m и оба допустимых universe сохраняются. Значимый
+signal, frozen reference/settings/provenance и необходимые used inputs сохраняются;
+Telegram и подписанная доставка Agent не зависят от наличия места в пуле.
+Вне пула не создаются новые outcomes/MFE/MAE и исследовательские зависимости.
+Неотбор, ожидание отбора и неполный расчёт различаются и не становятся нулевым outcome.
+
+Бюджет относится к episode obligations, включая warming/manual/draining. Активный
+episode и принятые horizons не вытесняются. Старые jobs, включая будущие, сохраняются
+и учитываются при переходе; существующая история не сбрасывается. Future horizon
+не overdue, но занимает резерв. Waitlist конечен по объёму/времени, manual не расширяет
+лимиты. Исходный проверяемый профиль64obligations/256horizon jobs, warming4/manual16,
+8admissions/min с burst reserve8 и waitlist128/128KiB фиксируется до проверки;
+это не доказанная production capacity. Полный пул не подавляет global signal.
+
+General72h/details30d/aggregates12месяцев, точность и immutable reference сохраняются.
+Статистика выбранных episodes обозначает фактический отбор и actualN; она не
+выдаётся за несмещённую выборку всего рынка. Agent получает все разрешённые
+signals и поздние outcomes только принятых episodes; publicv2/HMAC/idempotency
+и отсутствие торговых полномочий неизменны. Связанные AC06-02/03/04/05,07-06,
+09 и13-02/06 сохраняют ID и теперь проверяются с этим разделением. Новые AC или
+новый denominator не создаются.35GB и30s/60s deadlines не изменены; shortPASS
+не заменяет recovery/capacity/sharedVPS30min24h. Повторный systemic lag требует
+остановки с результатом, без автоматической серии новых оптимизаций.
 
 ## Стабильные AC и связи заменённых критериев
 
@@ -114,12 +142,12 @@ Requirement REQ-E05; текущая трассировка S12/S15, AC IDs со�
 
 Requirement REQ-E06; текущая трассировка S12/S15, AC IDs сохранены.
 
-Для episode один набор 5/15/30/60min outcomes и MFE/MAE от первого immutable observation/reference. Описательная статистика считает уникальные episodes с явными groups/completeness, не вклад каждого detector и не доходность стратегии. Постоянного N20/control-period research в рабочем цикле нет. Export/causal context не подменяет старые решения поздними данными.
+Для принятого в пул episode один набор 5/15/30/60min outcomes и MFE/MAE от первого immutable observation/reference. Описательная статистика считает уникальные episodes с явными groups/completeness, не вклад каждого detector и не доходность стратегии. Постоянного N20/control-period research в рабочем цикле нет. Export/causal context не подменяет старые решения поздними данными.
 
 | AC | Критерий и способ проверки |
 | --- | --- |
 | AC-06-01 — История значимых episodes | Значимые события и revisions episode сохраняют ID, instrument/market, detector/version/settings, direction/TF, metrics/timestamps/context независимо от Telegram. Повторные свечные подтверждения не становятся отдельными исследованиями. Проверка: replay/transaction/restart/readback и неизменный episode ID. |
-| AC-06-02 — Один набор outcome от начала episode | Для episode один раз создаются горизонты 5/15/30/60 минут от первого наблюдения и immutable reference time/price; новые подтверждения, задержка расчёта и Telegram не меняют точку отсчёта. Owner horizons совместимы с 72 часами. Проверка: много подтверждений, поздний worker, restart, точные границы и уникальность jobs/results. |
+| AC-06-02 — Один набор outcome от начала episode | Для принятого в пул episode один раз создаются горизонты 5/15/30/60 минут от первого наблюдения и immutable reference time/price; новые подтверждения, задержка расчёта и Telegram не меняют точку отсчёта. Owner horizons совместимы с 72 часами. Проверка: много подтверждений, поздний worker, restart, точные границы и уникальность jobs/results. |
 | AC-06-03 — Returns и развитие | Outcome показывает price return, движение в сторону/против direction, continuation/reversal; neutral events используют ненаправленные metrics. Неполные данные помечены. Проверка: directed/neutral/gapped series. |
 | AC-06-04 — MFE/MAE | MFE/MAE и другие выбранные market metrics воспроизводимо вычисляются на обозначенном диапазоне исходных данных. Проверка: known OHLC/time series и gaps. |
 | AC-06-05 — Описательная статистика уникальных episodes | N считает уникальные episodes, а не свечи/подтверждения. Видны последующее движение, continuation/reversal и полнота по versions/settings/markets/TF с явно определённой группировкой; нет постоянных N20/control-period исследований или заявления прибыльности и отдельного вклада каждого detector. Проверка: controlled multi-confirmation cohorts до/после expiry. |
@@ -139,7 +167,7 @@ Telegram функционально обеспечивает alerts, status/sett
 | AC-07-03 — Control deck | Владелец открывает status/settings/list/add/remove/mute/terms через Telegram controls без запоминания команд; no-op settings не вызывает noisy error. Проверка: keyboard/handler fixtures и no-op exception scenario. |
 | AC-07-04 — Правдивый active status | Status/settings различают возможности, активные detectors и уведомления, показывают реальные рынки/universe/TF/thresholds и состояние данных. Старое решение не применяется после concurrent revision. Проверка: persisted/readback, отключённый detector, settings race; внешний вид в текущем аудите исключён. |
 | AC-07-05 — Управление доставкой | Realtime alerts включаются/выключаются отдельно от digest; mute действует на Telegram delivery и не останавливает history/agent delivery. Проверка: two-consumer isolation/failure tests. |
-| AC-07-06 — Просмотр episode outcome | Из episode доступен один последующий outcome от первого immutable reference; после 30 дней явно недоступны отдельные подробности, сводка их не подменяет. Проверка: несколько confirmations→один результат, navigation/expiry; без торговой рекомендации. |
+| AC-07-06 — Просмотр episode outcome | Для выбранного episode доступен один outcome от immutable reference; для невыбранного или ожидающего отбор явно указан статус, без притворного pending расчёта. После30дней подробности недоступны, сводка их не подменяет. Проверка: admission/nonselection, несколько confirmations, один результат, navigation/expiry; без торговой рекомендации. |
 | AC-07-07 — Объяснение manual | Для каждого detector доступно почему он сработал и значения metrics/terms; manual use не требует account credentials или trading agent. Проверка: detector explanation fixtures и disconnected consumer сценарий. |
 
 ### E08 — Owner settings и presets

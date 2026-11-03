@@ -50,46 +50,60 @@ def snapshot(store: Store, now_ms: int) -> dict[str, Any]:
         ("analytics-gap", "analytics-gap:", "id"),
     ):
         warning = history.items("analytics-blocked:" + name + ":", 1)
-        if warning:
-            _, item = warning[0]
-            result[name] = {
-                "state": "SOURCE_LIMITED_OR_UNKNOWN",
-                "due_lag_ms": None,
-                "job_state": item.get("state"),
-                "reason": item.get("reason"),
-            }
-            continue
         prefix = PREFIX + name + "-pending:"
         row = store.db.execute(
             "SELECT key,payload_json FROM runtime WHERE key>=? AND key<? ORDER BY key LIMIT 1",
             (prefix, prefix + "~"),
         ).fetchone()
+        pending: dict[str, Any]
         if row is None:
-            result[name] = {"state": "EMPTY", "due_lag_ms": 0}
-            continue
-        from .storage import json_payload
+            pending = {"state": "EMPTY", "due_lag_ms": 0}
+        else:
+            from .storage import json_payload
 
-        binding = json_payload(row[1])
-        job = history.get(jobs + str(binding.get(field, "")))
-        if not isinstance(job, dict) or type(job.get("next_attempt_ms")) is not int:
-            result[name] = {"state": "ORPHAN_OR_UNKNOWN", "due_lag_ms": None}
-            continue
-        lag = max(0, now_ms - job["next_attempt_ms"])
-        state = "FUTURE" if job["next_attempt_ms"] > now_ms else "CURRENT" if lag <= SLO_MS else "OVERDUE"
-        if name == "analytics-gap" and not (
-            job.get("state") == "PENDING"
-            and job.get("attempts") == 0
-            and type(job.get("end")) is int
-            and 0 <= now_ms - job["end"] <= SLO_MS
-        ):
-            state = "REFERENCED_RECOVERY"
-        result[name] = {
-            "state": state,
-            "due_lag_ms": lag,
-            "next_attempt_ms": job["next_attempt_ms"],
-            "job_state": job.get("state"),
-            "reason": job.get("reason"),
-        }
+            binding = json_payload(row[1])
+            job = history.get(jobs + str(binding.get(field, "")))
+            if not isinstance(job, dict) or type(job.get("next_attempt_ms")) is not int:
+                pending = {"state": "ORPHAN_OR_UNKNOWN", "due_lag_ms": None}
+            else:
+                lag = max(0, now_ms - job["next_attempt_ms"])
+                state = (
+                    "FUTURE" if job["next_attempt_ms"] > now_ms else "CURRENT" if lag <= SLO_MS else "OVERDUE"
+                )
+                if name == "analytics-gap" and not (
+                    job.get("state") == "PENDING"
+                    and job.get("attempts") == 0
+                    and type(job.get("end")) is int
+                    and 0 <= now_ms - job["end"] <= SLO_MS
+                ):
+                    state = "REFERENCED_RECOVERY"
+                due = job.get("due_ms")
+                pending = {
+                    "state": state,
+                    "due_lag_ms": lag,
+                    "next_attempt_ms": job["next_attempt_ms"],
+                    "job_state": job.get("state"),
+                    "reason": job.get("reason"),
+                    "original_due_ms": due,
+                    "original_due_lag_ms": max(0, now_ms - due) if type(due) is int else None,
+                }
+        if warning:
+            _, item = warning[0]
+            # A failed last attempt does not establish today's input readiness.
+            # Preserve the fail-closed public state, but never hide a separately
+            # overdue pending queue behind that historical failure or retry date.
+            result[name] = {
+                "state": "SOURCE_LIMITED_OR_UNKNOWN",
+                "due_lag_ms": None,
+                "job_state": item.get("state"),
+                "reason": item.get("reason"),
+                "input_readiness": "NOT_RECHECKED",
+                "status_basis": "LAST_FAILED_ATTEMPT_NOT_CURRENT_INPUTS",
+                "pending_queue": pending,
+                "scope": "FIRST_PENDING_AND_ONE_FAILED_SAMPLE_NOT_ALL_JOBS",
+            }
+        else:
+            result[name] = pending
     return result
 
 
@@ -132,7 +146,7 @@ def completed_batch(
             "interleaved_seconds": max(0.0, elapsed - (read_seconds or 0.0) - timing.apply_active_seconds),
         }
         value.update(
-            timing_basis="prepare callback thread CPU excludes connection setup; apply active wall/CPU excludes yields; interleaved wall includes checks/other tasks",
+            timing_basis="prepare callback thread CPU excludes connection setup; apply active wall/CPU includes writer unit CAS/commit and excludes yields; apply_calls counts actual result applications; interleaved wall includes preliminary checks/other tasks",
             timed_batches_total=previous.get("timed_batches_total", 0) + 1,
             **measured,
             **{key + "_total": previous.get(key + "_total", 0) + count for key, count in measured.items()},

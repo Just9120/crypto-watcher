@@ -58,6 +58,36 @@ commit; prospective source window используется только синх
 Ошибка consumer откатывает эту единицу целиком. Standalone/replaced observers
 сохраняют прежний вызов после source commit. Нового durable queue или формата нет.
 
+WS-группа до восьми frames сохраняет прежний внешний source commit. Внутри неё
+каждое подготовленное observation публикуется явной единицей domain_publication:
+один savepoint для producer changes и consumers. Подготовленные immutable revisions
+пишутся в исходном порядке до соответствующих consumers; public History.version
+сохраняет отдельный savepoint для обычных вызовов и пойманных ошибок callback.
+Mutable detector state получает finite typed write plan<=128keys/1MiB; отдельного
+общего group buffer и flush по распознаванию произвольного SQL больше нет.
+Snapshot consumers получают сохранённые projections; legacy on_event сохраняет
+exposed mutable-state boundary. Arbitrary callbacks выполняются с обычной SQL
+видимостью и защищённым внешним transaction ownership; их savepoint rollback не
+оставляет отложенных consumer intents. Финальная owner/settings проверка выполняется
+после фактической выгрузки consumer writes, до release producer unit.
+
+Acceptance-наблюдение не заменяет consumer callbacks и не добавляет их в trusted
+registry. После измерительного окна и остановки workers отдельный reader проверяет
+все сохранённые immutable event revisions, source-window hashes и точный oracle;
+consumer wiring сравнивается с исходным Controller до/после. Работа evidence reader
+не входит в paced-phase timers, но входит в общий CPU/wall budget контроллера.
+Явный diagnostic trace с callback wrapper остаётся инструментированным режимом,
+который не подтверждает acceptance производительности.
+
+Configuration/layout metadata на writer connection инвалидируются отдельно от
+рыночных строк. Шесть connection-local TEMP triggers отслеживают owner_settings
+и четыре используемых market_meta flags, включая trigger-side updates. Они не
+меняют persistent schema/history и не копируются reader connections. Изменение
+schema/authorizer/rollback инвалидирует соответствующие proofs; повреждённый TEMP
+watch set останавливает publication. Context завершается до outer commit и не
+переносит права/settings между транзакциями. Existing readers продолжают проверять
+actual immutable rows и pinned inputs; presence proof не кешируется.
+
 Readonly outcome/comparison preparation выполняется последовательно. Controller
 сохраняет256/64result batches и four publication lanes; comparison preparation
 получает4s вместо2s, чтобы использовать уже подготовленную frozen population
@@ -178,7 +208,7 @@ History всех families независима от Telegram selection/mute. Coa
 
 Restart восстанавливает episodes, per-direction conditions и pending work; exchange clock устанавливается до expiry решения. Незавершённый IN_FLIGHT означает ambiguous ack, поэтому exactly-once не заявляется. Forced closure подавляет старое условие до re-arm; complete recovered non-signal bars могут подтвердить re-arm без historical live flood. Bootstrap/recovery сохраняют последнее проверенное наблюдение как historical; G2B не выполняет ретроспективный detector backtest всех raw candles.
 
-## LIGHT-RADAR: episode analytics (текущая implementation-ветка)
+## LIGHT-RADAR: episode analytics
 
 Новые owner writes используют general candle window3days/72h и detail retention30d;
 outcome horizons>4320min отклоняются до изменения state. Исторические snapshots
@@ -435,7 +465,9 @@ Existing maintenance cadence выполняет конечный initial scan/re
 source marker. Operator backup/token/900s/forward recovery охватывает shared
 и source adoption; current full capacity qualification требуется до её выполнения.
 Store/startup не активируют3; current native/image, runtime activation/recovery,
-Linux/native совместный50s boundary и mature25GB еще требуют qualification перед production.
+Linux/native совместный50s boundary проверяется отдельно от полного operating path.
+Эксплуатационная ёмкость35GB и зрелая occupancy требуют собственной квалификации;
+актуальные delivery/acceptance records находятся в [плане](open_issues.md).
 Тот же maintenance worker обслуживает конечную initial scan, live eligibility
 queue и partial-slot GC. Открытый expiry-frontier tail остаётся CQ5 до закрытия
 UTC дня; его факты уже доступны. Body initial reclaim сохраняется при upgrade,
@@ -454,3 +486,108 @@ INTERRUPTED. Уже captured snapshots не теряются при ошибке
 минимум две чистые проверки и не менее30min устойчивости, а также
 исходную deep boundary/12h wait policy. Другие blockers не retry; после baseline
 каждый interruption остается видимым. Resource caps и24h boundary не меняются.
+
+
+## Publication path и границы диагностических выводов
+
+Controller использует paired internal callbacks: EventEngine передаёт уже сохранённые
+event/episode независимым consumers, OutcomeWorker — result и immutable event metadata.
+Замена public callback возвращает прежнюю singleton/flush boundary. В bounded intents
+сохраняются checked revision references; expansion заново читает actual revision и
+проверяет canonical digest. Объекты, SQL existence/ownership и полномочия не кэшируются.
+Pure transform свежих bytes использует прежний общий1MiB budget и возвращает новый object.
+
+Только Controller opt-in объединяет до4 COMPLETE outcome publications в одну writer
+transaction с CAS и rollback всей группы. INCOMPLETE/recovery и произвольные callbacks
+сохраняют singleton contract; completion latency заканчивается после commit.
+Agent drain ограничен8 units/250ms, перепроверяет clock/policy и прекращается при
+unknown/negative ACK; frozen bytes/HMAC/idempotency и network вне transactions прежние.
+Один SQL writer, thread для readonly calculations и конечные scheduler yields сохраняются.
+Кандидат проверяется совместным paced scenario; локальный эффект не доказывает LIVE SLO.
+
+Queue diagnostics разделяет first pending sample и последнюю неудачную попытку.
+SOURCE_LIMITED_OR_UNKNOWN остаётся fail-closed состоянием, а не утверждением о
+текущем отсутствии inputs. Вложенный pending_queue показывает due/retry age отдельно;
+NOT_RECHECKED явно обозначает отсутствие повторного расчёта readiness. Полного
+обхода заданий или пересчёта outcomes в routine diagnostics нет.
+
+## Сохраняемые compatibility и qualification surfaces
+
+| Объект / F24 | Подтверждённое назначение и решение |
+| --- | --- |
+| [Compatibility entrypoint](../telegram_crypto_watcher.py) | Прежний launcher делегирует canonical main; старых private implementations в wrapper нет. Сохранить используемый запуск. |
+| [Controller](../cryptowatcher/bot.py) diagnostics helper | Используется compatibility regression в test_bot; production CLI/UI выбирают bounded snapshot. Сохранить как внутренний compatibility surface, не считать dead code или свежим runtime measurement. |
+| [Conversion qualification](../cryptowatcher/conversion_qualification.py), native history/VFS readers | Historical archive/recovery и negative/parity tests. Нужны для чтения сохранённых layouts; удаление по отсутствию runtime admission необоснованно. |
+| [Historical exact-target probe](../scripts/qualify_compressed_validation.py) | Привязан к старым image/input/hash и конкретному эксперименту; не canonical текущий capacity/backup gate. Сохранить воспроизводимый tooling с этим ограничением; отсутствие старого input не разрешает подставлять live DB. |
+| [Retention rehearsal](../scripts/rehearse_retention.py), numeric/shared qualifications | Используемые finite regression и Linux boundaries. Они подтверждают свои сценарии, а не live throughput или размер зрелой population. |
+| Experimental two-writer material | Не переносится в runtime: прежние ветки и уникальные inputs сохраняются до точного approved cleanup. Новое получение данных и outcomes остаются на одной SQLite. |
+
+Данные старых experiments не нужны как current LIGHT-RADAR recovery history, однако
+их удаление требует проверки воспроизводимости/уникальности и отдельного точного
+списка. Reports/manifests/hashes сохраняются отдельно от тяжёлых copies. Общий
+Docker prune и очистка соседних проектов не входят в процедуру.
+
+
+### PR94 normal-runtime bounded receipt and publication
+
+Штатный schema2 runtime использует direct immutable revisions и member deltas,
+сохранённые legacy identities остаются на прежнем writer. Новые consumers читают
+обе формы; source/episode/reference bytes и настройки не конвертируются при startup.
+Rollback к reader без direct support запрещён после первого нового write; recovery
+требует совместимого образа/forward-fix, не app-only downgrade.
+
+Socket receipt отделён от SQL отдельной coroutine: FIFO ограничен128closed
+messages/2MiB на connection. Overflow явный, reconnect/current recovery восстанавливает
+источник. Время приёма записывается до detector work; clock barrier удерживает tick
+позади ожидающих receipts. Источники сохраняются с исходным FULL synchronous commit, до8уже принятых
+frames в одной transaction. Copy-on-write source overlay публикуется только после
+общего commit; ошибка в позднем frame откатывает всю группу. Измерение accepted
+sources и их lag выполняется после durable commit, не после промежуточного put.
+Отдельный exclusive counter учитывает group commit wait. При отмене не остаются reader task или watermark. Read role не владеет SQL.
+
+Finite source bursts получают приоритет перед transport preparation и repack;
+наступившие outcomes продолжают свой bounded worker. Delivery возобновляется после
+source drain. Telegram обрабатывает до8готовых прежних20-unit slices за0.25s с yield;
+Agent — до32прежних8-unit slices за1.5s, проверяя source priority между sends.
+Unknown/negative ACK не усиливается; idempotency/frozen bytes/HMAC v2 прежние.
+Уже ACKed unchanged episode не создаёт redundant intent; historical/expired,
+closure, outcomes и ранее ожидающий intent сохраняют прежний путь.
+
+Metadata immutable rows не сбрасывает unrelated mutable buffer. Fresh SQL head
+проверяется один раз в synchronous publication, промежуточные outbox/intent updates
+coalesce внутри source transaction. Отсутствующий direct diagnostic не проходит
+удаление несуществующих legacy body/expiry indexes; legacy rows удаляются штатно.
+Неизменный frozen retention binding повторно не переписывается. Checksums,
+owner/settings guards, fresh reads, TTL и rollback сохраняются. Эти изменения не
+доказывают capacity или live timeliness; acceptance определяется полным CI/runtime
+сценарием и последующим shared-VPS наблюдением.
+
+
+### Учёт предметного repository и отбора аналитики
+
+Для direct/domain и analytics-pool таблиц flow counters меняются атомарно с
+фактами и откатом транзакции. Логические bytes не включают физические страницы,
+индексы, freelist и journals: эти составляющие учитываются отдельно. Модель
+годовых результатов использует фактические admissions пула, а membership flow —
+все глобальные значимые события. Выборка outcomes не является случайной выборкой
+всего рынка. Исчезновение ledger либо обратный ход cumulative admissions делают
+прогноз неизвестным, а не нулевым. Новый формат samples отделён от прежних оценок;
+исходная история, settings и observer baseline при этом не меняются.
+
+SQL-триггеры учёта вычисляют INSERT/DELETE размер один раз на строку, UPDATE —
+одну net delta только изменившихся по размеру полей. Неизменные payload и изменения
+между INTEGER/REAL не измеряются повторно: оба числовых типа занимают8 logical bytes.
+Рост одного поля и уменьшение другого не превращаются в лишний gross flow.
+Версия триггеров2 устанавливается одной существующей writable-owner транзакцией:
+сначала проверяются все собственные прежние definitions и categories, затем
+заменяются только эти триггеры. Ledger/epoch/private/history не пересчитываются.
+При ошибке DDL весь переход откатывается; неизвестные definitions/версии требуют
+разбора и не перезаписываются. Маркер flow meter1 сохраняет совместимость reader;
+отдельный marker фиксирует версию триггеров. Это не разрешение downgrade приложения
+после других изменений repository и не доказательство производительности.
+
+Свежая additive установка пуста; совместимая старая непоставленная population
+инициализируется только до512строк на таблицу. Больший немеренный repository
+требует отдельной явной инициализации: startup не сканирует его целиком и не
+удаляет данные. Периодическая диагностика читает bounded slots/jobs/waitlist и
+cumulative admitted point, не материализует30дней selection records.

@@ -29,6 +29,7 @@ def hot_rows(
     limit: int | None,
     after: str | None,
     before: str | None,
+    decode: Any = None,
 ) -> Generator[tuple[str, Any, bool], None, None]:
     sql = "SELECT key,payload_json FROM runtime WHERE key>=?"
     parameters: tuple[Any, ...] = (prefix,)
@@ -43,7 +44,7 @@ def hot_rows(
     cursor = db.execute(sql, parameters)
     try:
         for key, payload in cursor:
-            yield key, json_payload(payload), True
+            yield key, decode(payload) if decode is not None else json_payload(payload), True
     finally:
         cursor.close()
 
@@ -58,6 +59,7 @@ def scan(
     cache: Any = None,
     after: str | None = None,
     before: str | None = None,
+    decode: Any = None,
 ) -> Generator[tuple[str, Any], None, None]:
     if (
         not isinstance(prefix, str)
@@ -68,7 +70,7 @@ def scan(
         raise ValueError("Invalid mixed runtime scan bounds")
     if limit == 0:
         return
-    hot = hot_rows(db, prefix, reverse, limit, after, before)
+    hot = hot_rows(db, prefix, reverse, limit, after, before, decode)
     cold = catalogue_reader.scan(
         db, prefix, reverse=reverse, limit=limit if bounded else 0, cache=cache, after=after, before=before
     )

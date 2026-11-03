@@ -156,10 +156,22 @@ def checked_write(store: Store, key: str, value: Any) -> bool:
     body = store.get_runtime(catalogue_reader.PREFIX + coordinate.key, catalogue_reader.MISSING)
     if body is catalogue_reader.MISSING:
         raise StateError("Missing new history head revision")
-    from .events import DECISION_HEAD, History
+    from .events import DECISION_HEAD, HEAD_SCHEMA, History
 
     history = History(store)
-    public, compact = history._resolve_with_head(key[len(catalogue_reader.PREFIX) :], value)
+    project_episode = (
+        selected.kind == "episode" and isinstance(value, dict) and value.get("schema") == HEAD_SCHEMA
+    )
+    if project_episode:
+        from .events import HEAD_FIELDS
+
+        public, compact = history._resolve_with_head(
+            key[len(catalogue_reader.PREFIX) :],
+            value,
+            projection=frozenset(HEAD_FIELDS["episode"]),
+        )
+    else:
+        public, compact = history._resolve_with_head(key[len(catalogue_reader.PREFIX) :], value)
     if compact and not (isinstance(body, dict) and DECISION_HEAD in body):
         # The resolver just read this exact revision and checked every head
         # field in our writer snapshot. Reuse its complete restoration; no
@@ -167,7 +179,11 @@ def checked_write(store: Store, key: str, value: Any) -> bool:
         # service normalization comparison as a direct revision read.
         actual = history._expand_services(public) if store.bounded else public
     else:
-        actual = history.resolve(coordinate.key, body)
+        actual = (
+            history._resolve_with_head(coordinate.key, body, projection=frozenset(HEAD_FIELDS["episode"]))[0]
+            if project_episode
+            else history.resolve(coordinate.key, body)
+        )
     if encode(public) != encode(actual):
         raise StateError("Conflicting new history head projection")
     current = record_catalog.head(store.db, selected.kind, selected.identity, store.cached_bytes)
