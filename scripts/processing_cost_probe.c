@@ -84,7 +84,7 @@ void cw_probe_callback_leave(void) { if(callback_depth<=0){atomic_fetch_add(&los
 /* No SQL text, parameters, paths, market data or secrets are exported. */
 int cw_probe_snapshot(char *buf,size_t cap) {
  size_t used=0;int first=1;
- #define ADD(...) do { int n=snprintf(buf+used,cap>used?cap-used:0,__VA_ARGS__);if(n<0||(size_t)n>=cap-used)return -1;used+=(size_t)n; }while(0)
+ #define ADD(...) do { int appended=snprintf(buf+used,cap>used?cap-used:0,__VA_ARGS__);if(appended<0||(size_t)appended>=cap-used)return -1;used+=(size_t)appended; }while(0)
  ADD("{\"lost\":%d,\"slots\":%d,\"rows\":[",atomic_load(&lost),atomic_load(&slots));
  for(int s=0;s<SLOTS;s++)for(int p=0;p<3;p++)for(int r=0;r<2;r++)for(int op=0;op<OPS;op++) {
   uint64_t n=atomic_load(&counts[s][p][r][op][0]);if(!n)continue;

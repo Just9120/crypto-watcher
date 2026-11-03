@@ -518,6 +518,7 @@ def preflight():
     rows = probe.snapshot()
     ops = {r[3] for r in rows["rows"] if r[1] == 1}
     assert rows["lost"] == 0 and all(op in ops for op in (0, 1, 8, 10, 14))
+    assert sum(row[4] for row in rows["rows"] if row[1] == 0 and row[3] == 3) == 10000
     assert os.environ.get("EXPECTED_SQLITE") == sqlite3.sqlite_version
     print(
         json.dumps(
