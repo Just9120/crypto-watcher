@@ -235,6 +235,8 @@ async def replay(
             pool = None
             global_trace = []
             global_evidence = []
+            observation = None
+            observation_proof = None
             if bounded_pool:
                 from .bounded_pool import Pool
 
@@ -244,6 +246,10 @@ async def replay(
                     else Pool(controller.outcomes, manual=("spot/BTCUSDT", "linear/BTCUSDT"))
                 )
                 assert pool is not None
+                if not diagnostic:
+                    from .processing_observation import Observation
+
+                    observation = Observation(controller.engine)
                 original_publish = controller.engine.on_event_snapshot
 
                 def published(event, episode):
@@ -272,7 +278,8 @@ async def replay(
                     trace.published(event, point)
                     original_publish(event, episode)
 
-                controller.engine.on_event_snapshot = published
+                if diagnostic:
+                    controller.engine.on_event_snapshot = published
             bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=1)))
             context = SimpleNamespace(bot=bot)
             symbols = ["BTCUSDT"] + [f"SIM{i:03}USDT" for i in range(1, instruments)]
@@ -315,6 +322,8 @@ async def replay(
                 runtime_seed_stats = json.loads(encode(controller.engine.writer_stats))
                 for key in controller.engine.writer_stats["cpu_seconds"]:
                     controller.engine.writer_stats["cpu_seconds"][key] = 0.0
+            if observation is not None:
+                observation.check()
             stage("SEED_COMPLETE")
             controller.maintenance_started_at = NOW / 1000
             market._scope_revision = store.snapshot().revision
@@ -623,6 +632,28 @@ async def replay(
                 if finish_readers is not None:
                     await finish_readers()
                 stage("FIXTURE_WORKERS_STOPPED")
+            if observation is not None:
+                persisted_events, observation_proof = observation.collect(controller.history)
+                global_trace = [signal_point(event) for event in persisted_events]
+                if domain_roles:
+                    for event, point in zip(persisted_events, global_trace, strict=True):
+                        reason = {
+                            "live_observation": "L",
+                            "historical_observation": "H",
+                            "awaiting_rearm": "R",
+                        }.get(event["observation_reason"], "?")
+                        global_evidence.append(
+                            "|".join(
+                                (
+                                    event["event_id"],
+                                    hashlib.sha256(encode(point).encode()).hexdigest(),
+                                    str(event["receipt_ms"] - event["market_observation_ms"]),
+                                    str(event["detection_ms"] - event["market_observation_ms"]),
+                                    reason,
+                                    str(int(event["live"])),
+                                )
+                            )
+                        )
             pending_due = [job for job in jobs if job["due_ms"] <= finished]
             result = {
                 "schema": "cryptowatcher.processing-replay.v2",
@@ -725,6 +756,7 @@ async def replay(
 
                 result["bounded_pool"] = {
                     **measured_pool,
+                    "observation": observation_proof,
                     "global_fact_evidence": global_evidence if domain_roles else None,
                     "global_expected_ids": [
                         event_identity(

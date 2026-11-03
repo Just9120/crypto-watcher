@@ -34,6 +34,15 @@ def comparison(cases):
     results = [c["result"]["result"] for c in cases]
     keys = ("seed_sha256", "offered_sha256", "streams", "offered_closed")
     same = all(results[0].get(k) is not None and results[0].get(k) == results[1].get(k) for k in keys)
+    observation_ok = all(
+        r["bounded_pool"].get("observation", {}).get("mode") == "PERSISTED_REVISIONS_AFTER_PHASE"
+        and r["bounded_pool"]["observation"].get("consumer_wiring_unchanged") is True
+        and r["bounded_pool"]["observation"].get("events_read") == r["bounded_pool"]["global_actual"]
+        and r["bounded_pool"]["observation"].get("producer_facts") == r["bounded_pool"]["global_actual"]
+        for r in results
+    )
+    if not observation_ok:
+        return {"state": "PAIR_INCOMPLETE_OBSERVATION", "same_input": same}
     for case in cases:
         record = case["result"]
         if record.get("failures") != q.verdict(record["result"]):
@@ -51,6 +60,7 @@ def comparison(cases):
         "state": "COMPARISON_COMPLETE" if same and global_ok else "PAIR_INCOMPLETE_IDENTITY",
         "same_input": same,
         "same_global_facts": global_ok,
+        "same_observation": observation_ok,
         "baseline_failures": cases[0]["result"]["failures"],
         "candidate_failures": cases[1]["result"]["failures"],
         "candidate_processing_gates": (

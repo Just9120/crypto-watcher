@@ -26,6 +26,13 @@ def sample(failures=()):
                 "failures_fixture": list(failures),
                 "bounded_pool": {
                     "global_actual_sha256": "facts",
+                    "global_actual": 10,
+                    "observation": {
+                        "mode": "PERSISTED_REVISIONS_AFTER_PHASE",
+                        "consumer_wiring_unchanged": True,
+                        "events_read": 10,
+                        "producer_facts": 10,
+                    },
                     "global_expected_sha256": "facts",
                     "agent_receipts_by_kind": {"LIVE_EVENT": 1, "HISTORICAL_OUTCOME_UPDATE": 1},
                 },
@@ -102,3 +109,31 @@ def test_manual_profile_cannot_deploy_or_replace_required_pr_workflow():
     assert "secrets." not in text and "environment:" not in text
     assert "600s" in text and "qualify_group_pair run" in text
     assert (root / "scripts/qualify_group_pair.py").read_text().count("pair.one(") == 1
+
+
+def test_pair_requires_the_same_noninterposing_observation_in_both_cases(monkeypatch):
+    monkeypatch.setattr(pair.q, "verdict", lambda r: r["failures_fixture"])
+    cases = [sample(), sample()]
+    assert pair.comparison(cases)["same_observation"] is True
+    for index in range(2):
+        changed = copy.deepcopy(cases)
+        changed[index]["result"]["result"]["bounded_pool"]["observation"]["consumer_wiring_unchanged"] = False
+        assert pair.comparison(changed)["state"] == "PAIR_INCOMPLETE_OBSERVATION"
+    changed = copy.deepcopy(cases)
+    changed[1]["result"]["result"]["bounded_pool"]["observation"]["events_read"] = 9
+    assert pair.comparison(changed)["state"] == "PAIR_INCOMPLETE_OBSERVATION"
+
+
+def test_both_images_use_the_reviewed_observation_overlay_and_keep_frozen_assertions():
+    import hashlib
+
+    root = Path(__file__).resolve().parents[1]
+    workflow = yaml.load((root / ".github/workflows/full-validation.yml").read_text(), Loader=yaml.BaseLoader)
+    guard = workflow["jobs"]["group-publication"]["steps"][2]["run"]
+    for path in ("tests/processing_replay.py", "tests/processing_observation.py"):
+        assert hashlib.sha256((root / path).read_bytes()).hexdigest() in guard
+    assert "'tests/test_processing_replay.py'" in guard
+    assert "'scripts/qualify_processing.py'" in guard
+    overlay = (root / "tests/group_publication.Dockerfile").read_text()
+    assert "COPY tests/processing_replay.py tests/processing_observation.py /app/tests/" in overlay
+    assert "cryptowatcher/" not in overlay

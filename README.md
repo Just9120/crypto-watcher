@@ -171,6 +171,12 @@ Isolated native PASS не заменяет shared-VPS resource/backup/capacity �
 сохраняет failures обеих версий, exact input/oracle identity, CPU/RAM/I/O и cleanup.
 Для текущего кандидата дополнительно требуется runtime evidence explicit publication;
 прежний baseline до group buffer сохраняется для сопоставления.
+Чистый replay сохраняет callbacks Controller: global oracle проверяет все
+сохранённые event revisions после остановки workers и измерительного окна,
+сверяет их количество со счётчиком producer и подтверждает unchanged consumer wiring.
+Тот же measurement overlay применяется к обоим exact application sources.
+Frozen inputs, joint assertions и thresholds не меняются. Обёртка consumers остаётся
+только в явно инструментированном diagnostic режиме, не в acceptance прогоне.
 Профиль не запускается из PR автоматически и не выполняет merge или deployment.
 
 ### Полная регрессия exact main без поставки

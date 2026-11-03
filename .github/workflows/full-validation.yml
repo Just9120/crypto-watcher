@@ -78,16 +78,22 @@ jobs:
       - name: Verify immutable comparison sources and unchanged scenario
         run: |
           python - <<'PY'
-          import os,re,subprocess
+          import hashlib,os,re,subprocess
           from pathlib import Path
           candidate,baseline=os.environ['CANDIDATE'],os.environ['BASELINE']
           assert re.fullmatch(r'[0-9a-f]{40}',candidate)
           assert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()==candidate
           subprocess.run(['git','merge-base','--is-ancestor',baseline,candidate],check=True)
-          for path in ('scripts/qualify_processing.py','tests/processing_replay.py',
+          for path in ('scripts/qualify_processing.py',
                        'tests/test_processing_replay.py','scripts/cpu_pair_budget.py',
                        'requirements.txt','requirements-dev.txt','Dockerfile'):
               assert subprocess.check_output(['git','show',baseline+':'+path])==Path(path).read_bytes(),path
+          # Reviewed observation-only overlay is identical in both images.
+          for path,digest in (
+              ('tests/processing_replay.py','57068a1ce4fbf908e8d62f96f0c93f646d704b7980d90a4eb59e703ff17e9425'),
+              ('tests/processing_observation.py','3d962dbe851cff28658db6b859a9dc1ecf640d58d34e4b94845b454730cb118f'),
+          ):
+              assert hashlib.sha256(Path(path).read_bytes()).hexdigest()==digest,path
           PY
           mkdir -p .cache-g1/group-baseline .cache-g1/group-candidate
           git archive "$BASELINE" | tar -x -C .cache-g1/group-baseline

@@ -71,6 +71,14 @@ exposed mutable-state boundary. Arbitrary callbacks выполняются с о
 оставляет отложенных consumer intents. Финальная owner/settings проверка выполняется
 после фактической выгрузки consumer writes, до release producer unit.
 
+Acceptance-наблюдение не заменяет consumer callbacks и не добавляет их в trusted
+registry. После измерительного окна и остановки workers отдельный reader проверяет
+все сохранённые immutable event revisions, source-window hashes и точный oracle;
+consumer wiring сравнивается с исходным Controller до/после. Работа evidence reader
+не входит в paced-phase timers, но входит в общий CPU/wall budget контроллера.
+Явный diagnostic trace с callback wrapper остаётся инструментированным режимом,
+который не подтверждает acceptance производительности.
+
 Configuration/layout metadata на writer connection инвалидируются отдельно от
 рыночных строк. Шесть connection-local TEMP triggers отслеживают owner_settings
 и четыре используемых market_meta flags, включая trigger-side updates. Они не
