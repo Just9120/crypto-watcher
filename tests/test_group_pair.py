@@ -180,3 +180,5 @@ def test_native_prechecks_have_writable_temporary_files_with_readonly_applicatio
     ):
         assert guard in command
     assert "--basetemp /work/pytest" in command
+    assert "-o asyncio_mode=auto" in command
+    assert "-o asyncio_default_fixture_loop_scope=function" in command
