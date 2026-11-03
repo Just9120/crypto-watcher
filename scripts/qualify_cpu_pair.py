@@ -80,7 +80,22 @@ def save(directory, label, proof):
     (directory / f"{label}-controller.json").write_text(json.dumps(proof, indent=2))
 
 
-def one(image, measurement, directory, label, cpu_limit, budget):
+def one(
+    image,
+    measurement,
+    directory,
+    label,
+    cpu_limit,
+    budget,
+    *,
+    expected_revision=None,
+    admission=None,
+    supervisor_module="scripts.qualify_cpu_pair",
+):
+    if supervisor_module not in ("scripts.qualify_cpu_pair", "scripts.qualify_group_pair"):
+        raise ValueError("Unsupported supervisor")
+    expected_revision = expected_revision or b.RUNTIME
+    admission = admission or b.admission
     work = directory / f"{label}-work"
     work.mkdir(mode=0o700)
     os.chown(work, 10001, 10001)
@@ -90,7 +105,7 @@ def one(image, measurement, directory, label, cpu_limit, budget):
         "cpu_limit": cpu_limit,
         "state": "PREPARED",
         "samples": [],
-        "runtime": b.RUNTIME,
+        "runtime": expected_revision,
         "measurement": measurement,
         "image": image,
         "admission": [],
@@ -103,9 +118,9 @@ def one(image, measurement, directory, label, cpu_limit, budget):
                 proof["state"] = budget.reason()
                 return proof
             proof["admission"].append(q.interval(5))
-            if b.admission(proof["admission"], shutil.disk_usage(directory).free, cpu_limit=cpu_limit):
+            if admission(proof["admission"], shutil.disk_usage(directory).free, cpu_limit=cpu_limit):
                 break
-        if not b.admission(proof["admission"], shutil.disk_usage(directory).free, cpu_limit=cpu_limit):
+        if not admission(proof["admission"], shutil.disk_usage(directory).free, cpu_limit=cpu_limit):
             proof["state"] = "NOT_STARTED_RESOURCE_ADMISSION"
             return proof
         if not budget.admit_second():
@@ -141,7 +156,7 @@ def one(image, measurement, directory, label, cpu_limit, budget):
                 image,
                 "-B",
                 "-m",
-                "scripts.qualify_cpu_pair",
+                supervisor_module,
                 "supervise",
                 "--cpu-limit",
                 str(cpu_limit),
@@ -223,7 +238,7 @@ def one(image, measurement, directory, label, cpu_limit, budget):
             if len(raw) > 2 * 1024**2:
                 raise ValueError("Oversized result")
             result = json.loads(raw)
-            if result.get("source") != b.RUNTIME:
+            if result.get("source") != expected_revision:
                 raise ValueError("Frozen source mismatch")
             (directory / f"{label}-result.json").write_bytes(raw)
             proof["result"] = result

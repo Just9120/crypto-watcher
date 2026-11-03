@@ -160,6 +160,17 @@ synthetic work удаляется после сохранения proof. Product
 также требует эту qualification для code changes. Нет CD/manual full-main запуска.
 Isolated native PASS не заменяет shared-VPS resource/backup/capacity и30min/24h.
 
+### Разовое сравнение групповой публикации
+
+По явному поручению владельца workflow `full-validation.yml` поддерживает режим
+`group-publication` на ветке PR94. `revision` — exact SHA кандидата; baseline
+зафиксирован в `scripts/qualify_group_pair.py`. Это одна baseline/candidate пара
+на одном Linux host: normal runtime, без профайлера и экспериментальных адаптеров.
+Общий бюджет пары —1CPU/4GiB/450CPU-s/510wall/600outer; исходные assertions остаются.
+`COMPARISON_COMPLETE` означает полноту сравнения, а не приёмочный PASS: `pair.json`
+сохраняет failures обеих версий, exact input/oracle identity, CPU/RAM/I/O и cleanup.
+Профиль не запускается из PR автоматически и не выполняет merge или deployment.
+
 ### Полная регрессия exact main без поставки
 
 Canonical entrypoint: `python scripts/checks.py full`; inventory без выполнения:

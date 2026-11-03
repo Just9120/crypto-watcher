@@ -87,6 +87,12 @@ class History(BASE_HISTORY):
         return super().metadata(key)
 
     def condition_group(self, stream: Any) -> Any:
+        batch = getattr(self.store, "_writer_batch", None)
+        if batch is not None and not batch.flushing:
+            batch.check()
+            pending = batch.direct.get(("conditions", stream))
+            if pending is not None:
+                return json.loads(pending)
         row = self.store.db.execute(
             "SELECT payload,sha FROM domain_conditions WHERE stream=?", (stream,)
         ).fetchone()
@@ -106,6 +112,13 @@ class History(BASE_HISTORY):
             _, stream, family, direction = key.split(":")
             return self.condition_group(stream).get(family + ":" + direction, default)
         if key.startswith(STATE_PREFIXES):
+            batch = getattr(self.store, "_writer_batch", None)
+            if batch is not None and not batch.flushing:
+                batch.check()
+                identity = ("state", key)
+                if identity in batch.direct:
+                    raw = batch.direct[identity]
+                    return default if raw is None else json.loads(raw)
             row = self.store.db.execute("SELECT payload,sha FROM domain_state WHERE key=?", (key,)).fetchone()
             if row is None:
                 return super().get(key, default)
@@ -121,6 +134,10 @@ class History(BASE_HISTORY):
             group[family + ":" + direction] = value
             self.conditions(stream, group)
         elif key.startswith(STATE_PREFIXES):
+            batch = getattr(self.store, "_writer_batch", None)
+            if batch is not None and batch.grouped and not batch.flushing:
+                batch.domain("state", key, value)
+                return
             if self.store.get_runtime(PREFIX + key) is not None:
                 repository.OriginalHistory.delete(self, key)
             raw = encode(value)
@@ -147,6 +164,10 @@ class History(BASE_HISTORY):
                 old._delete_raw(GROUP + stream)
             for key in legacy.legacy:
                 old._delete_raw(key)
+        batch = getattr(self.store, "_writer_batch", None)
+        if batch is not None and batch.grouped and not batch.flushing:
+            batch.domain("conditions", stream, value)
+            return
         raw = encode(value)
         self.store.db.execute(
             "INSERT INTO domain_conditions VALUES(?,?,?) ON CONFLICT(stream) DO UPDATE SET payload=excluded.payload,sha=excluded.sha",
@@ -155,6 +176,12 @@ class History(BASE_HISTORY):
 
     def delete(self, key: Any) -> Any:
         if key.startswith(STATE_PREFIXES):
+            batch = getattr(self.store, "_writer_batch", None)
+            if batch is not None and batch.grouped and not batch.flushing:
+                from .writer_memory import DELETE
+
+                batch.domain("state", key, DELETE)
+                return
             self.store.db.execute("DELETE FROM domain_state WHERE key=?", (key,))
             # Direct mutable rows never own legacy body/expiry indexes. Delete
             # those only when a real legacy row is present (including cutover).
@@ -162,6 +189,24 @@ class History(BASE_HISTORY):
                 super().delete(key)
         else:
             super().delete(key)
+
+    def flush_domain(self, pending: Any) -> None:
+        """Flush bounded, already encoded mutable state without per-row wrappers."""
+        states = [(key, raw) for (kind, key), raw in pending.items() if kind == "state"]
+        for key, _ in states:
+            if self.store.get_runtime(PREFIX + key) is not None:
+                repository.OriginalHistory.delete(self, key)
+        self.store.db.executemany(
+            "INSERT INTO domain_state VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload,sha=excluded.sha",
+            [(key, raw, digest(raw)) for key, raw in states if raw is not None],
+        )
+        self.store.db.executemany(
+            "DELETE FROM domain_state WHERE key=?", [(key,) for key, raw in states if raw is None]
+        )
+        self.store.db.executemany(
+            "INSERT INTO domain_conditions VALUES(?,?,?) ON CONFLICT(stream) DO UPDATE SET payload=excluded.payload,sha=excluded.sha",
+            [(key, raw, digest(raw)) for (kind, key), raw in pending.items() if kind == "conditions"],
+        )
 
     def items(self, prefix: Any, limit: Any = None, *, reverse: Any = False) -> Any:
         batch = getattr(self.store, "_writer_batch", None)
@@ -294,20 +339,33 @@ class History(BASE_HISTORY):
             if set(prior) - set(fields):
                 raise StateError("Episode members cannot disappear")
         else:
+            snapshots: dict[str, str] = {}
+            links = []
             for name in repository.SHARED & body.keys():
                 raw = encode(body[name])
                 if len(raw.encode()) <= 128:
                     continue
                 sha = digest(raw)
-                db.execute("INSERT OR IGNORE INTO direct_snapshots(digest,payload) VALUES(?,?)", (sha, raw))
-                found = db.execute("SELECT payload FROM direct_snapshots WHERE digest=?", (sha,)).fetchone()[
-                    0
-                ]
-                if found != raw:
+                if sha in snapshots and snapshots[sha] != raw:
                     raise StateError("Conflicting domain input snapshot")
-                db.execute("INSERT INTO direct_links VALUES(?,?,?)", (key, name, sha))
+                snapshots[sha] = raw
+                links.append((key, name, sha))
                 fields[name] = sha
                 del body[name]
+            if snapshots:
+                placeholders = ",".join("?" for _ in snapshots)
+                query = f"SELECT digest,payload FROM direct_snapshots WHERE digest IN({placeholders})"
+                found = dict(db.execute(query, tuple(snapshots)).fetchall())
+                if any(found[sha] != snapshots[sha] for sha in found):
+                    raise StateError("Conflicting domain input snapshot")
+                missing = [(sha, raw) for sha, raw in snapshots.items() if sha not in found]
+                if missing:
+                    db.executemany("INSERT INTO direct_snapshots(digest,payload) VALUES(?,?)", missing)
+                    # Validate actual rows after triggers, never cache a presence
+                    # proof or bypass corruption checks across publications.
+                    if dict(db.execute(query, tuple(snapshots)).fetchall()) != snapshots:
+                        raise StateError("Conflicting domain input snapshot")
+                db.executemany("INSERT INTO direct_links VALUES(?,?,?)", links)
         clock = {
             k: value[k]
             for k in (*events.HEAD_FIELDS[kind], "origin_event_id", "reference_price", "reference_time_ms")

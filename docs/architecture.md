@@ -58,6 +58,17 @@ commit; prospective source window используется только синх
 Ошибка consumer откатывает эту единицу целиком. Standalone/replaced observers
 сохраняют прежний вызов после source commit. Нового durable queue или формата нет.
 
+Существующая WS-группа до восьми frames использует один конечный publication context
+на той же connection и до внешнего commit. Mutable domain state/conditions и consumer
+state объединяются в ограниченных буферах (каждый до128ключей/1MiB); revisions,
+публичные heads и source provenance сохраняются без пропусков. Raw domain SQL,
+сканирование, savepoint и смена authorizer — barriers, публикующие pending state
+внутри текущей транзакции; внешний reader видит только committed данные. Context
+сбрасывается при выходе и не переносит права/settings между транзакциями.
+Ссылки на shared inputs проверяются одним bounded SQL lookup на публикацию;
+существующие payload bytes проверяются, missing inputs вставляются и перечитываются
+после triggers. Доказательство наличия inputs не кешируется между публикациями.
+
 Readonly outcome/comparison preparation выполняется последовательно. Controller
 сохраняет256/64result batches и four publication lanes; comparison preparation
 получает4s вместо2s, чтобы использовать уже подготовленную frozen population

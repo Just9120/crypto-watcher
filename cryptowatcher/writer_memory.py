@@ -89,6 +89,18 @@ class Connection(sqlite3.Connection):
         if self.hot is None:
             return
         verb = sql.lstrip().split(None, 1)[0].upper() if sql.strip() else ""
+        if (
+            self.hot.grouped
+            and not self.hot.flushing
+            and (
+                verb in ("SAVEPOINT", "RELEASE", "ROLLBACK", "WITH", "CREATE", "DROP", "ALTER")
+                or "domain_state" in sql.lower()
+                or "domain_conditions" in sql.lower()
+            )
+        ):
+            # Raw SQL and savepoints are visibility/rollback barriers. Never
+            # retain a deferred mutation across an untracked SQL boundary.
+            self.hot.flush()
         if verb in ("COMMIT", "END") or (verb == "ROLLBACK" and " TO " not in " " + sql.upper() + " "):
             raise StateError("Joined producer cannot end its source transaction")
         if (verb == "WITH" or verb == "PRAGMA" and ("=" in sql or "(" in sql)) or (
@@ -104,6 +116,7 @@ class Connection(sqlite3.Connection):
 
     def set_authorizer(self, callback: Any) -> Any:
         if self.hot is not None:
+            self.hot.flush()
             self.hot.headers.clear()
             self.hot.episodes.clear()
         return super().set_authorizer(callback)
@@ -114,6 +127,11 @@ class Connection(sqlite3.Connection):
     def execute(self, sql: Any, parameters: Any = ()) -> Any:
         self.invalidate(sql)
         if self.hot is not None and sql in QUERIES:
+            if self.hot.grouped and self.hot.header_epoch != self.total_changes:
+                # Include trigger-side changes, not merely SQL text. A group
+                # must not reuse pre-write owner/configuration evidence.
+                self.hot.headers.clear()
+                self.hot.header_epoch = self.total_changes
             key = (sql, tuple(parameters))
             previous = self.hot.headers.get(key)
             if previous is None:
@@ -160,17 +178,52 @@ class Batch:
         self.writes: dict[Any, Any] = {}
         self.sizes: dict[Any, int] = {}
         self.flushing = False
+        self.grouped = False
+        self.header_epoch = -1
+        self.failed = False
+        self.direct: dict[Any, Any] = {}
+        self.direct_sizes: dict[Any, int] = {}
         self.episodes = EpisodeReads(stats)
         self.owner = None if history is None else (history.store.owner_id, history.store.readonly)
 
+    def check(self) -> None:
+        if (
+            self.failed
+            or self.owner != (self.history.store.owner_id, self.history.store.readonly)
+            or self.history.store.readonly
+            or not self.history.store.db.in_transaction
+        ):
+            raise StateError("Writer group owner or transaction changed")
+
+    def domain(self, kind: str, key: str, value: Any) -> None:
+        self.check()
+        raw = None if value is DELETE else encode(value)
+        size = len(key.encode()) + (0 if raw is None else len(raw.encode()))
+        identity = (kind, key)
+        if (
+            len(self.direct) + (identity not in self.direct) > 128
+            or sum(self.direct_sizes.values()) - self.direct_sizes.get(identity, 0) + size > 1024**2
+        ):
+            self.flush()
+        if size > 1024**2:
+            raise StateError("Joined domain-state budget exceeded")
+        self.direct[identity] = raw
+        self.direct_sizes[identity] = size
+        self.stats["domain_buffered"] += 1
+
     def write(self, key: Any, value: Any) -> Any:
+        self.check()
         frozen = DELETE if value is DELETE else copy.deepcopy(value)
         size = len(key.encode()) + (0 if value is DELETE else len(encode(value).encode()))
         if (
             len(self.writes) + (key not in self.writes) > 128
             or sum(self.sizes.values()) - self.sizes.get(key, 0) + size > 1024**2
         ):
-            raise StateError("Joined mutable-state budget exceeded")
+            if not self.grouped:
+                raise StateError("Joined mutable-state budget exceeded")
+            self.flush()
+            if size > 1024**2:
+                raise StateError("Joined mutable-state budget exceeded")
         self.stats["buffered_mutations"] += 1
         self.writes[key], self.sizes[key] = frozen, size
         self.stats["peak_keys"] = max(self.stats["peak_keys"], len(self.writes))
@@ -178,9 +231,15 @@ class Batch:
     def flush(self) -> Any:
         if self.flushing:
             return
+        self.check()
         self.flushing = True
         try:
-            for key, value in self.writes.items():
+            if self.direct:
+                self.history.flush_domain(self.direct)
+                self.stats["domain_flushed"] += len(self.direct)
+                self.direct.clear()
+                self.direct_sizes.clear()
+            for key, value in list(self.writes.items()):
                 if value is DELETE:
                     self.delete(self.history, key)
                 else:
@@ -195,11 +254,24 @@ class Batch:
 @contextmanager
 def transaction(history: Any) -> Iterator[Any]:
     db = history.store.db
-    if not db.in_transaction or getattr(history.store, "_writer_batch", None) is not None:
+    existing = getattr(history.store, "_writer_batch", None)
+    if existing is not None:
+        if not existing.grouped or existing.history.store is not history.store:
+            raise StateError("Writer batch requires its existing source transaction")
+        existing.check()
+        try:
+            yield existing
+        except BaseException:
+            existing.failed = True
+            raise
+        return
+    if not db.in_transaction:
         raise StateError("Writer batch requires its existing source transaction")
     stats = dict.fromkeys(
         (
             "observations",
+            "domain_buffered",
+            "domain_flushed",
             "buffered_mutations",
             "flushed_mutations",
             "peak_keys",
@@ -223,3 +295,20 @@ def transaction(history: Any) -> Iterator[Any]:
         if isinstance(db, Connection):
             db.hot = None
         setattr(history.store, "_writer_batch", None)
+
+
+@contextmanager
+def source_group(store: Any) -> Iterator[Any]:
+    """Reuse one finite publication context, never beyond the durable group."""
+    from .events import History
+
+    history = History(store)
+    # Keep legacy installations and non-writer callers on their original path.
+    from .domain_repository import History as DomainHistory
+
+    if not isinstance(history, DomainHistory) or not isinstance(store.db, Connection):
+        yield None
+        return
+    with transaction(history) as batch:
+        batch.grouped = True
+        yield batch

@@ -1,0 +1,5 @@
+**
+!scripts/
+!scripts/qualify_cpu_pair.py
+!scripts/cpu_pair_budget.py
+!scripts/qualify_group_pair.py
