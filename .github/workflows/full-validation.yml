@@ -108,7 +108,7 @@ jobs:
           done
       - name: One baseline-candidate pair within the shared budget
         run: |
-          sudo timeout --signal=INT --kill-after=10s 600s "$(command -v python)" -B -m scripts.qualify_group_pair run cw-group-pair:baseline cw-group-pair:candidate "$CANDIDATE" "$REPORT"
+          sudo timeout --signal=INT --kill-after=10s 600s "$(command -v python)" -B -m scripts.qualify_group_pair run cw-group-pair:baseline cw-group-pair:candidate "$CANDIDATE" "$GITHUB_WORKSPACE/$REPORT"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
