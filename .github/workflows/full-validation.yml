@@ -114,7 +114,7 @@ jobs:
           done
       - name: Focused native retention and evidence checks before the market pair
         run: |
-          timeout --signal=INT --kill-after=10s 180s docker run --rm --cpus=1 --memory=4g --memory-swap=4g --network=none --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /work:rw,noexec,nosuid,mode=1777,size=1g cw-group-runtime:candidate python -B -m pytest -p no:cacheprovider tests/test_retention_pair.py tests/test_expiry_native.py tests/test_light_retention.py tests/test_catalogue_lifecycle.py tests/test_explicit_publication.py tests/test_group_publication.py tests/test_processing_observation.py -q --basetemp /work/pytest
+          timeout --signal=INT --kill-after=10s 180s docker run --rm --cpus=1 --memory=4g --memory-swap=4g --network=none --read-only --cap-drop=ALL --security-opt=no-new-privileges --tmpfs /work:rw,noexec,nosuid,mode=1777,size=1g --env TMPDIR=/work cw-group-runtime:candidate python -B -m pytest -p no:cacheprovider tests/test_retention_pair.py tests/test_expiry_native.py tests/test_light_retention.py tests/test_catalogue_lifecycle.py tests/test_explicit_publication.py tests/test_group_publication.py tests/test_processing_observation.py -q --basetemp /work/pytest
       - name: One baseline-candidate pair within the shared budget
         run: |
           sudo timeout --signal=INT --kill-after=10s 600s "$(command -v python)" -B -m scripts.qualify_group_pair run cw-group-pair:baseline cw-group-pair:candidate "$CANDIDATE" "$GITHUB_WORKSPACE/$REPORT"

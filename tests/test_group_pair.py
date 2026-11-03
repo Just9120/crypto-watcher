@@ -159,3 +159,24 @@ def test_profile_only_runs_on_research_branch_and_never_accepts_changed_applicat
     measured = next(step["run"] for step in job["steps"] if step.get("name", "").startswith("One bounded"))
     assert "--profile" in measured and "600s" in measured
     assert workflow["permissions"] == {"contents": "read"}
+
+
+def test_native_prechecks_have_writable_temporary_files_with_readonly_application():
+    root = Path(__file__).resolve().parents[1]
+    workflow = yaml.load((root / ".github/workflows/full-validation.yml").read_text(), Loader=yaml.BaseLoader)
+    command = next(
+        step["run"]
+        for step in workflow["jobs"]["group-publication"]["steps"]
+        if step.get("name", "").startswith("Focused native retention")
+    )
+    for guard in (
+        "--read-only",
+        "--network=none",
+        "--cpus=1",
+        "--memory=4g",
+        "--cap-drop=ALL",
+        "--env TMPDIR=/work",
+        "--tmpfs /work:",
+    ):
+        assert guard in command
+    assert "--basetemp /work/pytest" in command
