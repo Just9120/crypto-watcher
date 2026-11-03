@@ -140,6 +140,55 @@ def hot_binding(db: sqlite3.Connection, key: str) -> tuple[int, str, str | None]
     return tuple(rows[0]) if rows else None
 
 
+def paired_expiries(store: Any, keys: tuple[str, ...]) -> tuple[dict[str, Any], dict[str, Any], set[str]]:
+    """Read up to two actual bindings in one snapshot; never retain row proofs."""
+    from .catalogue_lifecycle import expires as cold_expiry
+    from .key_registry import pack
+
+    keys = tuple(dict.fromkeys(keys))
+    if not 1 <= len(keys) <= 2:
+        raise ValueError("Retention pair must contain one or two keys")
+    db = store.db
+    hot: dict[str, Any] = {}
+    canonical: set[str] = set()
+    if db.execute("SELECT type FROM sqlite_master WHERE name='market_lifetimes'").fetchone()[0] != "view":
+        hot = {key: hot_binding(db, key) for key in keys}
+    else:
+        packed = {
+            key: store._cached_value("registry-pack", "", key, lambda key=key: pack(key)) for key in keys
+        }
+        wanted = ",".join("(?,?)" for _ in keys)
+        parameters = tuple(value for key in keys for value in (key, packed[key]))
+        rows = db.execute(
+            f"WITH wanted(public,packed) AS (VALUES {wanted}) "
+            "SELECT w.public,e.expires,e.category,i.external,e.key_bytes FROM wanted w "
+            "JOIN market_runtime_keys k ON k.external IN(w.public,w.packed) "
+            "JOIN market_expiry e ON e.rid=k.id LEFT JOIN market_event_ids i ON i.id=e.event_ref "
+            "UNION ALL SELECT w.public,e.expires,e.category,e.event_id,NULL FROM wanted w "
+            "JOIN market_expiry_legacy e ON e.key=w.public",
+            parameters,
+        ).fetchall()
+        for key, expiry, category, event, key_bytes in rows:
+            if key in hot:
+                raise ValueError("Conflicting native retention bindings")
+            hot[key] = (expiry, category, event)
+            token = packed[key]
+            expected = len(token.encode() if isinstance(token, str) else token)
+            if key_bytes == expected:
+                canonical.add(key)
+        for key in keys:
+            hot.setdefault(key, None)
+    leases = {}
+    for key in keys:
+        binding = hot[key]
+        old = binding[:1] if binding is not None else None
+        cold = cold_expiry(db, key)
+        if cold is not None and old is not None and old[0] != cold:
+            raise ValueError("Conflicting mixed immutable expiry")
+        leases[key] = (cold,) if cold is not None else old
+    return hot, leases, canonical
+
+
 def owned_hot(db: sqlite3.Connection, event_id: str, limit: int = 128) -> list[str]:
     """A bounded native ownership batch; callers repeat after removing it."""
     if type(limit) is not int or not 1 <= limit <= 1024:
