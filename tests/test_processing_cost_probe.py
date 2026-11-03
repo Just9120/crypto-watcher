@@ -65,11 +65,12 @@ def test_real_sqlite_wrappers_preserve_factory_udf_values_exception_and_rollback
     assert probe.lib.role == 0
 
 
-def test_group_role_is_restored_on_error_and_no_input_is_replaced(monkeypatch):
+@pytest.mark.parametrize("empty", [False, True])
+def test_group_role_is_restored_on_error_and_no_input_is_replaced(monkeypatch, empty):
     from cryptowatcher.ingestion import BybitRadar
 
     frame = ({"unchanged": True}, 123)
-    frames = [frame]
+    frames = [] if empty else [frame]
     allowed = {"unchanged"}
 
     def original(self, market, received, names):

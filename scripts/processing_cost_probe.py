@@ -237,7 +237,7 @@ def installed(probe):
                     "cpu": used,
                     "phase": probe.phase,
                     "frames": len(frames),
-                    "first_receipt_ms": min(at for _, at in frames),
+                    "first_receipt_ms": min((at for _, at in frames), default=None),
                 },
             )
             if len(row["groups"]) < 4096:
