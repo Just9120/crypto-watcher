@@ -80,7 +80,25 @@ def save(directory, label, proof):
     (directory / f"{label}-controller.json").write_text(json.dumps(proof, indent=2))
 
 
-def one(image, measurement, directory, label, cpu_limit, budget):
+def one(
+    image,
+    measurement,
+    directory,
+    label,
+    cpu_limit,
+    budget,
+    *,
+    expected_revision=None,
+    supervisor_module="scripts.qualify_cpu_pair",
+    admission=None,
+    measurement_files=(),
+):
+    if supervisor_module not in ("scripts.qualify_cpu_pair", "scripts.qualify_revision_pair", "scripts.processing_cost_probe"):
+        raise ValueError("Unsupported measurement supervisor")
+    if any(name not in ("sql-profile.json", "cost-profile.json", "cost-samples.json") for name in measurement_files):
+        raise ValueError("Unsupported bounded measurement artifact")
+    expected_revision = expected_revision or b.RUNTIME
+    admission = admission or b.admission
     work = directory / f"{label}-work"
     work.mkdir(mode=0o700)
     os.chown(work, 10001, 10001)
@@ -90,7 +108,7 @@ def one(image, measurement, directory, label, cpu_limit, budget):
         "cpu_limit": cpu_limit,
         "state": "PREPARED",
         "samples": [],
-        "runtime": b.RUNTIME,
+        "runtime": expected_revision,
         "measurement": measurement,
         "image": image,
         "admission": [],
@@ -103,9 +121,9 @@ def one(image, measurement, directory, label, cpu_limit, budget):
                 proof["state"] = budget.reason()
                 return proof
             proof["admission"].append(q.interval(5))
-            if b.admission(proof["admission"], shutil.disk_usage(directory).free, cpu_limit=cpu_limit):
+            if admission(proof["admission"], shutil.disk_usage(directory).free, cpu_limit=cpu_limit):
                 break
-        if not b.admission(proof["admission"], shutil.disk_usage(directory).free, cpu_limit=cpu_limit):
+        if not admission(proof["admission"], shutil.disk_usage(directory).free, cpu_limit=cpu_limit):
             proof["state"] = "NOT_STARTED_RESOURCE_ADMISSION"
             return proof
         if not budget.admit_second():
@@ -141,7 +159,7 @@ def one(image, measurement, directory, label, cpu_limit, budget):
                 image,
                 "-B",
                 "-m",
-                "scripts.qualify_cpu_pair",
+                supervisor_module,
                 "supervise",
                 "--cpu-limit",
                 str(cpu_limit),
@@ -223,7 +241,7 @@ def one(image, measurement, directory, label, cpu_limit, budget):
             if len(raw) > 2 * 1024**2:
                 raise ValueError("Oversized result")
             result = json.loads(raw)
-            if result.get("source") != b.RUNTIME:
+            if result.get("source") != expected_revision:
                 raise ValueError("Frozen source mismatch")
             (directory / f"{label}-result.json").write_bytes(raw)
             proof["result"] = result
@@ -241,6 +259,14 @@ def one(image, measurement, directory, label, cpu_limit, budget):
                     raise ValueError("Domain fact evidence digest mismatch")
                 (directory / f"{label}-facts.json").write_bytes(raw)
                 proof["fact_evidence"] = evidence
+        for filename in measurement_files:
+            path = work / filename
+            if path.is_symlink() or not path.is_file() or path.stat().st_size > 2 * 1024**2:
+                raise ValueError("Missing or oversized measurement artifact")
+            raw = path.read_bytes()
+            if json.loads(raw).get("source") != expected_revision:
+                raise ValueError("Measurement artifact source mismatch")
+            (directory / f"{label}-{filename}").write_bytes(raw)
         if proof["state"] == "PREPARED":
             proof["state"] = (
                 "CASE_COMPLETE"

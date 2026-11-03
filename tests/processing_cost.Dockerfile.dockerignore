@@ -1,0 +1,7 @@
+**
+!scripts/
+!scripts/processing_cost_probe.c
+!scripts/processing_cost_probe.py
+!scripts/qualify_cpu_pair.py
+!scripts/qualify_revision_pair.py
+!scripts/cpu_pair_budget.py

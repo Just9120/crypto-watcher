@@ -6,6 +6,12 @@ on:
         description: Exact current main SHA, no branch/tag
         required: true
         type: string
+      mode:
+        description: Explicit profile; diagnostic only on its fixed measurement branch
+        required: true
+        default: full
+        type: choice
+        options: [full, cost-diagnostic]
 permissions:
   contents: read
 concurrency:
@@ -13,7 +19,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   full:
-    if: github.repository == 'Just9120/crypto-watcher' && github.ref == 'refs/heads/main'
+    if: github.repository == 'Just9120/crypto-watcher' && github.ref == 'refs/heads/main' && inputs.mode == 'full'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
@@ -52,5 +58,64 @@ jobs:
             ${{ env.VALIDATION_REPORT }}/*.log
             ${{ env.VALIDATION_REPORT }}/package/manifest.json
             ${{ env.VALIDATION_REPORT }}/package/bundle.sha256
+          retention-days: 14
+          if-no-files-found: warn
+
+  cost-diagnostic:
+    if: github.repository == 'Just9120/crypto-watcher' && github.ref == 'refs/heads/codex/processing-cost-20261103' && inputs.mode == 'cost-diagnostic' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      RUNTIME: 04a894c95ff186c2983387eb74a93219670b17b0
+      REQUESTED: ${{ inputs.revision }}
+      MEASUREMENT: ${{ github.sha }}
+      REPORT: .cache-g1/cost-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+      - name: Verify immutable application and prepare isolated build context
+        run: |
+          test "$REQUESTED" = "$RUNTIME"
+          python - <<'PY'
+          import os,subprocess,hashlib
+          from pathlib import Path
+          runtime=os.environ['RUNTIME']
+          for path in ['requirements.txt','requirements-dev.txt','Dockerfile','tests/processing_replay.py','tests/test_processing_replay.py','scripts/qualify_processing.py','scripts/qualify_framed_backup.py']:
+              frozen=subprocess.check_output(['git','show',runtime+':'+path])
+              assert hashlib.sha256(frozen).digest()==hashlib.sha256(Path(path).read_bytes()).digest(),path
+          PY
+          mkdir -p .cache-g1/frozen-app
+          git archive "$RUNTIME" | tar -x -C .cache-g1/frozen-app
+      - name: Install locked diagnostic prerequisites and check measurement code
+        run: |
+          python -m pip install --require-hashes -r requirements-dev.txt
+          uv pip check --python "$(command -v python)"
+          python -m ruff check scripts/processing_cost_probe.py
+          python -m ruff format --check scripts/processing_cost_probe.py
+          python -m pytest tests/test_processing_cost_probe.py tests/test_cpu_pair.py -q --basetemp .cache-g1/cost-controller-tests
+      - name: Build frozen runtime and measurement-only overlay
+        run: |
+          docker build --build-arg SOURCE_REVISION="$RUNTIME" --build-arg BUILD_RUN="${{ github.run_id }}" -t "cw-cost-base:$RUNTIME" .cache-g1/frozen-app
+          docker build -f tests/processing.Dockerfile --build-arg BASE_IMAGE="cw-cost-base:$RUNTIME" -t "cw-cost-runtime:$RUNTIME" .cache-g1/frozen-app
+          docker build -f tests/processing_cost.Dockerfile --build-arg BASE_IMAGE="cw-cost-runtime:$RUNTIME" --build-arg MEASUREMENT_REVISION="$MEASUREMENT" -t "cw-cost:$MEASUREMENT" .
+      - name: Native interception and SQLite round-trip preflight; no market run
+        run: |
+          EXPECTED_SQLITE=$(timeout --signal=TERM --kill-after=5s 15s docker run --rm --network none --cpus 1 --memory 4g --memory-swap 4g --read-only --cap-drop ALL --security-opt no-new-privileges:true --no-healthcheck --entrypoint python "cw-cost-base:$RUNTIME" -B -c 'import sqlite3; print(sqlite3.sqlite_version)')
+          timeout --signal=TERM --kill-after=5s 20s docker run --ulimit cpu=5:5 --rm -e EXPECTED_SQLITE="$EXPECTED_SQLITE" --network none --cpus 1 --memory 4g --memory-swap 4g --pids-limit 64 --user 10001:10001 --read-only --cap-drop ALL --security-opt no-new-privileges:true --no-healthcheck --tmpfs /tmp:rw,noexec,nosuid,size=16m,mode=1777 -e LD_PRELOAD=/diag/processing_cost_probe.so:libsqlite3.so.0 --entrypoint python "cw-cost:$MEASUREMENT" -B -m scripts.processing_cost_probe preflight
+      - name: Exactly one full diagnostic; original assertions retained
+        run: |
+          sudo timeout --signal=INT --kill-after=10s 600s "$(command -v python)" -B -m scripts.processing_cost_probe run "cw-cost:$MEASUREMENT" "$MEASUREMENT" "$REPORT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: cost-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.REPORT }}/*.json
+            ${{ env.REPORT }}/*.log
+          include-hidden-files: true
           retention-days: 14
           if-no-files-found: warn
