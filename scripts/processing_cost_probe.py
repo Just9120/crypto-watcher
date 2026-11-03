@@ -405,10 +405,9 @@ def supervise(cpu_limit, seconds):
 
 
 def run(image, measurement, directory):
-    from scripts.qualify_revision_pair import admission
-
     from scripts import cpu_pair_budget as b
     from scripts import qualify_cpu_pair as pair
+    from scripts import qualify_revision_pair as revisions
 
     if directory.exists():
         raise ValueError("New result directory required")
@@ -436,7 +435,7 @@ def run(image, measurement, directory):
             budget,
             expected_revision=RUNTIME,
             supervisor_module="scripts.processing_cost_probe",
-            admission=admission,
+            admission=revisions.admission,
             measurement_files=("cost-profile.json", "cost-samples.json"),
         )
         result = proof.get("result", {})
