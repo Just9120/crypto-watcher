@@ -9,3 +9,6 @@
 !tests/
 !tests/processing_replay.py
 !tests/processing_observation.py
+!docs/
+!docs/contracts/
+!docs/contracts/cryptowatcher.market_event.v2.example.md
