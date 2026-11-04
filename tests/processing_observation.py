@@ -11,8 +11,9 @@ MAX_EVENTS = 20000
 
 
 class Observation:
-    def __init__(self, engine):
+    def __init__(self, engine, *, runtime_counter=True):
         self.engine = engine
+        self.runtime_counter = runtime_counter
         self.binding = self.current_binding()
 
     def current_binding(self):
@@ -46,8 +47,8 @@ class Observation:
                 raise AssertionError("Duplicate or conflicting persisted event evidence")
             identities.add(identity)
             events.append(event)
-        declared = self.engine.writer_stats["facts"]
-        if len(events) != declared:
+        declared = self.engine.writer_stats["facts"] if self.runtime_counter else None
+        if self.runtime_counter and len(events) != declared:
             raise AssertionError("Persisted events differ from the producer fact count")
         self.check()
         return events, {
@@ -55,4 +56,5 @@ class Observation:
             "consumer_wiring_unchanged": True,
             "events_read": len(events),
             "producer_facts": declared,
+            "fact_count_source": "RUNTIME_WRITER" if self.runtime_counter else "INDEPENDENT_ORACLE_REQUIRED",
         }

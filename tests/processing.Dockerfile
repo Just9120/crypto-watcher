@@ -4,5 +4,7 @@ USER root
 COPY requirements-dev.txt /qualification/requirements-dev.txt
 RUN python -m pip install --no-cache-dir --require-hashes -r /qualification/requirements-dev.txt && python -m pip check
 COPY tests/ /app/tests/
-COPY scripts/qualify_processing.py scripts/qualify_framed_backup.py /app/scripts/
+COPY pyproject.toml /app/pyproject.toml
+COPY .github/workflows/ci.yml /app/.github/workflows/ci.yml
+COPY scripts/qualify_processing.py scripts/qualify_framed_backup.py scripts/qualify_subject_save.py /app/scripts/
 USER 10001:10001

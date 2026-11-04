@@ -5,7 +5,7 @@ on:
       mode:
         description: Explicit owner-authorized profile; never deploy
         type: choice
-        options: [full-main, group-publication]
+        options: [full-main, group-publication, subject-save-narrow]
         default: full-main
       revision:
         description: Exact selected source SHA, no branch/tag
@@ -18,7 +18,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   full:
-    if: github.repository == 'Just9120/crypto-watcher' && github.ref == 'refs/heads/main' && inputs.mode != 'group-publication'
+    if: github.repository == 'Just9120/crypto-watcher' && github.ref == 'refs/heads/main' && inputs.mode == 'full-main'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
@@ -123,5 +123,53 @@ jobs:
             ${{ env.REPORT }}/*.json
             ${{ env.REPORT }}/*.log
           include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: warn
+
+  subject-save-narrow:
+    if: github.repository == 'Just9120/crypto-watcher' && github.ref == 'refs/heads/codex/subject-save-prototype-20261104' && inputs.mode == 'subject-save-narrow' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    env:
+      BASELINE: 19e0051b3ed009c90d6badd93a75b14a6d097e6a
+      CANDIDATE: ${{ inputs.revision }}
+      REPORT: .cache-g1/subject-narrow-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+      - name: Verify frozen application and narrow-only provenance
+        run: |
+          python - <<'PY'
+          import hashlib,os,re,subprocess
+          from pathlib import Path
+          source,baseline=os.environ['CANDIDATE'],os.environ['BASELINE']
+          assert re.fullmatch(r'[0-9a-f]{40}',source)
+          assert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()==source
+          subprocess.run(['git','merge-base','--is-ancestor',baseline,source],check=True)
+          assert not subprocess.check_output(['git','diff',baseline,source,'--','cryptowatcher'])
+          for name in ('scripts/qualify_processing.py','scripts/cpu_pair_budget.py',
+                       'tests/test_processing_replay.py','requirements.txt','requirements-dev.txt','Dockerfile'):
+              assert subprocess.check_output(['git','show',baseline+':'+name])==Path(name).read_bytes(),name
+          for name,digest in (('tests/processing_replay.py', '2198314f96f8f786b99786ad27d00089f5474a71e70965754ccd5a21898ce1d6'), ('tests/processing_observation.py', '5c9ae6b45300adcb4c49d25bb3ef378b062838035413784042643f5c0de6d40f')):
+              assert hashlib.sha256(Path(name).read_bytes()).hexdigest()==digest,name
+          PY
+      - name: Build existing native application and isolated qualification overlay
+        run: |
+          docker build --build-arg SOURCE_REVISION="$CANDIDATE" --build-arg BUILD_RUN="${{ github.run_id }}" -t cw-subject-base:narrow .
+          docker build -f tests/processing.Dockerfile --build-arg BASE_IMAGE=cw-subject-base:narrow -t cw-subject-runtime:narrow .
+      - name: One bounded native narrow matrix; not full processing acceptance
+        run: |
+          sudo timeout --signal=INT --kill-after=10s 600s "$(command -v python)" -B -m scripts.qualify_subject_save run cw-subject-runtime:narrow "$CANDIDATE" "$GITHUB_WORKSPACE/$REPORT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: subject-narrow-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.REPORT }}/*.json
+            ${{ env.REPORT }}/*.log
           retention-days: 14
           if-no-files-found: warn

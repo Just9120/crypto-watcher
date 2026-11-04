@@ -249,7 +249,7 @@ async def replay(
                 if not diagnostic:
                     from .processing_observation import Observation
 
-                    observation = Observation(controller.engine)
+                    observation = Observation(controller.engine, runtime_counter=runtime_pool)
                 original_publish = controller.engine.on_event_snapshot
 
                 def published(event, episode):
