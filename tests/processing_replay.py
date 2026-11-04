@@ -109,6 +109,7 @@ async def replay(
     diagnostic: bool = False,
     hot_state: bool = False,
     domain_roles: bool = False,
+    subject_services: bool = False,
 ) -> dict:
     if hot_state and (not bounded_pool or diagnostic):
         raise ValueError("Hot-state qualification requires the unprofiled bounded-pool scenario")
@@ -125,6 +126,8 @@ async def replay(
         raise ValueError("Qualification needs a new owned database and1..256 instruments per market")
     if type(seconds) is not int or not 4 <= seconds <= 190:
         raise ValueError("Qualification duration outside4..190 real seconds")
+    if subject_services and (direct_sqlite or domain_roles or hot_state or diagnostic):
+        raise ValueError("Subject services require the unchanged runtime flow")
     runtime_pool = not direct_sqlite
     if runtime_pool:
         bounded_pool = True
@@ -231,6 +234,10 @@ async def replay(
             market = BybitRadar(store, client)
             market.server_now = now
             controller = Controller(infrastructure, store, market)
+            if subject_services:
+                from cryptowatcher.service_repository import install as install_services
+
+                install_services(store)
             controller.agent.enable(True)
             pool = None
             global_trace = []
@@ -718,6 +725,41 @@ async def replay(
                     "Endpoint captured before cancellation; file bytes are after join, not disk IO or measured peak",
                 ],
             }
+            if subject_services:
+                from cryptowatcher.repository_meter import size_sql, state
+                from cryptowatcher.service_repository import TABLES
+
+                reconciliation = {}
+                for table, category in TABLES.items():
+                    columns = [row[1] for row in store.db.execute("PRAGMA table_info(" + table + ")")]
+                    actual = tuple(
+                        store.db.execute(
+                            "SELECT COUNT(*),COALESCE(SUM(" + size_sql(columns) + "),0) FROM " + table
+                        ).fetchone()
+                    )
+                    saved = tuple(
+                        store.db.execute(
+                            "SELECT records,logical_bytes FROM market_counts WHERE category=?", (category,)
+                        ).fetchone()
+                    )
+                    reconciliation[table] = {"actual": actual, "saved": saved, "match": actual == saved}
+                result["subject_services"] = {
+                    "mode": "ISOLATED_CANONICAL_SUBJECT_JOBS_DELIVERIES",
+                    "operations": dict(store.services.stats),
+                    "exact_counter_reconciliation": reconciliation,
+                    "tables": {
+                        name: store.db.execute("SELECT COUNT(*) FROM " + name).fetchone()[0]
+                        for name in (
+                            "subject_sources",
+                            "subject_outcomes",
+                            "subject_deliveries",
+                            "subject_delivery_payloads",
+                            "subject_attempts",
+                        )
+                    },
+                    "accounting": state(store),
+                    "foreign_keys": store.db.execute("PRAGMA foreign_key_check").fetchall(),
+                }
             if sys.platform == "linux":
                 import resource
 

@@ -92,7 +92,11 @@ def one(
     admission=None,
     supervisor_module="scripts.qualify_cpu_pair",
 ):
-    if supervisor_module not in ("scripts.qualify_cpu_pair", "scripts.qualify_group_pair"):
+    if supervisor_module not in (
+        "scripts.qualify_cpu_pair",
+        "scripts.qualify_group_pair",
+        "scripts.qualify_service_pair",
+    ):
         raise ValueError("Unsupported supervisor")
     expected_revision = expected_revision or b.RUNTIME
     admission = admission or b.admission

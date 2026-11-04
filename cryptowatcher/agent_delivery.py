@@ -18,6 +18,7 @@ import httpx
 
 from .agent_contract import envelope
 from .events import PREFIX, History, identity
+from .service_projections import transition
 from .storage import StateError, Store, encode
 
 
@@ -418,7 +419,7 @@ class AgentDelivery:
             ):
                 with self.store.db:
                     record.update(state="SUPERSEDED", reason="EXPIRED_OR_SETTINGS_CHANGED")
-                    self.history.put("agent:outbox:" + record["delivery_id"], record)
+                    transition(self.history, "agent:outbox:" + record["delivery_id"], record)
                     self.history.delete(due_key)
                     self.ready.remove("send", due_key, record["kind"] == "HISTORICAL_OUTCOME_UPDATE")
                     intent = record["intent"]
@@ -454,7 +455,7 @@ class AgentDelivery:
                         },
                     )
                 record.update(state="IN_FLIGHT", attempts=record["attempts"] + 1)
-                self.history.put("agent:outbox:" + record["delivery_id"], record)
+                transition(self.history, "agent:outbox:" + record["delivery_id"], record)
                 self.ready.advance()
             status, acknowledged, retry_after = None, False, 0
             try:
@@ -534,7 +535,7 @@ class AgentDelivery:
                         f"agent:send-due:{record['next_ms']:016d}:{record['delivery_id']}",
                         {"delivery_id": record["delivery_id"]},
                     )
-                self.history.put("agent:outbox:" + record["delivery_id"], record)
+                transition(self.history, "agent:outbox:" + record["delivery_id"], record)
                 if record["state"] == "PENDING":
                     self.ready.publish(
                         "send",
@@ -557,6 +558,11 @@ class AgentDelivery:
                 (start, start + "~"),
             )
         )
+        if self.store.services is not None:
+            for state, count in self.store.db.execute(
+                "SELECT state,COUNT(*) FROM subject_deliveries WHERE channel='agent' AND stage='outbox' GROUP BY state"
+            ):
+                counts[state] = counts.get(state, 0) + count
         preference = self.history.get("agent:preference", {"schema": 1, "enabled": False})
         preference_valid = (
             isinstance(preference, dict)

@@ -247,12 +247,22 @@ class Store:
         self.reference_cache: dict[tuple[str, str, str | bytes], tuple[str | bytes | OwnerSettings, int]] = {}
         self.reference_cache_bytes = 0
         self.clock_ms = lambda: int(time.time() * 1000)
+        self.services: Any = None
+        service_layout = False
         if path.exists():
             probe = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
             try:
                 version = probe.execute("PRAGMA user_version").fetchone()[0]
                 if version not in (SCHEMA_VERSION, 2):
                     raise StateError("Unsupported database schema; database preserved")
+                if version == 2:
+                    marker = probe.execute(
+                        "SELECT value FROM market_meta WHERE key='subject_services'"
+                    ).fetchone()
+                    if marker is not None:
+                        if marker[0] != "1":
+                            raise StateError("Unknown subject service layout; database preserved")
+                        service_layout = True
                 binding = probe.execute("SELECT owner_id FROM owner_settings").fetchone()
                 if binding is not None and binding[0] != owner_id:
                     raise StateError("Database owner mismatch")
@@ -269,7 +279,7 @@ class Store:
         location = f"{path.resolve().as_uri()}?mode=ro" if readonly else str(path)
         self.db = (
             sqlite3.connect(location, uri=readonly, timeout=5, factory=Connection)
-            if writer_connection and not readonly
+            if (writer_connection and not readonly) or service_layout
             else sqlite3.connect(location, uri=readonly, timeout=5)
         )
         try:
@@ -282,6 +292,12 @@ class Store:
             self._configure_connection(path, readonly=readonly)
             if readonly:
                 self.db.rollback()
+            if service_layout:
+                from .service_repository import Repository, validate
+
+                validate(self, meter=True)
+                self.services = Repository(self)
+                setattr(self.db, "subject_services", True)
         except BaseException:
             if readonly:
                 self.db.close()
@@ -642,6 +658,12 @@ class Store:
         )
 
     def get_runtime(self, key: str, default: Any = None) -> Any:
+        if self.services is not None and key.startswith("radar:v1:"):
+            from .service_projections import MISSING, get
+
+            result = get(self.services, key[len("radar:v1:") :])
+            if result is not MISSING:
+                return result
         row = self.db.execute("SELECT payload_json FROM runtime WHERE key=?", (key,)).fetchone()
         if self.bounded:
             from .catalogue_reader import MISSING, lookup
@@ -661,7 +683,7 @@ class Store:
     ) -> Iterator[tuple[str, Any]]:
         from .catalogue_store import scan
 
-        yield from scan(
+        legacy = scan(
             self.db,
             prefix,
             bounded=self.bounded,
@@ -672,6 +694,12 @@ class Store:
             cache=self.cached_bytes,
             decode=self.decode_runtime,
         )
+        if self.services is None:
+            yield from legacy
+        else:
+            from .service_projections import merge
+
+            yield from merge(self.services, legacy, prefix, limit, reverse, after, before)
 
     def put_runtime(self, key: str, payload: Any) -> None:
         from .catalogue_write import mutation
@@ -684,6 +712,8 @@ class Store:
     def count_runtime(self, prefix: str) -> int:
         from .catalogue_store import count
 
+        if self.services is not None and prefix.startswith("radar:v1:"):
+            return sum(1 for _ in self.scan_runtime(prefix))
         return count(self.db, prefix, bounded=self.bounded)
 
     def backup(

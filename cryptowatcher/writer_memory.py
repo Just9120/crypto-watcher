@@ -83,6 +83,8 @@ class Cursor(sqlite3.Cursor):
 
 
 class Connection(sqlite3.Connection):
+    subject_services: bool = False
+
     hot: Any = None
     publication_depth = 0
     _metadata_epoch = 0

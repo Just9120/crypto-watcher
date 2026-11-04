@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from .events import PREFIX, History
+from .service_projections import transition
 from .storage import StateError
 
 STAGES = {"intent": "agent:intent-due:", "send": "agent:send-due:"}
@@ -64,7 +65,7 @@ class Ready:
             record["outcomes"] = [
                 self.history.revision_reference("outcome", value) for value in record["outcomes"]
             ]
-        self.history.put(key, record)
+        transition(self.history, key, record)
 
     def recover(self, stage: str, now: int) -> None:
         """At most eight old canonical bindings per call, including after restart."""

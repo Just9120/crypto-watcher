@@ -127,7 +127,7 @@ def trigger_sql(table: str, category: str, columns: list[str], *, legacy: bool =
 def install(store: Store, label: str, tables: dict[str, str]) -> None:
     if not store.bounded:
         return
-    if label not in ("direct", "pool") or store.readonly or store.db.in_transaction:
+    if label not in ("direct", "pool", "subject") or store.readonly or store.db.in_transaction:
         raise StateError("Subject meter installation requires its idle writable owner")
     with store.db:
         store.db.execute("BEGIN IMMEDIATE")
@@ -207,6 +207,10 @@ def state(store: Store) -> dict[str, Any]:
     labels = [("direct", DIRECT)] if "direct_snapshots" in present else []
     if "analytics_pool_choices" in present:
         labels.append(("pool", POOL))
+    if getattr(store, "services", None) is not None:
+        from .service_repository import TABLES
+
+        labels.append(("subject", TABLES))
     missing = [name for name, _ in labels if not installed(store, name)]
     categories = {r[0] for r in store.db.execute("SELECT category FROM market_counts")}
     existing = {r[0] for r in store.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}

@@ -309,12 +309,16 @@ class OutcomeWorker:
                 "pending_key": pending,
                 "hold_key": hold,
             }
-            self.history.put(key, job)
+            services = self.store.services
+            reserved = services is not None and services.reserve(self.history, job, event)
+            if not reserved:
+                self.history.put(key, job)
             from .queue_health import arrival
 
             arrival(self.store, "outcome")
-            self.history.put(pending, {"outcome_id": outcome_id})
-            self.history.put(hold, {"start": event["reference_time_ms"], "end": due})
+            if not reserved:
+                self.history.put(pending, {"outcome_id": outcome_id})
+                self.history.put(hold, {"start": event["reference_time_ms"], "end": due})
 
     def bootstrap(self, batch: int = 20) -> None:
         admission = self.history.get("outcome-admission", {"cursor": "", "complete": False})

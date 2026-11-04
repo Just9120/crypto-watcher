@@ -288,6 +288,13 @@ class History:
         self._put_raw(key, value)
 
     def _put_raw(self, key: str, value: Any) -> None:
+        if self.store.services is not None:
+            from .service_projections import put
+
+            if not self.store.db.in_transaction:
+                self.store.db.execute("BEGIN IMMEDIATE")
+            if put(self, key, value):
+                return
         from .storage_lifecycle import TERMINAL_DELIVERY
 
         if (
@@ -343,6 +350,17 @@ class History:
         self._delete_raw(key)
 
     def _delete_raw(self, key: str) -> None:
+        if self.store.services is not None:
+            from .service_projections import delete
+
+            if not self.store.db.in_transaction:
+                self.store.db.execute("BEGIN IMMEDIATE")
+            if delete(self.store.services, key):
+                if key.startswith("outcome-job:"):
+                    from .queue_health import sync_job
+
+                    sync_job(self, key, None)
+                return
         from .catalogue_write import deletion
 
         with deletion(self.store, PREFIX + key):

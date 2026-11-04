@@ -756,6 +756,12 @@ def _cohorts(store: Store, groups: tuple[str, ...], *, cutoff_ms: int | None, li
             "SELECT COUNT(*) FROM runtime j WHERE j.key>=? AND j.key<? AND " + absent,
             (PREFIX + "outcome-job:", PREFIX + "outcome-job:~", PREFIX + "outcome-head:"),
         ).fetchone()[0]
+        if store.services is not None:
+            incomplete += sum(
+                1
+                for (identifier,) in store.db.execute("SELECT id FROM subject_outcomes")
+                if History(store).get("outcome-head:" + identifier) is None
+            )
         incomplete += store.db.execute(
             "SELECT COUNT(*) FROM market_quality q JOIN json_each(cw_quality_json(q.facts)) s WHERE json_extract(s.value,'$.state')!='COMPLETE'"
         ).fetchone()[0]

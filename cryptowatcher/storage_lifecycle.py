@@ -281,6 +281,10 @@ class BoundedRetention:
                 "INSERT INTO market_meta VALUES('retention_history_cursor',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (selected.cursor if due_keys <= retired else "",),
             )
+            if store.services is not None:
+                from .service_retention import work
+
+                removed += work(store.services, now_ms, batch)
             # Service receipts expire first. They do not keep detail alive indefinitely.
             from .expiry_index import due_services
 

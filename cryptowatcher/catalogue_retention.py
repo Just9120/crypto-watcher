@@ -124,6 +124,10 @@ def remove_event(store: Store, event_id: str, terminal: Callable[[str, str], Non
     if not store.db.in_transaction:
         raise StateError("Event expiry requires an outer writer transaction")
     removed = 0
+    if store.services is not None:
+        from .service_retention import retire
+
+        removed += retire(store.services, event_id, terminal)
     while rows := list(owned_hot_rows(store.db, event_id, limit=128)):
         for key, category in rows:
             raw = store.get_runtime(key, {})

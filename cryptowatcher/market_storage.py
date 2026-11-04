@@ -38,9 +38,11 @@ def candle_deadline(
     detail_days: int,
 ) -> int:
     """One existing retention/hold rule shared by legacy rows and source tiles."""
+    from .service_repository import holds_table
+
     expiry = max(start + step + candle_days * DAY, anchor + detail_days * DAY)
     held = db.execute(
-        "SELECT MAX(expires) FROM market_holds WHERE stream=? AND start<=? AND end>? AND expires>?",
+        f"SELECT MAX(expires) FROM {holds_table(db)} WHERE stream=? AND start<=? AND end>? AND expires>?",
         (stream, start, start, now),
     ).fetchone()[0]
     return max(expiry, min(held, now + 3600000)) if held else expiry
@@ -187,6 +189,7 @@ def decoded(payload: bytes, maximum: int = 8192) -> Any:
 def stream_id(db: sqlite3.Connection, name: str, *, create: bool = False) -> int | None:
     if create:
         db.execute("INSERT OR IGNORE INTO market_streams(name) VALUES (?)", (name,))
+
     row = db.execute("SELECT id FROM market_streams WHERE name=?", (name,)).fetchone()
     return row[0] if row else None
 

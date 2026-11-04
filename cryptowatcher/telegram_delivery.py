@@ -11,6 +11,7 @@ from telegram.error import BadRequest, Forbidden, RetryAfter, TelegramError
 
 from .detectors import freshness
 from .events import History
+from .service_projections import transition
 from .storage import Store
 
 
@@ -38,7 +39,7 @@ class TelegramDelivery:
         if candidate["state"] == "IN_FLIGHT" and candidate["attempts"][-1]["result"] == "IN_FLIGHT":
             candidate["attempts"][-1]["result"] = "AMBIGUOUS_AFTER_RESTART"
         candidate.update(state=state, completed_ms=now_ms)
-        self.history.put("outbox:telegram:" + candidate["delivery_id"], candidate)
+        transition(self.history, "outbox:telegram:" + candidate["delivery_id"], candidate)
         self.history.delete(candidate["pending_key"])
         episode = self.history.get("episode-head:" + candidate["episode_id"])
         if episode["pending_notification"] == candidate["delivery_id"]:
@@ -105,7 +106,8 @@ class TelegramDelivery:
                 with self.store.db:
                     if candidate["state"] == "IN_FLIGHT":
                         candidate["attempts"][-1]["result"] = "AMBIGUOUS_AFTER_RESTART"
-                    if "text" not in candidate:
+                    materialize = "text" not in candidate
+                    if materialize:
                         candidate["event_id"] = event["event_id"]
                         candidate["text"] = self.renderer(event, candidate, clock())
                         if self.emphasis is not None:
@@ -114,7 +116,10 @@ class TelegramDelivery:
                             ]
                     candidate["state"] = "IN_FLIGHT"
                     candidate["attempts"].append({"at_ms": clock(), "result": "IN_FLIGHT"})
-                    self.history.put("outbox:telegram:" + candidate["delivery_id"], candidate)
+                    if materialize:
+                        self.history.put("outbox:telegram:" + candidate["delivery_id"], candidate)
+                    else:
+                        transition(self.history, "outbox:telegram:" + candidate["delivery_id"], candidate)
                 # Persist before send. The same frozen text/identity is retained after an ambiguous ack.
                 try:
                     message = await bot.send_message(
@@ -150,7 +155,7 @@ class TelegramDelivery:
                             f"pending:telegram:{candidate['next_attempt_ms']:016d}:{candidate['delivery_id']}"
                         )
                         self.history.put(candidate["pending_key"], {"delivery_id": candidate["delivery_id"]})
-                        self.history.put("outbox:telegram:" + candidate["delivery_id"], candidate)
+                        transition(self.history, "outbox:telegram:" + candidate["delivery_id"], candidate)
                     self.store.put_runtime(
                         "telegram_delivery",
                         {"state": "FAILED", "error_class": type(exc).__name__, "at": clock() / 1000},

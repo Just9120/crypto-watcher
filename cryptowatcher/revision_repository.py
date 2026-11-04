@@ -497,6 +497,14 @@ def maintenance(store: Store, now: int) -> dict[str, Any]:
                 scanned += 1
                 if store.db.execute(f"SELECT 1 FROM direct_{kind}_heads WHERE id=?", (identity,)).fetchone():
                     continue
+                if (
+                    kind == "event"
+                    and store.services is not None
+                    and store.db.execute(
+                        "SELECT 1 FROM subject_sources WHERE event_id=? AND revision=?", (identity, revision)
+                    ).fetchone()
+                ):
+                    continue
                 store.db.execute("DELETE FROM direct_links WHERE owner=?", (key,))
                 removed += store.db.execute(
                     f"DELETE FROM direct_{kind}_revisions WHERE id=? AND revision=?", (identity, revision)

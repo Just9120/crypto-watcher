@@ -51,17 +51,12 @@ def snapshot(store: Store, now_ms: int) -> dict[str, Any]:
     ):
         warning = history.items("analytics-blocked:" + name + ":", 1)
         prefix = PREFIX + name + "-pending:"
-        row = store.db.execute(
-            "SELECT key,payload_json FROM runtime WHERE key>=? AND key<? ORDER BY key LIMIT 1",
-            (prefix, prefix + "~"),
-        ).fetchone()
+        row = next(store.scan_runtime(prefix, 1), None)
         pending: dict[str, Any]
         if row is None:
             pending = {"state": "EMPTY", "due_lag_ms": 0}
         else:
-            from .storage import json_payload
-
-            binding = json_payload(row[1])
+            binding = row[1]
             job = history.get(jobs + str(binding.get(field, "")))
             if not isinstance(job, dict) or type(job.get("next_attempt_ms")) is not int:
                 pending = {"state": "ORPHAN_OR_UNKNOWN", "due_lag_ms": None}

@@ -12,6 +12,7 @@ from .events import PREFIX, History, identity
 from .ingestion import BybitRadar
 from .market import MarketError
 from .outcomes import MINUTE, pending_key
+from .service_repository import holds_table
 from .sources import Candle, Sources
 from .storage import Store, encode, json_payload
 
@@ -121,7 +122,7 @@ class AnalyticsRecovery:
 
         sid = stream_id(self.store.db, stream)
         row = self.store.db.execute(
-            "SELECT MAX(expires) FROM market_holds WHERE stream=? AND start<? AND end>? AND expires>?",
+            f"SELECT MAX(expires) FROM {holds_table(self.store.db)} WHERE stream=? AND start<? AND end>? AND expires>?",
             (sid, end, start, now),
         ).fetchone()
         return row[0] if row else None
@@ -351,7 +352,7 @@ class AnalyticsRecovery:
         if not isinstance(cursor, str) or not cursor.startswith(prefix):
             raise ValueError("Invalid recovery owner cursor")
         rows = self.store.db.execute(
-            "SELECT key,start,end,expires FROM market_holds WHERE key>? AND key<? ORDER BY key LIMIT 65",
+            f"SELECT key,start,end,expires FROM {holds_table(self.store.db)} WHERE key>? AND key<? ORDER BY key LIMIT 65",
             (cursor, prefix + "~"),
         ).fetchall()
         deadline = time.monotonic() + 0.025
