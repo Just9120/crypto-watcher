@@ -5,7 +5,7 @@ on:
       mode:
         description: Explicit owner-authorized profile; never deploy
         type: choice
-        options: [full-main, group-publication]
+        options: [full-main, group-publication, counter-delta-pair]
         default: full-main
       revision:
         description: Exact selected source SHA, no branch/tag
@@ -18,7 +18,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   full:
-    if: github.repository == 'Just9120/crypto-watcher' && github.ref == 'refs/heads/main' && inputs.mode != 'group-publication'
+    if: github.repository == 'Just9120/crypto-watcher' && github.ref == 'refs/heads/main' && inputs.mode == 'full-main'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
@@ -122,6 +122,71 @@ jobs:
           path: |
             ${{ env.REPORT }}/*.json
             ${{ env.REPORT }}/*.log
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: warn
+
+  counter-delta-pair:
+    if: github.repository == 'Just9120/crypto-watcher' && github.ref == 'refs/heads/codex/counter-delta-prototype-20261104' && inputs.mode == 'counter-delta-pair' && github.run_attempt == 1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      BASELINE: 19e0051b3ed009c90d6badd93a75b14a6d097e6a
+      CANDIDATE: ${{ inputs.revision }}
+      REPORT: .cache-g1/counter-pair-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+      - name: Verify counter-only experiment and exact original full scenario
+        run: |
+          python - <<'PY'
+          import os,re,subprocess
+          from pathlib import Path
+          source,baseline=os.environ['CANDIDATE'],os.environ['BASELINE']
+          assert re.fullmatch(r'[0-9a-f]{40}',source)
+          assert subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()==source
+          subprocess.run(['git','merge-base','--is-ancestor',baseline,source],check=True)
+          assert not subprocess.check_output(['git','diff',baseline,source,'--','cryptowatcher'])
+          for name in ('scripts/qualify_processing.py','scripts/qualify_cpu_pair.py',
+                       'scripts/cpu_pair_budget.py','scripts/qualify_group_pair.py',
+                       'tests/processing_replay.py','tests/processing_observation.py',
+                       'tests/test_processing_replay.py','requirements.txt','requirements-dev.txt',
+                       'requirements-bootstrap.txt','Dockerfile'):
+              assert subprocess.check_output(['git','show',baseline+':'+name])==Path(name).read_bytes(),name
+          PY
+          mkdir -p "$REPORT"
+      - name: Build one application tree and identical native harness with explicit modes
+        run: |
+          docker build --build-arg SOURCE_REVISION="$CANDIDATE" --build-arg BUILD_RUN="${{ github.run_id }}" -t cw-counter-base:common .
+          docker build -f tests/counter_runtime.Dockerfile --build-arg BASE_IMAGE=cw-counter-base:common -t cw-counter-runtime:common .
+          for label in baseline candidate; do
+            if [ "$label" = baseline ]; then revision="$BASELINE"; flag=0; else revision="$CANDIDATE"; flag=1; fi
+            docker build -f tests/counter_pair.Dockerfile --build-arg BASE_IMAGE=cw-counter-runtime:common --build-arg MEASUREMENT_REVISION="$CANDIDATE" --build-arg APPLICATION_REVISION="$revision" --build-arg COUNTER_DELTA="$flag" -t "cw-counter:$label" .
+          done
+      - name: Bounded Linux correctness before full comparison
+        run: |
+          sudo timeout --signal=INT --kill-after=10s 600s "$(command -v python)" -B -m scripts.qualify_counter_pair precheck cw-counter:candidate "$CANDIDATE" "$GITHUB_WORKSPACE/$REPORT/prechecks"
+      - name: First full pair within original shared limits
+        run: |
+          sudo timeout --signal=INT --kill-after=10s 600s "$(command -v python)" -B -m scripts.qualify_counter_pair run cw-counter:baseline cw-counter:candidate "$CANDIDATE" "$GITHUB_WORKSPACE/$REPORT/pair-1"
+      - name: Repeat unchanged pair on same host in reversed order
+        run: |
+          sudo timeout --signal=INT --kill-after=10s 600s "$(command -v python)" -B -m scripts.qualify_counter_pair run cw-counter:baseline cw-counter:candidate "$CANDIDATE" "$GITHUB_WORKSPACE/$REPORT/pair-2" --reverse
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: counter-pairs-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.REPORT }}/prechecks/*.json
+            ${{ env.REPORT }}/prechecks/*.log
+            ${{ env.REPORT }}/pair-1/*.json
+            ${{ env.REPORT }}/pair-1/*.log
+            ${{ env.REPORT }}/pair-2/*.json
+            ${{ env.REPORT }}/pair-2/*.log
           include-hidden-files: true
           retention-days: 14
           if-no-files-found: warn

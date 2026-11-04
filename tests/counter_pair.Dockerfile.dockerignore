@@ -1,0 +1,6 @@
+**
+!scripts/
+!scripts/qualify_cpu_pair.py
+!scripts/cpu_pair_budget.py
+!scripts/qualify_counter_pair.py
+!scripts/counter_supervisor.py
