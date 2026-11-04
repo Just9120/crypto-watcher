@@ -147,6 +147,7 @@ jobs:
         run: |
           python -m pip install --require-hashes -r requirements-dev.txt
           uv pip check --python "$(command -v python)"
+          mkdir -p .cache-g1
           python -m pytest tests/test_service_pair.py tests/test_cpu_pair.py -q --basetemp .cache-g1/service-controller
       - name: Build isolated exact baseline and candidate with one measurement overlay
         run: |
