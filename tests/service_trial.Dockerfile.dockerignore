@@ -1,0 +1,11 @@
+**
+!scripts/
+!scripts/qualify_cpu_pair.py
+!scripts/cpu_pair_budget.py
+!scripts/qualify_group_pair.py
+!scripts/qualify_service_pair.py
+!scripts/qualify_processing.py
+!scripts/qualify_service_preflight.py
+!tests/
+!tests/processing_replay.py
+!tests/processing_observation.py
