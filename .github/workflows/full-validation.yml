@@ -7,6 +7,10 @@ on:
         type: choice
         options: [full-main, group-publication, counter-delta-pair]
         default: full-main
+      repeat_only:
+        description: Counter experiment only; consume the single remaining reversed pair
+        type: boolean
+        default: false
       revision:
         description: Exact selected source SHA, no branch/tag
         required: true
@@ -167,10 +171,16 @@ jobs:
             if [ "$label" = baseline ]; then revision="$BASELINE"; flag=0; else revision="$CANDIDATE"; flag=1; fi
             docker build -f tests/counter_pair.Dockerfile --build-arg BASE_IMAGE=cw-counter-runtime:common --build-arg MEASUREMENT_REVISION="$CANDIDATE" --build-arg APPLICATION_REVISION="$revision" --build-arg COUNTER_DELTA="$flag" -t "cw-counter:$label" .
           done
+      - name: Install frozen host assertion dependencies
+        run: |
+          python -m pip install --require-hashes -r requirements-dev.txt
+          uv pip check --python "$(command -v python)"
       - name: Bounded Linux correctness before full comparison
+        if: inputs.repeat_only != true
         run: |
           sudo timeout --signal=INT --kill-after=10s 600s "$(command -v python)" -B -m scripts.qualify_counter_pair precheck cw-counter:candidate "$CANDIDATE" "$GITHUB_WORKSPACE/$REPORT/prechecks"
       - name: First full pair within original shared limits
+        if: inputs.repeat_only != true
         run: |
           sudo timeout --signal=INT --kill-after=10s 600s "$(command -v python)" -B -m scripts.qualify_counter_pair run cw-counter:baseline cw-counter:candidate "$CANDIDATE" "$GITHUB_WORKSPACE/$REPORT/pair-1"
       - name: Repeat unchanged pair on same host in reversed order
