@@ -74,6 +74,7 @@ def native(directory):
     code = pytest.main(
         [
             "tests/test_service_repository.py",
+            "tests/test_service_queue_regressions.py",
             "tests/test_runtime_repository.py",
             "tests/test_repository_meter.py",
             "tests/test_outcomes.py",

@@ -78,11 +78,9 @@ def get(repo: Any, key: str) -> Any:
         ).fetchone()
         if row is None:
             return MISSING
-        from .service_repository import checksum
+        from .service_repository import decoded_payload
 
-        if checksum(row[0]) != row[1]:
-            raise StateError("Corrupt subject attempt")
-        return json.loads(row[0])
+        return json.loads(decoded_payload(row[0], row[1]))
     binding = delivery_binding(repo, key)
     if binding is not None:
         row, ready, root = binding
@@ -180,14 +178,15 @@ def put(history: Any, key: str, value: Any) -> bool:
         source = db.execute(
             "SELECT expires_ms FROM subject_sources WHERE event_id=? AND revision=?", tuple(parent)
         ).fetchone()
-        from .service_repository import checksum
+        from .service_repository import checksum, decoded_payload, packed_payload
 
-        raw = encode(value)
+        plain = encode(value)
+        raw = packed_payload(plain)
         # An interrupted attempt has no completed receipt. Completed receipts
         # cannot be overwritten under the same immutable attempt identity.
-        saved = db.execute("SELECT payload FROM subject_attempts WHERE key=?", (key,)).fetchone()
+        saved = db.execute("SELECT payload,digest FROM subject_attempts WHERE key=?", (key,)).fetchone()
         if saved is not None:
-            if saved[0] != raw:
+            if decoded_payload(saved[0], saved[1]) != plain:
                 raise StateError("Conflicting immutable delivery receipt")
             return True
         db.execute(
@@ -399,13 +398,19 @@ def _transition(history: Any, key: str, record: dict[str, Any]) -> None:
             if k in payload_fields
             and k not in ("intent", "body", "episode_snapshot", "text", "text_entities")
         }
-        raw = encode(history._freeze_services(keep))
-        from .service_repository import checksum
+        from .service_repository import checksum, packed_payload
 
+        raw = packed_payload(encode(history._freeze_services(keep)))
+        saved = history.store.db.execute(
+            "SELECT payload,digest,frozen FROM subject_delivery_payloads WHERE key=?", (key,)
+        ).fetchone()
+        if saved is not None and tuple(saved) == (raw, checksum(raw), 1):
+            return
         history.store.db.execute("DELETE FROM subject_delivery_payloads WHERE key=?", (key,))
         history.store.db.execute(
             "INSERT INTO subject_delivery_payloads VALUES(?,?,?,1)", (key, raw, checksum(raw))
         )
+        repo.stats["payload_writes"] += 1
 
 
 def managed(key: str) -> bool:

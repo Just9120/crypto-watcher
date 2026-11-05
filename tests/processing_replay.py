@@ -510,6 +510,11 @@ async def replay(
                     ).fetchone()[0]
                     for prefix in ("pending:telegram:", "agent:intent-due:", "agent:send-due:")
                 )
+                if subject_services:
+                    from cryptowatcher.service_diagnostics import pending_usage
+
+                    usage = pending_usage(store)
+                    pending_bytes = usage["binding_bytes"]
                 pending_count = sum(
                     controller.history.count(prefix)
                     for prefix in ("pending:telegram:", "agent:intent-due:", "agent:send-due:")
@@ -535,6 +540,9 @@ async def replay(
                         "delivery_pending_bytes": pending_bytes,
                     }
                 )
+
+                if subject_services:
+                    samples[-1]["canonical_pending_storage"] = usage
 
             steady_started[0] = time.monotonic()
             phase_cpu = time.process_time()
@@ -743,6 +751,9 @@ async def replay(
                         ).fetchone()
                     )
                     reconciliation[table] = {"actual": actual, "saved": saved, "match": actual == saved}
+                from cryptowatcher.service_diagnostics import final_ledger
+
+                result["subject_queue_ledger"] = final_ledger(store, controller.history, finished)
                 result["subject_services"] = {
                     "mode": "ISOLATED_CANONICAL_SUBJECT_JOBS_DELIVERIES",
                     "operations": dict(store.services.stats),

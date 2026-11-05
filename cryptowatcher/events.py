@@ -464,6 +464,13 @@ class History:
         if not direct and (head is None or value["revision"] > head["revision"]):
             self.put(f"{kind}-head:{key}", self._head(kind, value, version_key, bounded=self.store.bounded))
 
+    def _pending_parent_exists(self, key: str) -> bool:
+        # Do not decode large immutable bodies just to test queue ownership.
+        if self.store.db.execute("SELECT 1 FROM runtime WHERE key=?", (PREFIX + key,)).fetchone():
+            return True
+        repo = self.store.services
+        return repo is not None and repo.parent_exists(key)
+
     def prune_pending(self, limit: int = 64) -> int:
         """Caller owns the transaction. A missing job can never be retried."""
         if not self.store.bounded:
@@ -479,12 +486,7 @@ class History:
             ("digest-pending:", "digest-outbox:", "delivery_id"),
         ):
             for key, binding in self.items(pending, limit):
-                if (
-                    self.store.db.execute(
-                        "SELECT 1 FROM runtime WHERE key=?", (PREFIX + parent + binding[field],)
-                    ).fetchone()
-                    is None
-                ):
+                if not self._pending_parent_exists(parent + binding[field]):
                     self.delete(key)
                     counts[pending + "EXPIRED_MISSING_PARENT"] = (
                         counts.get(pending + "EXPIRED_MISSING_PARENT", 0) + 1

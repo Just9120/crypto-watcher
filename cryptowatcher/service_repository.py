@@ -269,6 +269,21 @@ class Repository:
         if write:
             self.store.snapshot()
 
+    def parent_exists(self, key: str) -> bool:
+        """Indexed canonical owner lookup; missing/corrupt schema must fail closed."""
+        self.check()
+        if key.startswith("outcome-job:"):
+            return (
+                self.store.db.execute("SELECT 1 FROM subject_outcomes WHERE id=?", (key[12:],)).fetchone()
+                is not None
+            )
+        if key.startswith(("outbox:telegram:", "agent:outbox:")):
+            return (
+                self.store.db.execute("SELECT 1 FROM subject_deliveries WHERE key=?", (key,)).fetchone()
+                is not None
+            )
+        return False
+
     def source(self, history: Any, event_id: str, revision: int) -> Source | None:
         self.check(write=True)
         if type(revision) is not int or revision < 1:
@@ -431,7 +446,8 @@ class Repository:
         if source is None:
             return False
         payload_fields = PAYLOAD_FIELDS[(channel, stage)]
-        body = encode({k: v for k, v in record.items() if k in payload_fields})
+        plain = encode({k: v for k, v in record.items() if k in payload_fields})
+        body = packed_payload(plain)
         mutable = encode({k: v for k, v in record.items() if k not in payload_fields})
         digest = checksum(body)
         from .storage_lifecycle import TERMINAL_DELIVERY
@@ -475,6 +491,9 @@ class Repository:
         saved = self.store.db.execute(
             "SELECT payload,digest,frozen FROM subject_delivery_payloads WHERE key=?", (key,)
         ).fetchone()
+        if saved is not None and decoded_payload(saved[0], saved[1]) == plain:
+            # Existing plain records keep their representation and frozen retry bytes.
+            body, digest = saved[0], saved[1]
         if saved is None:
             self.store.db.execute(
                 "INSERT INTO subject_delivery_payloads VALUES(?,?,?,?)", (key, body, digest, int(frozen))
@@ -505,9 +524,7 @@ class Repository:
         ).fetchone()
         if row is None:
             return None
-        if checksum(row[1]) != row[2]:
-            raise StateError("Corrupt subject delivery payload")
-        return {**json.loads(row[1]), **json.loads(row[0])}
+        return {**json.loads(decoded_payload(row[1], row[2])), **json.loads(row[0])}
 
     def update_delivery(self, key: str, record: dict[str, Any]) -> bool:
         """Known status transition: never encode or rewrite the frozen payload."""
@@ -536,6 +553,24 @@ class Repository:
         )
         self.stats["status_only_updates"] += 1
         return True
+
+
+def packed_payload(plain: str) -> str:
+    """Reuse the bounded lossless JSON codec; do not expand small bodies."""
+    from .record_codec import pack
+
+    if len(plain) < 512:
+        return plain
+    packed = pack(plain)
+    return packed if len(packed.encode("utf-8")) < len(plain.encode("utf-8")) else plain
+
+
+def decoded_payload(payload: str, digest: str) -> str:
+    from .record_codec import sql_payload
+
+    if checksum(payload) != digest:
+        raise StateError("Corrupt subject delivery payload")
+    return str(sql_payload(payload))
 
 
 def terminal_deadline(record: dict[str, Any], expiry: int, now: int) -> int:
