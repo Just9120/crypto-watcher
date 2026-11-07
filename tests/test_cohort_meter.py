@@ -184,6 +184,39 @@ def test_projection_cache_checks_immutable_settings_body_on_every_reuse(store):
         projector.read("radar:v1:" + key, encoded)
 
 
+def test_event_publication_checks_shared_settings_once_and_never_reuses_the_proof(store):
+    import sqlite3
+
+    enable(store.db)
+    store.bounded = True
+    OutcomeWorker(store)
+    history = History(store)
+    value = event(store, 3)
+    key = f"radar:v1:event:{value['event_id']}:{value['revision']:010d}"
+    packed = history.codec.pack(value)
+    payload = encode(packed)
+    body = "historyblob:v1:" + packed["_history_storage"]["fields"]["settings_snapshot"]["id"]
+
+    queries = []
+    store.db.set_trace_callback(queries.append)
+    try:
+        with store.db:
+            store.cohort_projector.upsert_event(key, payload)
+    finally:
+        store.db.set_trace_callback(None)
+    reads = [sql for sql in queries if "SELECT payload_json FROM runtime WHERE key=" in sql]
+    assert 1 <= len(reads) <= 2  # Load the body and bind its checked bytes, once.
+    assert compare(store)["event_records"] == 1
+
+    other = {**value, "event_id": identity("counter/missing-settings")}
+    other_key = f"radar:v1:event:{other['event_id']}:{other['revision']:010d}"
+    with store.db:
+        store.db.execute("DELETE FROM runtime WHERE key=?", (body,))
+    with pytest.raises(sqlite3.OperationalError), store.db:
+        store.cohort_projector.upsert_event(other_key, encode({**packed, "event_id": other["event_id"]}))
+    assert store.get_runtime(other_key) is None
+
+
 @pytest.mark.skipif(sys.platform != "linux", reason="Observer address-space/CPU qualification requires Linux")
 def test_full_month_cohort_counter_fits_unchanged_observer_resource_budget(tmp_path):
     from tests.cohort_population import build

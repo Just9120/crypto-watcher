@@ -267,7 +267,10 @@ class History:
         with mutation(self.store, PREFIX + key, value) as write:
             if not write:
                 return
-            self.store.db.execute(RUNTIME_UPSERT, (PREFIX + key, payload))
+            if self.store.bounded and key.startswith("event:"):
+                self.store.cohort_projector.upsert_event(PREFIX + key, payload)
+            else:
+                self.store.db.execute(RUNTIME_UPSERT, (PREFIX + key, payload))
             if self.store.bounded:
                 from .storage_lifecycle import track
 

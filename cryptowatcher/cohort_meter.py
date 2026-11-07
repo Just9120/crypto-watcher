@@ -37,8 +37,32 @@ class Projector:
         self.db = db
         self.cache: OrderedDict[Any, Any] = OrderedDict()
         self.size = 0
+        self._publication: tuple[str, str | bytes] | None = None
+        self._projection: str | None = None
+
+    def upsert_event(self, key: str, payload: str | bytes) -> None:
+        """Reuse the checked NEW projection only inside this exact runtime write."""
+        from .storage import RUNTIME_UPSERT
+
+        if self._publication is not None or not key.startswith("radar:v1:event:"):
+            raise ValueError("Expected one non-reentrant event publication")
+        self._publication = (key, payload)
+        try:
+            # This single statement writes only the event runtime row. Its
+            # triggers can read shared settings but cannot replace their bodies.
+            self.db.execute(RUNTIME_UPSERT, (key, payload))
+        finally:
+            self._publication = None
+            self._projection = None
 
     def read(self, key: str, raw: Any) -> str:
+        if self._publication != (key, raw):
+            return self._read_checked(key, raw)
+        if self._projection is None:
+            self._projection = self._read_checked(key, raw)
+        return self._projection
+
+    def _read_checked(self, key: str, raw: Any) -> str:
         from .history_codec import BLOB_PREFIX, MARKER, SCHEMA, Codec
         from .storage import StateError, encode, json_payload
 
@@ -182,8 +206,10 @@ class Projector:
         return answer
 
 
-def install_functions(db: sqlite3.Connection) -> None:
-    db.create_function("cw_cohort_record", 2, Projector(db).read)
+def install_functions(db: sqlite3.Connection) -> Projector:
+    projector = Projector(db)
+    db.create_function("cw_cohort_record", 2, projector.read)
+    return projector
 
 
 def modifications(expression: str, sign: int, condition: str) -> list[str]:
