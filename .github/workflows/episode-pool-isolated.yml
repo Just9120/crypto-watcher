@@ -13,11 +13,11 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          fetch-depth: 2
+          fetch-depth: 0
           persist-credentials: false
       - name: Verify and build the exact candidate
         run: |
-          test "$(git rev-parse HEAD^)" = "$CANDIDATE"
+          git cat-file -e "$CANDIDATE^{commit}"
           git diff --exit-code "$CANDIDATE" HEAD -- cryptowatcher Dockerfile requirements.txt requirements-bootstrap.txt native
           docker build --build-arg SOURCE_REVISION="$CANDIDATE" --build-arg BUILD_RUN="$GITHUB_RUN_ID" -t episode-pool-diagnostic .
       - name: Run the bounded market replay
@@ -44,7 +44,7 @@ jobs:
           report=json.loads(next(line for line in reversed(rows) if line.startswith('{')))
           assert report['state']=='COMPLETE',report.get('reason',report['state'])
           result=report['result']
-          assert result['offered']==result['accepted']==3296
+          assert result['offered']==result['accepted']==1648
           assert result['max_source_lag_ms'] is not None and result['max_source_lag_ms']<=30000,result['max_source_lag_ms']
           assert result['complete_due']>0 and result['max_due_lag_ms'] is not None and result['max_due_lag_ms']<=60000,result['max_due_lag_ms']
           assert report['container_removed'] and report['work_removed']

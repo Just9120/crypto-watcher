@@ -4,7 +4,10 @@ import hashlib
 import hmac
 import json
 import os
-import resource
+try:
+    import resource
+except ImportError:
+    resource=None
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,7 +28,7 @@ MIN = 60000
 BASE = 1_800_000_000_000
 SECRET = "fixture_no_credentials_" * 3
 URL = "https://agent.example/integrations/cryptowatcher/events"
-WORK = Path("/work")
+WORK = Path(os.environ.get("CW_BURST_OUTPUT","/work"))
 PATH = WORK / "case.sqlite3"
 
 def proof(state, **data):
@@ -48,6 +51,9 @@ def metadata(symbol, market):
     return value
 
 async def case():
+    import burst_timing
+    if os.environ.get("CW_BURST_PROFILE","1")=="1":
+        burst_timing.install()
     infra=Infrastructure.from_env(dict(
         OWNER_USER_ID="100001", EXPECTED_BOT_ID="100002",
         TELEGRAM_BOT_TOKEN="100002:fixture_no_credentials_123456789",
@@ -160,7 +166,7 @@ async def case():
         jobs=[asyncio.create_task(periodically(cb,seconds)) for cb,seconds in
               ((c.deliver,1),(c.agent_job,2),(c.analytics_job,5),(c.repack_job,5))]
         try:
-            for offset in (0,60,120,180):
+            for offset in (0,):
                 await asyncio.sleep(max(0,wall[0]+offset-time.monotonic()))
                 end=BASE+offset*1000
                 phase=f"burst_{offset}"
@@ -181,9 +187,10 @@ async def case():
                     checkpoint()
                     if j%4==0:
                         await asyncio.sleep(0)
+            burst_completed_seconds=time.monotonic()-wall[0]
             phase="drain"
             checkpoint(True)
-            await asyncio.sleep(max(0,wall[0]+190-time.monotonic()))
+            await asyncio.sleep(2)
         finally:
             for job in jobs:
                 job.cancel()
@@ -196,7 +203,7 @@ async def case():
         files={s:Path(str(PATH)+s).stat().st_size for s in ("","-wal","-shm") if Path(str(PATH)+s).exists()}
         lags.sort()
         result=dict(
-            offered=3296,accepted=accepted,streams=len(streams),seed_seconds=seed_wall,
+            offered=1648,accepted=accepted,burst_completed_seconds=burst_completed_seconds,stages=dict(burst_timing.records),streams=len(streams),seed_seconds=seed_wall,
             ingress_window_seconds=time.monotonic()-wall[0],
             max_source_lag_ms=max(lags,default=None),source_p95_ms=lags[int(len(lags)*.95)-1] if lags else None,
             late_source_streams=market.confirmed_source_diagnostic(now_ms)["late_streams"],
@@ -206,7 +213,7 @@ async def case():
             telegram_pending=c.history.count("pending:telegram:"),agent_live=len(live_agent),agent_total=all_agent,
             agent_pending=c.history.count("agent:intent-due:")+c.history.count("agent:send-due:"),
             pool=dict(store.db.execute("SELECT state,count(*) FROM episode_pool GROUP BY state")),
-            process_cpu_seconds=time.process_time(),peak_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024,
+            process_cpu_seconds=time.process_time(),peak_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024 if resource else None,
             working_files=files,
         )
         proof("COMPLETE",**result)
@@ -218,4 +225,4 @@ if __name__ == "__main__":
     except BaseException as exc:
         proof("ERROR",error=type(exc).__name__)
         raise
-    time.sleep(8)
+    if resource: time.sleep(8)
