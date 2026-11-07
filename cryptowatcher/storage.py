@@ -287,7 +287,7 @@ class Store:
         registry_functions(self.db, self._cached_value)
         from .cohort_meter import install_functions as cohort_functions
 
-        cohort_functions(self.db)
+        self.cohort_projector = cohort_functions(self.db)
 
         self.db.create_function("cw_record_json", 1, self.cached_record_json, deterministic=True)
         self.db.create_function("cw_clock_ms", 0, lambda: int(self.clock_ms()))
