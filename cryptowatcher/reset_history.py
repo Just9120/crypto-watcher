@@ -168,8 +168,10 @@ def prepare(
         current_light = (
             isinstance(previous_generation, dict) and previous_generation.get("model") == LIGHT_POLICY
         )
-        if current_light != clear_light_test_history:
-            raise StateError("Light radar history cleanup requires an explicit matching operation")
+        if current_light and not clear_light_test_history:
+            raise StateError("Light radar history already exists; reset refused")
+        if clear_light_test_history and not current_light:
+            raise StateError("Light test-history cleanup requires the current light radar model")
         preserved = private_state(old)
     expected_private, configuration_changes = (
         light_private(preserved) if light_radar_transition else (preserved, {})

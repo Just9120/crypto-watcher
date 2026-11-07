@@ -55,7 +55,7 @@ def test_explicit_light_cleanup_keeps_private_state_and_light_model(tmp_path):
         current.put_runtime("history_generation", generation)
         current.put_runtime("radar:v1:event-counter", 10000)
         expected = private_state(current)
-    with pytest.raises(StateError, match="explicit matching"):
+    with pytest.raises(StateError, match="already exists"):
         prepare(
             source,
             candidate,
