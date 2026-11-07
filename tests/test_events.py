@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from telegram import MessageEntity
 from telegram.error import Forbidden, NetworkError, RetryAfter
 
 from cryptowatcher.config import OwnerSettings
@@ -540,3 +541,47 @@ def test_joined_observation_requires_transaction_and_does_not_commit_its_produce
         assert state.db.in_transaction and engine.history.events()
         raise RuntimeError("producer rollback")
     assert not engine.history.events() and not engine.history.items("condition:")
+
+
+async def test_audit_copy_uses_primary_payload_and_its_error_does_not_block_primary(state):
+    import asyncio
+
+    engine = EventEngine(state, selected("composite"))
+    observe(engine)
+    first = candidate(engine.history)
+    entered = asyncio.Event()
+    unblock = asyncio.Event()
+    audit_id = state.owner_id + 1
+    keyboard = object()
+    transport = TelegramDelivery(
+        state,
+        state.owner_id,
+        lambda *args: "same rendered alert",
+        lambda event: keyboard,
+        audit_chat_id=audit_id,
+        emphasis=lambda text: [MessageEntity(MessageEntity.BOLD, 0, 4)],
+    )
+
+    async def send(chat_id, text, **options):
+        if chat_id == audit_id:
+            entered.set()
+            await unblock.wait()
+            raise Forbidden("audit chat blocked")
+        return SimpleNamespace(message_id=1)
+
+    bot = SimpleNamespace(send_message=AsyncMock(side_effect=send))
+    try:
+        await transport.send_due(bot, NOW + 2000)
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        assert engine.history.get("outbox:telegram:" + first["delivery_id"])["state"] == "DELIVERED"
+        primary_call, audit_call = bot.send_message.await_args_list
+        assert primary_call.args == (state.owner_id, "same rendered alert")
+        assert audit_call.args == (audit_id, "same rendered alert")
+        assert primary_call.kwargs == audit_call.kwargs
+        assert audit_call.kwargs["reply_markup"] is keyboard
+        assert audit_call.kwargs["entities"][0].type == MessageEntity.BOLD
+        unblock.set()
+        await asyncio.sleep(0)
+        assert engine.history.get("target:telegram") is None
+    finally:
+        await transport.close_audit()

@@ -118,6 +118,7 @@ def prepare(
     preserved_archive_sha256: str | None = None,
     discard_test_history: bool = False,
     light_radar_transition: bool = False,
+    clear_light_test_history: bool = False,
 ) -> dict[str, Any]:
     if any(
         not p.is_absolute() or p.resolve() != p or any(q.is_symlink() for q in (p, *p.parents))
@@ -128,6 +129,8 @@ def prepare(
         raise StateError("Reset destination already exists")
     if light_radar_transition and not discard_test_history:
         raise StateError("Light radar transition requires explicit exact-generation test-history discard")
+    if clear_light_test_history and (not discard_test_history or light_radar_transition):
+        raise StateError("Light test-history cleanup requires an exact-generation discard")
     started = time.monotonic()
     deadline = started + 120
     if discard_test_history and (
@@ -162,8 +165,11 @@ def prepare(
                 raise StateError("Fresh measurement predecessor generation mismatch")
         elif previous_generation is not None:
             raise StateError("History reset already performed; no automatic repeat")
-        if isinstance(previous_generation, dict) and previous_generation.get("model") == LIGHT_POLICY:
-            raise StateError("Light radar history already exists; reset refused")
+        current_light = (
+            isinstance(previous_generation, dict) and previous_generation.get("model") == LIGHT_POLICY
+        )
+        if current_light != clear_light_test_history:
+            raise StateError("Light radar history cleanup requires an explicit matching operation")
         preserved = private_state(old)
     expected_private, configuration_changes = (
         light_private(preserved) if light_radar_transition else (preserved, {})
@@ -216,6 +222,13 @@ def prepare(
             generation.update(
                 model=LIGHT_POLICY,
                 reason="OWNER_AUTHORIZED_LIGHT_RADAR_TRANSITION_20261030",
+                candle_window_hours=72,
+                comparator_limitations="COMPARISONS_DISABLED_LEGACY_READ_ONLY",
+            )
+        if clear_light_test_history:
+            generation.update(
+                model=LIGHT_POLICY,
+                reason="OWNER_AUTHORIZED_LIGHT_TEST_HISTORY_CLEANUP",
                 candle_window_hours=72,
                 comparator_limitations="COMPARISONS_DISABLED_LEGACY_READ_ONLY",
             )
@@ -307,6 +320,7 @@ def main() -> int:
     parser.add_argument("--preserved-archive-sha256")
     parser.add_argument("--discard-test-history", action="store_true")
     parser.add_argument("--light-radar-transition", action="store_true")
+    parser.add_argument("--clear-light-test-history", action="store_true")
     args = parser.parse_args()
     receipt = prepare(
         args.source,
@@ -317,6 +331,7 @@ def main() -> int:
         preserved_archive_sha256=args.preserved_archive_sha256,
         discard_test_history=args.discard_test_history,
         light_radar_transition=args.light_radar_transition,
+        clear_light_test_history=args.clear_light_test_history,
     )
     write_new(args.receipt, encode(receipt).encode())
     print(encode(receipt))

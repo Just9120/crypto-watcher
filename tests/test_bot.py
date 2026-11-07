@@ -289,3 +289,44 @@ async def test_legacy_poll_respects_domain_activation_and_notification_selection
     context = SimpleNamespace(bot=SimpleNamespace(send_message=AsyncMock()))
     await controller.poll(context)
     context.bot.send_message.assert_not_awaited()
+
+
+async def test_additional_owner_commands_use_same_owner_state_and_reject_foreign_callbacks(controller):
+    from dataclasses import replace
+
+    primary = controller.store.owner_id
+    extra = primary + 1
+    controller.infrastructure = replace(controller.infrastructure, additional_owner_id=extra)
+    before = controller.store.snapshot()
+    request = update("/set price_move_min 3")
+    request.effective_user.id = request.effective_chat.id = extra
+    await controller.handle(request, None)
+    after = controller.store.snapshot()
+    assert after.revision == before.revision + 1
+    assert after.settings.price_move_min == 3
+    assert controller.store.owner_id == controller.infrastructure.delivery_chat_id == primary
+    request.effective_message.reply_text.assert_awaited()
+    foreign = update(callback="ui:home", owner=False)
+    await controller.handle(foreign, None)
+    foreign.callback_query.answer.assert_awaited_once_with("Нет доступа", show_alert=True)
+    foreign.callback_query.edit_message_text.assert_not_awaited()
+    assert controller.store.snapshot() == after
+    primary_request = update("/settings")
+    await controller.handle(primary_request, None)
+    primary_request.effective_message.reply_text.assert_awaited()
+
+
+async def test_application_registers_identical_commands_for_both_owner_private_chats(controller):
+    from dataclasses import replace
+
+    primary = controller.infrastructure.owner_id
+    controller.infrastructure = replace(controller.infrastructure, additional_owner_id=primary + 1)
+    bot = SimpleNamespace(
+        get_me=AsyncMock(return_value=SimpleNamespace(id=controller.infrastructure.expected_bot_id)),
+        set_my_commands=AsyncMock(),
+    )
+    app = application(controller)
+    await app.post_init(SimpleNamespace(bot=bot))
+    calls = bot.set_my_commands.await_args_list
+    assert [call.kwargs["scope"].chat_id for call in calls] == [primary, primary + 1]
+    assert calls[0].args[0] == calls[1].args[0]

@@ -109,6 +109,24 @@ health, generation/config и полного private readback удаляются 
 writer на прежнюю БД; после начала staging — exact record/paths и forward recovery,
 без blind retry. Private recovery/receipts остаются. Замер автоматически не стартует.
 
+### Обслуживание тестовой истории текущего light radar
+
+Для уже активной модели `EPISODE_ORIGIN_V2_72H` повторное удаление
+тестовой истории требует `--clear-light-test-history` вместе с exact
+generation, `--discard-test-history`, явным approval и reviewed helper,
+описанными выше. Старый обычный reset сохраняет свой отказ. Новый
+кандидат сохраняет текущую модель, revision и private state, получает
+новое поколение истории. Только digest cursor начинается заново.
+
+Снимок настроек для резервного копирования создаётся штатным модулем
+`python -m cryptowatcher.settings_snapshot export --database SOURCE
+--snapshot SETTINGS.sqlite3 --owner-id OWNER_ID`. Файл обновляется
+транзакцией без смены inode. Он содержит только private state.
+Восстановление проверяется через `restore` с тем же снимком и новым
+путём `--database`, затем проверяется совпадение hash. Для CloudKeep
+выбирается файл снимка. Credentials остаются в отдельной процедуре
+защищённого резервного копирования.
+
 ### Чистая БД для нового замера с сохранением всей истории
 
 Отдельное поручение владельца17Oct2026 разрешает новую working DB, но требует
