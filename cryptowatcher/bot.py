@@ -198,6 +198,7 @@ class Controller:
             event_keyboard,
             self.engine.reconcile_notifications if self.engine else None,
             emphasis=notification_entities,
+            audit_chat_id=infrastructure.additional_owner_id,
         )
         if isinstance(market, BybitRadar) and self.engine is not None:
             engine = self.engine
@@ -1090,19 +1091,24 @@ def application(controller: Controller) -> Application[Any, Any, Any, Any, Any, 
         identity = await app.bot.get_me()
         if identity.id != controller.infrastructure.expected_bot_id:
             raise ConfigError("Telegram bot identity mismatch")
-        await app.bot.set_my_commands(
-            [
-                BotCommand(command, label)
-                for command, label in COMMANDS.items()
-                if command in PUBLISHED_COMMANDS
-            ],
-            scope=BotCommandScopeChat(controller.infrastructure.delivery_chat_id),
-        )
+        commands = [
+            BotCommand(command, label) for command, label in COMMANDS.items() if command in PUBLISHED_COMMANDS
+        ]
+        for chat_id in controller.infrastructure.owner_chat_ids:
+            try:
+                await app.bot.set_my_commands(commands, scope=BotCommandScopeChat(chat_id))
+            except TelegramError as exc:
+                if chat_id == controller.infrastructure.owner_id:
+                    raise
+                logger.warning("Telegram audit menu registration failed: %s", type(exc).__name__)
         controller.store.put_runtime(
             "heartbeat", {"at": time.time(), "revision": controller.infrastructure.source_revision}
         )
         if isinstance(controller.market, BybitRadar):
             await controller.market.start()
+
+    async def stop(app: Application[Any, Any, Any, Any, Any, Any]) -> None:
+        await controller.delivery.close_audit()
 
     async def shutdown(app: Application[Any, Any, Any, Any, Any, Any]) -> None:
         await controller.shared_records.close()
@@ -1115,6 +1121,7 @@ def application(controller: Controller) -> Application[Any, Any, Any, Any, Any, 
         Application.builder()
         .token(controller.infrastructure.bot_token)
         .post_init(initialize)
+        .post_stop(stop)
         .post_shutdown(shutdown)
         .build()
     )

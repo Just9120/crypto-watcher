@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+from collections import deque
+from contextlib import suppress
 from typing import Any, Callable
 
 from telegram import MessageEntity
@@ -11,6 +14,9 @@ from telegram.error import BadRequest, Forbidden, RetryAfter, TelegramError
 from .detectors import freshness
 from .events import History
 from .storage import Store
+
+logger = logging.getLogger(__name__)
+AUDIT_QUEUE_SIZE = 20
 
 
 class TelegramDelivery:
@@ -23,6 +29,7 @@ class TelegramDelivery:
         on_success: Callable[[str, int], None] | None = None,
         *,
         emphasis: Callable[[str], list[MessageEntity]] | None = None,
+        audit_chat_id: int | None = None,
     ) -> None:
         if chat_id != store.owner_id:
             raise ValueError("Telegram target must be the owner's private chat")
@@ -32,6 +39,42 @@ class TelegramDelivery:
         self.on_success = on_success
         self.emphasis = emphasis
         self.lock = asyncio.Lock()
+        self.audit_chat_id = audit_chat_id if audit_chat_id != chat_id else None
+        self.audit_pending: deque[tuple[str, dict[str, Any], int]] = deque()
+        self.audit_task: asyncio.Task[None] | None = None
+
+    def queue_audit(
+        self, bot: Any, text: str, options: dict[str, Any], fresh_until_ms: int, clock: Callable[[], int]
+    ) -> None:
+        if self.audit_chat_id is None:
+            return
+        if len(self.audit_pending) >= AUDIT_QUEUE_SIZE:
+            logger.warning("Telegram audit queue full; dropped audit copy")
+            return
+        self.audit_pending.append((text, options, fresh_until_ms))
+        if self.audit_task is None or self.audit_task.done():
+            self.audit_task = asyncio.create_task(self.drain_audit(bot, self.audit_chat_id, clock))
+
+    async def drain_audit(self, bot: Any, chat_id: int, clock: Callable[[], int]) -> None:
+        while self.audit_pending:
+            text, options, fresh_until_ms = self.audit_pending.popleft()
+            if clock() > fresh_until_ms:
+                continue
+            delay = 1.0
+            try:
+                await bot.send_message(chat_id, text, **options)
+            except TelegramError as exc:
+                logger.warning("Telegram audit copy failed: %s", type(exc).__name__)
+                if isinstance(exc, RetryAfter):
+                    delay = max(delay, float(exc.retry_after))
+            await asyncio.sleep(delay)
+
+    async def close_audit(self) -> None:
+        if self.audit_task is not None:
+            self.audit_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self.audit_task
+        self.audit_pending.clear()
 
     def finish(self, candidate: dict[str, Any], state: str, now_ms: int) -> None:
         if candidate["state"] == "IN_FLIGHT" and candidate["attempts"][-1]["result"] == "IN_FLIGHT":
@@ -115,17 +158,11 @@ class TelegramDelivery:
                     candidate["attempts"].append({"at_ms": clock(), "result": "IN_FLIGHT"})
                     self.history.put("outbox:telegram:" + candidate["delivery_id"], candidate)
                 # Persist before send. The same frozen text/identity is retained after an ambiguous ack.
+                options: dict[str, Any] = {"reply_markup": self.keyboard(event)}
+                if "text_entities" in candidate:
+                    options["entities"] = MessageEntity.de_list(candidate["text_entities"], bot)
                 try:
-                    message = await bot.send_message(
-                        self.chat_id,
-                        candidate["text"],
-                        reply_markup=self.keyboard(event),
-                        **(
-                            {"entities": MessageEntity.de_list(candidate["text_entities"], bot)}
-                            if "text_entities" in candidate
-                            else {}
-                        ),
-                    )
+                    message = await bot.send_message(self.chat_id, candidate["text"], **options)
                 except TelegramError as exc:
                     with self.store.db:
                         candidate["attempts"][-1].update(result=type(exc).__name__)
@@ -167,6 +204,7 @@ class TelegramDelivery:
                     "telegram_delivery",
                     {"state": state, "delivery_id": candidate["delivery_id"], "at": clock() / 1000},
                 )
+                self.queue_audit(bot, candidate["text"], options, event["fresh_until_ms"], clock)
                 if self.on_success is not None:
                     self.on_success(candidate["episode_id"], clock())
 

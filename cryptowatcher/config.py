@@ -247,6 +247,13 @@ class Infrastructure:
     engine_interval: int
     defaults: OwnerSettings
     source_revision: str
+    additional_owner_id: int | None = None
+
+    @property
+    def owner_chat_ids(self) -> tuple[int, ...]:
+        if self.additional_owner_id is None or self.additional_owner_id == self.owner_id:
+            return (self.owner_id,)
+        return (self.owner_id, self.additional_owner_id)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Infrastructure:
@@ -261,6 +268,9 @@ class Infrastructure:
         expected = int(number(env.get("EXPECTED_BOT_ID"), "EXPECTED_BOT_ID", integer=True))
         if int(token.split(":", 1)[0]) != expected:
             raise ConfigError("TELEGRAM_BOT_TOKEN bot identity mismatch")
+        additional = env.get("ADDITIONAL_OWNER_USER_ID", "").strip()
+        if additional and re.fullmatch(r"[1-9][0-9]{0,15}", additional) is None:
+            raise ConfigError("Invalid ADDITIONAL_OWNER_USER_ID")
         legacy = Path(env.get("STATE_FILE", "/data/state_crypto_watcher.json"))
         revision = env.get("SOURCE_REVISION", "UNSET")
         if revision != "UNSET" and not re.fullmatch(r"[0-9a-f]{40}", revision):
@@ -277,6 +287,7 @@ class Infrastructure:
             ),
             defaults=OwnerSettings.from_env(env),
             source_revision=revision,
+            additional_owner_id=int(additional) if additional else None,
         )
 
 
@@ -287,7 +298,8 @@ def authorized(update: Any, infrastructure: Infrastructure) -> bool:
     return bool(
         user
         and chat
-        and user.id == infrastructure.owner_id
-        and chat.id == infrastructure.delivery_chat_id
+        and infrastructure.delivery_chat_id == infrastructure.owner_id
+        and user.id in infrastructure.owner_chat_ids
+        and chat.id == user.id
         and chat.type == "private"
     )

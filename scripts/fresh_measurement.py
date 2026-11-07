@@ -244,11 +244,13 @@ def execute(
     approved: bool,
     archive_original: bool = False,
     discard_test_history: bool = False,
+    clear_light_test_history: bool = False,
     reset_helper: Path | None = None,
     reset_helper_sha256: str | None = None,
 ) -> dict[str, Any]:
     require(approved, "Explicit --approve-fresh-database is required")
     require(not (discard_test_history and archive_original), "Conflicting archive/discard policies")
+    require(not clear_light_test_history or discard_test_history, "Explicit test-history discard required")
     if discard_test_history:
         require(
             reset_helper is not None and reset_helper_sha256 is not None, "Reviewed reset helper required"
@@ -382,6 +384,8 @@ def execute(
         phase("PREFLIGHT_PRIVATE")
         before = json.loads(offline("/data/sqlite/cryptowatcher.sqlite3", ["-c", private_code], 30))
         require(before["generation"]["id"] == expected_generation, "Generation changed")
+        light_model = before["generation"].get("model") == "EPISODE_ORIGIN_V2_72H"
+        require(light_model == clear_light_test_history, "History model and cleanup mode do not match")
         record["private_before"] = before["private_sha256"]
         source_identity = identity(source)[:2]
         try:
@@ -475,7 +479,13 @@ def execute(
                     offline_command(
                         c["Image"],
                         archive_input,
-                        ["-c", loader, *candidate_args, "--discard-test-history"],
+                        [
+                            "-c",
+                            loader,
+                            *candidate_args,
+                            "--discard-test-history",
+                            *(["--clear-light-test-history"] if clear_light_test_history else []),
+                        ],
                         reset_helper=reset_helper,
                     ),
                     timeout=135,
@@ -608,6 +618,7 @@ def main() -> None:
     parser.add_argument("--approve-fresh-database", action="store_true")
     parser.add_argument("--archive-original", action="store_true")
     parser.add_argument("--discard-test-history", action="store_true")
+    parser.add_argument("--clear-light-test-history", action="store_true")
     parser.add_argument("--reset-helper", type=Path)
     parser.add_argument("--reset-helper-sha256")
     args = parser.parse_args()
@@ -619,6 +630,7 @@ def main() -> None:
                 approved=args.approve_fresh_database,
                 archive_original=args.archive_original,
                 discard_test_history=args.discard_test_history,
+                clear_light_test_history=args.clear_light_test_history,
                 reset_helper=args.reset_helper,
                 reset_helper_sha256=args.reset_helper_sha256,
             ),
