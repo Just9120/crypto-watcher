@@ -764,7 +764,7 @@ def _cohorts(store: Store, groups: tuple[str, ...], *, cutoff_ms: int | None, li
 
         if installed(store.db):
             incomplete += store.db.execute(
-                "SELECT COUNT(*) FROM market_episode_results r WHERE json_extract(r.fact,'$.state')!='COMPLETE' "
+                "SELECT COUNT(*) FROM market_episode_results r WHERE json_extract(r.fact,'$.state') NOT IN ('COMPLETE','NOT_SELECTED') "
                 "AND NOT EXISTS (SELECT 1 FROM " + source(store, "outcome", head=True) + " o "
                 "WHERE o.key>=? AND o.key<? "
                 "AND json_extract(cw_record_json(o.payload_json),'$.episode_id')=r.episode_id "

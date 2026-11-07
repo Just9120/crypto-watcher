@@ -72,6 +72,7 @@ class ControlDeck:
     async def show_event(
         self, update: Update, event_id: str, token: str = "", *, result: bool = False
     ) -> None:
+        from .episode_pool import outcome_scope_note
         from .outcomes import episode_results
         from .render import event_keyboard, event_text, outcome_text
 
@@ -105,7 +106,9 @@ class ControlDeck:
                 + "\nTelegram: "
                 + self.delivery_note(event_id)
             )
-        await self.c.send(update, body, event_keyboard(event, history_token=nav))
+        await self.c.send(
+            update, body + outcome_scope_note(self.c.history, event), event_keyboard(event, history_token=nav)
+        )
 
     def cancel(self) -> None:
         if self.c.store.get_runtime(INPUT):

@@ -8,7 +8,8 @@ async def test_full_offered_source_episode_outcome_and_independent_delivery_path
     assert result["offered_closed_candles"] == result["persisted_and_confirmed"]
     assert len(result["offers_by_stream"]) == 8
     assert result["families"] == ["breakout", "composite", "price", "turnover", "volatility"]
-    assert result["outcome_states"] == {"COMPLETE": result["episodes"] * 4}
+    assert 0 < result["episodes_with_outcomes"] < result["episodes"]
+    assert result["outcome_states"] == {"COMPLETE": result["episodes_with_outcomes"] * 4}
     assert result["comparison_jobs"] == 0 and result["comparison_states"] == {}
     assert all(p["due_outcomes"] == 0 for p in result["debt_checkpoints"])
     assert any(p["future_outcomes"] > 0 for p in result["debt_checkpoints"])

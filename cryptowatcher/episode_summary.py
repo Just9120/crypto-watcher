@@ -105,6 +105,7 @@ def install(db: sqlite3.Connection) -> None:
 
 def prepare(store: Store, event: dict[str, Any]) -> list[ArchiveFact]:
     from .config import OwnerSettings
+    from .episode_pool import selection
     from .events import History, identity
     from .quality_summary import DAY
 
@@ -126,7 +127,11 @@ def prepare(store: Store, event: dict[str, Any]) -> list[ArchiveFact]:
         origin = history.metadata(f"event:{origin_id}:0000000001") if origin_id else None
         if origin is None:
             raise StateError("Missing episode outcome origin during aggregation; details preserved")
-        horizons = OwnerSettings.from_payload(origin["settings_snapshot"]).outcome_horizons
+        chosen = selection(history, origin)
+        outside = chosen is not None and chosen["state"] in ("NOT_SELECTED", "WAITING")
+        horizons = (
+            (0,) if outside else OwnerSettings.from_payload(origin["settings_snapshot"]).outcome_horizons
+        )
         # Expiry needs saved numbers only. Source windows may already have
         # reached their lease boundary and must never be expanded here.
         results = [
@@ -148,10 +153,10 @@ def prepare(store: Store, event: dict[str, Any]) -> list[ArchiveFact]:
                 or history.metadata("outcome-job:" + identity(f"outcome/{event['episode_id']}/{horizon}/2"))
                 or {}
             )
-            state = outcome.get("state", "EXPIRED_INCOMPLETE")
+            state = "NOT_SELECTED" if outside else outcome.get("state", "EXPIRED_INCOMPLETE")
             fact = {
                 "episode_id": event["episode_id"],
-                "state": "COMPLETE" if state == "COMPLETE" else "EXPIRED_RETENTION_INCOMPLETE",
+                "state": state if state in ("COMPLETE", "NOT_SELECTED") else "EXPIRED_RETENTION_INCOMPLETE",
                 "previous_state": state,
                 "metrics": outcome.get("metrics", {}),
                 "classification": outcome.get("classification", "UNCLASSIFIED"),
