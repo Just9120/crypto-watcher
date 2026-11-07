@@ -1,0 +1,51 @@
+name: Episode pool isolated diagnostic
+on:
+  push:
+    branches: [codex/episode-pool-isolated-20261107]
+permissions:
+  contents: read
+jobs:
+  replay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CANDIDATE: 3b56671d092894e2c4cf4b2cb7c7f9736d343f8f
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify and build the exact candidate
+        run: |
+          test "$(git rev-parse HEAD^)" = "$CANDIDATE"
+          git diff --exit-code "$CANDIDATE" HEAD -- cryptowatcher Dockerfile requirements.txt requirements-bootstrap.txt native
+          docker build --build-arg SOURCE_REVISION="$CANDIDATE" --build-arg BUILD_RUN="$GITHUB_RUN_ID" -t episode-pool-diagnostic .
+      - name: Run the bounded market replay
+        run: |
+          set -euo pipefail
+          root=$(mktemp -d "$RUNNER_TEMP/episode-pool.XXXXXXXX")
+          chmod 755 "$root"
+          mkdir "$root/case"
+          cp -r cryptowatcher "$root/case/"
+          cp scripts/episode_pool_probe/*.py "$root/case/"
+          image=$(docker image inspect --format '{{.Id}}' episode-pool-diagnostic)
+          sudo env EPISODE_PROBE_ROOT="$root" EPISODE_PROBE_IMAGE="$image" timeout --kill-after=25s 665s python3 "$root/case/controller.py" | tee "$RUNNER_TEMP/episode-pool-report.ndjson"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: episode-pool-replay
+          path: ${{ runner.temp }}/episode-pool-report.ndjson
+          retention-days: 7
+      - name: Check the replay result
+        run: |
+          python3 - <<'PY'
+          import json,os,pathlib
+          rows=pathlib.Path(os.environ['RUNNER_TEMP'],'episode-pool-report.ndjson').read_text().splitlines()
+          report=json.loads(next(line for line in reversed(rows) if line.startswith('{')))
+          assert report['state']=='COMPLETE',report.get('reason',report['state'])
+          result=report['result']
+          assert result['offered']==result['accepted']==3296
+          assert result['max_source_lag_ms'] is not None and result['max_source_lag_ms']<=30000,result['max_source_lag_ms']
+          assert result['complete_due']>0 and result['max_due_lag_ms'] is not None and result['max_due_lag_ms']<=60000,result['max_due_lag_ms']
+          assert report['container_removed'] and report['work_removed']
+          PY
