@@ -441,6 +441,7 @@ class EventEngine:
         source_revision: str = "UNSET",
         on_event: Callable[[dict[str, Any]], None] | None = None,
         on_episode: Callable[[dict[str, Any]], None] | None = None,
+        retain_enrichment: Callable[[str], bool] | None = None,
     ) -> None:
         if not re.fullmatch(r"[0-9a-f]{40}|UNSET", source_revision):
             raise ValueError("Invalid detector source revision")
@@ -450,6 +451,7 @@ class EventEngine:
         self.source_revision = source_revision
         self.on_event = on_event
         self.on_episode = on_episode
+        self.retain_enrichment = retain_enrichment
         with store.db:
             for family in FAMILIES:
                 key = f"detector-metadata:{family}:{VERSIONS[family]}"
@@ -735,6 +737,8 @@ class EventEngine:
                             "pending_notification": None,
                             "notification_sequence": 0,
                         }
+                        if self.retain_enrichment is not None:
+                            episode["outcome_selection_policy"] = "EPISODE_POOL_V1"
                         self.history.put(
                             active_key,
                             {
@@ -823,7 +827,16 @@ class EventEngine:
                         ).hexdigest(),
                         "source_inputs": [asdict(c) for c in inputs],
                         "source_context": source_context or {"ticker": None, "instrument": None},
-                        "enrichment": enrichment or {"state": "UNAVAILABLE", "detector_input": False},
+                        "enrichment": (
+                            enrichment or {"state": "UNAVAILABLE", "detector_input": False}
+                            if self.retain_enrichment is None
+                            or (enrichment and self.retain_enrichment(episode["episode_id"]))
+                            else {
+                                "state": "UNAVAILABLE",
+                                "reason": "OUTSIDE_EPISODE_POOL",
+                                "detector_input": False,
+                            }
+                        ),
                         "producer_source_revision": self.source_revision,
                         "outcome_context_completeness": "COMPLETE"
                         if noise is not None
@@ -836,6 +849,8 @@ class EventEngine:
                         "trading_authorized": False,
                         "model_invoked": False,
                     }
+                    if policy := episode.get("outcome_selection_policy"):
+                        event["outcome_selection_policy"] = policy
                     self.history.version("event", event)
                     self.history.put(f"history:{current.end:016d}:{event_id}", {"event_id": event_id})
                     self.history.put(

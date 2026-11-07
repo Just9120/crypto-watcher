@@ -51,7 +51,7 @@ class Enrichment:
             self.history.version("mapping", mapping)
         return mapping
 
-    async def work(self, now: int, batch: int = 4) -> None:
+    async def work(self, now: int, batch: int = 4, *, followed: set[str] | None = None) -> None:
         async with self.lock:
             owner = self.store.snapshot()
             if not owner.settings.enrichment_enabled or now <= 0:
@@ -59,6 +59,11 @@ class Enrichment:
             if self.waiting_for_recovery():
                 self.store.put_runtime("enrichment", {"state": "WAITING_FOR_CORE_RECOVERY", "at_ms": now})
                 return
+            active = {s.rsplit("/", 1)[0] for s in self.market.streams if s.startswith("spot/")}
+            if followed is not None:
+                active.intersection_update(followed)
+                if not active:
+                    return
             errors: dict[str, str] = {}
             for market in ("spot", "linear"):
                 if self.waiting_for_recovery():
@@ -70,10 +75,9 @@ class Enrichment:
                 if self.store.snapshot().revision != owner.revision:
                     return
             now = self.market.server_now()
-            active = sorted({s.rsplit("/", 1)[0] for s in self.market.streams if s.startswith("spot/")})
             pairs = set()
             with self.store.db:
-                for key in active:
+                for key in sorted(active):
                     if key in self.market.instruments:
                         mapping = self._mapping(key, now)
                         if mapping["perpetual_instrument"]:
