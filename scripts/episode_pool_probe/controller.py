@@ -86,7 +86,7 @@ try:
         "--mount",f"type=bind,src={work},dst=/work",
         "--entrypoint","/bin/sh",IMAGE,"-ec",
         "cp -r /case/cryptowatcher /work/; ln -s /app/cryptowatcher/_native /work/cryptowatcher/_native; "
-        "cp /case/replay.py /case/burst_timing.py /work/; cd /work; exec python -B replay.py")
+        "cp /case/replay.py /case/burst_timing.py /work/; cd /work; export CW_BURST_PROFILE=0; exec python -B replay.py")
     docker("start",ident)
     facts=json.loads(docker("inspect",ident))[0]
     assert facts["Image"]==IMAGE and facts["HostConfig"]["NanoCpus"]==2*10**9 and facts["HostConfig"]["Memory"]==MEMORY
