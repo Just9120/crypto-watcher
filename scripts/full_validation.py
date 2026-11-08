@@ -10,7 +10,6 @@ import shutil
 import subprocess
 import sys
 import time
-import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
@@ -150,8 +149,12 @@ def execute(revision: str, directory: Path) -> int:
     run_id = os.environ.get("GITHUB_RUN_ID") or str(time.time_ns())
     if not re.fullmatch(r"[1-9][0-9]*", run_id):
         raise ValueError("Invalid qualification build identity")
+    image = f"cryptowatcher:{revision}"
+    if subprocess.check_output(
+        ["docker", "image", "ls", "--filter", f"reference={image}", "--quiet"], text=True
+    ).strip():
+        raise ValueError("Qualification image tag already exists; use a clean Docker daemon")
     directory.mkdir(parents=True, exist_ok=False)
-    image = "cryptowatcher-full:" + uuid.uuid4().hex
     record: dict[str, Any] = {
         "schema": "cryptowatcher.full-validation.v1",
         "kind": "QUALIFICATION_ONLY_NO_CD",
