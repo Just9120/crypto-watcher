@@ -78,7 +78,7 @@ def test_full_inventory_and_manual_workflow_have_no_delivery_schedule_or_credent
     assert "secrets." not in text and "environment:" not in text
     assert "schedule:" not in text and "release.yml" not in text
     assert "scripts/checks.py full" in text and '"$EXPECTED_REVISION"' in text
-    commands = full.commands(SHA, root / ".cache-g1/fixture", "cryptowatcher-full:owned", "123")
+    commands = full.commands(SHA, root / ".cache-g1/fixture", f"cryptowatcher:{SHA}", "123")
     assert [name for name, _ in commands] == [name for name, _ in full.INVENTORY]
     assert not any(
         "deliver" in word or "push" == word or "ssh" == word for _, cmd in commands for word in cmd
@@ -95,6 +95,7 @@ def test_full_result_stops_on_failure_records_skips_and_only_removes_created_pac
     monkeypatch.setattr(full, "ROOT", tmp_path)
     monkeypatch.setattr(full, "preflight", lambda *a: {"revision": SHA})
     monkeypatch.setattr(full, "git", lambda *a: "" if a[0] == "status" else SHA)
+    monkeypatch.setattr(full.subprocess, "check_output", Mock(return_value=""))
     observed = []
 
     def run(command, **kwargs):
@@ -119,7 +120,27 @@ def test_full_result_stops_on_failure_records_skips_and_only_removes_created_pac
         assert (directory / "package/manifest.json").exists()
         assert not (directory / "package/bundle.tar").exists()
         assert len(observed) == len(full.INVENTORY)
+        commands = dict(zip((name for name, _ in full.INVENTORY), observed, strict=True))
+        image = f"cryptowatcher:{SHA}"
+        assert commands["image_build"][commands["image_build"].index("-t") + 1] == image
+        assert commands["image_checks"][-2] == image
+        assert commands["package_round_trip"][-2] == image
     else:
         assert result != 0 and record["state"] == "FAIL"
         assert len(observed) == (1 if mode == "native_failure" else 3)
         assert not (directory / "package").exists()
+
+
+def test_full_profile_preserves_existing_release_tag(tmp_path, monkeypatch):
+    directory = tmp_path / ".cache-g1/full-proof"
+    monkeypatch.setattr(full, "preflight", lambda *a: {"revision": SHA})
+    check_output = Mock(return_value="existing-image-id\n")
+    monkeypatch.setattr(full.subprocess, "check_output", check_output)
+
+    with pytest.raises(ValueError, match="image tag already exists"):
+        full.execute(SHA, directory)
+
+    check_output.assert_called_once_with(
+        ["docker", "image", "ls", "--filter", f"reference=cryptowatcher:{SHA}", "--quiet"], text=True
+    )
+    assert not directory.exists()
