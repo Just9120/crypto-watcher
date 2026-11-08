@@ -102,6 +102,8 @@ def ndjson(store: Store, selection: Selection) -> Iterator[str]:
             )
             + "\n"
         )
+        from .episode_pool import selection as episode_selection
+
         counts: dict[str, int] = {}
         relations = {
             "event": "json_extract(cw_record_json(r.payload_json),'$.event_id') IN (SELECT json_extract(cw_record_json(payload_json),'$.event_id') FROM selected)",
@@ -130,7 +132,10 @@ def ndjson(store: Store, selection: Selection) -> Iterator[str]:
                         "outcome_origin": history.get(f"event:{record['origin_event_id']}:0000000001"),
                     }
                 counts[kind] = counts.get(kind, 0) + 1
-                yield encode({"schema": SCHEMA, "type": kind, "record": record}) + "\n"
+                item = {"schema": SCHEMA, "type": kind, "record": record}
+                if kind == "event" and (follow := episode_selection(history, record)) is not None:
+                    item["outcome_selection"] = follow
+                yield encode(item) + "\n"
         # Historical settings are frozen in every selected revision; export them independently too.
         rows = store.db.execute(
             cte

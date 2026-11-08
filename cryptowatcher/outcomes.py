@@ -231,11 +231,13 @@ class OutcomeWorker:
         request_gap: Callable[[str, int, int], str | None] | None = None,
         *,
         on_outcome: Callable[[dict[str, Any]], None] | None = None,
+        replay_admission: bool = True,
     ) -> None:
         self.store = store
         self.history = History(store)
         self.request_gap = request_gap
         self.on_outcome = on_outcome
+        self.replay_admission = replay_admission
         with store.db:
             previous = self.history.get("outcome-method:" + METHOD)
             if previous is not None and previous != DEFINITION:
@@ -298,6 +300,8 @@ class OutcomeWorker:
             self.history.put(hold, {"start": event["reference_time_ms"], "end": due})
 
     def bootstrap(self, batch: int = 20) -> None:
+        if not self.replay_admission:
+            return
         admission = self.history.get("outcome-admission", {"cursor": "", "complete": False})
         if admission["complete"]:
             return

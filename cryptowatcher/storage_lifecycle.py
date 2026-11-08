@@ -148,6 +148,7 @@ def track(store: Store, key: str, value: Any) -> None:
         )
         if type(anchor) is int:
             expiry = anchor + days * DAY
+    parent = None
     if event_id:
         parent = saved_expiry(store.db, PREFIX + "event-head:" + event_id)
         from .catalogue_lifecycle import parent_expiry
@@ -160,7 +161,12 @@ def track(store: Store, key: str, value: Any) -> None:
         if parent:
             expiry = parent[0]
     if isinstance(value, dict) and type(value.get("expires_ms")) is int:
-        expiry = min(expiry, value["expires_ms"])
+        # A historical Agent retry follows its retained event's deadline.
+        # Its immutable live freshness timestamp still goes to the receiver.
+        if not (
+            parent and name.startswith("agent:outbox:") and value.get("kind") == "HISTORICAL_OUTCOME_UPDATE"
+        ):
+            expiry = min(expiry, value["expires_ms"])
     category = name.split(":", 1)[0]
     # Active per-stream state may renew; immutable/per-event/service state cannot.
     if category in ("active", "historical-active", "suppressed-active"):
@@ -324,6 +330,19 @@ class BoundedRetention:
                     # Preserve original pending methodology/revision until its
                     # parent is aggregated, even across a split expiry batch.
                     if history.metadata("event-head:" + raw["event_id"]) is not None:
+                        continue
+                if (
+                    row[0].startswith(PREFIX + "agent:outbox:")
+                    and isinstance(raw, dict)
+                    and (
+                        raw.get("kind") == "HISTORICAL_OUTCOME_UPDATE"
+                        and raw.get("state") in ("PENDING", "IN_FLIGHT", "BLOCKED")
+                    )
+                ):
+                    # Repair the legacy live-TTL index before deleting a recoverable retry.
+                    track(store, row[0], raw)
+                    repaired = saved_expiry(store.db, row[0])
+                    if repaired and repaired[0] > now_ms:
                         continue
                 state = raw.get("state") if isinstance(raw, dict) else None
                 if state in ("PENDING", "RETRY", "IN_FLIGHT", "BLOCKED", "INVALID_SOURCE", "INCOMPLETE"):
