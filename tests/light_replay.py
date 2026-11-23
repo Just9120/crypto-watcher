@@ -144,6 +144,9 @@ async def replay(path: Path, *, minutes: int = 30) -> dict[str, Any]:
 
         async def work():
             with measured("outcomes"):
+                pool = getattr(controller, "episode_pool", None)
+                if pool is not None:
+                    pool.advance(clock[0])
                 for _ in range(64):
                     controller.outcomes.work(clock[0])
                     due = [
@@ -258,6 +261,7 @@ async def replay(path: Path, *, minutes: int = 30) -> dict[str, Any]:
                 "persisted_and_confirmed": sum(offers.values()),
                 "events": len(trace),
                 "episodes": len(roots),
+                "episodes_with_outcomes": len({r["episode_id"] for r in outcomes}),
                 "families": sorted({e["detector_id"] for e in trace}),
                 "outcome_states": dict(Counter(r["state"] for r in outcomes)),
                 "comparison_jobs": controller.history.count("comparison-job:"),

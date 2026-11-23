@@ -35,6 +35,7 @@ from .config import (
 from .detector_config import FAMILIES, PARAMETERS
 from .digest import Digest
 from .enrichment_runtime import Enrichment
+from .episode_pool import EpisodePool, outcome_scope_note
 from .events import EventEngine, History
 from .ingestion import BybitRadar
 from .market import BybitREST, MarketError
@@ -167,8 +168,12 @@ class Controller:
         self.agent = AgentDelivery(store, getattr(market, "client", None))
         self.recovery = AnalyticsRecovery(store, market) if isinstance(market, BybitRadar) else None
         self.outcomes = OutcomeWorker(
-            store, self.recovery.request if self.recovery else None, on_outcome=self.agent.outcome
+            store,
+            self.recovery.request if self.recovery else None,
+            on_outcome=self.agent.outcome,
+            replay_admission=not isinstance(market, BybitRadar),
         )
+        self.episode_pool = EpisodePool(self.outcomes) if isinstance(market, BybitRadar) else None
         self.retention = Retention(store)
         self.digest = Digest(store, infrastructure.delivery_chat_id)
         self.analytics_lock = asyncio.Lock()
@@ -186,6 +191,7 @@ class Controller:
                 store,
                 source_revision=infrastructure.source_revision,
                 on_event=self.admit_event,
+                retain_enrichment=self.episode_pool.selected if self.episode_pool else None,
                 on_episode=self.agent.episode_closed,
             )
             if isinstance(market, BybitRadar)
@@ -222,7 +228,13 @@ class Controller:
                     live=live,
                     context_provider=lambda: (
                         public_context(store, stream.rsplit("/", 1)[0], now),
-                        self.enrichment_context(stream.rsplit("/", 1)[0], candles[-1].end),
+                        self.enrichment_context(stream.rsplit("/", 1)[0], candles[-1].end)
+                        if self.episode_pool is None or self.episode_pool.follows(stream.rsplit("/", 1)[0])
+                        else {
+                            "state": "UNAVAILABLE",
+                            "reason": "OUTSIDE_EPISODE_POOL",
+                            "detector_input": False,
+                        },
                     ),
                     commit=commit,
                 )
@@ -235,7 +247,10 @@ class Controller:
             )
 
     def admit_event(self, event: dict[str, Any]) -> None:
-        self.outcomes.admit(event)
+        if self.episode_pool is None:
+            self.outcomes.admit(event)
+        else:
+            self.episode_pool.offer(event)
         self.agent.admit(event)
 
     def enrichment_context(self, key: str, cutoff: int) -> dict[str, Any]:
@@ -505,7 +520,9 @@ class Controller:
                         if origin is not None
                         else "Исходные подробности episode уже недоступны в сроке хранения."
                     )
-                    await self.send(update, body, event_keyboard(event))
+                    await self.send(
+                        update, body + outcome_scope_note(self.history, event), event_keyboard(event)
+                    )
         elif command == "enrichment":
             if raw:
                 if raw.lower() not in ("on", "off"):
@@ -793,6 +810,8 @@ class Controller:
             phase = "OUTCOMES"
             try:
                 started = time.monotonic()
+                if self.episode_pool is not None:
+                    self.episode_pool.advance(now)
                 processed_outcomes = await self.outcomes.async_work(self.market.server_now)
                 # Legacy comparison records stay readable until their normal
                 # retention/explicit test-history transition. No N20 worker runs.
@@ -1055,7 +1074,10 @@ class Controller:
         if self.enrichment is None or not isinstance(self.market, BybitRadar):
             return
         try:
-            await self.enrichment.work(self.market.server_now())
+            await self.enrichment.work(
+                self.market.server_now(),
+                followed=self.episode_pool.instruments() if self.episode_pool is not None else None,
+            )
         except Exception as exc:
             self.store.put_runtime("enrichment", {"state": "FAILED", "error_class": type(exc).__name__})
             logger.error("Optional enrichment failure: %s", type(exc).__name__)

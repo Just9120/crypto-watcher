@@ -1512,7 +1512,8 @@ def test_live_source_and_all_consumers_commit_once_and_are_invisible_until_commi
             original(event)
             if agent_enabled:
                 assert History(radar.store).items("agent:intent:")
-            assert History(radar.store).count("outcome-pending:") > 0
+            assert radar.store.db.execute("SELECT COUNT(*) FROM episode_pool").fetchone()[0] > 0
+            assert observer.db.execute("SELECT COUNT(*) FROM episode_pool").fetchone()[0] == 0
             callbacks.append(event["event_id"])
 
         controller.engine.on_event = inside
@@ -1523,6 +1524,9 @@ def test_live_source_and_all_consumers_commit_once_and_are_invisible_until_commi
         assert atomic_source_value(observer, stream, NOW)["start"] == NOW
         assert radar.sources.windows[stream][NOW].start == NOW
         assert not radar.store.db.in_transaction
+        assert observer.db.execute("SELECT COUNT(*) FROM episode_pool").fetchone()[0] > 0
+        controller.episode_pool.advance(radar.server_now())
+        assert History(observer).count("outcome-pending:") > 0
         before = radar.store.db.total_changes
         radar.accept_message("spot", message("1m"), radar.streams)
         assert radar.store.db.total_changes == before
@@ -1549,7 +1553,7 @@ def test_live_consumer_failure_rolls_back_source_event_and_jobs_before_ram_publi
         original(event)
         if agent_enabled:
             assert History(radar.store).items("agent:intent:")
-        assert History(radar.store).count("outcome-pending:") > 0
+        assert radar.store.db.execute("SELECT COUNT(*) FROM episode_pool").fetchone()[0] > 0
         raise RuntimeError("consumer after intent admission")
 
     controller.engine.on_event = fail
@@ -1562,6 +1566,7 @@ def test_live_consumer_failure_rolls_back_source_event_and_jobs_before_ram_publi
     assert not h.events() and not h.items("outcome-pending:") and not h.items("comparison-pending:")
     assert not h.items("condition:") and not h.items("episode-head:")
     assert not h.items("agent:intent:") and not h.items("agent:intent-due:")
+    assert radar.store.db.execute("SELECT COUNT(*) FROM episode_pool").fetchone()[0] == 0
     assert not radar.store.db.in_transaction and radar._timing_stack == []
 
 

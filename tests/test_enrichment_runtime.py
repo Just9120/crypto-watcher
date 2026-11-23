@@ -174,12 +174,19 @@ async def test_owner_controls_frozen_event_independent_perpetual_and_no_threshol
     await controller.handle(update("/enrichment on"), None)
     assert store.snapshot().settings.changed(enrichment_enabled=False) == baseline
     await controller.enrichment_job(None)
-    engine = EventEngine(store)
+    assert not History(store).items("mapping-head:")
+    engine = EventEngine(
+        store, on_event=controller.episode_pool.offer, retain_enrichment=controller.episode_pool.selected
+    )
+    engine.observe("spot/BTCUSDT/1m", history(now=NOW - 60_000), 1e6, 0.01, NOW - 60_000, live=True)
+    controller.episode_pool.advance(NOW)
+    assert controller.episode_pool.follows("spot/BTCUSDT")
+    await controller.enrichment_job(None)
     value = controller.enrichment_context("spot/BTCUSDT", NOW)
     for market in ("spot", "linear"):
         engine.observe(
-            market + "/BTCUSDT/1m",
-            history(),
+            market + "/BTCUSDT/3m",
+            history(tf="3m"),
             1e6,
             0.01,
             NOW,
@@ -188,7 +195,7 @@ async def test_owner_controls_frozen_event_independent_perpetual_and_no_threshol
         )
     events = History(store).events(20)
     assert {e["market_type"] for e in events} == {"spot", "linear"}
-    spot = next(e for e in events if e["market_type"] == "spot")
+    spot = next(e for e in events if e["market_type"] == "spot" and e.get("enrichment") == value)
     assert spot["enrichment"] == value
     old = spot["enrichment"]["metrics"]["funding_rate_pct"]["value"]
     with store.db:
